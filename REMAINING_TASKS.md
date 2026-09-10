@@ -218,10 +218,14 @@ Goal: server generates terrain, streams chunks, client meshes and renders them.
 - [ ] Biome selection (2.2 step 2) + carvers + decoration pass — deferred to the
       Lua pipeline (Phase 4); base pipeline is heightmap-only for now.
 
-### 2.3 Lighting
+### 2.3 Lighting  ✅ (per-chunk)
 
-- [ ] Sky + block light flood fill on chunk generation.
-- [ ] Incremental relight on block edit (Phase 3/5 consumer).
+- [x] `LightEngine::relight_chunk` (`vb/world/lighting.{hpp,cpp}`): BFS sky-light
+      flood (full-strength straight down, −1/step sideways) + block-light flood
+      from emitters; `transmittance()` from the registry (opaque = 0, water dims
+      by 2). Clears the light dirty flag, marks mesh dirty.
+- [ ] Cross-chunk sky occlusion + incremental relight-on-edit — Phase 3/5;
+      reuses the same propagation core.
 
 ### 2.4 World replication (§8.5)
 

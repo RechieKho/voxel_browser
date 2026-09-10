@@ -2,6 +2,7 @@
 
 target_sources(vb_core PRIVATE
   block.cpp
+  lighting.cpp
   paletted_chunk_store.cpp
   world.cpp
 )

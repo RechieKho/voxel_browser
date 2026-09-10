@@ -6,6 +6,7 @@ add_executable(vb_tests
   unit/cli_test.cpp
   unit/config_test.cpp
   unit/core_test.cpp
+  unit/lighting_test.cpp
   unit/protocol_test.cpp
   unit/net_test.cpp
   unit/replication_test.cpp
