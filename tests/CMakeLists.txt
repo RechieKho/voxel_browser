@@ -3,6 +3,7 @@
 
 add_executable(vb_tests
   main.cpp
+  unit/chunk_codec_test.cpp
   unit/cli_test.cpp
   unit/config_test.cpp
   unit/core_test.cpp

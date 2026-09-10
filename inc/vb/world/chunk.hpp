@@ -75,6 +75,9 @@ public:
 		return light_[index_of(x, y, z)];
 	}
 	std::array<Light, kChunkVolume> &light_volume() { return light_; }
+	const std::array<Light, kChunkVolume> &light_volume() const {
+		return light_;
+	}
 
 	GenState gen_state() const { return gen_state_; }
 	void set_gen_state(GenState s) { gen_state_ = s; }
