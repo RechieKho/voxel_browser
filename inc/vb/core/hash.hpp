@@ -13,9 +13,12 @@ namespace vb::core {
 
 class Fnv1a {
 public:
+	static constexpr std::uint64_t kPrime = 0x100000001b3ULL;
+	static constexpr std::uint64_t kOffsetBasis = 0xcbf29ce484222325ULL;
+
 	constexpr Fnv1a &update(std::uint8_t byte) {
 		state_ ^= byte;
-		state_ *= 0x100000001b3ULL;
+		state_ *= kPrime;
 		return *this;
 	}
 	Fnv1a &update(std::span<const std::byte> bytes) {
@@ -42,7 +45,7 @@ public:
 	constexpr std::uint64_t digest() const { return state_; }
 
 private:
-	std::uint64_t state_ = 0xcbf29ce484222325ULL;
+	std::uint64_t state_ = kOffsetBasis;
 };
 
 } // namespace vb::core

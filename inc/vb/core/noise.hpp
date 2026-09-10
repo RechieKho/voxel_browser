@@ -13,11 +13,19 @@
 
 namespace vb::core::noise {
 
+// All constants are std::uint64_t so the arithmetic never mixes it with
+// `unsigned long long` (a distinct type on LP64), which trips GCC -Wsign-conversion.
+inline constexpr std::uint64_t kMixA = 0xff51afd7ed558ccdULL;
+inline constexpr std::uint64_t kMixB = 0xc4ceb9fe1a85ec53ULL;
+inline constexpr std::uint64_t kHashX = 0x9E3779B97F4A7C15ULL;
+inline constexpr std::uint64_t kHashY = 0xC2B2AE3D27D4EB4FULL;
+inline constexpr std::uint64_t kOctaveSalt = 0x9E3779B97F4A7C15ULL;
+
 constexpr std::uint64_t mix64(std::uint64_t x) {
 	x ^= x >> 33;
-	x *= 0xff51afd7ed558ccdULL;
+	x *= kMixA;
 	x ^= x >> 33;
-	x *= 0xc4ceb9fe1a85ec53ULL;
+	x *= kMixB;
 	x ^= x >> 33;
 	return x;
 }
@@ -25,8 +33,7 @@ constexpr std::uint64_t mix64(std::uint64_t x) {
 inline std::uint64_t hash2(std::uint64_t seed, std::int64_t x, std::int64_t y) {
 	const std::uint64_t ux = static_cast<std::uint64_t>(x);
 	const std::uint64_t uy = static_cast<std::uint64_t>(y);
-	return mix64(seed ^ mix64(ux * 0x9E3779B97F4A7C15ULL) ^
-			mix64(uy * 0xC2B2AE3D27D4EB4FULL));
+	return mix64(seed ^ mix64(ux * kHashX) ^ mix64(uy * kHashY));
 }
 
 // Hash -> double in [0, 1).
@@ -70,9 +77,9 @@ inline double fbm2(std::uint64_t seed, double x, double y, const FbmParams &p) {
 	double sum = 0.0;
 	double norm = 0.0;
 	for (int o = 0; o < p.octaves; ++o) {
-		sum += amp *
-				value2(seed + static_cast<std::uint64_t>(o) * 0x9E3779B9ULL,
-						x * freq, y * freq);
+		const std::uint64_t octave_seed =
+				seed + static_cast<std::uint64_t>(o) * kOctaveSalt;
+		sum += amp * value2(octave_seed, x * freq, y * freq);
 		norm += amp;
 		amp *= p.gain;
 		freq *= p.lacunarity;

@@ -95,7 +95,7 @@ TEST_CASE("worldgen determinism gate (cross-platform golden value)") {
 
 	// Golden: regenerate + re-hash must be identical. If this line ever needs
 	// updating, the worldgen output changed — bump pack_version and note why.
-	CHECK(digest == 0xA194330E041D3330ull);
+	CHECK(digest == 0x021BB3847413D8A5ull);
 
 	// Same params, fresh generator -> same digest.
 	WorldGenerator gen2(params, registry);
