@@ -1,0 +1,45 @@
+name: Setup Metadata
+
+on:
+  workflow_call:
+    outputs:
+      project_name:
+        description: "Project Name"
+        value: ${{ jobs.setup_metadata.outputs.project_name }}
+      version:
+        description: "Version"
+        value: ${{ jobs.setup_metadata.outputs.version }}
+      commit_hash:
+        description: "Commit Hash"
+        value: ${{ jobs.setup_metadata.outputs.commit_hash }}
+      commit_date:
+        description: "Commit Date"
+        value: ${{ jobs.setup_metadata.outputs.commit_date }}
+
+jobs:
+  setup_metadata:
+    runs-on: ubuntu-latest
+    outputs:
+      project_name: ${{ steps.get_project_name.outputs.project_name }}
+      version: ${{ steps.get_version.outputs.version }}
+      commit_hash: ${{ steps.get_commit_hash.outputs.commit_hash }}
+      commit_date: ${{ steps.get_commit_date.outputs.commit_date }}
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Get project name
+        id: get_project_name
+        run: echo "project_name=$(cat PROJECT_NAME)" >> $GITHUB_OUTPUT
+
+      - name: Get version
+        id: get_version
+        run: echo "version=$(git describe --tags --abbrev=0)" >> $GITHUB_OUTPUT
+
+      - name: Get commit hash
+        id: get_commit_hash
+        run: echo "commit_hash=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Get commit date
+        id: get_commit_date
+        run: echo "commit_date=$(git log -1 --format=%cd --date=iso-strict)" >> $GITHUB_OUTPUT

@@ -1,0 +1,75 @@
+name: Build For Windows
+
+on:
+  workflow_call:
+
+jobs:
+  setup_metadata:
+    uses: ./.github/workflows/setup_metadata.yml
+
+  build:
+    needs: setup_metadata
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        target: [windows]
+        arch: [x86_64]
+        build_type: [release, debug]
+        include:
+          # Build type to cmake keyword.
+          - build_type: release
+            cmake_build_type_keyword: Release
+
+          - build_type: debug
+            cmake_build_type_keyword: RelWithDebInfo
+
+          # Define host for each target.
+          - os: windows-latest
+            target: windows
+
+          # Define toolchain data.
+          - target: windows
+            arch: x86_64
+            cmake_arch_keyword: x64
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up MSVC Dev Cmd
+        uses: ilammy/msvc-dev-cmd@7315a94840631165970262a99c72cfb48a65d25d # v1.12.0
+        with:
+          arch: ${{ matrix.cmake_arch_keyword }}
+
+      # Setup CMake
+      - name: Set up CMake for Windows
+        shell: cmd
+        run: |
+          if not exist "${{ github.workspace }}\\build" mkdir "${{ github.workspace }}\\build"
+          cd "${{ github.workspace }}\\build"
+          cmake "${{ github.workspace }}" -G Ninja -DCMAKE_BUILD_TYPE="${{ matrix.cmake_build_type_keyword }}"
+
+      - name: Build project
+        shell: cmd
+        run: cmake --build "${{ github.workspace }}\\build"
+
+      - name: Show build files
+        shell: cmd
+        working-directory: build
+        run: dir /s
+
+      - name: Rename binary
+        shell: cmd
+        run: |
+          rename "${{ github.workspace }}\\build\\${{ needs.setup_metadata.outputs.project_name }}.exe" "${{ needs.setup_metadata.outputs.project_name }}-${{ matrix.target }}-${{ matrix.arch }}-${{ matrix.build_type }}.exe"
+
+      - name: Export binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ needs.setup_metadata.outputs.project_name }}-${{ matrix.target }}-${{ matrix.arch }}-${{ matrix.build_type }}
+          path: |
+            ${{ github.workspace }}\build\${{ needs.setup_metadata.outputs.project_name }}-${{ matrix.target }}-${{ matrix.arch }}-${{ matrix.build_type }}.exe
+          if-no-files-found: error

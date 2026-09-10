@@ -1,0 +1,9 @@
+build
+
+.vscode/*
+!.vscode/extensions.json
+
+*.local
+**/*.local
+
+compile_commands.json

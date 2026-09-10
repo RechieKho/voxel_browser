@@ -1,0 +1,75 @@
+name: Build For Mac OS
+
+on:
+  workflow_call:
+
+jobs:
+  setup_metadata:
+    uses: ./.github/workflows/setup_metadata.yml
+
+  build:
+    needs: setup_metadata
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        target: [macos]
+        arch: [universal]
+        build_type: [release, debug]
+        include:
+          # Build type to cmake keyword.
+          - build_type: release
+            cmake_build_type_keyword: Release
+
+          - build_type: debug
+            cmake_build_type_keyword: RelWithDebInfo
+
+          - os: macos-latest
+            target: macos
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Xcode
+        uses: maxim-lobanov/setup-xcode@v1.6.0
+        with:
+          xcode-version: latest
+
+      - name: Set up CMake for MacOS universal
+        shell: bash
+        run: |
+          if [ ! -d "${{ github.workspace }}/build" ]; then
+            mkdir "${{ github.workspace }}/build"
+          fi
+          cd "${{ github.workspace }}/build"
+          cmake "${{ github.workspace }}" -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.cmake_build_type_keyword }} \
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+            -DCMAKE_OSX_SYSROOT=$(xcodebuild -version -sdk macosx Path) \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
+            -DHAVE_STD_REGEX=ON
+
+      - name: Build project
+        shell: bash
+        run: cmake --build "${{ github.workspace }}/build"
+
+      - name: Show build files
+        shell: bash
+        working-directory: "${{ github.workspace }}/build"
+        run: ls -lR
+
+      - name: Rename binary
+        shell: bash
+        run: |
+          mv "${{ github.workspace }}/build/${{ needs.setup_metadata.outputs.project_name }}" \
+             "${{ github.workspace }}/build/${{ needs.setup_metadata.outputs.project_name }}-${{ matrix.target }}-${{ matrix.arch }}-${{ matrix.build_type }}"
+
+      - name: Export binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ needs.setup_metadata.outputs.project_name }}-${{ matrix.target }}-${{ matrix.arch }}-${{ matrix.build_type }}
+          path: |
+            ${{ github.workspace }}/build/${{ needs.setup_metadata.outputs.project_name }}-${{ matrix.target }}-${{ matrix.arch }}-${{ matrix.build_type }}
+          if-no-files-found: error

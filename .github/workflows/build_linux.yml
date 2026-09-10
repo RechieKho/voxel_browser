@@ -1,0 +1,81 @@
+name: Build For Linux
+
+on:
+  workflow_call:
+
+jobs:
+  setup_metadata:
+    uses: ./.github/workflows/setup_metadata.yml
+
+  build:
+    needs: setup_metadata
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        target: [linux]
+        arch: [x86_64]
+        build_type: [release, debug]
+        include:
+          # Build type to cmake keyword.
+          - build_type: release
+            cmake_build_type_keyword: Release
+
+          - build_type: debug
+            cmake_build_type_keyword: RelWithDebInfo
+
+          # Define host for each target.
+          - os: ubuntu-latest
+            target: linux
+
+          # Define toolchain data.
+          - target: linux
+            arch: x86_64
+            dependencies: ""
+            cxxflags: -m64
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build cmake libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev build-essential libgl1-mesa-dev libglu1-mesa-dev
+
+      # Setup CMake
+      - name: Set up CMake for Linux
+        shell: bash
+        run: |
+          if [ ! -d "${{ github.workspace }}/build" ]; then
+            mkdir "${{ github.workspace }}/build"
+          fi
+          cd "${{ github.workspace }}/build"
+          cmake "${{ github.workspace }}" -G Ninja -DCMAKE_BUILD_TYPE="${{ matrix.cmake_build_type_keyword }}" \
+            -DCMAKE_CXX_FLAGS="${{ matrix.cxxflags }}"
+
+      - name: Build project
+        shell: bash
+        run: ninja -C "${{ github.workspace }}/build"
+
+      - name: Show build files
+        shell: bash
+        working-directory: build
+        run: ls -lR
+
+      - name: Rename binary
+        shell: bash
+        run: |
+          mv "${{ github.workspace }}/build/${{ needs.setup_metadata.outputs.project_name }}" \
+             "${{ github.workspace }}/build/${{ needs.setup_metadata.outputs.project_name }}-${{ matrix.target }}-${{ matrix.arch }}-${{ matrix.build_type }}"
+
+      - name: Export binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ needs.setup_metadata.outputs.project_name }}-${{ matrix.target }}-${{ matrix.arch }}-${{ matrix.build_type }}
+          path: |
+            ${{ github.workspace }}/build/${{ needs.setup_metadata.outputs.project_name }}-${{ matrix.target }}-${{ matrix.arch }}-${{ matrix.build_type }}
+          if-no-files-found: error

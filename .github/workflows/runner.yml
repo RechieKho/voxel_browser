@@ -1,0 +1,25 @@
+name: Builds
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - "main"
+      - "*-workflow"
+
+jobs:
+  lint:
+    uses: ./.github/workflows/lint.yml
+  build_linux:
+    needs: [lint]
+    uses: ./.github/workflows/build_linux.yml
+  build_macos:
+    needs: [lint]
+    uses: ./.github/workflows/build_macos.yml
+  build_windows:
+    needs: [lint]
+    uses: ./.github/workflows/build_windows.yml
+  bundle:
+    needs: [build_linux, build_macos, build_windows]
+    uses: ./.github/workflows/bundle.yml
