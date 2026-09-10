@@ -91,10 +91,15 @@ network space; client window + render loop alive.
 
 ### 1.2 Transport (`vb_core/net`)
 
-- [ ] `Transport` wrapper over `ISteamNetworkingSockets`: init/shutdown, listen,
-      connect, poll, per-connection lifecycle callbacks. **(needs `VB_WITH_NET`)**
-- [ ] Lane/channel configuration (§8.2): 5 lanes with reliability flags.
-      *(lane→type mapping already in `message.hpp::lane_for`.)*
+- [x] `Transport` interface: `listen` / `connect` / `send` / `close` / `poll`,
+      whole-message delivery per lane, `TransportEvent` stream —
+      `inc/vb/net/transport.hpp`.
+- [x] `LoopbackTransport` (`inc/vb/net/loopback.hpp` + `.cpp`): in-process,
+      deterministic, dependency-free backend for tests + integrated singleplayer.
+- [ ] `GnsTransport` over `ISteamNetworkingSockets`: init/shutdown, real UDP,
+      per-connection lifecycle. **(needs `VB_WITH_NET`; Phase 1.2 spike)**
+- [x] Lane/channel configuration (§8.2): `lane_for(MessageType)` +
+      `send_mode_for_lane(Lane)` (reliable vs. unreliable).
 - [x] Message envelope `{type, flags, payload_len}` + varint helpers —
       `inc/vb/protocol/{byte_buffer,message}.hpp`, `read_frame`/`write_frame`.
 - [x] Codec framework in `vb/protocol/`: bounds-checked `ByteReader`/`ByteWriter`,
@@ -109,10 +114,20 @@ network space; client window + render loop alive.
       `S2C_AuthResult`, `C2S_Ready`, `S2C_JoinAccept`, `S2C_Disconnect{reason}`
       — `inc/vb/protocol/handshake.hpp` + `src/protocol/handshake.cpp`, all
       round-trip tested. `docs/protocol.md` documents every field.
-- [ ] Server: connection state machine (`Connecting → Authing → Syncing →
-      Playing`), handshake timeout, per-IP connection cap. **(needs transport)**
-- [ ] Client: connection flow driver + surfaced status enum for the UI.
-- [ ] `auth_mode = none` path fully working; `token` path stubbed.
+- [x] Server: `ServerHandshake` FSM (`AwaitingHello → AwaitingAuth →
+      AwaitingReady → Playing`/`Closed`), `on_timeout()`, `max_players` gate,
+      host hooks (`current_player_count` / `authenticate` / `on_ready`).
+- [x] Client: `ClientHandshake` FSM + `ClientHandshakeStatus` enum for the UI
+      (`Connecting / Authenticating / Syncing / Joined / Failed`).
+- [x] `auth_mode = none` path fully working (default `authenticate` accepts any
+      1–32 char name); `token` path carried through, verification stubbed.
+- [x] Integration test: full handshake + auth reject + server full + out-of-order
+      + version mismatch + timeout, driven over `LoopbackNetwork`
+      (`tests/unit/net_test.cpp`).
+- [ ] Per-IP connection cap + handshake-timeout wiring belong to the server loop
+      once `GnsTransport` lands.
+- [ ] `ENGINE_PROTOCOL_VERSION` mismatch → both FSMs already reject; surface it
+      in the client connect UI.
 
 ### 1.4 Replication bootstrap (`vb_core/replication`)
 

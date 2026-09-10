@@ -72,8 +72,21 @@ See `ARCHITECTURE_SPEC.md` §8.3 for the full diagram. Order:
 `Hello → ServerInfo → Auth → AuthResult → (asset manifest/data) → Ready →
 BlockRegistry → JoinAccept → initial ChunkAdd + EntitySnapshot`.
 
-The server's per-connection state machine (`Connecting → Authing → Syncing →
-Playing`) and the transport are Phase 1.2/1.3 — not yet in the tree.
+Implemented, transport-agnostic, in `inc/vb/net/handshake.hpp`:
+
+- `ServerHandshake` — per-connection FSM: `AwaitingHello → AwaitingAuth →
+  AwaitingReady → Playing` (or `Closed`). Rejects out-of-order messages
+  (`kBadHandshake`), protocol-version mismatch (`kProtocolMismatch`), a full
+  server (`kServerFull`), and failed auth (`kAuthFailed`); `on_timeout()` →
+  `kTimeout`.
+- `ClientHandshake` — drives `Hello → Auth → Ready` and exposes
+  `ClientHandshakeStatus { Connecting, Authenticating, Syncing, Joined, Failed }`
+  for the connect UI. Any `S2C_Disconnect` fails the handshake with the
+  server-provided message.
+
+The `Transport` interface (`inc/vb/net/transport.hpp`) delivers whole framed
+messages per lane. Backends: `LoopbackTransport` (in-process, done) and
+`GnsTransport` (GameNetworkingSockets, `VB_WITH_NET`, pending).
 
 ## Dependency pins
 

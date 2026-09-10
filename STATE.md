@@ -187,6 +187,17 @@ _(Move items here with a date + commit when fixed, so the history is visible.)_
   filled in. **Still open in Phase 1:** TOML config loader, GNS transport,
   connection FSMs, librg spike, client shell (camera/overlay).
 
+- **2026-09-10 — Phase 1.2/1.3 transport + handshake** (uncommitted).
+  `vb/net/`: `transport.hpp` (`Transport` interface, `TransportEvent`,
+  `lane_for`/`send_mode_for_lane`, `send_message` helper), `loopback.{hpp,cpp}`
+  (`LoopbackNetwork` in-process backend), `handshake.{hpp,cpp}` (`ServerHandshake`
+  + `ClientHandshake` FSMs with host callback hooks). `NetError` enum added to
+  `core/error.hpp`. `tests/unit/net_test.cpp` drives the whole handshake over
+  loopback (26 cases / 185 assertions total, green under `-Werror`).
+  **Next:** `GnsTransport` behind `VB_WITH_NET`, a `Session` object gluing
+  Transport+FSM+tick loop into `voxel_browser_server`/`voxel_browser`, then the
+  librg spike (1.4) and client shell (1.5).
+
 ### Gotchas learned this pass
 - Heavy deps (GNS, librg, Lua/sol2, FastNoise2, LZ4/xxHash, Cellulose) are
   declared in `Dependencies.cmake` but **gated behind `VB_WITH_*` (default OFF)**.

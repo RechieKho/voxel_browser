@@ -73,4 +73,50 @@ constexpr std::string_view message(ProtocolError e) {
 	return "unknown protocol error";
 }
 
+// Transport / connection failures — see inc/vb/net/.
+enum class NetError : std::uint8_t {
+	kNone = 0,
+	kAlreadyListening,
+	kNotListening,
+	kBindFailed,
+	kConnectFailed,
+	kUnknownConnection,
+	kBackendUnavailable, // built without VB_WITH_NET
+	kHandshakeTimeout,
+	kHandshakeProtocol, // peer violated the handshake sequence
+	kServerFull,
+	kAuthRejected,
+	kDisconnected,
+};
+
+constexpr std::string_view message(NetError e) {
+	switch (e) {
+		case NetError::kNone:
+			return "no error";
+		case NetError::kAlreadyListening:
+			return "already listening";
+		case NetError::kNotListening:
+			return "not listening";
+		case NetError::kBindFailed:
+			return "bind failed";
+		case NetError::kConnectFailed:
+			return "connect failed";
+		case NetError::kUnknownConnection:
+			return "unknown connection";
+		case NetError::kBackendUnavailable:
+			return "network backend unavailable (built without VB_WITH_NET)";
+		case NetError::kHandshakeTimeout:
+			return "handshake timed out";
+		case NetError::kHandshakeProtocol:
+			return "handshake protocol violation";
+		case NetError::kServerFull:
+			return "server full";
+		case NetError::kAuthRejected:
+			return "authentication rejected";
+		case NetError::kDisconnected:
+			return "disconnected";
+	}
+	return "unknown network error";
+}
+
 } // namespace vb::core
