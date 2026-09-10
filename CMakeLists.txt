@@ -62,6 +62,13 @@ endif()
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 
+# Deterministic floating point: forbid FMA contraction so worldgen / physics
+# produce identical results across compilers and platforms (spec §4, §18).
+# MSVC does not contract under its default /fp:precise.
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  add_compile_options(-ffp-contract=off)
+endif()
+
 get_directory_property(VB_HAS_PARENT PARENT_DIRECTORY)
 
 # --- Options ---------------------------------------------------------------

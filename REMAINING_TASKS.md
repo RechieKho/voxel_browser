@@ -192,24 +192,31 @@ needs re-running over it.
 
 Goal: server generates terrain, streams chunks, client meshes and renders them.
 
-### 2.1 Voxel data model (`vb_core/world`)
+### 2.1 Voxel data model (`vb_core/world`)  ✅
 
-- [ ] `PalettedChunkStore`: palette + bit-packed indices (1/2/4/8/16 bpv),
-      homogeneous collapse, get/set, iteration. Unit-tested round-trips.
-- [ ] `Chunk`: block store + light volume + dirty flags + gen state + `revision`.
-- [ ] `World`: `ChunkCoord → Chunk` map, load/unload manager.
-- [ ] `BlockSolidQuery` interface (shared by physics + meshing).
-- [ ] `CHUNK_DIM = 32` constant + coordinate math (world↔chunk↔local).
+- [x] `PalettedChunkStore` — 0/1/2/4/8/16 bpv, auto width growth, homogeneous
+      collapse, `compact()`; randomized round-trip test.
+- [x] `Chunk` — block store + light volume (sky/block nibbles) + `DirtyFlags` +
+      `GenState` + monotonic `revision`.
+- [x] `World` — `ChunkCoord → Chunk` map, world-voxel get/set across boundaries,
+      load/unload; implements `BlockSolidQuery`.
+- [x] `BlockSolidQuery` interface. `BlockRegistry` (hardcoded base set; Phase 4
+      → Lua). `kChunkDim = 32` + `index_of` / `address_of` coord math.
 
-### 2.2 World generation (`vb_core/worldgen`)
+### 2.2 World generation (`vb_core/worldgen`)  ✅ (base pipeline)
 
-- [ ] FastNoise2 wrapper: build node trees from a parameter struct.
-- [ ] Hardcoded default pipeline first (heightmap → dirt/stone/air), Lua-driven
-      pipeline deferred to Phase 4.
-- [ ] Worldgen worker pool + lock-free result handoff to the tick thread.
-- [ ] Surface pass (grass/dirt/sand by height vs. water level).
-- [ ] Determinism test: `(seed, coord)` → stable chunk hash, cross-platform
-      golden value in CI.
+- [x] Deterministic hand-rolled coherent noise (`vb/core/noise.hpp`) — integer
+      hash + polynomial interpolation, no trig; `-ffp-contract=off` project-wide
+      for cross-compiler reproducibility. (FastNoise2 remains the Phase 4
+      Lua-pipeline backend behind `VB_WITH_WORLDGEN`.)
+- [x] Fixed base pipeline (`WorldGenerator`): fBm heightmap → stone / dirt /
+      grass, sand + water near sea level. Deterministic from (seed, coord).
+- [x] `WorldGenWorkerPool` — N threads, dedup, `poll_completed()` handoff to the
+      tick thread (mutex+CV queue; "lock-free" is aspirational, correctness first).
+- [x] Determinism gate: `tests/unit/worldgen_test.cpp` hashes a fixed 4-chunk
+      region (FNV-1a) against a committed golden — CI runs it on all 3 platforms.
+- [ ] Biome selection (2.2 step 2) + carvers + decoration pass — deferred to the
+      Lua pipeline (Phase 4); base pipeline is heightmap-only for now.
 
 ### 2.3 Lighting
 
