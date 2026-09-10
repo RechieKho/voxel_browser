@@ -177,6 +177,16 @@ _(Move items here with a date + commit when fixed, so the history is visible.)_
   `voxel_browser`. Build-blocking bugs §1.1–1.3 fixed; §1.4 worked around.
   Decisions locked: sol2 (§19 Q1), doctest, LZ4, explicit source lists.
 
+- **2026-09-10 — Phase 1.1/1.2/1.3 (partial)** (uncommitted). `vb_core`:
+  `result.hpp` (`Result<T,E>`/`Status`), `error.hpp` (`CoreError`/`ProtocolError`
+  + total `message()` switches), `math.hpp`, `ids.hpp`, `log.{hpp,cpp}`.
+  `vb/protocol/`: `byte_buffer.hpp` (`ByteReader`/`ByteWriter` + LEB128 varints,
+  error-accumulating), `message.hpp` (envelope, `MessageType`, `lane_for`),
+  `handshake.hpp`+`handshake.cpp` (7 handshake message structs, encode/decode).
+  18 unit test cases / 113 assertions, all green under `-Werror`. `docs/protocol.md`
+  filled in. **Still open in Phase 1:** TOML config loader, GNS transport,
+  connection FSMs, librg spike, client shell (camera/overlay).
+
 ### Gotchas learned this pass
 - Heavy deps (GNS, librg, Lua/sol2, FastNoise2, LZ4/xxHash, Cellulose) are
   declared in `Dependencies.cmake` but **gated behind `VB_WITH_*` (default OFF)**.
@@ -188,6 +198,13 @@ _(Move items here with a date + commit when fixed, so the history is visible.)_
   `-Werror` never touches it.
 - `src/**` in the old lint job didn't recurse; lint now uses `find`. Every file
   under `src/` (incl. `.c`) must be clang-format-clean or CI fails.
+- doctest + MSVC STL: comparing/streaming a `std::string_view` in a `CHECK`
+  instantiates `toString<string_view>` which needs `<ostream>` complete —
+  add `#include <ostream>` to any test TU that does this (see `core_test.cpp`).
+- `Result<T,E>`: never call `.error()` when it holds a value (union UB). In
+  tests use `REQUIRE(result)` then deref, not `REQUIRE_MESSAGE(result, msg(err))`.
+- Sub-modules attach sources to `vb_core` via `target_sources()` from their own
+  `src/<mod>/CMakeLists.txt`, added after `core` in `src/CMakeLists.txt`.
 - Local dev on this Windows box: `clang`/`clang++` (LLVM 21) work; no `gcc`/`cl`
   on PATH in git-bash. `CC=clang CXX=clang++ cmake -G Ninja` configures fine.
   First configure is slow (~130s) — raylib + deep git clones.

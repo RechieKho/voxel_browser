@@ -5,8 +5,12 @@
 add_library(vb_core STATIC
   build_info.cpp
   cli.cpp
+  log.cpp
 )
 add_library(vb::core ALIAS vb_core)
+
+# Sibling modules attach their sources to vb_core via target_sources()
+# (see src/CMakeLists.txt add_subdirectory order).
 
 target_include_directories(vb_core PUBLIC
   "${CMAKE_SOURCE_DIR}/inc"

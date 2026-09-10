@@ -78,29 +78,39 @@ network space; client window + render loop alive.
 
 ### 1.1 Core primitives (`vb_core/core`)
 
-- [ ] Math types (`vec2/3`, `dvec3`, `ivec3`, AABB) — thin wrappers or adopt
-      raylib/raymath types where shared with render.
-- [ ] `Result<T,E>` / error enum, `expected`-style, no exceptions on hot paths.
-- [ ] Logging (levelled, thread-safe, sink-based).
+- [x] Math types (`Vec2/3<T>`, `Vec3d`, `IVec3`, `AABB`, Euclidean chunk coord
+      math) — `inc/vb/core/math.hpp`. Standalone (no raylib dep).
+- [x] `Result<T,E>` / `Status<E>` + `CoreError` / `ProtocolError` enums, no
+      exceptions — `inc/vb/core/{result,error}.hpp`.
+- [x] Logging (levelled, thread-safe, sink-based) — `inc/vb/core/log.hpp` +
+      `src/core/log.cpp`, `VB_INFO`/`VB_WARN`/… macros.
 - [ ] Config loader (TOML) for `server.toml` / `client.toml` + CLI overrides.
-- [ ] ID types: `BlockId`, `ChunkCoord`, `EntityId`, `AssetHash`.
+      *(next: add toml++ dependency, layer over the existing `Args`.)*
+- [x] ID types: `BlockId`, `NetId`, `EntityKindId`, `ChunkCoord`, `AssetHash`
+      — `inc/vb/core/ids.hpp` (+ `std::hash` specializations).
 
 ### 1.2 Transport (`vb_core/net`)
 
 - [ ] `Transport` wrapper over `ISteamNetworkingSockets`: init/shutdown, listen,
-      connect, poll, per-connection lifecycle callbacks.
+      connect, poll, per-connection lifecycle callbacks. **(needs `VB_WITH_NET`)**
 - [ ] Lane/channel configuration (§8.2): 5 lanes with reliability flags.
-- [ ] Message envelope `{type, flags, payload_len}` + varint helpers.
-- [ ] Codec framework in `vb/protocol/`: `read`/`write` per struct, bounds-
-      checked, round-trip unit-tested.
-- [ ] `ENGINE_PROTOCOL_VERSION` constant + mismatch handling.
+      *(lane→type mapping already in `message.hpp::lane_for`.)*
+- [x] Message envelope `{type, flags, payload_len}` + varint helpers —
+      `inc/vb/protocol/{byte_buffer,message}.hpp`, `read_frame`/`write_frame`.
+- [x] Codec framework in `vb/protocol/`: bounds-checked `ByteReader`/`ByteWriter`,
+      error-accumulating reads, round-trip + truncation + overlong-varint +
+      bad-enum + trailing-byte unit tests (`tests/unit/protocol_test.cpp`).
+- [x] `kEngineProtocolVersion` constant (`version.hpp`); `ProtocolError::kVersionMismatch`
+      reserved. Mismatch *handling* in the handshake FSM is 1.3.
 
 ### 1.3 Handshake (§8.3)
 
-- [ ] Messages: `C2S_Hello`, `S2C_ServerInfo`, `C2S_Auth`, `S2C_AuthResult`,
-      `C2S_Ready`, `S2C_JoinAccept`, `S2C_Disconnect{reason}`.
+- [x] Message structs + codecs: `C2S_Hello`, `S2C_ServerInfo`, `C2S_Auth`,
+      `S2C_AuthResult`, `C2S_Ready`, `S2C_JoinAccept`, `S2C_Disconnect{reason}`
+      — `inc/vb/protocol/handshake.hpp` + `src/protocol/handshake.cpp`, all
+      round-trip tested. `docs/protocol.md` documents every field.
 - [ ] Server: connection state machine (`Connecting → Authing → Syncing →
-      Playing`), handshake timeout, per-IP connection cap.
+      Playing`), handshake timeout, per-IP connection cap. **(needs transport)**
 - [ ] Client: connection flow driver + surfaced status enum for the UI.
 - [ ] `auth_mode = none` path fully working; `token` path stubbed.
 
