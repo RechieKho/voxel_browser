@@ -7,7 +7,7 @@
 > Companion docs: `ARCHITECTURE_SPEC.md` (target design) · `REMAINING_TASKS.md`
 > (implementation backlog). This file is for *traps and context*, not the plan.
 
-Last updated: 2026-09-10 (Phase 0 complete)
+Last updated: 2026-09-11 (Phase 3 netcode/physics slice)
 
 ---
 
@@ -203,6 +203,27 @@ _(Move items here with a date + commit when fixed, so the history is visible.)_
   the `JoinGrant`. `IntegratedGame` needs ~4 `tick()`s to settle (server-polls-
   then-client-polls each tick = one message hop per tick).
   **Next:** `GnsTransport` behind `VB_WITH_NET`.
+
+- **2026-09-11 — Phase 3 physics + netcode slice** (uncommitted). New
+  `vb/physics/movement.{hpp,cpp}` (`step_movement` — shared server + client
+  prediction; substepped swept-AABB w/ bisection snap, gravity/friction/jump/
+  step-up/fly; `MoveParams`). `vb/protocol/input.{hpp,cpp}` (`InputCmd` /
+  `C2SInputBatch`, lane 4). `S2C_EntitySnapshot` gained `has_local` + `local`
+  record + `flags` bit0=on_ground → **`kEngineProtocolVersion` 1 → 2**.
+  `ServerSession`: `handle_input_batch` (authoritative movement, dt clamp,
+  seq dedup), per-`Conn` `MoveState`; snapshots now carry the recipient's own
+  state. `ClientSession`: `push_input` (predict + history ring + resend),
+  reconcile-on-snapshot, `remote_samples_` + `interpolated_pos`. Client
+  `main.cpp` walks input-driven (collides with terrain) instead of free-fly.
+  `inc/vb/ecs/components.hpp` (struct defs only). Tests: `physics_test.cpp`,
+  `netcode_test.cpp`. ~99.5k assertions, green under `-Werror`.
+  - **Gotcha:** step-up in a pure-voxel world needs `step_height > 1.0` to climb a
+    full block (default is `1.05`); Quake-style 0.55 climbs nothing here.
+  - **Gotcha:** `ServerSession` intercepts *all* post-join C2S frames now (input
+    batch handled, others ignored) — it no longer forwards them to the handshake
+    FSM. Fine today; revisit when C2S block-edit/chat land.
+  - **Deferred:** EnTT registry + system runner (3.1), wall-clock server-time
+    estimation + librg entity mapping (need real `GnsTransport`).
 
 - **2026-09-11 — Phase 2 complete** (`ce7ee63`..HEAD). `vb/world`:
   `PalettedChunkStore`, `Chunk`, `World`, `BlockRegistry`, `LightEngine`

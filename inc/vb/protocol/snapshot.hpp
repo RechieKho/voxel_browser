@@ -31,10 +31,15 @@ struct S2CEntitySnapshot {
 	static constexpr MessageType kType = MessageType::kS2CEntitySnapshot;
 
 	std::uint32_t server_tick = 0;
-	std::uint32_t last_acked_input_seq = 0; // local player; 0 until Phase 3
+	std::uint32_t last_acked_input_seq = 0; // highest InputCmd seq simulated
 	std::vector<EntityRecord> entered;
 	std::vector<EntityRecord> updated;
 	std::vector<core::NetId> removed;
+
+	// The recipient's own authoritative state (interest culling excludes self,
+	// so it is carried separately for client-side reconciliation, spec §8.4).
+	bool has_local = false;
+	EntityRecord local{};
 
 	void encode(std::vector<std::byte> &out) const;
 	static Decoded<S2CEntitySnapshot> decode(std::span<const std::byte> in);

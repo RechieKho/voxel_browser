@@ -60,6 +60,10 @@ void S2CEntitySnapshot::encode(std::vector<std::byte> &out) const {
 	for (core::NetId id : removed) {
 		w.u32(static_cast<std::uint32_t>(id));
 	}
+	w.boolean(has_local);
+	if (has_local) {
+		write_record(w, local);
+	}
 }
 
 Decoded<S2CEntitySnapshot> S2CEntitySnapshot::decode(std::span<const std::byte> in) {
@@ -93,6 +97,11 @@ Decoded<S2CEntitySnapshot> S2CEntitySnapshot::decode(std::span<const std::byte> 
 	m.removed.reserve(static_cast<std::size_t>(n_removed));
 	for (std::uint64_t i = 0; i < n_removed && !r.failed(); ++i) {
 		m.removed.push_back(static_cast<core::NetId>(r.u32()));
+	}
+
+	m.has_local = r.boolean();
+	if (m.has_local && !r.failed()) {
+		m.local = read_record(r);
 	}
 
 	r.expect_consumed();

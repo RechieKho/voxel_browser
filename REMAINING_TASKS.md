@@ -289,43 +289,67 @@ with prediction/interpolation.
 
 ### 3.1 ECS (`vb_core/ecs`)
 
+- [x] Base components (§7.1) defined — `inc/vb/ecs/components.hpp` (`Position`,
+      `Velocity`, `Rotation`, `Collider`, `PlayerInput`, `PlayerTag`,
+      `NetReplicated`, `EntityKind`, `Health`, `Inventory`, `ItemStack`,
+      `InterpBuffer`). `ScriptState` waits for Phase 4.
 - [ ] EnTT registry wiring on the server; fixed 20 Hz tick loop with accumulator.
-- [ ] Base components (§7.1): `Position`, `Velocity`, `Rotation`, `AABB`,
-      `Collider`, `PlayerInput`, `PlayerTag`, `NetReplicated`, `EntityKind`,
-      `Health`, `Inventory`, `ItemStack`, `ScriptState` (empty until Phase 4).
+      **(deferred — the session drives per-player movement directly for now;
+      the registry + `SystemRunner` is a refactor once Lua entity kinds (Phase 4)
+      need to iterate arbitrary entities.)**
 - [ ] System runner with explicit ordering (§7.2).
-- [ ] Client-side lightweight registry (`NetId`, interp `Position` prev/current,
-      `Rotation`, `EntityKind`, `RenderHandle`).
+- [ ] Client-side lightweight registry — currently `ClientSession` holds the
+      predicted local state + a `remote_samples_` interp buffer inline.
 
 ### 3.2 Input pipeline
 
-- [ ] `InputCmd { seq, dt, move, look, buttons }`; client samples per frame,
-      keeps a history ring, batches on lane 4 (`C2S_InputBatch`).
-- [ ] `IngestInputSystem`: per-player queue, validation, rate limit, dt clamp.
+- [x] `InputCmd { seq, dt, move, yaw, pitch, buttons }` + `C2S_InputBatch`
+      (lane 4) — `inc/vb/protocol/input.hpp`, round-trip tested. Client keeps an
+      unacked history ring (`ClientSession::push_input`) and resends it each frame.
+- [x] Input ingest: `ServerSession::handle_input_batch` — skips already-simulated
+      `seq`, clamps `dt` to [0, 0.1], caps the batch at 64 cmds on decode.
+- [ ] Per-player rate limit / flood guard belongs with `GnsTransport`.
 
-### 3.3 Physics (`vb_core` shared)
+### 3.3 Physics (`vb_core/physics`)  ✅
 
-- [ ] Swept-AABB vs. voxel collision, per-axis resolution, `on_ground`, step-up.
-- [ ] Gravity integration from config.
-- [ ] Single implementation consumed by `VoxelCollisionSystem` (server) and
-      client prediction, parameterized by `BlockSolidQuery`.
-- [ ] Unit tests: floor rest, wall slide, ceiling bonk, step-up, corner cases.
+- [x] `vb/physics/movement.{hpp,cpp}`: `step_movement()` — substepped per-axis
+      swept-AABB voxel collision (bisection snap-to-contact), ground friction +
+      wish-velocity accel, gravity, jump, `on_ground` probe, full-voxel step-up,
+      fly mode. Parameterized by `BlockSolidQuery`; no raylib/ECS.
+- [x] One implementation consumed by the server (`handle_input_batch`) and client
+      prediction (`ClientSession`).
+- [x] `MoveParams` tunables (speeds, gravity, jump, step height); `ServerSession`
+      / `ClientSession` `set_move_params`. Config wiring (`server.toml`) → Phase 5.
+- [x] Unit tests (`tests/unit/physics_test.cpp`): floor rest, no tunnelling at
+      terminal velocity, wall stop + slide, jump arc, step-up, yaw basis.
 
 ### 3.4 Replication + netcode (§8.4)
 
-- [ ] Map EnTT player entities ↔ librg network entities.
-- [ ] `S2C_EntitySnapshot` full form: `server_tick`, `last_acked_input_seq`,
-      per-entity `{net_id, kind?, pos, rot, vel, flags}`, spawn/despawn records
-      resent until acked.
-- [ ] Client interpolation of remote entities at `server_time_est - 100 ms`.
-- [ ] Local-player prediction + reconciliation: snap to authoritative state,
-      replay unacked inputs through shared movement code.
-- [ ] Server-time estimation / smoothing on the client.
-- [ ] Integration test: client input → predicted move matches server result
-      within epsilon after reconciliation; second client sees interpolated motion.
+- [x] `S2C_EntitySnapshot` carries `last_acked_input_seq` + the recipient's own
+      authoritative `local` record (interest culling excludes self). `flags` bit 0
+      = `on_ground`.
+- [x] Local-player prediction + reconciliation — `ClientSession`: predict on every
+      `push_input`, on each snapshot snap to `local` and replay the unacked history
+      through the shared `step_movement`.
+- [x] Remote entity interpolation — `remote_samples_` keeps two snapshots per id;
+      `interpolated_pos()` lerps ~1 tick behind. (Tick-indexed, not wall-clock.)
+- [x] Integration test (`tests/unit/netcode_test.cpp`): input batch round-trip;
+      predicted feet converge to server authority within epsilon; a second client
+      sees the first move.
+- [ ] Wall-clock `server_time_est` + smoothing on the client (needs `GnsTransport`
+      RTT; the loopback path has no latency to estimate).
+- [ ] Map players ↔ librg network entities — with the rest of `VB_WITH_REPLICATION`.
 
 **Phase 3 exit:** two players walk around shared terrain, colliding with voxels,
 smooth on each other's screens, local motion is responsive (predicted).
+
+**Phase 3 status (2026-09-11): substantially met over the loopback transport.**
+Shared voxel physics, the input pipeline, authoritative server movement, client
+prediction/reconciliation and remote interpolation are done and tested; the
+client (`--singleplayer`) now walks input-driven with terrain collision instead
+of the free-fly cam. Deferred: a formal EnTT registry + system runner (Phase 3.1
+— not blocking; revisit when Lua entities need it), wall-clock server-time
+estimation and the librg entity mapping (both need the real `GnsTransport`).
 
 ---
 

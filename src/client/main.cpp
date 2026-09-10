@@ -20,6 +20,8 @@
 #include "vb/core/config.hpp"
 #include "vb/net/integrated.hpp"
 #include "vb/net/world_replicator.hpp"
+#include "vb/physics/movement.hpp"
+#include "vb/protocol/input.hpp"
 #include "vb/render/camera.hpp"
 #include "vb/render/chunk_renderer.hpp"
 #include "vb/render/window.hpp"
@@ -82,32 +84,34 @@ struct Singleplayer {
 	}
 };
 
-vb::render::LookMoveInput sample_input(bool mouse_captured) {
-	vb::render::LookMoveInput in;
+vb::protocol::InputCmd sample_input_cmd(std::uint32_t seq, double dt, double yaw,
+		double pitch, bool mouse_captured) {
+	vb::protocol::InputCmd cmd;
+	cmd.seq = seq;
+	cmd.dt = static_cast<float>(dt);
+	cmd.yaw = static_cast<float>(yaw);
+	cmd.pitch = static_cast<float>(pitch);
 	if (mouse_captured) {
-		const Vector2 d = GetMouseDelta();
-		in.look_delta = { static_cast<double>(d.x), static_cast<double>(d.y) };
+		if (IsKeyDown(KEY_W)) {
+			cmd.move.z += 1.0f;
+		}
+		if (IsKeyDown(KEY_S)) {
+			cmd.move.z -= 1.0f;
+		}
+		if (IsKeyDown(KEY_D)) {
+			cmd.move.x += 1.0f;
+		}
+		if (IsKeyDown(KEY_A)) {
+			cmd.move.x -= 1.0f;
+		}
+		if (IsKeyDown(KEY_SPACE)) {
+			cmd.buttons |= vb::protocol::kInputJump;
+		}
+		if (IsKeyDown(KEY_LEFT_SHIFT)) {
+			cmd.buttons |= vb::protocol::kInputSprint;
+		}
 	}
-	if (IsKeyDown(KEY_W)) {
-		in.move_axis.z += 1.0;
-	}
-	if (IsKeyDown(KEY_S)) {
-		in.move_axis.z -= 1.0;
-	}
-	if (IsKeyDown(KEY_D)) {
-		in.move_axis.x += 1.0;
-	}
-	if (IsKeyDown(KEY_A)) {
-		in.move_axis.x -= 1.0;
-	}
-	if (IsKeyDown(KEY_SPACE)) {
-		in.move_axis.y += 1.0;
-	}
-	if (IsKeyDown(KEY_LEFT_CONTROL)) {
-		in.move_axis.y -= 1.0;
-	}
-	in.sprint = IsKeyDown(KEY_LEFT_SHIFT);
-	return in;
+	return cmd;
 }
 
 Camera3D to_camera(const vb::render::FirstPersonController &c, float fovy) {
@@ -222,6 +226,13 @@ int main(int argc, char **argv) {
 	controller.set_look(0.0, -20.0);
 	controller.set_sensitivity(config.mouse_sensitivity);
 
+	vb::physics::MoveParams move_params;
+	if (sp) {
+		sp->game.client().set_move_params(move_params);
+		sp->game.client().set_local_feet(spawn);
+	}
+	std::uint32_t input_seq = 0;
+
 	std::unique_ptr<vb::render::ChunkRenderer> chunk_renderer;
 	if (!window.headless()) {
 		chunk_renderer = std::make_unique<vb::render::ChunkRenderer>();
@@ -243,11 +254,24 @@ int main(int argc, char **argv) {
 			}
 		}
 
-		controller.update(sample_input(mouse_captured), dt);
+		// Look only — position is authoritative, driven by input commands and
+		// corrected by the server via prediction/reconciliation (spec §8.4).
+		vb::render::LookMoveInput look_in;
+		if (mouse_captured) {
+			const Vector2 md = GetMouseDelta();
+			look_in.look_delta = { static_cast<double>(md.x),
+				static_cast<double>(md.y) };
+		}
+		controller.update(look_in, dt);
 
 		if (sp) {
-			sp->game.server().set_player_state(net_id, controller.position());
+			const vb::protocol::InputCmd cmd = sample_input_cmd(++input_seq, dt,
+					controller.yaw(), controller.pitch(), mouse_captured);
+			sp->game.client().push_input(cmd);
 			sp->game.tick(dt);
+			const vb::core::Vec3d feet = sp->game.client().predicted_feet();
+			controller.set_position(
+					{ feet.x, feet.y + move_params.eye_height, feet.z });
 		}
 
 		std::size_t chunk_count = 0;

@@ -13,6 +13,8 @@
 #include "vb/core/ids.hpp"
 #include "vb/core/math.hpp"
 #include "vb/net/handshake.hpp"
+#include "vb/physics/movement.hpp"
+#include "vb/protocol/input.hpp"
 #include "vb/net/transport.hpp"
 #include "vb/net/world_replicator.hpp"
 #include "vb/protocol/handshake.hpp"
@@ -64,6 +66,14 @@ public:
 
 	void set_interest_radius_cells(int cells) { interest_radius_cells_ = cells; }
 
+	// Movement tunables applied to every player (spec §7.3). Set before players
+	// join; a Lua pack overrides per entity kind in Phase 4.
+	void set_move_params(physics::MoveParams p) { move_params_ = p; }
+
+	// Authoritative feet position of a player (for tests / teleports). Input
+	// batches are the normal drive path.
+	const physics::MoveState *player_move_state(core::NetId id) const;
+
 	// Optional: attach world replication (chunk streaming). Without it the
 	// session only replicates entities.
 	void set_world_replicator(std::unique_ptr<WorldReplicator> replicator) {
@@ -77,11 +87,17 @@ private:
 		ServerHandshake handshake;
 		double age = 0.0;
 		bool playing = false;
+		bool input_driven = false;
 		core::NetId net_id = core::NetId::kInvalid;
 		std::vector<core::NetId> last_visible;
+		physics::MoveState move;
+		core::Vec2f look;
+		std::uint32_t last_input_seq = 0;
 	};
 
 	void drop(ConnId conn, const std::string &reason);
+	const world::BlockSolidQuery &world_query() const;
+	void handle_input_batch(Conn &conn, const protocol::C2SInputBatch &batch);
 	void broadcast_snapshots();
 	void broadcast_world();
 
@@ -91,6 +107,7 @@ private:
 	std::map<ConnId, Conn> conns_;
 	replication::InterestGrid interest_;
 	std::unique_ptr<WorldReplicator> replicator_;
+	physics::MoveParams move_params_;
 	int interest_radius_cells_ = 2;
 	std::uint32_t server_tick_ = 0;
 	std::size_t playing_ = 0;
@@ -135,6 +152,26 @@ public:
 	}
 	std::uint32_t last_server_tick() const { return last_server_tick_; }
 
+	// --- local-player prediction (spec §8.4) -----------------------------
+
+	void set_move_params(physics::MoveParams p) { move_params_ = p; }
+	// Seed the predicted state from S2C_JoinAccept spawn_pos.
+	void set_local_feet(core::Vec3d feet) { predicted_.position = feet; }
+
+	// Sample one input: predict locally against the chunk mirror, keep it in the
+	// unacked history, and send a batch of recent commands on lane 4.
+	void push_input(const protocol::InputCmd &cmd);
+
+	const physics::MoveState &predicted_state() const { return predicted_; }
+	core::Vec3d predicted_feet() const { return predicted_.position; }
+	std::uint32_t last_acked_input_seq() const { return last_acked_seq_; }
+	std::size_t unacked_input_count() const { return history_.size(); }
+
+	// Remote entity position for rendering, interpolated at
+	// server_time_est - 100 ms (spec §8.4). Falls back to the raw snapshot pos
+	// when only one sample is known.
+	core::Vec3d interpolated_pos(core::NetId id) const;
+
 	// Replicated chunk mirror (spec §11.2), populated from S2C_Chunk* messages.
 	const world::ClientChunkStore &chunk_store() const { return chunks_; }
 	world::ClientChunkStore &chunk_store() { return chunks_; }
@@ -144,6 +181,15 @@ private:
 	// consumed.
 	bool apply_gameplay_frame(const protocol::Frame &frame);
 	void apply_snapshot(const protocol::S2CEntitySnapshot &snap);
+	void reconcile(const protocol::EntityRecord &authoritative,
+			std::uint32_t acked_seq);
+
+	struct RemoteSample {
+		core::Vec3d prev_pos{};
+		core::Vec3d cur_pos{};
+		std::uint32_t prev_tick = 0;
+		std::uint32_t cur_tick = 0;
+	};
 
 	Transport &transport_;
 	ConnId conn_;
@@ -152,8 +198,14 @@ private:
 	std::string failure_reason_;
 	std::vector<TransportEvent> scratch_;
 	std::unordered_map<core::NetId, protocol::EntityRecord> remote_;
+	std::unordered_map<core::NetId, RemoteSample> remote_samples_;
 	world::ClientChunkStore chunks_{ world::BlockRegistry::base() };
 	std::uint32_t last_server_tick_ = 0;
+
+	physics::MoveState predicted_;
+	physics::MoveParams move_params_;
+	std::vector<protocol::InputCmd> history_; // unacked, ascending seq
+	std::uint32_t last_acked_seq_ = 0;
 };
 
 } // namespace vb::net

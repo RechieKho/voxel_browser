@@ -4,7 +4,12 @@
 > as any change to a struct in `inc/vb/protocol/`, and bump
 > `kEngineProtocolVersion` in `cmake/version.hpp.in`.
 
-Current `ENGINE_PROTOCOL_VERSION`: **1**.
+Current `ENGINE_PROTOCOL_VERSION`: **2**.
+
+- **2** — `S2C_EntitySnapshot` gains `bool has_local` + trailing `EntityRecord local`
+  (the recipient's own authoritative state, for client reconciliation);
+  `C2S_InputBatch` (80) payload defined.
+- **1** — initial shipped set.
 
 ## Conventions
 
@@ -61,10 +66,33 @@ buffered, and yields `consumed` so a stream reader can advance.
 1 server full, 2 protocol mismatch, 3 auth failed, 4 shutdown, 5 kicked,
 6 timeout, 7 protocol error, 8 bad handshake).
 
+### Snapshot — `inc/vb/protocol/snapshot.hpp` (implemented)
+
+| Type (id)               | Fields                                                                 |
+| ----------------------- | --------------------------------------------------------------------- |
+| `S2C_EntitySnapshot` (60) | `u32 server_tick`, `u32 last_acked_input_seq`, `varint n` + `n×EntityRecord entered`, `varint n` + `n×EntityRecord updated`, `varint n` + `n×u32 removed`, `bool has_local`, `EntityRecord local` (only if `has_local`) |
+
+`EntityRecord` = `u32 net_id`, `u16 kind`, `f64×3 pos`, `f32×2 rot` (yaw,pitch deg),
+`f32×3 vel`, `u8 flags` (bit 0 = `on_ground`). Interest culling excludes the
+recipient, so their own authoritative state rides in `local` for
+prediction/reconciliation (spec §8.4).
+
+### Input — `inc/vb/protocol/input.hpp` (implemented)
+
+| Type (id)            | Fields                                                        |
+| -------------------- | ------------------------------------------------------------ |
+| `C2S_InputBatch` (80) | `varint n` (≤64) + `n×InputCmd cmds` (ascending `seq`)       |
+
+`InputCmd` = `u32 seq`, `f32 dt`, `f32×3 move` (x=strafe, y=up/fly, z=forward, [-1,1]),
+`f32 yaw`, `f32 pitch`, `u8 buttons` (bit0 jump, bit1 sprint, bit2 primary,
+bit3 secondary, bit4 fly-up, bit5 fly-down). Sent every client frame; each batch
+resends recent unacked commands. The server simulates any `seq` above the last it
+has run and acks the highest via `S2C_EntitySnapshot.last_acked_input_seq`.
+
 ### Not yet implemented
 
-Asset sync (20–23), world (40–45), snapshot (60), input (80), chat/UI (100–103)
-— types are reserved in `MessageType`; payloads land in Phases 2–5.
+Asset sync (20–23), block edits (44–45), block registry (40), chat/UI (100–103)
+— types are reserved in `MessageType`; payloads land in Phases 4–5.
 
 ## Handshake sequence
 

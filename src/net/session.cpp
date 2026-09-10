@@ -1,9 +1,11 @@
 #include "vb/net/session.hpp"
 
+#include <algorithm>
 #include <span>
 #include <utility>
 
 #include "vb/core/log.hpp"
+#include "vb/core/math.hpp"
 #include "vb/protocol/message.hpp"
 #include "vb/protocol/world.hpp"
 
@@ -13,6 +15,31 @@ namespace {
 
 std::span<const std::byte> span_of(const std::vector<std::byte> &v) {
 	return { v.data(), v.size() };
+}
+
+// Fallback voxel query when no world replicator is attached (entity-only
+// sessions and early tests): everything is open air.
+struct EmptyBlockQuery final : world::BlockSolidQuery {
+	core::BlockId block_at(core::IVec3) const override {
+		return core::BlockId::kAir;
+	}
+	bool solid_at(core::IVec3) const override { return false; }
+};
+const EmptyBlockQuery kEmptyBlockQuery;
+
+physics::MoveInput to_move_input(const protocol::InputCmd &c) {
+	physics::MoveInput mi;
+	mi.dt = core::clamp(static_cast<double>(c.dt), 0.0, 0.1);
+	mi.wish_dir = physics::wish_dir_from_local(c.move, c.yaw);
+	mi.jump = (c.buttons & protocol::kInputJump) != 0;
+	mi.sprint = (c.buttons & protocol::kInputSprint) != 0;
+	mi.fly_up = (c.buttons & protocol::kInputFlyUp) != 0;
+	mi.fly_down = (c.buttons & protocol::kInputFlyDown) != 0;
+	return mi;
+}
+
+std::uint8_t pack_flags(bool on_ground) {
+	return on_ground ? 1u : 0u;
 }
 
 void send_frames(Transport &t, ConnId conn,
@@ -59,6 +86,50 @@ void ServerSession::drop(ConnId conn, const std::string &reason) {
 	transport_.close(conn, reason);
 }
 
+const world::BlockSolidQuery &ServerSession::world_query() const {
+	if (replicator_) {
+		return replicator_->world();
+	}
+	return kEmptyBlockQuery;
+}
+
+void ServerSession::handle_input_batch(Conn &conn,
+		const protocol::C2SInputBatch &batch) {
+	const world::BlockSolidQuery &world = world_query();
+	for (const auto &cmd : batch.cmds) {
+		if (cmd.seq <= conn.last_input_seq) {
+			continue; // already simulated (batches resend recent commands)
+		}
+		conn.move = physics::step_movement(conn.move, to_move_input(cmd),
+				move_params_, world);
+		conn.last_input_seq = cmd.seq;
+		conn.look = { cmd.yaw, cmd.pitch };
+	}
+	conn.input_driven = true;
+
+	replication::EntityState s;
+	if (const auto *e = interest_.get(conn.net_id)) {
+		s = *e;
+	}
+	s.net_id = conn.net_id;
+	s.pos = conn.move.position;
+	s.rot = conn.look;
+	s.vel = core::Vec3f{ static_cast<float>(conn.move.velocity.x),
+		static_cast<float>(conn.move.velocity.y),
+		static_cast<float>(conn.move.velocity.z) };
+	interest_.upsert(s);
+}
+
+const physics::MoveState *ServerSession::player_move_state(core::NetId id) const {
+	for (const auto &[conn, state] : conns_) {
+		(void)conn;
+		if (state.playing && state.net_id == id) {
+			return &state.move;
+		}
+	}
+	return nullptr;
+}
+
 void ServerSession::tick(double dt_seconds) {
 	scratch_.clear();
 	transport_.poll(scratch_);
@@ -82,6 +153,17 @@ void ServerSession::tick(double dt_seconds) {
 					drop(ev.conn, "malformed frame");
 					break;
 				}
+				if (it->second.playing) {
+					if (frame->header.type == protocol::MessageType::kC2SInputBatch) {
+						if (auto b = protocol::C2SInputBatch::decode(frame->payload)) {
+							handle_input_batch(it->second, *b);
+						}
+						break;
+					}
+					// Other post-join C2S messages (block edits, chat) land in
+					// later phases; ignore unknown types rather than dropping.
+					break;
+				}
 				auto step = it->second.handshake.on_frame(*frame);
 				send_frames(transport_, ev.conn, step.send);
 				if (step.completed) {
@@ -89,6 +171,8 @@ void ServerSession::tick(double dt_seconds) {
 					++playing_;
 					const JoinGrant &g = it->second.handshake.grant();
 					it->second.net_id = g.net_id;
+					it->second.move = physics::MoveState{};
+					it->second.move.position = g.spawn_pos;
 					interest_.upsert(replication::EntityState{
 							g.net_id, core::EntityKindId::kInvalid, g.spawn_pos,
 							{}, {} });
@@ -209,7 +293,25 @@ void ServerSession::broadcast_snapshots() {
 
 		state.last_visible = std::move(visible);
 
-		if (snap.entered.empty() && snap.updated.empty() && snap.removed.empty()) {
+		snap.last_acked_input_seq = state.last_input_seq;
+		if (state.input_driven) {
+			snap.has_local = true;
+			if (self) {
+				snap.local = to_record(*self);
+			}
+			snap.local.net_id = state.net_id;
+			snap.local.pos = state.move.position;
+			snap.local.vel = core::Vec3f{
+				static_cast<float>(state.move.velocity.x),
+				static_cast<float>(state.move.velocity.y),
+				static_cast<float>(state.move.velocity.z)
+			};
+			snap.local.rot = state.look;
+			snap.local.flags = pack_flags(state.move.on_ground);
+		}
+
+		if (!snap.has_local && snap.entered.empty() && snap.updated.empty() &&
+				snap.removed.empty()) {
 			continue; // nothing changed for this player this tick
 		}
 		send_message(transport_, conn, snap);
@@ -326,15 +428,88 @@ bool ClientSession::apply_gameplay_frame(const protocol::Frame &frame) {
 
 void ClientSession::apply_snapshot(const protocol::S2CEntitySnapshot &snap) {
 	last_server_tick_ = snap.server_tick;
-	for (const auto &r : snap.entered) {
+
+	const auto ingest = [&](const protocol::EntityRecord &r) {
 		remote_[r.net_id] = r;
+		RemoteSample &s = remote_samples_[r.net_id];
+		if (s.cur_tick == 0) {
+			s.prev_pos = r.pos;
+			s.prev_tick = snap.server_tick;
+		} else if (s.cur_tick != snap.server_tick) {
+			s.prev_pos = s.cur_pos;
+			s.prev_tick = s.cur_tick;
+		}
+		s.cur_pos = r.pos;
+		s.cur_tick = snap.server_tick;
+	};
+	for (const auto &r : snap.entered) {
+		ingest(r);
 	}
 	for (const auto &r : snap.updated) {
-		remote_[r.net_id] = r;
+		ingest(r);
 	}
 	for (core::NetId id : snap.removed) {
 		remote_.erase(id);
+		remote_samples_.erase(id);
 	}
+
+	if (snap.has_local) {
+		reconcile(snap.local, snap.last_acked_input_seq);
+	}
+}
+
+void ClientSession::reconcile(const protocol::EntityRecord &authoritative,
+		std::uint32_t acked_seq) {
+	last_acked_seq_ = acked_seq;
+	predicted_.position = authoritative.pos;
+	predicted_.velocity = core::Vec3d{ static_cast<double>(authoritative.vel.x),
+		static_cast<double>(authoritative.vel.y),
+		static_cast<double>(authoritative.vel.z) };
+	predicted_.on_ground = (authoritative.flags & 1u) != 0;
+
+	history_.erase(std::remove_if(history_.begin(), history_.end(),
+						   [acked_seq](const protocol::InputCmd &c) {
+							   return c.seq <= acked_seq;
+						   }),
+			history_.end());
+
+	for (const auto &c : history_) {
+		predicted_ = physics::step_movement(predicted_, to_move_input(c),
+				move_params_, chunks_);
+	}
+}
+
+void ClientSession::push_input(const protocol::InputCmd &cmd) {
+	if (!joined()) {
+		return;
+	}
+	predicted_ = physics::step_movement(predicted_, to_move_input(cmd),
+			move_params_, chunks_);
+	history_.push_back(cmd);
+	while (history_.size() > protocol::C2SInputBatch::kMaxCmds) {
+		history_.erase(history_.begin());
+	}
+	protocol::C2SInputBatch batch;
+	batch.cmds = history_;
+	send_message(transport_, conn_, batch);
+}
+
+core::Vec3d ClientSession::interpolated_pos(core::NetId id) const {
+	const auto it = remote_samples_.find(id);
+	if (it == remote_samples_.end()) {
+		const auto r = remote_.find(id);
+		return r == remote_.end() ? core::Vec3d{} : r->second.pos;
+	}
+	const RemoteSample &s = it->second;
+	if (s.cur_tick <= s.prev_tick) {
+		return s.cur_pos;
+	}
+	// Render ~1 tick behind the newest sample (spec §8.4 interpolation delay).
+	const double span = static_cast<double>(s.cur_tick - s.prev_tick);
+	const double target =
+			static_cast<double>(last_server_tick_) - 1.0 - static_cast<double>(s.prev_tick);
+	const double a = core::clamp(span > 0.0 ? target / span : 1.0, 0.0, 1.0);
+	return s.prev_pos + (s.cur_pos - s.prev_pos) * a;
 }
 
 } // namespace vb::net
