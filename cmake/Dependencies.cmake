@@ -202,9 +202,18 @@ if(VB_WITH_LUA)
 endif()
 
 # ===========================================================================
-# Cellulose — voxel meshing (Phase 2.5). API unknown, spike required first;
-# see ARCHITECTURE_SPEC.md §19 Q2. Declared here so the spike can enable it.
+# Cellulose — voxel meshing (spec §19 Q2, resolved). Header-only; we use its
+# greedy_mesh(vector<MeshSample>, ...) entry point. It vendors unordered_dense
+# as a submodule and its demo would re-fetch raylib, so: pull submodules and
+# turn the demo off. Phase 2 ships vb/render/chunk_mesher (same I/O) with this
+# OFF; flip VB_WITH_MESHING to swap in greedy_mesh.
 # ===========================================================================
-if(VB_WITH_MESHING)
-  vb_fetch(cellulose TAG main REPO https://github.com/RechieKho/cellulose.git)
+if(VB_WITH_MESHING AND NOT TARGET cellulose)
+  set(CELLULOSE_BUILD_DEMO OFF CACHE INTERNAL "")
+  FetchContent_Declare(cellulose
+    GIT_REPOSITORY https://github.com/RechieKho/cellulose.git
+    GIT_TAG main
+    GIT_SHALLOW TRUE
+    GIT_SUBMODULES_RECURSE TRUE)
+  FetchContent_MakeAvailable(cellulose)
 endif()

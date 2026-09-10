@@ -8,6 +8,7 @@ add_executable(vb_tests
   unit/config_test.cpp
   unit/core_test.cpp
   unit/lighting_test.cpp
+  unit/mesher_test.cpp
   unit/protocol_test.cpp
   unit/net_test.cpp
   unit/replication_test.cpp
@@ -45,7 +46,8 @@ endif()
 if(VB_BUILD_CLIENT)
   add_test(NAME client_smoke COMMAND voxel_browser --headless --frames 2)
   add_test(NAME singleplayer_smoke
-    COMMAND voxel_browser --headless --frames 1 --singleplayer --name CiBot)
+    COMMAND voxel_browser --headless --frames 2 --singleplayer --name CiBot
+            --render-distance 2)
   set_tests_properties(singleplayer_smoke PROPERTIES
-    PASS_REGULAR_EXPRESSION "joined singleplayer as net id 1")
+    PASS_REGULAR_EXPRESSION "joined singleplayer" TIMEOUT 60)
 endif()

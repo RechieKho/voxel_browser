@@ -7,6 +7,7 @@ target_link_libraries(vb_raygui_impl PUBLIC vb_raygui)
 set_target_properties(vb_raygui_impl PROPERTIES C_STANDARD 99)
 
 add_library(vb_render STATIC
+  chunk_renderer.cpp
   window.cpp
 )
 add_library(vb::render ALIAS vb_render)

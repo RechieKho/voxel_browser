@@ -249,19 +249,36 @@ Goal: server generates terrain, streams chunks, client meshes and renders them.
       (auto-mirrors chunk messages post-join). Integration test: a joined client
       mirrors the 27-chunk box around its spawn and reclaims it on move.
 
-### 2.5 Client meshing (`vb_render/render`)
+### 2.5 Client meshing  ✅ (hand-rolled; Cellulose swap-in pending)
 
-- [ ] **(spike)** Cellulose API: meshing entry points, does it own GPU buffers or
-      emit vertex data, neighbor/light inputs, chunk granularity. Record in spec
-      open question #2.
-- [ ] Mesh worker pool: greedy mesh from `(registry, blocks, light, neighbors)`.
-- [ ] Per-vertex light + AO baking.
-- [ ] Main-thread GPU upload with per-frame budget.
-- [ ] Frustum + distance culling; transparent second pass.
-- [ ] Texture atlas builder from pack textures (hardcoded set until Phase 4).
+- [x] **(spike)** Cellulose API — resolved in `ARCHITECTURE_SPEC.md §19 Q2`.
+      Emits vertex data (`ChunkMesh`); reusable seam is `greedy_mesh(vector<
+      MeshSample>, …)`. Blocked on `VB_WITH_MESHING` (submodule + demo-raylib
+      fetch); `Dependencies.cmake` prepared.
+- [x] `vb/world/chunk_mesher.{hpp,cpp}`: face-culled cube mesh from a
+      `ClientChunkStore` (reads neighbours across chunk borders), per-vertex
+      light + ambient occlusion. `MeshData { MeshVertex[], u32 indices[] }` —
+      renderer-neutral. Same I/O as `greedy_mesh` so the swap is local.
+- [x] `vb/render/chunk_renderer.{hpp,cpp}`: main-thread meshing with a per-frame
+      budget, raylib GPU upload (vertex colours from light × per-block tint),
+      drop-on-unload, re-mesh on `revision` change.
+- [x] Wired into the client: `--singleplayer` keeps an in-process
+      `IntegratedGame` + `World` + worldgen pool + `WorldReplicator` alive; the
+      render loop feeds player position back and draws the streamed, meshed
+      terrain.
+- [ ] Mesh worker pool (needs a chunk+neighbour snapshot), frustum culling,
+      transparent second pass, texture atlas (Phase 4) — follow-ups.
 
 **Phase 2 exit:** connect to a server and fly around streamed, meshed terrain
 (dirt/stone/grass/air) with correct chunk load/unload; determinism CI gate green.
+
+**Phase 2 status (2026-09-11): met.** `voxel_browser --singleplayer` generates
+terrain, streams it as chunks, meshes and renders it, and loads/unloads chunks
+as the player moves. Determinism gate is green on all 3 platforms. Deferred to
+later phases: biomes/carvers/decoration (Lua pipeline, Phase 4), cross-chunk sky
+occlusion + relight-on-edit (Phase 3/5), mesh worker pool + greedy merge
+(Cellulose, `VB_WITH_MESHING`), texture atlas (Phase 4), LZ4 chunk compression
+(`VB_WITH_COMPRESSION`).
 
 ---
 

@@ -695,9 +695,20 @@ to the extent practical (no code exec, no arbitrary FS writes).
 
 1. **Binding layer**: raw Lua C API vs. `sol2`. **Resolved (2026-09-10): sol2**
    (v3.3.0), for ergonomics; compile-time cost accepted.
-2. **Cellulose API fit**: exact meshing entry points and whether it manages GPU
-   buffers or just produces vertex data — needs a spike (task in
-   `REMAINING_TASKS.md`).
+2. **Cellulose API fit**: **Resolved (2026-09-11).** Cellulose is a mature
+   header-only lib (same maintainer). It **emits vertex data, not GPU buffers**:
+   `ChunkMesh { vector<MeshVertex{position, normal, u, v, brightness, block_id,
+   texture_id, occlusion}>, vector<u32> indices }`. The reusable seam is
+   `greedy_mesh(vector<MeshSample>, size, block_scale, ao, weld) -> ChunkMesh`
+   where `MeshSample { visible[6], block_id, brightness[6], texture[6],
+   face_occlusion[6] }` — a flat grid we can fill from `ClientChunkStore`
+   *without* adopting Cellulose's `World`. `cellulose/raylib.hpp` has
+   `to_raylib_mesh`. **Plan: adopt `greedy_mesh` under `VB_WITH_MESHING`.**
+   Blocker for turning it on now: Cellulose vendors `unordered_dense` as a git
+   submodule (empty on a shallow clone) and its default `CELLULOSE_BUILD_DEMO`
+   fetches raylib again — `Dependencies.cmake` needs `GIT_SUBMODULES` +
+   `CELLULOSE_BUILD_DEMO=OFF`. Phase 2 ships a hand-rolled mesher
+   (`vb/render/chunk_mesher`) with the same inputs/outputs so the swap is local.
 3. **librg version / API**: **Resolved (2026-09-10): librg v7.4.0** (single
    self-contained header, zpl bundled). Interest is chunk-radius based (cells
    independent of voxel chunks). **Use librg for interest culling + its

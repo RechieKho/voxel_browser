@@ -87,6 +87,7 @@ public:
 
 	std::uint64_t revision() const { return revision_; }
 	void bump_revision() { ++revision_; }
+	void set_revision(std::uint64_t r) { revision_ = r; }
 
 private:
 	core::ChunkCoord coord_{};

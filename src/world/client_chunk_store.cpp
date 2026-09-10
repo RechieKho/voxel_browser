@@ -15,6 +15,7 @@ core::Result<void, core::ProtocolError> ClientChunkStore::apply_add(
 		return core::Err{ decoded.error() };
 	}
 	chunk->set_gen_state(GenState::kGenerated);
+	chunk->set_revision(msg.revision);
 	chunk->dirty().mesh = true;
 	chunks_.insert_or_assign(msg.coord, std::move(chunk));
 	return {};
@@ -53,10 +54,31 @@ const Chunk *ClientChunkStore::find(core::ChunkCoord c) const {
 	return it == chunks_.end() ? nullptr : it->second.get();
 }
 
+std::vector<core::ChunkCoord> ClientChunkStore::loaded_coords() const {
+	std::vector<core::ChunkCoord> out;
+	out.reserve(chunks_.size());
+	for (const auto &[coord, chunk] : chunks_) {
+		(void)chunk;
+		out.push_back(coord);
+	}
+	return out;
+}
+
 core::BlockId ClientChunkStore::block_at(core::IVec3 world_voxel) const {
 	const VoxelAddress a = address_of(world_voxel);
 	const Chunk *chunk = find(a.chunk);
 	return chunk == nullptr ? core::BlockId::kAir : chunk->get(a.lx, a.ly, a.lz);
+}
+
+Light ClientChunkStore::light_at(core::IVec3 world_voxel) const {
+	const VoxelAddress a = address_of(world_voxel);
+	const Chunk *chunk = find(a.chunk);
+	if (chunk == nullptr) {
+		Light full;
+		full.set_sky(15);
+		return full;
+	}
+	return chunk->light(a.lx, a.ly, a.lz);
 }
 
 } // namespace vb::world

@@ -204,6 +204,24 @@ _(Move items here with a date + commit when fixed, so the history is visible.)_
   then-client-polls each tick = one message hop per tick).
   **Next:** `GnsTransport` behind `VB_WITH_NET`.
 
+- **2026-09-11 — Phase 2 complete** (`ce7ee63`..HEAD). `vb/world`:
+  `PalettedChunkStore`, `Chunk`, `World`, `BlockRegistry`, `LightEngine`
+  (per-chunk flood fill), `chunk_codec` (RLE), `chunk_interest`,
+  `ChunkLifecycleSystem`, `ClientChunkStore`, `chunk_mesher` (face-cull + AO).
+  `vb/worldgen`: deterministic `vb/core/noise.hpp` (no trig, `-ffp-contract=off`
+  project-wide), `WorldGenerator` (fBm heightmap), `WorldGenWorkerPool`
+  (+`kSynchronous`). `vb/protocol`: `S2C_EntitySnapshot`, `S2C_Chunk*`.
+  `net/world_replicator`: per-tick chunk streaming, wired into `ServerSession`
+  (`set_world_replicator`) + `ClientSession`. `vb/render/chunk_renderer`: raylib
+  GPU upload. `voxel_browser --singleplayer` = worldgen + streaming + meshing +
+  rendering, one code path. Determinism golden `0x021BB3847413D8A5` green on
+  all 3 platforms. ~99k test assertions.
+- **GCC gotcha:** `uint64_t` (`unsigned long` on LP64) vs `...ULL` literals
+  (`unsigned long long`) trips `-Wsign-conversion` — always name wide constants
+  `constexpr std::uint64_t`.
+- **Reference-lifetime gotcha:** don't store `const BlockRegistry&` — callers
+  pass `BlockRegistry::base()` temporaries. `LightEngine` holds it by value.
+
 - **2026-09-10 — Phase 1.4 replication** (uncommitted). librg spike done →
   `docs/replication.md` + `ARCHITECTURE_SPEC.md §19 Q3` (librg v7.4.0 is a
   self-contained header, zpl bundled; use it for culling + create/update/remove

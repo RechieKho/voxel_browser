@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <unordered_map>
+#include <vector>
 
 #include "vb/core/error.hpp"
 #include "vb/core/ids.hpp"
@@ -30,6 +31,7 @@ public:
 	const Chunk *find(core::ChunkCoord c) const;
 	bool has(core::ChunkCoord c) const { return chunks_.count(c) != 0; }
 	std::size_t size() const { return chunks_.size(); }
+	std::vector<core::ChunkCoord> loaded_coords() const;
 
 	const BlockRegistry &registry() const { return registry_; }
 
@@ -38,6 +40,10 @@ public:
 	bool solid_at(core::IVec3 world_voxel) const override {
 		return registry_.is_solid(block_at(world_voxel));
 	}
+
+	// Light at a world voxel; a full-bright Light for unloaded chunks so the
+	// mesher doesn't darken chunk borders while neighbours stream in.
+	Light light_at(core::IVec3 world_voxel) const;
 
 private:
 	BlockRegistry registry_;

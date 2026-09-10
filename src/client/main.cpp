@@ -1,15 +1,16 @@
 // voxel_browser — the client ("browser").
 //
-// Phase 1: build banner, raylib window + first-person camera, a debug overlay,
-// and a working connection handshake. `--singleplayer` runs an in-process
-// server over a loopback transport and joins it (spec §3 — one code path for
-// single- and multiplayer). `--headless` does no GL work so CI and integration
-// tests share this path.
+// Phase 2: raylib window + first-person camera + debug overlay, a working
+// connection handshake, and streamed/meshed voxel terrain. `--singleplayer`
+// runs an in-process server (worldgen + replication) over a loopback transport
+// and joins it (spec §3 — one code path for single- and multiplayer).
+// `--headless` does no GL work so CI and integration tests share this path.
 
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
+#include <memory>
 #include <string>
 
 #include <raylib.h>
@@ -18,8 +19,14 @@
 #include "vb/core/cli.hpp"
 #include "vb/core/config.hpp"
 #include "vb/net/integrated.hpp"
+#include "vb/net/world_replicator.hpp"
 #include "vb/render/camera.hpp"
+#include "vb/render/chunk_renderer.hpp"
 #include "vb/render/window.hpp"
+#include "vb/world/block.hpp"
+#include "vb/world/world.hpp"
+#include "vb/worldgen/generator.hpp"
+#include "vb/worldgen/worker_pool.hpp"
 
 namespace {
 
@@ -39,45 +46,41 @@ void print_usage() {
 				 "  --help           show this help\n";
 }
 
-struct JoinInfo {
-	bool joined = false;
-	std::uint32_t net_id = 0;
-	std::uint64_t world_seed = 0;
-	vb::core::Vec3d spawn{ 0.0, 66.0, 0.0 };
-	std::string detail;
-};
-
-// Runs the integrated (loopback) server + client until the handshake settles.
-JoinInfo run_singleplayer_handshake(const std::string &name) {
-	vb::net::HandshakeServerConfig server_cfg;
-	server_cfg.pack_name = "base";
-	server_cfg.motd = "integrated singleplayer";
-
-	vb::net::HandshakeClientConfig client_cfg;
-	client_cfg.player_name = name;
-	client_cfg.client_version = vb::kVersionString;
-
-	vb::net::IntegratedGame game(server_cfg, client_cfg);
-	for (int i = 0; i < 32 && !game.client_joined() && !game.client_failed();
-			++i) {
-		game.tick(0.05);
-	}
-
-	JoinInfo info;
-	if (game.client_joined()) {
-		const auto &accept = *game.client().join_accept();
-		info.joined = true;
-		info.net_id = static_cast<std::uint32_t>(accept.your_net_id);
-		info.world_seed = accept.world_seed;
-		info.spawn = accept.spawn_pos;
-		info.detail = "joined singleplayer as net id " +
-				std::to_string(info.net_id);
-	} else {
-		info.detail = "singleplayer handshake failed: " +
-				game.client().failure_reason();
-	}
-	return info;
+vb::worldgen::WorldGenerator make_generator(std::uint64_t seed) {
+	vb::worldgen::WorldGenParams p;
+	p.seed = seed;
+	return vb::worldgen::WorldGenerator(p, vb::world::BlockRegistry::base());
 }
+
+vb::net::HandshakeServerConfig sp_server_config(std::uint64_t seed) {
+	vb::net::HandshakeServerConfig c;
+	c.pack_name = "base";
+	c.motd = "integrated singleplayer";
+	c.world_seed = seed;
+	return c;
+}
+
+vb::net::HandshakeClientConfig sp_client_config(const std::string &name) {
+	vb::net::HandshakeClientConfig c;
+	c.player_name = name;
+	c.client_version = vb::kVersionString;
+	return c;
+}
+
+// Owns the in-process world for --singleplayer, kept alive for the whole
+// session (spec §3: the integrated server is a library, not a child process).
+struct Singleplayer {
+	vb::world::World world{ vb::world::BlockRegistry::base() };
+	vb::worldgen::WorldGenWorkerPool pool;
+	vb::net::IntegratedGame game;
+
+	Singleplayer(std::uint64_t seed, const std::string &name, int view_distance) : pool(make_generator(seed)),
+																				   game(sp_server_config(seed), sp_client_config(name)) {
+		game.server().set_world_replicator(
+				std::make_unique<vb::net::WorldReplicator>(world, pool,
+						vb::world::BlockRegistry::base(), view_distance, 3));
+	}
+};
 
 vb::render::LookMoveInput sample_input(bool mouse_captured) {
 	vb::render::LookMoveInput in;
@@ -121,22 +124,14 @@ Camera3D to_camera(const vb::render::FirstPersonController &c, float fovy) {
 	return cam;
 }
 
-void draw_scene(const Camera3D &camera) {
-	BeginMode3D(camera);
-	DrawGrid(64, 1.0f);
-	DrawCube(Vector3{ 0.0f, 0.5f, 0.0f }, 1.0f, 1.0f, 1.0f, Color{ 120, 180, 90, 255 });
-	DrawCubeWires(Vector3{ 0.0f, 0.5f, 0.0f }, 1.0f, 1.0f, 1.0f, DARKGRAY);
-	EndMode3D();
-}
-
 void draw_overlay(const vb::render::FirstPersonController &c,
-		const std::string &status, bool mouse_captured) {
+		const std::string &status, std::size_t chunk_count, bool mouse_captured) {
 	const vb::core::Vec3d p = c.position();
 	char line[160];
 	DrawText("voxel_browser", 12, 12, 20, RAYWHITE);
 	DrawText(status.c_str(), 12, 38, 18, Color{ 170, 200, 170, 255 });
-
-	std::snprintf(line, sizeof(line), "pos  %.1f  %.1f  %.1f", p.x, p.y, p.z);
+	std::snprintf(line, sizeof(line), "pos  %.1f  %.1f  %.1f   chunks %zu", p.x,
+			p.y, p.z, chunk_count);
 	DrawText(line, 12, 64, 18, Color{ 170, 170, 180, 255 });
 	std::snprintf(line, sizeof(line), "look yaw %.0f  pitch %.0f", c.yaw(),
 			c.pitch());
@@ -161,8 +156,8 @@ int main(int argc, char **argv) {
 		return EXIT_SUCCESS;
 	}
 
-	auto loaded = vb::core::load_client_config(
-			args.value_or("config", "client.toml"));
+	auto loaded =
+			vb::core::load_client_config(args.value_or("config", "client.toml"));
 	if (!loaded) {
 		std::cerr << "client: bad config: " << vb::core::message(loaded.error())
 				  << '\n';
@@ -176,40 +171,61 @@ int main(int argc, char **argv) {
 	const bool singleplayer = args.has("singleplayer");
 	const bool headless = args.has("headless") || VB_HEADLESS_DEFAULT;
 	const float fov = static_cast<float>(config.fov);
+	const int view_distance =
+			static_cast<int>(config.render_distance < 2 ? 2 : config.render_distance);
 
 	std::cout << vb::core::describe_build() << '\n'
 			  << "client: " << (headless ? "headless" : "windowed") << " mode\n";
 
-	JoinInfo join;
+	std::unique_ptr<Singleplayer> sp;
+	vb::core::NetId net_id = vb::core::NetId::kInvalid;
+	vb::core::Vec3d spawn{ 0.0, 72.0, 0.0 };
 	std::string status;
+
 	if (singleplayer) {
-		join = run_singleplayer_handshake(config.player_name);
-		std::cout << "client: " << join.detail << '\n';
-		if (!join.joined) {
+		sp = std::make_unique<Singleplayer>(7, config.player_name, view_distance);
+		for (int i = 0; i < 128 && !sp->game.client_joined() &&
+				!sp->game.client_failed();
+				++i) {
+			sp->game.tick(0.05);
+		}
+		if (!sp->game.client_joined()) {
+			std::cout << "client: singleplayer join failed: "
+					  << sp->game.client().failure_reason() << '\n';
 			return EXIT_FAILURE;
 		}
-		status = join.detail + " (seed " + std::to_string(join.world_seed) + ")";
+		const auto &accept = *sp->game.client().join_accept();
+		net_id = accept.your_net_id;
+		spawn = accept.spawn_pos;
+		status = "singleplayer — net id " +
+				std::to_string(static_cast<std::uint32_t>(net_id)) + ", seed " +
+				std::to_string(accept.world_seed);
+		std::cout << "client: joined " << status << '\n';
 	} else {
 		status = "not connected (" + server + ":" + std::to_string(port) +
 				") — remote transport lands with VB_WITH_NET";
 		std::cout << "client: " << status << '\n';
 	}
 
-	vb::render::WindowConfig cfg;
-	cfg.headless = headless;
-	cfg.width = static_cast<int>(config.window_width);
-	cfg.height = static_cast<int>(config.window_height);
-	cfg.vsync = config.vsync;
-	cfg.title = "voxel_browser";
-	cfg.headless_frame_limit =
+	vb::render::WindowConfig wcfg;
+	wcfg.headless = headless;
+	wcfg.width = static_cast<int>(config.window_width);
+	wcfg.height = static_cast<int>(config.window_height);
+	wcfg.vsync = config.vsync;
+	wcfg.title = "voxel_browser";
+	wcfg.headless_frame_limit =
 			headless ? static_cast<std::uint64_t>(args.int_or("frames", 3)) : 0;
-
-	vb::render::Window window(cfg);
+	vb::render::Window window(wcfg);
 
 	vb::render::FirstPersonController controller;
-	controller.set_position({ join.spawn.x, join.spawn.y + 1.7, join.spawn.z });
-	controller.set_look(0.0, -10.0);
+	controller.set_position({ spawn.x, spawn.y + 1.7, spawn.z });
+	controller.set_look(0.0, -20.0);
 	controller.set_sensitivity(config.mouse_sensitivity);
+
+	std::unique_ptr<vb::render::ChunkRenderer> chunk_renderer;
+	if (!window.headless()) {
+		chunk_renderer = std::make_unique<vb::render::ChunkRenderer>();
+	}
 
 	bool mouse_captured = false;
 
@@ -229,10 +245,27 @@ int main(int argc, char **argv) {
 
 		controller.update(sample_input(mouse_captured), dt);
 
+		if (sp) {
+			sp->game.server().set_player_state(net_id, controller.position());
+			sp->game.tick(dt);
+		}
+
+		std::size_t chunk_count = 0;
+		if (chunk_renderer && sp) {
+			chunk_renderer->sync(sp->game.client().chunk_store(), /*budget*/ 8);
+			chunk_count = chunk_renderer->uploaded_count();
+		}
+
 		window.begin_frame();
 		if (!window.headless()) {
-			draw_scene(to_camera(controller, fov));
-			draw_overlay(controller, status, mouse_captured);
+			const Camera3D camera = to_camera(controller, fov);
+			BeginMode3D(camera);
+			DrawGrid(64, 4.0f);
+			if (chunk_renderer) {
+				chunk_renderer->draw();
+			}
+			EndMode3D();
+			draw_overlay(controller, status, chunk_count, mouse_captured);
 		}
 		window.end_frame();
 	}
