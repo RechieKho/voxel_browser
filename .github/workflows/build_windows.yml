@@ -42,7 +42,8 @@ jobs:
           cmake -S "${{ github.workspace }}" -B "${{ github.workspace }}\build" -G Ninja ^
             -DCMAKE_BUILD_TYPE="${{ matrix.cmake_build_type_keyword }}" ^
             -DVB_WARNINGS_AS_ERRORS=ON ^
-            -DVB_HEADLESS=OFF
+            -DVB_HEADLESS=OFF ^
+            -DVB_WITH_LUA=ON
 
       - name: Build
         shell: cmd

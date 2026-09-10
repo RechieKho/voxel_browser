@@ -5,6 +5,7 @@ add_subdirectory(protocol)
 add_subdirectory(world)
 add_subdirectory(worldgen)
 add_subdirectory(physics)
+add_subdirectory(script)
 add_subdirectory(net)
 
 if(VB_BUILD_CLIENT)

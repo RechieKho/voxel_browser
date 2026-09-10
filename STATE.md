@@ -7,7 +7,7 @@
 > Companion docs: `ARCHITECTURE_SPEC.md` (target design) · `REMAINING_TASKS.md`
 > (implementation backlog). This file is for *traps and context*, not the plan.
 
-Last updated: 2026-09-11 (Phase 3 netcode/physics slice)
+Last updated: 2026-09-11 (Phase 4.1 Lua VM)
 
 ---
 
@@ -204,7 +204,28 @@ _(Move items here with a date + commit when fixed, so the history is visible.)_
   then-client-polls each tick = one message hop per tick).
   **Next:** `GnsTransport` behind `VB_WITH_NET`.
 
-- **2026-09-11 — Phase 3 physics + netcode slice** (uncommitted). New
+- **2026-09-11 — Phase 4.1 Lua VM** (uncommitted). `inc/vb/script/vm.hpp` +
+  `src/script/vm.cpp`: `vb::script::Vm` — pImpl over one `sol::state`, sandboxed
+  at construction (base/string/table/math/coroutine/utf8 only; os/io/load/require/
+  package/collectgarbage nilled; `debug` trimmed to `traceback`), ceiling
+  allocator, per-call `lua_sethook(LUA_MASKCOUNT)` instruction budget. `do_string`
+  is source-only. `ScriptError` enum added to `core/error.hpp`. `tests/unit/
+  script_test.cpp` (7 cases, `#if VB_WITH_LUA`). CI build workflows now pass
+  `-DVB_WITH_LUA=ON` (Lua is pure C, no system deps; sol2 header-only).
+  - **sol2 pin bumped v3.3.0 → v3.5.0**: 3.3.0's bundled "better optional"
+    (`optional_implementation.hpp`) fails to compile under Clang ≥ 18
+    ("no member named 'construct' in optional<T&>"). `docs/lua-api.md` +
+    `Dependencies.cmake` note it.
+  - **vm.cpp compiles in every build**: `#if !VB_WITH_LUA` gives a `kDisabled`
+    stub, so `vb_core` always has the symbols and `script_test.cpp` links.
+  - **Local dev:** `cmake -S . -B build-lua -DVB_WITH_LUA=ON -DVB_WITH_COMPRESSION=ON`
+    — first configure re-fetches lua + sol2 (~45s). `build/` stays Lua-off.
+  - **Not thread-safe:** the instruction hook assumes one `Vm` per thread (fine —
+    the pack VM lives on the server tick thread).
+  - **Next (4.2):** `vb.register_*` + event bus + `vb.world` API on top of `Vm`;
+    (4.3) `S2C_BlockRegistry`; (4.4) asset sync + virtual FS `require`.
+
+- **2026-09-11 — Phase 3 physics + netcode slice** (committed `37e39a3`). New
   `vb/physics/movement.{hpp,cpp}` (`step_movement` — shared server + client
   prediction; substepped swept-AABB w/ bisection snap, gravity/friction/jump/
   step-up/fly; `MoveParams`). `vb/protocol/input.{hpp,cpp}` (`InputCmd` /

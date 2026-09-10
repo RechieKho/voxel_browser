@@ -197,7 +197,9 @@ if(VB_WITH_LUA)
   find_package(sol2 QUIET)
   if(NOT sol2_FOUND AND NOT TARGET sol2::sol2)
     set(SOL2_BUILD_LUA OFF CACHE INTERNAL "")
-    vb_fetch(sol2 TAG v3.3.0 REPO https://github.com/ThePhD/sol2.git)
+    # v3.3.0's bundled "better optional" doesn't compile under Clang >= 18
+    # (no member 'construct' in optional<T&>); v3.5.0 fixes it.
+    vb_fetch(sol2 TAG v3.5.0 REPO https://github.com/ThePhD/sol2.git)
   endif()
 endif()
 

@@ -73,6 +73,40 @@ constexpr std::string_view message(ProtocolError e) {
 	return "unknown protocol error";
 }
 
+// Lua scripting failures — see inc/vb/script/.
+enum class ScriptError : std::uint8_t {
+	kNone = 0,
+	kSyntax, // chunk failed to compile
+	kRuntime, // error raised during execution
+	kBudgetExceeded, // instruction-count hook fired (runaway callback)
+	kOutOfMemory, // allocator ceiling hit
+	kSandboxViolation, // attempted to reach a stripped global
+	kNotFound, // module / callback not found
+	kDisabled, // built without VB_WITH_LUA
+};
+
+constexpr std::string_view message(ScriptError e) {
+	switch (e) {
+		case ScriptError::kNone:
+			return "no error";
+		case ScriptError::kSyntax:
+			return "script syntax error";
+		case ScriptError::kRuntime:
+			return "script runtime error";
+		case ScriptError::kBudgetExceeded:
+			return "script instruction budget exceeded";
+		case ScriptError::kOutOfMemory:
+			return "script memory ceiling exceeded";
+		case ScriptError::kSandboxViolation:
+			return "script sandbox violation";
+		case ScriptError::kNotFound:
+			return "script module or callback not found";
+		case ScriptError::kDisabled:
+			return "scripting disabled (built without VB_WITH_LUA)";
+	}
+	return "unknown script error";
+}
+
 // Transport / connection failures — see inc/vb/net/.
 enum class NetError : std::uint8_t {
 	kNone = 0,

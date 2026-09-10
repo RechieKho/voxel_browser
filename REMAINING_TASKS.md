@@ -358,15 +358,21 @@ estimation and the librg entity mapping (both need the real `GnsTransport`).
 Goal: server logic + content defined in Lua; client auto-downloads pack assets;
 Lua-defined UI.
 
-### 4.1 Lua runtime (`vb_core/script`)
+### 4.1 Lua runtime (`vb_core/script`)  🚧
 
-- [ ] Embed Lua 5.4; `vb::script::Vm` wrapper (open, load chunk, call, error
-      capture with traceback).
-- [ ] Decide raw API vs. sol2 (open question #1) and commit.
-- [ ] Sandbox env (§10.2): strip `os`/`io`/`debug`/bytecode-`load`; custom
-      `require` over the virtual pack FS; instruction-count hook; memory ceiling
-      allocator; per-callback wall-clock budget enforced by the tick loop.
-- [ ] Sandbox-escape test suite (attempts to reach fs/os/net all fail).
+- [x] Embed Lua 5.4 (`cmake/lua` wrapper) + sol2 **v3.5.0** (bumped from 3.3.0 —
+      Clang ≥ 18 incompat). `VB_WITH_LUA` on in all three CI build workflows.
+- [x] `vb::script::Vm` — pImpl over `sol::state`; `do_string` (source only,
+      traceback capture), `ScriptResult` / `core::ScriptError`. Stub build when
+      `VB_WITH_LUA` is off.
+- [x] Sandbox env (§10.2): curated libs, `os`/`io`/`load`/`require`/`package`/
+      `collectgarbage` nilled, `debug` → `traceback` only, instruction-count
+      hook, ceiling allocator.
+- [x] Sandbox-escape tests (`tests/unit/script_test.cpp`): os/io/load absent,
+      runaway loop → `kBudgetExceeded`, memory bomb → `kOutOfMemory` (recoverable).
+- [ ] Custom `require` over the virtual pack FS + per-callback wall-clock budget
+      — deferred to 4.4 (needs the synced asset FS).
+- [ ] Decision #1 (sol2) — recorded; **done**.
 
 ### 4.2 Server Lua API (§10.3)
 
