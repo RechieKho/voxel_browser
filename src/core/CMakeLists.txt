@@ -5,6 +5,7 @@
 add_library(vb_core STATIC
   build_info.cpp
   cli.cpp
+  config.cpp
   log.cpp
 )
 add_library(vb::core ALIAS vb_core)
@@ -23,6 +24,7 @@ target_link_libraries(vb_core
   PUBLIC
     EnTT::EnTT
   PRIVATE
+    tomlplusplus::tomlplusplus
     vb_warnings
     vb_sanitizers
 )

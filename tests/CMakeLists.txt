@@ -4,6 +4,7 @@
 add_executable(vb_tests
   main.cpp
   unit/cli_test.cpp
+  unit/config_test.cpp
   unit/core_test.cpp
   unit/protocol_test.cpp
   unit/net_test.cpp

@@ -84,8 +84,10 @@ network space; client window + render loop alive.
       exceptions — `inc/vb/core/{result,error}.hpp`.
 - [x] Logging (levelled, thread-safe, sink-based) — `inc/vb/core/log.hpp` +
       `src/core/log.cpp`, `VB_INFO`/`VB_WARN`/… macros.
-- [ ] Config loader (TOML) for `server.toml` / `client.toml` + CLI overrides.
-      *(next: add toml++ dependency, layer over the existing `Args`.)*
+- [x] Config loader (TOML) for `server.toml` / `client.toml` + CLI overrides —
+      `inc/vb/core/config.hpp` + `src/core/config.cpp` (tomlplusplus v3.4.0).
+      Defaults ← file ← CLI; missing file = defaults, malformed = `kParseError`.
+      `*.toml.example` templates in the repo root; both binaries load and apply.
 - [x] ID types: `BlockId`, `NetId`, `EntityKindId`, `ChunkCoord`, `AssetHash`
       — `inc/vb/core/ids.hpp` (+ `std::hash` specializations).
 
@@ -162,11 +164,12 @@ network space; client window + render loop alive.
 connects, completes handshake, opens a window; integration test for mutual
 visibility of two clients is green in CI.
 
-**Phase 1 status (2026-09-10):** core primitives, wire codec, handshake FSMs,
-transport abstraction + loopback backend, session layer, integrated
-singleplayer, and the client shell are done and tested. Remaining before the
-exit criterion: TOML config (1.1), `GnsTransport` for real sockets (1.2), and
-the librg replication spike + two-client visibility test (1.4).
+**Phase 1 status (2026-09-10):** core primitives, TOML config, wire codec,
+handshake FSMs, transport abstraction + loopback backend, session layer,
+integrated singleplayer, and the client shell are done and tested. Remaining
+before the exit criterion: `GnsTransport` for real sockets (1.2) and the librg
+replication spike + two-client visibility test (1.4) — both need `VB_WITH_*`
+deps turned on and, for GNS, new CI system packages.
 
 ---
 

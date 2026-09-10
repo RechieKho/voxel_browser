@@ -16,6 +16,7 @@
 
 #include "vb/core/build_info.hpp"
 #include "vb/core/cli.hpp"
+#include "vb/core/config.hpp"
 #include "vb/net/integrated.hpp"
 #include "vb/render/camera.hpp"
 #include "vb/render/window.hpp"
@@ -25,15 +26,15 @@ namespace {
 void print_usage() {
 	std::cout << "Usage: voxel_browser [options]\n"
 				 "\n"
+				 "  --config <path>   client.toml to load (default client.toml)\n"
 				 "  --server <addr>   server address to connect to (default 127.0.0.1)\n"
 				 "  --port <n>        server port (default 27015)\n"
-				 "  --name <name>     player name (default Player)\n"
+				 "  --name <name>     player name override\n"
+				 "  --fov <deg>       vertical field of view override\n"
+				 "  --render-distance <n>  view distance override (chunks)\n"
 				 "  --singleplayer    run an in-process server and join it\n"
 				 "  --headless        run without a window (no rendering)\n"
 				 "  --frames <n>      headless: run n frames then exit (default 3)\n"
-				 "  --width <n>       window width (default 1280)\n"
-				 "  --height <n>      window height (default 720)\n"
-				 "  --fov <deg>       vertical field of view (default 70)\n"
 				 "  --version        print build info and exit\n"
 				 "  --help           show this help\n";
 }
@@ -160,12 +161,21 @@ int main(int argc, char **argv) {
 		return EXIT_SUCCESS;
 	}
 
+	auto loaded = vb::core::load_client_config(
+			args.value_or("config", "client.toml"));
+	if (!loaded) {
+		std::cerr << "client: bad config: " << vb::core::message(loaded.error())
+				  << '\n';
+		return EXIT_FAILURE;
+	}
+	vb::core::ClientConfig config = *loaded;
+	vb::core::apply_cli_overrides(config, args);
+
 	const std::string server = args.value_or("server", "127.0.0.1");
 	const int port = args.int_or("port", 27015);
-	const std::string name = args.value_or("name", "Player");
 	const bool singleplayer = args.has("singleplayer");
 	const bool headless = args.has("headless") || VB_HEADLESS_DEFAULT;
-	const float fov = static_cast<float>(args.int_or("fov", 70));
+	const float fov = static_cast<float>(config.fov);
 
 	std::cout << vb::core::describe_build() << '\n'
 			  << "client: " << (headless ? "headless" : "windowed") << " mode\n";
@@ -173,7 +183,7 @@ int main(int argc, char **argv) {
 	JoinInfo join;
 	std::string status;
 	if (singleplayer) {
-		join = run_singleplayer_handshake(name);
+		join = run_singleplayer_handshake(config.player_name);
 		std::cout << "client: " << join.detail << '\n';
 		if (!join.joined) {
 			return EXIT_FAILURE;
@@ -187,8 +197,9 @@ int main(int argc, char **argv) {
 
 	vb::render::WindowConfig cfg;
 	cfg.headless = headless;
-	cfg.width = args.int_or("width", 1280);
-	cfg.height = args.int_or("height", 720);
+	cfg.width = static_cast<int>(config.window_width);
+	cfg.height = static_cast<int>(config.window_height);
+	cfg.vsync = config.vsync;
 	cfg.title = "voxel_browser";
 	cfg.headless_frame_limit =
 			headless ? static_cast<std::uint64_t>(args.int_or("frames", 3)) : 0;
@@ -198,6 +209,7 @@ int main(int argc, char **argv) {
 	vb::render::FirstPersonController controller;
 	controller.set_position({ join.spawn.x, join.spawn.y + 1.7, join.spawn.z });
 	controller.set_look(0.0, -10.0);
+	controller.set_sensitivity(config.mouse_sensitivity);
 
 	bool mouse_captured = false;
 

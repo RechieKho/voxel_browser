@@ -94,6 +94,7 @@ messages per lane. Backends: `LoopbackTransport` (in-process, done) and
 | --------------------- | ---------- | --------------------------------------- |
 | raylib / raygui       | `5.5` / `4.0` | window/GL/input; version-matched      |
 | EnTT                  | `v3.13.2`  | ECS                                     |
+| tomlplusplus          | `v3.4.0`   | server.toml / client.toml loader        |
 | doctest               | `v2.4.11`  | tests                                   |
 | GameNetworkingSockets | `v1.4.1`   | Phase 1; pulls protobuf, needs OpenSSL  |
 | zpl / librg           | `v18.1.4` / `v7.2.2` | Phase 1.4 spike — confirm API |

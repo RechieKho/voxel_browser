@@ -88,6 +88,15 @@ if(NOT EnTT_FOUND AND NOT TARGET EnTT::EnTT)
 endif()
 
 # ===========================================================================
+# tomlplusplus — server.toml / client.toml config loader (Phase 1.1)
+# ===========================================================================
+find_package(tomlplusplus QUIET)
+if(NOT tomlplusplus_FOUND AND NOT TARGET tomlplusplus::tomlplusplus)
+  vb_fetch(tomlplusplus TAG v3.4.0
+    REPO https://github.com/marzer/tomlplusplus.git)
+endif()
+
+# ===========================================================================
 # doctest — test framework (Phase 0 test target)
 # ===========================================================================
 if(VB_BUILD_TESTS)

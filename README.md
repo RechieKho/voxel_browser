@@ -137,10 +137,14 @@ Binaries land in `build/`:
 | `voxel_browser_server`   | the authoritative, headless server                |
 
 ```bash
-./build/voxel_browser_server --port 27015          # start a server
-./build/voxel_browser --server 127.0.0.1 --port 27015   # connect a client
-./build/voxel_browser --headless --frames 1        # no-GPU smoke run
+./build/voxel_browser_server --config server.toml   # start a server
+./build/voxel_browser --singleplayer --name Me       # in-process server + join
+./build/voxel_browser --headless --frames 1          # no-GPU smoke run
 ```
+
+Copy `server.toml.example` / `client.toml.example` and edit; every key is
+optional and CLI flags override the file. Real remote connections (`--server`)
+arrive with the GameNetworkingSockets transport (`VB_WITH_NET`).
 
 ### Build options
 

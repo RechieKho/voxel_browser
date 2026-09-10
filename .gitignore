@@ -7,3 +7,7 @@ build
 **/*.local
 
 compile_commands.json
+
+# Local runtime config (keep the .example templates).
+/server.toml
+/client.toml

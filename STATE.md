@@ -202,7 +202,16 @@ _(Move items here with a date + commit when fixed, so the history is visible.)_
   (headless too); `singleplayer_smoke` CTest. `ServerHandshake::grant()` exposes
   the `JoinGrant`. `IntegratedGame` needs ~4 `tick()`s to settle (server-polls-
   then-client-polls each tick = one message hop per tick).
-  **Next:** `GnsTransport` behind `VB_WITH_NET`; librg spike (1.4); TOML config (1.1).
+  **Next:** `GnsTransport` behind `VB_WITH_NET`; librg spike (1.4).
+
+- **2026-09-10 — Phase 1.1 TOML config** (uncommitted). `tomlplusplus` v3.4.0
+  added to `Dependencies.cmake` (always-on, header-only, linked PRIVATE into
+  `vb_core`). `vb/core/config.{hpp,cpp}`: `ServerConfig`/`ClientConfig` (spec
+  §15 defaults), `parse_*`/`load_*` (missing file → defaults, malformed →
+  `kParseError`), `apply_cli_overrides`. Both binaries load `--config` +
+  overrides. `server.toml.example` / `client.toml.example` in repo root;
+  `/server.toml` `/client.toml` gitignored. `tests/unit/config_test.cpp`.
+  41 test cases / 242 assertions green.
 
 - **2026-09-10 — Phase 1.5 client shell** (uncommitted). `vb/render/camera.hpp`
   — header-only `FirstPersonController` (double precision throughout; the strict

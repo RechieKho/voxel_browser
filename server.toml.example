@@ -1,0 +1,16 @@
+# voxel_browser_server configuration. Copy to `server.toml` (next to the binary
+# or pass --config <path>). Every key is optional; the values below are the
+# built-in defaults. CLI flags override the file.
+
+bind_address       = "0.0.0.0"
+port               = 27015
+content_pack       = "content/base"
+max_players        = 16
+view_distance      = 8          # chunks
+tick_rate          = 20         # Hz, clamped to 1..240
+world_seed         = 0          # 0 = random each startup
+gravity            = 24.0
+asset_max_file_mb  = 32
+asset_max_total_mb = 512
+auth_mode          = "none"     # "none" | "token" (token verification is stubbed)
+motd               = ""

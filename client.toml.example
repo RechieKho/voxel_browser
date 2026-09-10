@@ -1,0 +1,13 @@
+# voxel_browser client configuration. Copy to `client.toml` (or pass
+# --config <path>). All keys optional; values shown are the defaults. This file
+# is never sent to a server. CLI flags override the file.
+
+window_width      = 1280
+window_height     = 720
+vsync             = true
+fov               = 70.0        # vertical, degrees
+render_distance   = 8           # chunks, clamped to the server's view_distance
+mouse_sensitivity = 0.12        # degrees of look per pixel of mouse motion
+asset_cache_mb    = 512
+player_name       = "Player"
+recent_servers    = []          # e.g. ["play.example.com:27015"]
