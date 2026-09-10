@@ -10,6 +10,7 @@ add_executable(vb_tests
   unit/net_test.cpp
   unit/replication_test.cpp
   unit/render_test.cpp
+  unit/world_test.cpp
 )
 
 target_link_libraries(vb_tests

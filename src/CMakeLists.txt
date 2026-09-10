@@ -2,6 +2,7 @@
 
 add_subdirectory(core)
 add_subdirectory(protocol)
+add_subdirectory(world)
 add_subdirectory(net)
 
 if(VB_BUILD_CLIENT)
