@@ -5,17 +5,18 @@ on:
   workflow_call:
 
 jobs:
-  build:
+  clang-format:
     runs-on: ubuntu-latest
-
     steps:
       - name: Check out code
         uses: actions/checkout@v4
-      - name: Setup clang-format
-        shell: bash
-        run: |
-          python -m pip install clang-format
+
       - name: Run clang-format
         shell: bash
         run: |
-          pipx run clang-format --style=file:.clang-format src/** --dry-run --Werror
+          files=$(find src -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.c' -o -name '*.h' \))
+          if [ -z "$files" ]; then
+            echo "no source files to lint"; exit 0
+          fi
+          echo "$files"
+          pipx run clang-format --style=file:.clang-format --dry-run --Werror $files

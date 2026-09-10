@@ -17,18 +17,12 @@ jobs:
         arch: [x86_64]
         build_type: [release, debug]
         include:
-          # Build type to cmake keyword.
           - build_type: release
             cmake_build_type_keyword: Release
-
           - build_type: debug
             cmake_build_type_keyword: RelWithDebInfo
-
-          # Define host for each target.
           - os: windows-latest
             target: windows
-
-          # Define toolchain data.
           - target: windows
             arch: x86_64
             cmake_arch_keyword: x64
@@ -36,40 +30,40 @@ jobs:
     steps:
       - name: Check out code
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - name: Set up MSVC Dev Cmd
         uses: ilammy/msvc-dev-cmd@7315a94840631165970262a99c72cfb48a65d25d # v1.12.0
         with:
           arch: ${{ matrix.cmake_arch_keyword }}
 
-      # Setup CMake
-      - name: Set up CMake for Windows
+      - name: Configure
         shell: cmd
         run: |
-          if not exist "${{ github.workspace }}\\build" mkdir "${{ github.workspace }}\\build"
-          cd "${{ github.workspace }}\\build"
-          cmake "${{ github.workspace }}" -G Ninja -DCMAKE_BUILD_TYPE="${{ matrix.cmake_build_type_keyword }}"
+          cmake -S "${{ github.workspace }}" -B "${{ github.workspace }}\build" -G Ninja ^
+            -DCMAKE_BUILD_TYPE="${{ matrix.cmake_build_type_keyword }}" ^
+            -DVB_WARNINGS_AS_ERRORS=ON ^
+            -DVB_HEADLESS=OFF
 
-      - name: Build project
+      - name: Build
         shell: cmd
-        run: cmake --build "${{ github.workspace }}\\build"
+        run: cmake --build "${{ github.workspace }}\build"
 
-      - name: Show build files
+      - name: Test
         shell: cmd
         working-directory: build
-        run: dir /s
+        run: ctest --output-on-failure
 
-      - name: Rename binary
-        shell: cmd
+      - name: Stage binaries
+        shell: bash
         run: |
-          rename "${{ github.workspace }}\\build\\${{ needs.setup_metadata.outputs.project_name }}.exe" "${{ needs.setup_metadata.outputs.project_name }}-${{ matrix.target }}-${{ matrix.arch }}-${{ matrix.build_type }}.exe"
+          dist="${{ github.workspace }}/dist"
+          mkdir -p "$dist"
+          cp "${{ github.workspace }}/build/voxel_browser.exe" "$dist/"
+          cp "${{ github.workspace }}/build/voxel_browser_server.exe" "$dist/"
 
-      - name: Export binary
-        uses: actions/upload-artifact@v7
+      - name: Export binaries
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ needs.setup_metadata.outputs.project_name }}-${{ matrix.target }}-${{ matrix.arch }}-${{ matrix.build_type }}
-          path: |
-            ${{ github.workspace }}\build\${{ needs.setup_metadata.outputs.project_name }}-${{ matrix.target }}-${{ matrix.arch }}-${{ matrix.build_type }}.exe
+          path: ${{ github.workspace }}/dist/*
           if-no-files-found: error
