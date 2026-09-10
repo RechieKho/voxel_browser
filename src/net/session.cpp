@@ -65,7 +65,7 @@ void ServerSession::tick(double dt_seconds) {
 	for (auto &ev : scratch_) {
 		switch (ev.kind) {
 			case TransportEvent::Kind::kConnected: {
-				conns_.emplace(ev.conn, Conn{ ServerHandshake(config_, host_) });
+				conns_.try_emplace(ev.conn, ServerHandshake(config_, host_));
 				VB_DEBUG("net", "connection ", static_cast<std::uint64_t>(ev.conn),
 						" opened");
 				break;
@@ -87,6 +87,10 @@ void ServerSession::tick(double dt_seconds) {
 					it->second.playing = true;
 					++playing_;
 					const JoinGrant &g = it->second.handshake.grant();
+					it->second.net_id = g.net_id;
+					interest_.upsert(replication::EntityState{
+							g.net_id, core::EntityKindId::kInvalid, g.spawn_pos,
+							{}, {} });
 					joins_.push_back({ ev.conn, g.net_id, step.player_name });
 					VB_INFO("net", "player '", step.player_name, "' joined as net id ",
 							static_cast<std::uint32_t>(g.net_id));
@@ -103,6 +107,7 @@ void ServerSession::tick(double dt_seconds) {
 				}
 				if (it->second.playing) {
 					--playing_;
+					interest_.remove(it->second.net_id);
 					leaves_.push_back({ ev.conn, ev.reason });
 				}
 				conns_.erase(it);
@@ -127,6 +132,72 @@ void ServerSession::tick(double dt_seconds) {
 	for (ConnId conn : timed_out) {
 		drop(conn, "handshake timeout");
 	}
+
+	++server_tick_;
+	broadcast_snapshots();
+}
+
+namespace {
+
+protocol::EntityRecord to_record(const replication::EntityState &s) {
+	protocol::EntityRecord r;
+	r.net_id = s.net_id;
+	r.kind = s.kind;
+	r.pos = s.pos;
+	r.rot = s.rot;
+	r.vel = s.vel;
+	return r;
+}
+
+} // namespace
+
+void ServerSession::broadcast_snapshots() {
+	for (auto &[conn, state] : conns_) {
+		if (!state.playing) {
+			continue;
+		}
+		const replication::EntityState *self = interest_.get(state.net_id);
+		const core::Vec3d eye = self ? self->pos : core::Vec3d{};
+
+		std::vector<core::NetId> visible = interest_.visible_from(
+				eye, interest_radius_cells_, state.net_id);
+		const replication::InterestDiff d =
+				replication::diff_interest(state.last_visible, visible);
+
+		protocol::S2CEntitySnapshot snap;
+		snap.server_tick = server_tick_;
+		for (core::NetId id : d.entered) {
+			if (const auto *e = interest_.get(id)) {
+				snap.entered.push_back(to_record(*e));
+			}
+		}
+		for (core::NetId id : d.stayed) {
+			if (const auto *e = interest_.get(id)) {
+				snap.updated.push_back(to_record(*e));
+			}
+		}
+		snap.removed = d.left;
+
+		state.last_visible = std::move(visible);
+
+		if (snap.entered.empty() && snap.updated.empty() && snap.removed.empty()) {
+			continue; // nothing changed for this player this tick
+		}
+		send_message(transport_, conn, snap);
+	}
+}
+
+void ServerSession::set_player_state(core::NetId id, core::Vec3d pos,
+		core::Vec2f rot, core::Vec3f vel) {
+	replication::EntityState s;
+	if (const auto *existing = interest_.get(id)) {
+		s = *existing;
+	}
+	s.net_id = id;
+	s.pos = pos;
+	s.rot = rot;
+	s.vel = vel;
+	interest_.upsert(s);
 }
 
 std::vector<SessionPlayerJoined> ServerSession::take_joins() {
@@ -169,6 +240,15 @@ void ClientSession::tick(double) {
 					failure_reason_ = "malformed frame from server";
 					return;
 				}
+				if (handshake_.status() == ClientHandshakeStatus::kJoined &&
+						frame->header.type ==
+								protocol::MessageType::kS2CEntitySnapshot) {
+					if (auto snap = protocol::S2CEntitySnapshot::decode(
+								frame->payload)) {
+						apply_snapshot(*snap);
+					}
+					break;
+				}
 				auto step = handshake_.on_frame(*frame);
 				send_frames(transport_, conn_, step.send);
 				if (step.failed) {
@@ -185,6 +265,19 @@ void ClientSession::tick(double) {
 				break;
 			}
 		}
+	}
+}
+
+void ClientSession::apply_snapshot(const protocol::S2CEntitySnapshot &snap) {
+	last_server_tick_ = snap.server_tick;
+	for (const auto &r : snap.entered) {
+		remote_[r.net_id] = r;
+	}
+	for (const auto &r : snap.updated) {
+		remote_[r.net_id] = r;
+	}
+	for (core::NetId id : snap.removed) {
+		remote_.erase(id);
 	}
 }
 

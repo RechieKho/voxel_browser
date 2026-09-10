@@ -126,18 +126,19 @@ if(VB_WITH_NET)
 endif()
 
 # ===========================================================================
-# librg (+ zpl) — interest management / entity streaming (Phase 1.4 spike)
-#   Single-header libraries; API has churned across 7.x — pin exactly and
-#   record the resolved commit in docs/protocol.md.
+# librg — interest management / entity streaming (spec §19 Q3, docs/replication.md)
+#   v7.4.0 is a single self-contained header (code/librg.h bundles its own zpl —
+#   no separate zpl dependency). LIBRG_IMPL goes in exactly one TU, built as its
+#   own target so the project warning flags don't touch the C code.
 # ===========================================================================
-if(VB_WITH_REPLICATION)
-  FetchContent_Declare(zpl
-    GIT_REPOSITORY https://github.com/zpl-c/zpl.git
-    GIT_TAG v18.1.4 GIT_SHALLOW TRUE)
+if(VB_WITH_REPLICATION AND NOT TARGET vb_librg)
   FetchContent_Declare(librg
     GIT_REPOSITORY https://github.com/zpl-c/librg.git
-    GIT_TAG v7.2.2 GIT_SHALLOW TRUE)
-  FetchContent_MakeAvailable(zpl librg)
+    GIT_TAG v7.4.0 GIT_SHALLOW TRUE)
+  FetchContent_MakeAvailable(librg)
+  add_library(vb_librg INTERFACE)
+  target_include_directories(vb_librg SYSTEM INTERFACE "${librg_SOURCE_DIR}/code")
+  add_library(vb::librg ALIAS vb_librg)
 endif()
 
 # ===========================================================================

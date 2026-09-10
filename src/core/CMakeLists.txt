@@ -35,7 +35,7 @@ if(VB_WITH_NET)
 endif()
 
 if(VB_WITH_REPLICATION)
-  target_link_libraries(vb_core PUBLIC librg)
+  target_link_libraries(vb_core PUBLIC vb_librg)
   target_compile_definitions(vb_core PUBLIC VB_WITH_REPLICATION=1)
 endif()
 

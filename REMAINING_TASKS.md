@@ -138,14 +138,27 @@ network space; client window + render loop alive.
 
 ### 1.4 Replication bootstrap (`vb_core/replication`)
 
-- [ ] **(spike)** librg v0.x API: streamer setup, interest radius, entity
-      track/untrack, event callbacks, serialization use. Write findings to
-      `docs/protocol.md`.
-- [ ] `librg` world init on server; per-player interest sphere.
-- [ ] Minimal `S2C_EntitySnapshot` carrying `{net_id, pos}` for player entities.
-- [ ] Integration test: two headless clients connect; each receives the other's
-      snapshot when within interest range, loses it outside. *(README Phase 1
-      acceptance)*
+- [x] **(spike)** librg v7.4.0 API investigated — findings + the §19 Q3 decision
+      in `docs/replication.md` (use librg for culling + create/update/remove
+      framing; keep our own payload codec). Pin fixed in `Dependencies.cmake`
+      (self-contained header, no separate zpl).
+- [x] Hand-rolled interest first: `InterestGrid` + `diff_interest`
+      (`inc/vb/replication/interest.hpp`) with the same diff semantics behind a
+      narrow interface, so librg drops in underneath later.
+- [x] `S2C_EntitySnapshot` (`inc/vb/protocol/snapshot.hpp`): `server_tick`,
+      `last_acked_input_seq`, `entered[]` / `updated[]` / `removed[]` records.
+      Round-trip tested.
+- [x] `ServerSession` builds per-player snapshots each tick from the interest
+      grid (diff vs. last-visible); `ClientSession` applies them into
+      `remote_entities()`. `set_player_state()` feeds authoritative positions.
+- [x] Integration test (`tests/unit/replication_test.cpp`): two headless clients
+      join one server; each sees the other only within interest range, gets a
+      `removed` when the other moves out or disconnects. **(README Phase 1
+      acceptance — met over the loopback transport.)**
+- [ ] Wire real librg in (`VB_WITH_REPLICATION`) as the interest backend — after
+      players actually move (Phase 3) so scale testing is meaningful.
+- [ ] The two-client test currently runs over `LoopbackTransport`; re-run it over
+      `GnsTransport` once that lands.
 
 ### 1.5 Client shell (`vb_render`)
 
@@ -164,12 +177,14 @@ network space; client window + render loop alive.
 connects, completes handshake, opens a window; integration test for mutual
 visibility of two clients is green in CI.
 
-**Phase 1 status (2026-09-10):** core primitives, TOML config, wire codec,
-handshake FSMs, transport abstraction + loopback backend, session layer,
-integrated singleplayer, and the client shell are done and tested. Remaining
-before the exit criterion: `GnsTransport` for real sockets (1.2) and the librg
-replication spike + two-client visibility test (1.4) — both need `VB_WITH_*`
-deps turned on and, for GNS, new CI system packages.
+**Phase 1 status (2026-09-10):** everything except the real `GnsTransport`
+socket backend (1.2). Core primitives, TOML config, wire codec, handshake FSMs,
+transport abstraction + loopback backend, session layer, integrated
+singleplayer, client shell, interest management + entity snapshots + the
+two-client visibility test — all done and tested (~280 assertions). The librg
+integration is deferred to Phase 3 (needs moving players to be meaningful); the
+`Transport` seam is where `GnsTransport` plugs in, and the replication test just
+needs re-running over it.
 
 ---
 

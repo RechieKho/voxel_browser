@@ -202,7 +202,23 @@ _(Move items here with a date + commit when fixed, so the history is visible.)_
   (headless too); `singleplayer_smoke` CTest. `ServerHandshake::grant()` exposes
   the `JoinGrant`. `IntegratedGame` needs ~4 `tick()`s to settle (server-polls-
   then-client-polls each tick = one message hop per tick).
-  **Next:** `GnsTransport` behind `VB_WITH_NET`; librg spike (1.4).
+  **Next:** `GnsTransport` behind `VB_WITH_NET`.
+
+- **2026-09-10 — Phase 1.4 replication** (uncommitted). librg spike done →
+  `docs/replication.md` + `ARCHITECTURE_SPEC.md §19 Q3` (librg v7.4.0 is a
+  self-contained header, zpl bundled; use it for culling + create/update/remove
+  framing, our codec for payloads; not wired yet). `Dependencies.cmake` librg
+  block fixed (`v7.4.0`, `vb_librg` INTERFACE target, no separate zpl).
+  `inc/vb/replication/interest.hpp` (`InterestGrid` + `diff_interest`, header-
+  only, linear scan). `vb/protocol/snapshot.{hpp,cpp}` (`S2CEntitySnapshot`).
+  `ServerSession` broadcasts per-player snapshots each tick;
+  `ClientSession::remote_entities()`; `ServerSession::set_player_state()`.
+  `tests/unit/replication_test.cpp` — two-client visibility (Phase 1 exit
+  criterion). 46 cases / 280 assertions.
+- **CI gotcha (found on first push):** `doctest.h` trips MSVC `/W4 /WX`
+  (`C2220` at doctest.h:539). Fix: `tests/CMakeLists.txt` re-adds
+  `doctest::doctest`'s include dir as `SYSTEM PRIVATE`. clang/gcc never hit it,
+  so it must be verified in CI. Same pattern already used for raygui/toml++.
 
 - **2026-09-10 — Phase 1.1 TOML config** (uncommitted). `tomlplusplus` v3.4.0
   added to `Dependencies.cmake` (always-on, header-only, linked PRIVATE into

@@ -8,6 +8,7 @@ add_executable(vb_tests
   unit/core_test.cpp
   unit/protocol_test.cpp
   unit/net_test.cpp
+  unit/replication_test.cpp
   unit/render_test.cpp
 )
 
@@ -18,6 +19,13 @@ target_link_libraries(vb_tests
     vb_warnings
     vb_sanitizers
 )
+
+# doctest.h itself trips /W4 /WX on MSVC — treat its headers as SYSTEM so the
+# project warning flags don't apply to third-party code.
+get_target_property(_vb_doctest_inc doctest::doctest INTERFACE_INCLUDE_DIRECTORIES)
+if(_vb_doctest_inc)
+  target_include_directories(vb_tests SYSTEM PRIVATE ${_vb_doctest_inc})
+endif()
 
 set_target_properties(vb_tests PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"

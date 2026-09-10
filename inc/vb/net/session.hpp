@@ -6,10 +6,16 @@
 #include <string>
 #include <vector>
 
+#include <unordered_map>
+#include <utility>
+
 #include "vb/core/ids.hpp"
+#include "vb/core/math.hpp"
 #include "vb/net/handshake.hpp"
 #include "vb/net/transport.hpp"
 #include "vb/protocol/handshake.hpp"
+#include "vb/protocol/snapshot.hpp"
+#include "vb/replication/interest.hpp"
 
 // Sessions glue a Transport to the handshake FSMs and present a small
 // game-facing API: the server loop pulls join/leave events, the client loop
@@ -46,20 +52,35 @@ public:
 
 	std::size_t player_count() const { return playing_; }
 	std::size_t pending_count() const { return conns_.size() - playing_; }
+	std::uint32_t server_tick() const { return server_tick_; }
+
+	// Feed authoritative entity state into the replication grid (Phase 3's
+	// movement systems will call this; tests set it directly).
+	void set_player_state(core::NetId id, core::Vec3d pos, core::Vec2f rot = {},
+			core::Vec3f vel = {});
+
+	void set_interest_radius_cells(int cells) { interest_radius_cells_ = cells; }
 
 private:
 	struct Conn {
+		explicit Conn(ServerHandshake hs) : handshake(std::move(hs)) {}
 		ServerHandshake handshake;
 		double age = 0.0;
 		bool playing = false;
+		core::NetId net_id = core::NetId::kInvalid;
+		std::vector<core::NetId> last_visible;
 	};
 
 	void drop(ConnId conn, const std::string &reason);
+	void broadcast_snapshots();
 
 	Transport &transport_;
 	HandshakeServerConfig config_;
 	HandshakeServerHost host_;
 	std::map<ConnId, Conn> conns_;
+	replication::InterestGrid interest_;
+	int interest_radius_cells_ = 2;
+	std::uint32_t server_tick_ = 0;
 	std::size_t playing_ = 0;
 	std::uint32_t next_net_id_ = 1;
 	std::vector<TransportEvent> scratch_;
@@ -94,13 +115,25 @@ public:
 		return handshake_.join_accept();
 	}
 
+	// Replicated view of other entities (spec §8.4). Updated from every
+	// S2C_EntitySnapshot once joined.
+	const std::unordered_map<core::NetId, protocol::EntityRecord> &
+	remote_entities() const {
+		return remote_;
+	}
+	std::uint32_t last_server_tick() const { return last_server_tick_; }
+
 private:
+	void apply_snapshot(const protocol::S2CEntitySnapshot &snap);
+
 	Transport &transport_;
 	ConnId conn_;
 	ClientHandshake handshake_;
 	bool started_ = false;
 	std::string failure_reason_;
 	std::vector<TransportEvent> scratch_;
+	std::unordered_map<core::NetId, protocol::EntityRecord> remote_;
+	std::uint32_t last_server_tick_ = 0;
 };
 
 } // namespace vb::net

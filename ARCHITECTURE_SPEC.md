@@ -693,13 +693,18 @@ to the extent practical (no code exec, no arbitrary FS writes).
 
 ## 19. Open Questions
 
-1. **Binding layer**: raw Lua C API vs. `sol2`. Leaning `sol2` for velocity;
-   cost is compile time + a dependency.
+1. **Binding layer**: raw Lua C API vs. `sol2`. **Resolved (2026-09-10): sol2**
+   (v3.3.0), for ergonomics; compile-time cost accepted.
 2. **Cellulose API fit**: exact meshing entry points and whether it manages GPU
    buffers or just produces vertex data — needs a spike (task in
    `REMAINING_TASKS.md`).
-3. **librg version / v0.x API**: interest management granularity (per-entity vs.
-   per-chunk streamer) and whether we use its serialization or only its culling.
+3. **librg version / API**: **Resolved (2026-09-10): librg v7.4.0** (single
+   self-contained header, zpl bundled). Interest is chunk-radius based (cells
+   independent of voxel chunks). **Use librg for interest culling + its
+   create/update/remove framing; keep our own per-entity payload codec and
+   envelope/lane routing.** Not yet wired — Phase 1 ships a hand-rolled
+   `InterestGrid` with the same diff semantics behind a narrow interface. Full
+   write-up in `docs/replication.md`.
 4. **Chunk compression**: LZ4 vs. zstd vs. palette-only. Start LZ4, measure.
 5. **Persistence**: region file format for world save — deferred past first
    playable, but the chunk store should not assume in-memory-forever.

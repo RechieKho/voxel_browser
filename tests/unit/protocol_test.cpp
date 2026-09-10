@@ -11,6 +11,7 @@
 #include "vb/protocol/byte_buffer.hpp"
 #include "vb/protocol/handshake.hpp"
 #include "vb/protocol/message.hpp"
+#include "vb/protocol/snapshot.hpp"
 
 using namespace vb::protocol;
 
@@ -122,6 +123,27 @@ TEST_CASE("handshake structs round-trip") {
 	CHECK(d2.message == "full");
 
 	round_trip(C2SReady{});
+}
+
+TEST_CASE("entity snapshot round-trips") {
+	S2CEntitySnapshot s;
+	s.server_tick = 4242;
+	s.last_acked_input_seq = 17;
+	s.entered.push_back({ vb::core::NetId{ 3 }, vb::core::EntityKindId{ 1 },
+			{ 1.0, 2.0, 3.0 }, { 45.0f, -10.0f }, { 0.1f, 0.0f, -0.2f }, 0 });
+	s.updated.push_back({ vb::core::NetId{ 4 }, vb::core::EntityKindId{ 0 },
+			{ -8.0, 64.0, 0.0 }, {}, {}, 2 });
+	s.removed.push_back(vb::core::NetId{ 9 });
+
+	auto s2 = round_trip(s);
+	CHECK(s2.server_tick == 4242);
+	CHECK(s2.last_acked_input_seq == 17);
+	REQUIRE(s2.entered.size() == 1);
+	CHECK(s2.entered[0] == s.entered[0]);
+	REQUIRE(s2.updated.size() == 1);
+	CHECK(s2.updated[0].pos.y == doctest::Approx(64.0));
+	REQUIRE(s2.removed.size() == 1);
+	CHECK(s2.removed[0] == vb::core::NetId{ 9 });
 }
 
 TEST_CASE("decode rejects a bad enum and trailing bytes") {

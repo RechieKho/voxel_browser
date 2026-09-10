@@ -4,4 +4,5 @@
 
 target_sources(vb_core PRIVATE
   handshake.cpp
+  snapshot.cpp
 )
