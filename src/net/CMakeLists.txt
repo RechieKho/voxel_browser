@@ -7,4 +7,5 @@ target_sources(vb_core PRIVATE
   handshake.cpp
   session.cpp
   integrated.cpp
+  world_replicator.cpp
 )

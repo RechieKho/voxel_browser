@@ -3,6 +3,8 @@
 target_sources(vb_core PRIVATE
   block.cpp
   chunk_codec.cpp
+  chunk_lifecycle.cpp
+  client_chunk_store.cpp
   lighting.cpp
   paletted_chunk_store.cpp
   world.cpp

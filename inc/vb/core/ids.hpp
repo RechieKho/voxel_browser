@@ -26,6 +26,7 @@ struct ChunkCoord {
 	std::int32_t z{};
 
 	constexpr bool operator==(const ChunkCoord &) const = default;
+	constexpr auto operator<=>(const ChunkCoord &) const = default;
 };
 
 inline constexpr std::int32_t kChunkDim = 32;

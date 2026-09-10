@@ -12,6 +12,7 @@ add_executable(vb_tests
   unit/net_test.cpp
   unit/replication_test.cpp
   unit/render_test.cpp
+  unit/world_replication_test.cpp
   unit/world_test.cpp
   unit/worldgen_test.cpp
 )

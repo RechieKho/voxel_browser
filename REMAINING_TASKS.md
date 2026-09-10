@@ -227,15 +227,27 @@ Goal: server generates terrain, streams chunks, client meshes and renders them.
 - [ ] Cross-chunk sky occlusion + incremental relight-on-edit — Phase 3/5;
       reuses the same propagation core.
 
-### 2.4 World replication (§8.5)
+### 2.4 World replication (§8.5)  ✅
 
-- [ ] Messages: `S2C_ChunkAdd`, `S2C_ChunkDelta`, `S2C_ChunkRemove`.
-- [ ] Palette container serialization + LZ4 compression.
-- [ ] `InterestManagementSystem`: per-player visible chunk set from position +
-      view distance; diff → add/remove messages.
-- [ ] `ChunkLifecycleSystem`: generate/load chunks around players, unload when
-      no player is interested.
-- [ ] Client `ClientChunkStore` mirror; apply add/delta/remove.
+- [x] Messages: `S2C_ChunkAdd` (coord + revision + opaque payload),
+      `S2C_ChunkDelta` (block + light change lists), `S2C_ChunkRemove` —
+      `vb/protocol/world.{hpp,cpp}`, round-trip tested.
+- [x] Palette container serialization (`vb/world/chunk_codec`): palette + RLE of
+      (run, palette-index) + RLE'd light. LZ4 is the `MessageFlag::kCompressed`
+      framing layer, wired when `VB_WITH_COMPRESSION` lands (not required for
+      correctness; RLE already shrinks it well).
+- [x] Per-player visible chunk set (`vb/world/chunk_interest.hpp`:
+      `chunks_in_view` + `diff_chunk_sets`) → add/remove diff in
+      `net/world_replicator.{hpp,cpp}`.
+- [x] `ChunkLifecycleSystem` (`vb/world/chunk_lifecycle.{hpp,cpp}`):
+      generate (worldgen pool) / light / load around players, unload when no
+      player wants a chunk. Worker pool gained a `kSynchronous` mode for
+      deterministic tests + the integrated server.
+- [x] `ClientChunkStore` (`vb/world/client_chunk_store.{hpp,cpp}`): applies
+      add/delta/remove, implements `BlockSolidQuery` for meshing + prediction.
+- [x] Wired into `ServerSession` (`set_world_replicator`) + `ClientSession`
+      (auto-mirrors chunk messages post-join). Integration test: a joined client
+      mirrors the 27-chunk box around its spawn and reclaims it on move.
 
 ### 2.5 Client meshing (`vb_render/render`)
 

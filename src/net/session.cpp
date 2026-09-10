@@ -5,6 +5,7 @@
 
 #include "vb/core/log.hpp"
 #include "vb/protocol/message.hpp"
+#include "vb/protocol/world.hpp"
 
 namespace vb::net {
 
@@ -108,6 +109,9 @@ void ServerSession::tick(double dt_seconds) {
 				if (it->second.playing) {
 					--playing_;
 					interest_.remove(it->second.net_id);
+					if (replicator_) {
+						replicator_->forget_player(it->second.net_id);
+					}
 					leaves_.push_back({ ev.conn, ev.reason });
 				}
 				conns_.erase(it);
@@ -135,6 +139,31 @@ void ServerSession::tick(double dt_seconds) {
 
 	++server_tick_;
 	broadcast_snapshots();
+	broadcast_world();
+}
+
+void ServerSession::broadcast_world() {
+	if (!replicator_) {
+		return;
+	}
+	std::vector<std::pair<core::NetId, core::Vec3d>> players;
+	for (const auto &[conn, state] : conns_) {
+		(void)conn;
+		if (!state.playing) {
+			continue;
+		}
+		const replication::EntityState *e = interest_.get(state.net_id);
+		players.emplace_back(state.net_id, e ? e->pos : core::Vec3d{});
+	}
+
+	for (auto &pf : replicator_->tick(players)) {
+		for (auto &[conn, state] : conns_) {
+			if (state.playing && state.net_id == pf.id) {
+				send_frames(transport_, conn, pf.frames);
+				break;
+			}
+		}
+	}
 }
 
 namespace {
@@ -241,12 +270,7 @@ void ClientSession::tick(double) {
 					return;
 				}
 				if (handshake_.status() == ClientHandshakeStatus::kJoined &&
-						frame->header.type ==
-								protocol::MessageType::kS2CEntitySnapshot) {
-					if (auto snap = protocol::S2CEntitySnapshot::decode(
-								frame->payload)) {
-						apply_snapshot(*snap);
-					}
+						apply_gameplay_frame(*frame)) {
 					break;
 				}
 				auto step = handshake_.on_frame(*frame);
@@ -265,6 +289,38 @@ void ClientSession::tick(double) {
 				break;
 			}
 		}
+	}
+}
+
+bool ClientSession::apply_gameplay_frame(const protocol::Frame &frame) {
+	using protocol::MessageType;
+	switch (frame.header.type) {
+		case MessageType::kS2CEntitySnapshot: {
+			if (auto snap = protocol::S2CEntitySnapshot::decode(frame.payload)) {
+				apply_snapshot(*snap);
+			}
+			return true;
+		}
+		case MessageType::kS2CChunkAdd: {
+			if (auto m = protocol::S2CChunkAdd::decode(frame.payload)) {
+				(void)chunks_.apply_add(*m);
+			}
+			return true;
+		}
+		case MessageType::kS2CChunkDelta: {
+			if (auto m = protocol::S2CChunkDelta::decode(frame.payload)) {
+				(void)chunks_.apply_delta(*m);
+			}
+			return true;
+		}
+		case MessageType::kS2CChunkRemove: {
+			if (auto m = protocol::S2CChunkRemove::decode(frame.payload)) {
+				chunks_.apply_remove(*m);
+			}
+			return true;
+		}
+		default:
+			return false;
 	}
 }
 

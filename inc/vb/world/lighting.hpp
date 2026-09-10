@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <utility>
 
 #include "vb/world/block.hpp"
 #include "vb/world/chunk.hpp"
@@ -16,7 +17,8 @@ inline constexpr std::uint8_t kMaxLight = 15;
 
 class LightEngine {
 public:
-	explicit LightEngine(const BlockRegistry &registry) : registry_(registry) {}
+	// Holds the registry by value (it is cheap and callers pass temporaries).
+	explicit LightEngine(BlockRegistry registry) : registry_(std::move(registry)) {}
 
 	// Recompute both light channels for a whole chunk from scratch. Clears the
 	// light dirty flag.
@@ -27,7 +29,7 @@ private:
 	// reduced for liquids, 0 for opaque).
 	std::uint8_t transmittance(core::BlockId block) const;
 
-	const BlockRegistry &registry_;
+	BlockRegistry registry_;
 };
 
 } // namespace vb::world

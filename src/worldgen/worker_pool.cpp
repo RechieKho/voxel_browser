@@ -7,6 +7,10 @@ namespace vb::worldgen {
 
 WorldGenWorkerPool::WorldGenWorkerPool(WorldGenerator generator,
 		std::size_t threads) : generator_(std::move(generator)) {
+	if (threads == kSynchronous) {
+		synchronous_ = true;
+		return;
+	}
 	if (threads == 0) {
 		const unsigned hw = std::thread::hardware_concurrency();
 		threads = hw > 2 ? static_cast<std::size_t>(hw - 1) : 1;
@@ -35,6 +39,12 @@ bool WorldGenWorkerPool::submit(core::ChunkCoord coord) {
 		}
 		if (std::find(queue_.begin(), queue_.end(), coord) != queue_.end()) {
 			return false;
+		}
+		if (synchronous_) {
+			auto chunk = std::make_unique<world::Chunk>(coord);
+			generator_.generate(*chunk);
+			completed_.push_back(std::move(chunk));
+			return true;
 		}
 		queue_.push_back(coord);
 	}

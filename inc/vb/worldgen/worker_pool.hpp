@@ -22,8 +22,11 @@ namespace vb::worldgen {
 
 class WorldGenWorkerPool {
 public:
-	WorldGenWorkerPool(WorldGenerator generator,
-			std::size_t threads = 0); // 0 -> hardware_concurrency-ish
+	// threads == 0 -> pick from hardware_concurrency. A synchronous pool
+	// (threads with kSynchronous) generates inside submit() with no background
+	// threads — deterministic, for tests and the integrated server.
+	static constexpr std::size_t kSynchronous = static_cast<std::size_t>(-1);
+	WorldGenWorkerPool(WorldGenerator generator, std::size_t threads = 0);
 	~WorldGenWorkerPool();
 
 	WorldGenWorkerPool(const WorldGenWorkerPool &) = delete;
@@ -50,6 +53,7 @@ private:
 	std::unordered_set<core::ChunkCoord> in_flight_;
 	std::vector<std::unique_ptr<world::Chunk>> completed_;
 	std::atomic_bool stop_{ false };
+	bool synchronous_ = false;
 	std::vector<std::thread> workers_;
 };
 

@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include <memory>
 #include <unordered_map>
 #include <utility>
 
@@ -13,9 +14,11 @@
 #include "vb/core/math.hpp"
 #include "vb/net/handshake.hpp"
 #include "vb/net/transport.hpp"
+#include "vb/net/world_replicator.hpp"
 #include "vb/protocol/handshake.hpp"
 #include "vb/protocol/snapshot.hpp"
 #include "vb/replication/interest.hpp"
+#include "vb/world/client_chunk_store.hpp"
 
 // Sessions glue a Transport to the handshake FSMs and present a small
 // game-facing API: the server loop pulls join/leave events, the client loop
@@ -61,6 +64,13 @@ public:
 
 	void set_interest_radius_cells(int cells) { interest_radius_cells_ = cells; }
 
+	// Optional: attach world replication (chunk streaming). Without it the
+	// session only replicates entities.
+	void set_world_replicator(std::unique_ptr<WorldReplicator> replicator) {
+		replicator_ = std::move(replicator);
+	}
+	WorldReplicator *world_replicator() { return replicator_.get(); }
+
 private:
 	struct Conn {
 		explicit Conn(ServerHandshake hs) : handshake(std::move(hs)) {}
@@ -73,12 +83,14 @@ private:
 
 	void drop(ConnId conn, const std::string &reason);
 	void broadcast_snapshots();
+	void broadcast_world();
 
 	Transport &transport_;
 	HandshakeServerConfig config_;
 	HandshakeServerHost host_;
 	std::map<ConnId, Conn> conns_;
 	replication::InterestGrid interest_;
+	std::unique_ptr<WorldReplicator> replicator_;
 	int interest_radius_cells_ = 2;
 	std::uint32_t server_tick_ = 0;
 	std::size_t playing_ = 0;
@@ -123,7 +135,14 @@ public:
 	}
 	std::uint32_t last_server_tick() const { return last_server_tick_; }
 
+	// Replicated chunk mirror (spec §11.2), populated from S2C_Chunk* messages.
+	const world::ClientChunkStore &chunk_store() const { return chunks_; }
+	world::ClientChunkStore &chunk_store() { return chunks_; }
+
 private:
+	// Handle a post-join gameplay message (snapshot / chunk). Returns true if
+	// consumed.
+	bool apply_gameplay_frame(const protocol::Frame &frame);
 	void apply_snapshot(const protocol::S2CEntitySnapshot &snap);
 
 	Transport &transport_;
@@ -133,6 +152,7 @@ private:
 	std::string failure_reason_;
 	std::vector<TransportEvent> scratch_;
 	std::unordered_map<core::NetId, protocol::EntityRecord> remote_;
+	world::ClientChunkStore chunks_{ world::BlockRegistry::base() };
 	std::uint32_t last_server_tick_ = 0;
 };
 

@@ -33,6 +33,13 @@ Chunk &World::get_or_create_chunk(core::ChunkCoord c) {
 	return *it->second;
 }
 
+Chunk &World::insert_chunk(std::unique_ptr<Chunk> chunk) {
+	const core::ChunkCoord c = chunk->coord();
+	auto [it, inserted] = chunks_.insert_or_assign(c, std::move(chunk));
+	(void)inserted;
+	return *it->second;
+}
+
 bool World::unload_chunk(core::ChunkCoord c) { return chunks_.erase(c) != 0; }
 
 std::vector<core::ChunkCoord> World::loaded_coords() const {

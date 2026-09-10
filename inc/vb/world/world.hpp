@@ -38,6 +38,9 @@ public:
 	Chunk *find_chunk(core::ChunkCoord c);
 	const Chunk *find_chunk(core::ChunkCoord c) const;
 	Chunk &get_or_create_chunk(core::ChunkCoord c);
+	// Take ownership of an externally generated chunk (worldgen worker output).
+	// Replaces any existing chunk at that coord.
+	Chunk &insert_chunk(std::unique_ptr<Chunk> chunk);
 	bool unload_chunk(core::ChunkCoord c);
 	std::size_t chunk_count() const { return chunks_.size(); }
 
