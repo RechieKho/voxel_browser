@@ -124,10 +124,15 @@ network space; client window + render loop alive.
 - [x] Integration test: full handshake + auth reject + server full + out-of-order
       + version mismatch + timeout, driven over `LoopbackNetwork`
       (`tests/unit/net_test.cpp`).
-- [ ] Per-IP connection cap + handshake-timeout wiring belong to the server loop
-      once `GnsTransport` lands.
+- [x] Session layer: `ServerSession` (drives per-conn handshakes, timeouts,
+      net-id allocation, `take_joins`/`take_leaves`) + `ClientSession` +
+      `IntegratedGame` (loopback server+client in one object) —
+      `inc/vb/net/{session,integrated}.hpp`.
+- [x] Integrated singleplayer wired into `voxel_browser --singleplayer`
+      (works headless; `singleplayer_smoke` CTest asserts the join line).
+- [ ] Per-IP connection cap belongs to the server loop once `GnsTransport` lands.
 - [ ] `ENGINE_PROTOCOL_VERSION` mismatch → both FSMs already reject; surface it
-      in the client connect UI.
+      in the client connect UI (Phase 5.3 main menu).
 
 ### 1.4 Replication bootstrap (`vb_core/replication`)
 

@@ -122,12 +122,12 @@ ServerHandshakeStep ServerHandshake::on_frame(const Frame &frame) {
 				return fail(DisconnectReason::kProtocolError, "malformed Ready");
 			}
 
-			const JoinGrant grant = host_.on_ready(player_name_);
+			grant_ = host_.on_ready(player_name_);
 			protocol::S2CJoinAccept accept;
-			accept.your_net_id = grant.net_id;
-			accept.spawn_pos = grant.spawn_pos;
-			accept.world_seed = grant.world_seed;
-			accept.time_of_day = grant.time_of_day;
+			accept.your_net_id = grant_.net_id;
+			accept.spawn_pos = grant_.spawn_pos;
+			accept.world_seed = grant_.world_seed;
+			accept.time_of_day = grant_.time_of_day;
 
 			state_ = ServerHandshakeState::kPlaying;
 			ServerHandshakeStep step;

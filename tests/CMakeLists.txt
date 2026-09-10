@@ -29,4 +29,8 @@ if(VB_BUILD_SERVER)
 endif()
 if(VB_BUILD_CLIENT)
   add_test(NAME client_smoke COMMAND voxel_browser --headless --frames 2)
+  add_test(NAME singleplayer_smoke
+    COMMAND voxel_browser --headless --frames 1 --singleplayer --name CiBot)
+  set_tests_properties(singleplayer_smoke PROPERTIES
+    PASS_REGULAR_EXPRESSION "joined singleplayer as net id 1")
 endif()

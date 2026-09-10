@@ -48,6 +48,7 @@ struct HandshakeServerConfig {
 	protocol::AuthMode auth_mode = protocol::AuthMode::kNone;
 	std::uint32_t max_players = 16;
 	double handshake_timeout_seconds = 10.0;
+	std::uint64_t world_seed = 0; // used for JoinAccept when the host grant is 0
 };
 
 struct AuthOutcome {
@@ -92,6 +93,8 @@ public:
 
 	ServerHandshakeState state() const { return state_; }
 	const std::string &player_name() const { return player_name_; }
+	// Valid once state() == kPlaying: the grant sent in S2C_JoinAccept.
+	const JoinGrant &grant() const { return grant_; }
 
 	// Feed one decoded frame from this connection.
 	ServerHandshakeStep on_frame(const protocol::Frame &frame);
@@ -107,6 +110,7 @@ private:
 	HandshakeServerHost host_;
 	ServerHandshakeState state_ = ServerHandshakeState::kAwaitingHello;
 	std::string player_name_;
+	JoinGrant grant_;
 };
 
 // ---------------------------------------------------------------------------

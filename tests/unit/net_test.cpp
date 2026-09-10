@@ -9,7 +9,9 @@
 #include <vector>
 
 #include "vb/net/handshake.hpp"
+#include "vb/net/integrated.hpp"
 #include "vb/net/loopback.hpp"
+#include "vb/net/session.hpp"
 #include "vb/net/transport.hpp"
 #include "vb/protocol/handshake.hpp"
 #include "vb/protocol/message.hpp"
@@ -262,4 +264,52 @@ TEST_CASE("server handshake times out") {
 	auto step = fsm.on_timeout();
 	CHECK(step.disconnect);
 	CHECK(step.disconnect_reason == proto::DisconnectReason::kTimeout);
+}
+
+TEST_CASE("IntegratedGame completes the join and assigns a net id") {
+	HandshakeServerConfig scfg;
+	scfg.world_seed = 12345;
+	HandshakeClientConfig ccfg;
+	ccfg.player_name = "Solo";
+
+	IntegratedGame game(scfg, ccfg);
+	for (int i = 0; i < 32 && !game.client_joined() && !game.client_failed();
+			++i) {
+		game.tick(0.05);
+	}
+
+	REQUIRE(game.client_joined());
+	CHECK(game.server().player_count() == 1);
+	REQUIRE(game.client().join_accept().has_value());
+	CHECK(game.client().join_accept()->your_net_id == vb::core::NetId{ 1 });
+	CHECK(game.client().join_accept()->world_seed == 12345);
+
+	auto joins = game.server().take_joins();
+	REQUIRE(joins.size() == 1);
+	CHECK(joins[0].name == "Solo");
+	CHECK(joins[0].net_id == vb::core::NetId{ 1 });
+}
+
+TEST_CASE("ServerSession times out a silent connection") {
+	LoopbackNetwork net;
+	HandshakeServerConfig cfg;
+	cfg.handshake_timeout_seconds = 1.0;
+	ServerSession server(net.server(), cfg);
+	REQUIRE(net.server().listen(0));
+
+	Transport &ct = net.create_client();
+	auto id = ct.connect("x", 0);
+	REQUIRE(id);
+
+	server.tick(0.5); // sees Connected
+	CHECK(server.pending_count() == 1);
+	server.tick(1.0); // past the timeout
+
+	std::vector<TransportEvent> ev;
+	ct.poll(ev);
+	bool disconnected = false;
+	for (const auto &e : ev) {
+		disconnected |= e.kind == TransportEvent::Kind::kDisconnected;
+	}
+	CHECK(disconnected);
 }

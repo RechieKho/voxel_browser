@@ -194,9 +194,16 @@ _(Move items here with a date + commit when fixed, so the history is visible.)_
   + `ClientHandshake` FSMs with host callback hooks). `NetError` enum added to
   `core/error.hpp`. `tests/unit/net_test.cpp` drives the whole handshake over
   loopback (26 cases / 185 assertions total, green under `-Werror`).
-  **Next:** `GnsTransport` behind `VB_WITH_NET`, a `Session` object gluing
-  Transport+FSM+tick loop into `voxel_browser_server`/`voxel_browser`, then the
-  librg spike (1.4) and client shell (1.5).
+- **2026-09-10 — Phase 1 session layer + integrated singleplayer** (uncommitted).
+  `vb/net/session.{hpp,cpp}`: `ServerSession` (per-conn handshake driver,
+  timeouts, monotonic net-id alloc, `take_joins`/`take_leaves`), `ClientSession`.
+  `vb/net/integrated.{hpp,cpp}`: `IntegratedGame` — loopback server+client in one
+  object. `voxel_browser --singleplayer` runs it and completes the join
+  (headless too); `singleplayer_smoke` CTest. `ServerHandshake::grant()` exposes
+  the `JoinGrant`. `IntegratedGame` needs ~4 `tick()`s to settle (server-polls-
+  then-client-polls each tick = one message hop per tick).
+  **Next:** `GnsTransport` behind `VB_WITH_NET`; librg spike (1.4); client shell
+  camera/overlay (1.5); TOML config (1.1).
 
 ### Gotchas learned this pass
 - Heavy deps (GNS, librg, Lua/sol2, FastNoise2, LZ4/xxHash, Cellulose) are

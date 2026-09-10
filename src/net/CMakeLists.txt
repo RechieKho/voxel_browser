@@ -5,4 +5,6 @@
 target_sources(vb_core PRIVATE
   loopback.cpp
   handshake.cpp
+  session.cpp
+  integrated.cpp
 )
