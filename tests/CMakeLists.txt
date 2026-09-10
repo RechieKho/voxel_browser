@@ -7,6 +7,7 @@ add_executable(vb_tests
   unit/core_test.cpp
   unit/protocol_test.cpp
   unit/net_test.cpp
+  unit/render_test.cpp
 )
 
 target_link_libraries(vb_tests

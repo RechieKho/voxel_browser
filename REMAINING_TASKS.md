@@ -147,14 +147,26 @@ network space; client window + render loop alive.
 
 ### 1.5 Client shell (`vb_render`)
 
-- [ ] Window/context via raylib, main loop scaffold, `--headless` no-op renderer.
-- [ ] First-person camera + mouse capture toggle.
-- [ ] Debug overlay (FPS, connection state, position).
-- [ ] Keep a placeholder grid/cube render until Phase 2 meshing lands.
+- [x] Window/context via raylib, main loop scaffold, `--headless` no-op renderer
+      (`vb/render/window.hpp`).
+- [x] `FirstPersonController` (`vb/render/camera.hpp`, header-only, unit-tested):
+      mouse-look with pitch clamp, WASD + vertical + sprint, normalized diagonals,
+      double precision. Client fills `LookMoveInput` from raylib; mouse-capture
+      toggle on click / Tab / Esc.
+- [x] Debug overlay: position, yaw/pitch, FPS, connection status line.
+- [x] Placeholder grid/cube render until Phase 2 meshing.
+- [ ] Spawn/orient from `S2C_JoinAccept` in the *multiplayer* path too (only the
+      singleplayer path feeds spawn_pos in so far).
 
 **Phase 1 exit:** `voxel_browser_server` accepts connections; `voxel_browser`
 connects, completes handshake, opens a window; integration test for mutual
 visibility of two clients is green in CI.
+
+**Phase 1 status (2026-09-10):** core primitives, wire codec, handshake FSMs,
+transport abstraction + loopback backend, session layer, integrated
+singleplayer, and the client shell are done and tested. Remaining before the
+exit criterion: TOML config (1.1), `GnsTransport` for real sockets (1.2), and
+the librg replication spike + two-client visibility test (1.4).
 
 ---
 

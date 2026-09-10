@@ -202,8 +202,15 @@ _(Move items here with a date + commit when fixed, so the history is visible.)_
   (headless too); `singleplayer_smoke` CTest. `ServerHandshake::grant()` exposes
   the `JoinGrant`. `IntegratedGame` needs ~4 `tick()`s to settle (server-polls-
   then-client-polls each tick = one message hop per tick).
-  **Next:** `GnsTransport` behind `VB_WITH_NET`; librg spike (1.4); client shell
-  camera/overlay (1.5); TOML config (1.1).
+  **Next:** `GnsTransport` behind `VB_WITH_NET`; librg spike (1.4); TOML config (1.1).
+
+- **2026-09-10 — Phase 1.5 client shell** (uncommitted). `vb/render/camera.hpp`
+  — header-only `FirstPersonController` (double precision throughout; the strict
+  `-Wdouble-promotion` warning makes mixed float/double painful, so everything
+  angle/position is `double` and `LookMoveInput` holds `Vec2d`/`Vec3d`). Client
+  `main.cpp` gained mouse-look + WASD + a debug overlay + spawn-from-JoinAccept.
+  `tests/unit/render_test.cpp` (5 cases). Rule: no `1.0f` literals anywhere the
+  value flows into a `double` — CI's `-Wdouble-promotion` is fatal.
 
 ### Gotchas learned this pass
 - Heavy deps (GNS, librg, Lua/sol2, FastNoise2, LZ4/xxHash, Cellulose) are
