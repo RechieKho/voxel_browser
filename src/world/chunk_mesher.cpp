@@ -38,8 +38,19 @@ constexpr std::array<std::array<IVec3, 2>, 6> kFaceTangents{ {
 		{ { { 1, 0, 0 }, { 0, 1, 0 } } }, // -Z
 } };
 
-// Which (u,v) sign each of the 4 corners sits at, matching kFaceCorners order.
-constexpr std::array<std::array<int, 2>, 4> kCornerUV{ { { -1, -1 }, { -1, 1 }, { 1, 1 }, { 1, -1 } } };
+// A corner's sign along a tangent axis, derived from its own coordinates
+// rather than a hand-matched lookup table: kFaceTangents entries are one-hot
+// (exactly one component is 1, the rest 0), so dotting a 0/1 corner offset
+// against one gives 0 or 1 for "which side of the voxel centre this corner is
+// on along that axis" -> map to -1/+1. This is correct for every face by
+// construction; a shared 4-entry {su,sv} table indexed by corner only matched
+// +X by coincidence (each face's kFaceCorners winding sits differently
+// relative to its own tangent axes) and put the AO on the wrong corner on the
+// other 5 faces.
+int corner_sign(const IVec3 &corner, const IVec3 &tangent) {
+	const int dot = corner.x * tangent.x + corner.y * tangent.y + corner.z * tangent.z;
+	return dot != 0 ? 1 : -1;
+}
 
 // raylib's Mesh.indices is `unsigned short*` — a hard 16-bit vertex cap per
 // chunk mesh. Water is non-opaque, so without this a fully submerged region
@@ -108,8 +119,8 @@ MeshData mesh_chunk(const ClientChunkStore &store, core::ChunkCoord coord) {
 					for (int c = 0; c < 4; ++c) {
 						const IVec3 corner =
 								kFaceCorners[fu][static_cast<std::size_t>(c)];
-						const int su = kCornerUV[static_cast<std::size_t>(c)][0];
-						const int sv = kCornerUV[static_cast<std::size_t>(c)][1];
+						const int su = corner_sign(corner, tu);
+						const int sv = corner_sign(corner, tv);
 
 						// AO from the 3 voxels around this corner, in the face's
 						// outward plane.

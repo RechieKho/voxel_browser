@@ -133,6 +133,49 @@ TEST_CASE("a water block on solid ground only shows its top face") {
 	CHECK(mesh_chunk(store, { 0, 0, 0 }).quad_count() == 10);
 }
 
+TEST_CASE("AO darkens the occluded corner of a top face, not another one") {
+	// Regression: a single {su,sv} sign table was reused for all 6 faces, but
+	// each face's corner winding sits differently relative to its own tangent
+	// axes -- only +X happened to match it by coincidence. +Y (this test) was
+	// off by a corner rotation, so the AO landed on the wrong vertex.
+	auto reg = BlockRegistry::base();
+	Chunk c({ 0, 0, 0 });
+	c.blocks().set(10, 10, 10, base_block::stone);
+	// Sits exactly at the diagonal AO sample for the target block's top-face
+	// corner at world (11, 11, 11); occludes only that one corner.
+	c.blocks().set(11, 11, 11, base_block::stone);
+	LightEngine(reg).relight_chunk(c);
+
+	ClientChunkStore store(reg);
+	put(store, c);
+
+	const MeshData m = mesh_chunk(store, { 0, 0, 0 });
+	float occluded_corner_light = -1.0f;
+	float other_min_light = 2.0f;
+	int top_face_verts = 0;
+	for (const auto &v : m.vertices) {
+		// Only the (10,10,10) block's own top face: ny > 0, py == 11, and
+		// px/pz in [10,11] (the occluder block's top face sits at py == 12).
+		if (v.ny < 0.5f || v.py < 10.5f || v.py > 11.5f) {
+			continue;
+		}
+		if (v.px < 9.5f || v.px > 11.5f || v.pz < 9.5f || v.pz > 11.5f) {
+			continue;
+		}
+		++top_face_verts;
+		const bool is_occluded_corner =
+				v.px > 10.5f && v.pz > 10.5f; // world (11, 11, 11)
+		if (is_occluded_corner) {
+			occluded_corner_light = v.light;
+		} else {
+			other_min_light = std::min(other_min_light, v.light);
+		}
+	}
+	REQUIRE(top_face_verts == 4);
+	REQUIRE(occluded_corner_light >= 0.0f);
+	CHECK(occluded_corner_light < other_min_light);
+}
+
 TEST_CASE("darker light yields darker vertices") {
 	auto reg = BlockRegistry::base();
 	Chunk c({ 0, 0, 0 });

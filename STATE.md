@@ -244,6 +244,25 @@ _(Move items here with a date + commit when fixed, so the history is visible.)_
      mesh generator needs either a face-count safety margin or an explicit cap;
      there wasn't one.**
 
+  **Follow-up (same session):** the water-culling fix didn't fully address
+  "AO is wrong" — it was two separate bugs. The real AO bug: a single shared
+  `kCornerUV` 4-entry `{su,sv}` sign table was reused for all 6 mesher faces,
+  but each face's `kFaceCorners` winding sits differently relative to its own
+  `kFaceTangents` axes; only `+X` happened to match the table by coincidence
+  (`-X`/`+Z` had `u` fully inverted, `+Y` was rotated by one corner, `-Y` was
+  mirrored) — AO landed on a *different* corner than the one actually
+  occluded, on 5 of 6 face orientations. Fixed by computing each corner's
+  `(u,v)` sign directly from its own coordinates dotted with that face's
+  tangent axes (`corner_sign()`) instead of a hand-matched table — correct by
+  construction, no per-face bookkeeping to get wrong. Verified the regression
+  test actually catches it: reverting just the fix reproduces the bug (bright
+  vertex where the occluder sits, a different vertex wrongly darkened).
+  **Lesson: a shared lookup table indexed by "corner number" across 6 faces
+  with independently-chosen winding + tangent-axis conventions is exactly the
+  kind of thing that looks right for the first case you check (+X) and is
+  wrong for the rest — derive from geometry instead of hand-deriving a table
+  per case.**
+
   **Known, deliberately not fixed:** auto-step-up "jerks" the camera (the
   physics teleports the feet up ~1 block in a single tick — correct and
   robust, but visually abrupt). Fixing it well means smoothing the *rendered*
