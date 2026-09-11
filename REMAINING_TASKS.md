@@ -347,65 +347,83 @@ with prediction/interpolation.
       RTT; the loopback path has no latency to estimate).
 - [ ] Map players ↔ librg network entities — with the rest of `VB_WITH_REPLICATION`.
 
-### 3.5 Entity visual presentation — billboard sprites (§11.3)
+### 3.5 Entity visual presentation — billboard sprites (§11.3)  ✅ (placeholder art)
 
-**Gap:** nothing today draws a remote player or entity at all — `remote_entities()`
-/ `interpolated_pos()` (3.4) give correct positions, but the client only renders
-terrain. "Smooth on each other's screens" (the Phase 3 exit line below) has only
-ever been true of the *data*, not anything visible. Design: `ARCHITECTURE_SPEC.md`
-§11.3 (Don't Starve-style Y-axis-billboarded, directionally-animated sprites,
-decided 2026-09-11 — see §19 Q7).
+**Gap closed:** nothing used to draw a remote player or entity at all —
+`remote_entities()`/`interpolated_pos()` (3.4) gave correct positions, but the
+client only rendered terrain. Design: `ARCHITECTURE_SPEC.md` §11.3 (Don't
+Starve-style Y-axis-billboarded, directionally-animated sprites, decided
+2026-09-11 — see §19 Q7).
 
-- [ ] `vb/render/entity_renderer.{hpp,cpp}` (sibling to `chunk_renderer`): per-`NetId`
-      render state (current clip, elapsed time, direction bucket + hysteresis);
-      draws each visible remote entity as one `DrawBillboardPro` call per frame
-      (`up = {0,1,0}` for the Y-axis lock; raylib's `right` there comes from the
-      view matrix and is always horizontal regardless of pitch — confirmed in
-      `rmodels.c`, no custom quad math needed).
-- [ ] Direction-bucket selection: bearing from entity to camera minus the entity's
-      own yaw, bucketed into `facings` (4 or 8) sectors, with hysteresis so
-      standing near a sector boundary doesn't flicker. Mirroring via negative
-      `size.x` in `DrawBillboardPro` (halves the required art: 5 unique poses
-      cover all 8 facings).
-- [ ] Client animation state machine (data already on the wire — no new round
-      trip): priority `dead > hurt-pulse > acting > jump/fall > run > walk > idle`,
-      driven by `EntityRecord.vel` (speed thresholds) + new `flags` bits (`dead`,
-      `hurt_pulse` edge-triggered, `acting`) alongside the existing bit 0
-      (`on_ground`). Bumps `kEngineProtocolVersion` + `docs/protocol.md` when wired.
+- [x] `vb/render/entity_renderer.{hpp,cpp}` (sibling to `chunk_renderer`):
+      per-`NetId` render state (current clip, elapsed time, direction bucket +
+      hysteresis); draws each tracked remote entity as one `DrawBillboardPro`
+      call per frame (`up = {0,1,0}` for the Y-axis lock — raylib's `right`
+      there comes from the view matrix and is always horizontal regardless of
+      pitch, confirmed directly in `rmodels.c`, no custom quad math needed).
+      Only constructed when the window isn't headless (same pattern as
+      `ChunkRenderer`).
+- [x] Direction-bucket selection: `vb/render/entity_visual.hpp` —
+      `bearing_degrees` / `direction_bucket` / `select_pose` /
+      `DirectionBucketTracker` (header-only, no raylib, unit-tested like
+      `camera.hpp`). Bearing from entity to camera minus the entity's own yaw,
+      bucketed into `facings` sectors (default 8, active today even against
+      the flat placeholder), hysteresis so standing near a sector boundary
+      doesn't flicker. Mirroring via negative `size.x` in `DrawBillboardPro`.
+- [x] Client animation state machine — `resolve_anim_clip()`: priority `dead >
+      hurt_pulse > acting > jump/fall > run > walk > idle` from
+      `EntityRecord.vel` (speed thresholds) + `flags` bits. **Still open:** the
+      server only ever sends `flags` bit 0 (`on_ground`); `dead`/`hurt_pulse`/
+      `acting` are defined (`EntityAnimFlag`) but nothing sets them yet, so
+      only jump/fall/run/walk/idle are reachable in practice today. Wiring the
+      other bits bumps `kEngineProtocolVersion` + `docs/protocol.md`.
 - [ ] `vb/ecs/components.hpp` gains a `SpriteVisual` component (atlas handle,
-      `facings`, per-clip frame lists/fps/loop) — the kind's static visual def,
-      separate from the already-shipped `InterpBuffer` (position smoothing, reused
-      as-is, not duplicated).
-- [ ] **Hardcoded fallback ships in this phase, no Lua/pack dependency**: a single
-      flat-tinted placeholder quad (1 frame, `facings = 1`) so remote players are
-      visible immediately — mirrors how Phase 2 shipped a hand-rolled mesher ahead
-      of Cellulose. Swap-in point for the real thing is local.
+      `facings`, per-clip frame lists/fps/loop) — the kind's static visual def.
+      Deferred: nothing produces one until 4.2 exists; `EntityRenderer` today
+      hardcodes `facings = 8` and a single flat frame instead of reading a
+      per-kind def.
+- [x] **Hardcoded fallback, no Lua/pack dependency**: a 1×1 white texture
+      tinted per-`NetId` (deterministic hash → hue, so distinct entities are
+      distinguishable) stands in for real art — mirrors how Phase 2 shipped a
+      hand-rolled mesher ahead of Cellulose.
 - [ ] Real content (atlas art, per-clip frame data) is pack-defined —
       `vb.register_entity{ visual = {...} }` (4.2) + the atlas travels over Asset
       Sync (4.4) like any texture; base-pack sprites are 5.1.
-- [ ] Local player: **not** billboarded in first-person (no viewmodel in scope);
+- [x] Local player: **not** billboarded in first-person (no viewmodel in scope);
       third-person / spectator views are future work.
-- [ ] Unit tests: direction-bucket math (bearing→sector, mirroring sign, hysteresis
-      doesn't flicker at a boundary), animation-state priority resolution from a
-      given `(vel, flags)`.
+- [x] Unit tests (`tests/unit/entity_visual_test.cpp`, 14 cases): anim-priority
+      resolution, bearing convention, direction-bucket math (front/back/yaw
+      invariance), pose mirroring for `facings` 8/4/1, tracker hysteresis
+      (ignores a flicker, switches once stable), `EntityPresentationState`
+      clip-time reset/accumulation.
 - [ ] Non-goals for v1 (explicitly deferred, not forgotten): skeletal/vertex
       animation, per-limb equipment layering, blob shadows, dynamic per-entity
       lighting from the block they stand in (chunks already compute this — cheap
       follow-up, not core).
+
+**3.5 status (2026-09-11): the machinery is real and tested; the art is not.**
+`--singleplayer` will draw a flat colored quad, correctly billboarded and
+direction/animation-tracked, for every remote entity — there just aren't any to
+see without a second connected player yet (needs `GnsTransport`, or a future
+in-process 2-client harness). Verified via the automated netcode/replication
+tests exercising `remote_entities()`, and via `entity_visual_test.cpp` for the
+presentation logic itself; not yet eyeballed with two live windows.
 
 **Phase 3 exit:** two players walk around shared terrain, colliding with voxels,
 **visibly** smooth on each other's screens (3.5), local motion is responsive
 (predicted).
 
 **Phase 3 status (2026-09-11): substantially met over the loopback transport,
-visual presentation (3.5) planned but not yet built.** Shared voxel physics, the
-input pipeline, authoritative server movement, client prediction/reconciliation
-and remote interpolation are done and tested; the client (`--singleplayer`) now
-walks input-driven with terrain collision instead of the free-fly cam. Deferred:
-a formal EnTT registry + system runner (Phase 3.1 — not blocking; revisit when
-Lua entities need it), wall-clock server-time estimation and the librg entity
-mapping (both need the real `GnsTransport`), and 3.5 (nothing renders a remote
-player yet — design is written, `entity_renderer` isn't).
+including visual presentation.** Shared voxel physics, the input pipeline,
+authoritative server movement, client prediction/reconciliation, remote
+interpolation, and now billboard rendering of remote entities (3.5) are done
+and tested; the client (`--singleplayer`) walks input-driven with terrain
+collision instead of the free-fly cam. Deferred: a formal EnTT registry + system
+runner (Phase 3.1 — not blocking; revisit when Lua entities need it), wall-clock
+server-time estimation and the librg entity mapping (both need the real
+`GnsTransport`), and 3.5's real art (waits on 4.2/4.4/5.1) — the placeholder
+billboards are drawn and tested but haven't been eyeballed with two live
+players in one session yet.
 
 ---
 

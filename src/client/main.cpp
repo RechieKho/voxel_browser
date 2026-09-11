@@ -27,6 +27,7 @@
 #include "vb/protocol/world.hpp"
 #include "vb/render/camera.hpp"
 #include "vb/render/chunk_renderer.hpp"
+#include "vb/render/entity_renderer.hpp"
 #include "vb/render/window.hpp"
 #include "vb/world/block.hpp"
 #include "vb/world/world.hpp"
@@ -188,13 +189,15 @@ Camera3D to_camera(const vb::render::FirstPersonController &c, float fovy) {
 }
 
 void draw_overlay(const vb::render::FirstPersonController &c,
-		const std::string &status, std::size_t chunk_count, bool mouse_captured) {
+		const std::string &status, std::size_t chunk_count,
+		std::size_t entity_count, bool mouse_captured) {
 	const vb::core::Vec3d p = c.position();
 	char line[160];
 	DrawText("voxel_browser", 12, 12, 20, RAYWHITE);
 	DrawText(status.c_str(), 12, 38, 18, Color{ 170, 200, 170, 255 });
-	std::snprintf(line, sizeof(line), "pos  %.1f  %.1f  %.1f   chunks %zu", p.x,
-			p.y, p.z, chunk_count);
+	std::snprintf(line, sizeof(line),
+			"pos  %.1f  %.1f  %.1f   chunks %zu   entities %zu", p.x, p.y, p.z,
+			chunk_count, entity_count);
 	DrawText(line, 12, 64, 18, Color{ 170, 170, 180, 255 });
 	std::snprintf(line, sizeof(line), "look yaw %.0f  pitch %.0f", c.yaw(),
 			c.pitch());
@@ -294,8 +297,10 @@ int main(int argc, char **argv) {
 	std::uint32_t edit_seq = 0;
 
 	std::unique_ptr<vb::render::ChunkRenderer> chunk_renderer;
+	std::unique_ptr<vb::render::EntityRenderer> entity_renderer;
 	if (!window.headless()) {
 		chunk_renderer = std::make_unique<vb::render::ChunkRenderer>();
+		entity_renderer = std::make_unique<vb::render::EntityRenderer>();
 	}
 
 	bool mouse_captured = false;
@@ -358,9 +363,16 @@ int main(int argc, char **argv) {
 		}
 
 		std::size_t chunk_count = 0;
+		std::size_t entity_count = 0;
 		if (chunk_renderer && sp) {
 			chunk_renderer->sync(sp->game.client().chunk_store(), /*budget*/ 8);
 			chunk_count = chunk_renderer->uploaded_count();
+		}
+		if (entity_renderer && sp) {
+			const vb::render::CameraView camera_view{ controller.position(),
+				controller.target() };
+			entity_renderer->sync(sp->game.client(), camera_view, dt);
+			entity_count = entity_renderer->tracked_count();
 		}
 
 		window.begin_frame();
@@ -371,6 +383,10 @@ int main(int argc, char **argv) {
 			if (chunk_renderer) {
 				chunk_renderer->draw();
 			}
+			if (entity_renderer) {
+				entity_renderer->draw(
+						{ controller.position(), controller.target() });
+			}
 			if (look_hit.hit) {
 				DrawCubeWires({ static_cast<float>(look_hit.voxel.x) + 0.5f,
 									  static_cast<float>(look_hit.voxel.y) + 0.5f,
@@ -378,7 +394,8 @@ int main(int argc, char **argv) {
 						1.02f, 1.02f, 1.02f, BLACK);
 			}
 			EndMode3D();
-			draw_overlay(controller, status, chunk_count, mouse_captured);
+			draw_overlay(controller, status, chunk_count, entity_count,
+					mouse_captured);
 		}
 		window.end_frame();
 	}

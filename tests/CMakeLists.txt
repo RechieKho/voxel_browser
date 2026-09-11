@@ -8,6 +8,7 @@ add_executable(vb_tests
   unit/cli_test.cpp
   unit/config_test.cpp
   unit/core_test.cpp
+  unit/entity_visual_test.cpp
   unit/lighting_test.cpp
   unit/mesher_test.cpp
   unit/netcode_test.cpp

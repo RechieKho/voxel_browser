@@ -7,7 +7,7 @@
 > Companion docs: `ARCHITECTURE_SPEC.md` (target design) · `REMAINING_TASKS.md`
 > (implementation backlog). This file is for *traps and context*, not the plan.
 
-Last updated: 2026-09-11 (entity billboard-sprite design)
+Last updated: 2026-09-11 (entity billboard-sprite placeholder implemented)
 
 ---
 
@@ -204,7 +204,43 @@ _(Move items here with a date + commit when fixed, so the history is visible.)_
   then-client-polls each tick = one message hop per tick).
   **Next:** `GnsTransport` behind `VB_WITH_NET`.
 
+- **2026-09-11 — Entity billboard-sprite placeholder implemented** (Phase 3.5,
+  uncommitted). `inc/vb/render/entity_visual.hpp` (header-only, no raylib,
+  unit-tested like `camera.hpp`): `resolve_anim_clip` (priority state machine),
+  `bearing_degrees`/`direction_bucket`/`select_pose` (direction math, mirroring
+  for the far half of the sectors), `DirectionBucketTracker` (flicker
+  hysteresis), `EntityPresentationState` (per-entity orchestration + clip-time
+  tracking). `vb/render/entity_renderer.{hpp,cpp}`: raylib-backed, pImpl (no
+  raylib types in the header, matching `ChunkRenderer`); one `DrawBillboardPro`
+  per tracked entity against a 1×1 white texture tinted by a deterministic
+  `NetId` hash (stand-in art, so simultaneous entities are at least visually
+  distinguishable). Wired into `main.cpp` next to `chunk_renderer`, same
+  headless guard, overlay now shows an `entities N` count.
+  `tests/unit/entity_visual_test.cpp` — 14 cases. 113/119 total (non-Lua/Lua
+  builds) test cases green.
+  - **Gotcha:** `resolve_anim_clip`'s horizontal-speed calc needs both
+    operands explicitly cast to `double` before multiplying
+    (`static_cast<double>(vel.x) * vel.x` still promotes the second operand
+    implicitly) — `-Wdouble-promotion` catches this, same class of trap noted
+    for Phase 1.5's camera code.
+  - **Confirmed, not assumed:** raylib 5.5's `DrawBillboardPro` with a fixed
+    `up = {0,1,0}` gives exactly Y-axis (cylindrical) billboarding for free —
+    read `rmodels.c` directly rather than trusting the header comment; its
+    `right` vector comes from the camera view matrix but is always horizontal
+    regardless of pitch (cross of any forward vector with world-up has zero Y
+    component).
+  - **Not yet visually verified**: no second connected player exists to look
+    at (needs `GnsTransport`, or an in-process 2-client test harness with a
+    window) — correctness rests on the unit tests + code review, not eyes on
+    screen. Flag if a real two-player session shows different behaviour than
+    the math predicts.
+  - **Still open:** `SpriteVisual` ECS component (waits on 4.2 having a real
+    per-kind visual def to populate it with); the `dead`/`hurt_pulse`/`acting`
+    flag bits are defined but nothing sends them yet (server only ever sets
+    bit 0).
+
 - **2026-09-11 — Entity visual presentation decided: billboard sprites**
+  (committed `adfc68e`).
   (design only, no code). Players/entities are Don't Starve-style 2D
   billboards, not 3D blocky models — `ARCHITECTURE_SPEC.md` §11.3, open
   question §19 Q7, backlog `REMAINING_TASKS.md` Phase 3.5. Closes a real,
