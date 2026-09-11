@@ -92,6 +92,76 @@ TEST_CASE("a neighbour chunk culls the shared border faces") {
 	CHECK(mesh_chunk(store, { 0, 0, 0 }).quad_count() == 6144 - 1024);
 }
 
+// Regression: ChunkRenderer only re-meshes a chunk when its revision changes
+// (see chunk_renderer.cpp's sync()). mesh_chunk() itself is a pure function of
+// current store state and was always correct -- the bug was that a chunk's
+// *neighbour* never got its revision bumped when the chunk arrived/changed/
+// left, so the renderer never knew to re-mesh it, leaving stale (uncalled or
+// wrongly-AO'd) border faces baked in until something else happened to touch
+// that neighbour. Reported as visible chunk-sized gaps under water (chunk
+// arrival order) and small AO glitches near edits (delta order).
+
+TEST_CASE("apply_add bumps an already-loaded neighbour's revision") {
+	ClientChunkStore store(BlockRegistry::base());
+
+	Chunk a({ 0, 0, 0 });
+	a.blocks().fill(base_block::stone);
+	put(store, a); // a loads alone first, meshed as if +X were open air
+	const std::uint64_t rev_before = store.find({ 0, 0, 0 })->revision();
+
+	Chunk b({ 1, 0, 0 }); // +X neighbour arrives second
+	b.blocks().fill(base_block::stone);
+	put(store, b);
+
+	CHECK(store.find({ 0, 0, 0 })->revision() > rev_before);
+	// And re-meshing now actually culls the shared face.
+	CHECK(mesh_chunk(store, { 0, 0, 0 }).quad_count() == 6144 - 1024);
+}
+
+TEST_CASE("apply_delta bumps an already-loaded neighbour's revision") {
+	ClientChunkStore store(BlockRegistry::base());
+
+	Chunk a({ 0, 0, 0 });
+	a.blocks().fill(base_block::stone);
+	put(store, a);
+	Chunk b({ 1, 0, 0 });
+	b.blocks().fill(base_block::stone);
+	put(store, b); // both loaded; the shared face is already culled
+
+	const std::uint64_t rev_before = store.find({ 1, 0, 0 })->revision();
+
+	vb::protocol::S2CChunkDelta delta;
+	delta.coord = { 0, 0, 0 };
+	delta.base_revision = store.find({ 0, 0, 0 })->revision();
+	delta.new_revision = delta.base_revision + 1;
+	delta.blocks.push_back({ static_cast<std::uint32_t>(index_of(31, 0, 0)),
+			vb::core::BlockId::kAir }); // break a's border voxel touching b
+	REQUIRE(store.apply_delta(delta));
+
+	CHECK(store.find({ 1, 0, 0 })->revision() > rev_before);
+}
+
+TEST_CASE("apply_remove bumps an already-loaded neighbour's revision") {
+	ClientChunkStore store(BlockRegistry::base());
+
+	Chunk a({ 0, 0, 0 });
+	a.blocks().fill(base_block::stone);
+	put(store, a);
+	Chunk b({ 1, 0, 0 });
+	b.blocks().fill(base_block::stone);
+	put(store, b);
+
+	const std::uint64_t rev_before = store.find({ 0, 0, 0 })->revision();
+
+	vb::protocol::S2CChunkRemove rm;
+	rm.coord = { 1, 0, 0 };
+	store.apply_remove(rm);
+
+	CHECK(store.find({ 0, 0, 0 })->revision() > rev_before);
+	// b is gone, so a's +X face must be exposed again.
+	CHECK(mesh_chunk(store, { 0, 0, 0 }).quad_count() == 6144);
+}
+
 TEST_CASE("transparent leaves do not cull neighbouring faces") {
 	Chunk c({ 0, 0, 0 });
 	c.blocks().set(8, 8, 8, base_block::stone);

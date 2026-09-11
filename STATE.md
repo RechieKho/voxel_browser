@@ -7,7 +7,7 @@
 > Companion docs: `ARCHITECTURE_SPEC.md` (target design) · `REMAINING_TASKS.md`
 > (implementation backlog). This file is for *traps and context*, not the plan.
 
-Last updated: 2026-09-11 (macOS Homebrew protobuf configure crash fixed)
+Last updated: 2026-09-11 (chunk-neighbour remesh bug fixed)
 
 ---
 
@@ -227,6 +227,43 @@ _(Move items here with a date + commit when fixed, so the history is visible.)_
   the `JoinGrant`. `IntegratedGame` needs ~4 `tick()`s to settle (server-polls-
   then-client-polls each tick = one message hop per tick).
   **Next:** `GnsTransport` behind `VB_WITH_NET`.
+
+- **2026-09-11 — Chunk-neighbour remesh bug fixed** (uncommitted). Reported by
+  the user: "very minor AO error, perhaps arises from receiving data from the
+  server" + "square chunks visible under water." Root cause:
+  `ChunkRenderer::sync()` only re-`mesh_chunk()`s a chunk when
+  `chunk->revision()` changes (chunk_renderer.cpp) — `mesh_chunk()` itself is
+  a pure function of current store state and was always correct, but **three
+  of the four `ClientChunkStore` mutators never bumped a *neighbour's*
+  revision**, only `edit_block()` (the client's own optimistic edits) did:
+  - `apply_add` — a chunk arriving after an already-loaded neighbour left
+    that neighbour's border permanently meshed as if this chunk were still
+    unloaded (air) — wrong culling *and* wrong AO along that seam, forever,
+    unless something else happened to touch the neighbour later. Order-
+    dependent on server streaming order — explains the "square chunks" report
+    exactly (water chunks are flat/homogeneous, so an unculled border face is
+    a very visible full 32×32 quad) and is entirely about *timing of data
+    arriving from the server*, matching the other half of the report too.
+  - `apply_delta` — the authoritative block-edit broadcast (anyone's edit,
+    not just yours) never bumped the neighbour whose culling/AO depends on
+    a border voxel it just changed.
+  - `apply_remove` — a chunk unloading never told the neighbour that had been
+    culling a face against it to re-expose that face.
+  Fixed by extracting `bump_all_neighbor_revisions(coord)` (bump all 6
+  face-adjacent loaded neighbours, unconditionally) and calling it from all
+  three; `edit_block()` keeps its own tighter border-only variant since it
+  only ever touches one voxel and knows exactly which single neighbour (if
+  any) is affected. Regression tests in `tests/unit/mesher_test.cpp` assert
+  the neighbour's revision actually changes (not just that `mesh_chunk()`'s
+  output would be correct if called again — the bug was entirely about
+  *whether* it gets called again) — verified they fail without the fix
+  (reverted the source, reran, confirmed all 3 fail with `1 > 1`) before
+  trusting them.
+  **Lesson for next time a chunk-border bug shows up:** any code path that
+  changes what a chunk looks like from the outside (new data, an edit
+  anywhere in it, unloading) needs to bump *every loaded neighbour's*
+  revision, not just its own — the renderer has no other signal to re-mesh a
+  chunk whose own data didn't change but whose correct mesh output did.
 
 - **2026-09-11 — macOS Homebrew protobuf configure crash fixed** (`f86aeec`).
   Reported by the user building `-DVB_WITH_NET=ON` locally on macOS with

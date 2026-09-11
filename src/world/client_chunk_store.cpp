@@ -6,6 +6,24 @@
 
 namespace vb::world {
 
+void ClientChunkStore::bump_all_neighbor_revisions(core::ChunkCoord coord) {
+	static constexpr core::ChunkCoord kOffsets[6] = {
+		{ 1, 0, 0 },
+		{ -1, 0, 0 },
+		{ 0, 1, 0 },
+		{ 0, -1, 0 },
+		{ 0, 0, 1 },
+		{ 0, 0, -1 },
+	};
+	for (const core::ChunkCoord &o : kOffsets) {
+		const auto it = chunks_.find(
+				{ coord.x + o.x, coord.y + o.y, coord.z + o.z });
+		if (it != chunks_.end()) {
+			it->second->bump_revision();
+		}
+	}
+}
+
 core::Result<void, core::ProtocolError> ClientChunkStore::apply_add(
 		const protocol::S2CChunkAdd &msg) {
 	auto chunk = std::make_unique<Chunk>(msg.coord);
@@ -18,6 +36,9 @@ core::Result<void, core::ProtocolError> ClientChunkStore::apply_add(
 	chunk->set_revision(msg.revision);
 	chunk->dirty().mesh = true;
 	chunks_.insert_or_assign(msg.coord, std::move(chunk));
+	// Neighbours already loaded were meshed assuming this chunk was unloaded
+	// (open air) -- their border faces/AO need recomputing now that it's not.
+	bump_all_neighbor_revisions(msg.coord);
 	return {};
 }
 
@@ -42,11 +63,19 @@ core::Result<void, core::ProtocolError> ClientChunkStore::apply_delta(
 	}
 	chunk.dirty().mesh = true;
 	chunk.bump_revision();
+	// An authoritative edit (this player's or another's) may have touched a
+	// border voxel -- a neighbour's culling/AO could depend on it. Delta lists
+	// can span anywhere in the chunk, so bump unconditionally rather than
+	// working out which specific voxels are actually on an edge.
+	bump_all_neighbor_revisions(msg.coord);
 	return {};
 }
 
 void ClientChunkStore::apply_remove(const protocol::S2CChunkRemove &msg) {
 	chunks_.erase(msg.coord);
+	// A neighbour may have been culling faces against this chunk; now that
+	// it's gone those faces need to reappear.
+	bump_all_neighbor_revisions(msg.coord);
 }
 
 core::BlockId ClientChunkStore::edit_block(core::IVec3 world_voxel,
