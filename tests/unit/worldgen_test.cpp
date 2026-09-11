@@ -125,3 +125,41 @@ TEST_CASE("worker pool generates submitted chunks, dedupes, drains") {
 	REQUIRE(done.size() == 2);
 	CHECK(done[0]->gen_state() == vb::world::GenState::kGenerated);
 }
+
+// Regression: JoinGrant::spawn_pos used to default to a fixed {0, 64, 0}
+// regardless of seed. With base_height=64 and amplitude=28 the real surface
+// ranges roughly [36, 92], so a fixed spawn Y landed at or below the actual
+// surface for a large fraction of seeds, embedding the player in solid
+// terrain from the moment they joined -- no falling involved. Seed 1 is a
+// dramatic case (surface_height(0,0) == 78, fourteen blocks above the old
+// fixed spawn).
+TEST_CASE("default_spawn_position always sits on top of the real surface") {
+	auto registry = vb::world::BlockRegistry::base();
+	for (const std::uint64_t seed : { std::uint64_t{ 1 }, std::uint64_t{ 7 },
+				 std::uint64_t{ 19 } }) {
+		WorldGenParams p;
+		p.seed = seed;
+		const WorldGenerator gen(p, registry);
+		const int surface = gen.surface_height(0, 0);
+
+		const vb::core::Vec3d spawn = default_spawn_position(gen);
+		CHECK(spawn.x == doctest::Approx(0.5));
+		CHECK(spawn.z == doctest::Approx(0.5));
+		// One voxel above the topmost solid block, not inside/below it.
+		CHECK(spawn.y == doctest::Approx(static_cast<double>(surface) + 1.0));
+		CHECK(spawn.y > static_cast<double>(surface));
+	}
+}
+
+TEST_CASE("default_spawn_position honours a non-origin spawn column") {
+	auto registry = vb::world::BlockRegistry::base();
+	WorldGenParams p;
+	p.seed = 1;
+	const WorldGenerator gen(p, registry);
+
+	const vb::core::Vec3d spawn = default_spawn_position(gen, 40, -12);
+	CHECK(spawn.x == doctest::Approx(40.5));
+	CHECK(spawn.z == doctest::Approx(-11.5));
+	CHECK(spawn.y ==
+			doctest::Approx(static_cast<double>(gen.surface_height(40, -12)) + 1.0));
+}

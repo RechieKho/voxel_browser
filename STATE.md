@@ -7,7 +7,7 @@
 > Companion docs: `ARCHITECTURE_SPEC.md` (target design) · `REMAINING_TASKS.md`
 > (implementation backlog). This file is for *traps and context*, not the plan.
 
-Last updated: 2026-09-11 (join-time fall-through-world / embedding bug fixed)
+Last updated: 2026-09-11 (fixed spawn position — was embedded in terrain for ~half of all seeds)
 
 ---
 
@@ -228,8 +228,40 @@ _(Move items here with a date + commit when fixed, so the history is visible.)_
   then-client-polls each tick = one message hop per tick).
   **Next:** `GnsTransport` behind `VB_WITH_NET`.
 
+- **2026-09-11 — Fixed spawn Y: was embedded in terrain by construction for
+  ~half of all seeds** (uncommitted). Follow-up report after the fall-through
+  fix below: "the player stuck inside blocks on spawn" -- **no falling
+  involved this time**, a separate bug. Root cause: `JoinGrant::spawn_pos`
+  defaults to a fixed `{0, 64, 0}` (`inc/vb/net/handshake.hpp`), and neither
+  `--singleplayer` nor the dedicated server ever overrode it with a real
+  terrain height -- singleplayer's hardcoded seed 7 happens to have
+  `surface_height(0,0) == 56` (safely below 64, purely by luck), but the
+  standalone server now picks a **random** seed by default
+  (`server/main.cpp`'s `random_seed()`), and `base_height=64` /
+  `amplitude=28` means the real surface ranges roughly `[36, 92]` — probed 30
+  seeds, **19 of 30 (63%)** had `surface_height(0,0) >= 64`, i.e. the fixed
+  spawn point was at or below ground. Seed 1 is dramatic: surface height 78,
+  fourteen blocks above where the player would spawn — fully entombed in
+  stone from the instant they joined, zero fall.
+  Fixed by adding `worldgen::default_spawn_position(generator, x, z)`
+  (`vb/worldgen/generator.{hpp,cpp}`) — feet one voxel above the real
+  `surface_height` at the spawn column — and wiring it into a
+  `HandshakeServerHost::on_ready` in both `--singleplayer` (`sp_server_host()`
+  in client `main.cpp`) and the dedicated server (`server/main.cpp`), neither
+  of which supplied a custom host before. `ServerSession`'s constructor
+  already fills in `net_id`/`world_seed` on top of whatever `on_ready`
+  returns (existing wrapper logic, unchanged) — the host only needs to set
+  `spawn_pos`. Tests: `tests/unit/worldgen_test.cpp` — asserts the computed
+  spawn sits exactly one voxel above `surface_height` for 3 seeds (including
+  1, the dramatic case) and for a non-origin spawn column.
+  **This is a different bug from the one below and doesn't supersede it** —
+  a correct spawn *point* still needs the *chunk at that point* to be loaded
+  before physics starts touching it; both fixes matter together. Not
+  discovered together because singleplayer's fixed seed 7 masked this one
+  during all of Phase 3-5's development and testing.
+
 - **2026-09-11 — Join-time fall-through-world / embedding bug fixed**
-  (uncommitted). Reported: "when the player joins, the player immediately
+  (`69ea41c`). Reported: "when the player joins, the player immediately
   falls outside the world first, which leads to player get embedded inside
   the terrain." Root cause: physics is entirely input-driven
   (`ServerSession::handle_input_batch` only runs `step_movement` when a

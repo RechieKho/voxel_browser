@@ -65,4 +65,13 @@ void WorldGenerator::generate(world::Chunk &chunk) const {
 	chunk.set_gen_state(world::GenState::kGenerated);
 }
 
+core::Vec3d default_spawn_position(const WorldGenerator &gen, int spawn_x,
+		int spawn_z) {
+	const int surface = gen.surface_height(spawn_x, spawn_z);
+	// Feet one voxel above the topmost solid block (occupies [surface,
+	// surface+1)), centred in the column.
+	return { static_cast<double>(spawn_x) + 0.5,
+		static_cast<double>(surface) + 1.0, static_cast<double>(spawn_z) + 0.5 };
+}
+
 } // namespace vb::worldgen

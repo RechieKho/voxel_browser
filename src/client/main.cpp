@@ -77,6 +77,21 @@ vb::net::HandshakeClientConfig sp_client_config(const std::string &name) {
 	return c;
 }
 
+// JoinGrant::spawn_pos otherwise defaults to a fixed {0, 64, 0} regardless of
+// seed -- with base_height=64 and amplitude=28 the real surface ranges
+// roughly [36, 92], so a fixed Y can land at or below it and spawn the player
+// embedded in solid terrain outright (no fall involved). Compute a real one
+// from the same seed instead.
+vb::net::HandshakeServerHost sp_server_host(std::uint64_t seed) {
+	vb::net::HandshakeServerHost host;
+	host.on_ready = [seed](std::string_view) {
+		vb::net::JoinGrant grant;
+		grant.spawn_pos = vb::worldgen::default_spawn_position(make_generator(seed));
+		return grant;
+	};
+	return host;
+}
+
 // Owns the in-process world for --singleplayer, kept alive for the whole
 // session (spec §3: the integrated server is a library, not a child process).
 struct Singleplayer {
@@ -85,7 +100,7 @@ struct Singleplayer {
 	vb::net::IntegratedGame game;
 
 	Singleplayer(std::uint64_t seed, const std::string &name, int view_distance) : pool(make_generator(seed)),
-																				   game(sp_server_config(seed), sp_client_config(name)) {
+																				   game(sp_server_config(seed), sp_client_config(name), sp_server_host(seed)) {
 		game.server().set_world_replicator(
 				std::make_unique<vb::net::WorldReplicator>(world, pool,
 						vb::world::BlockRegistry::base(), view_distance, 3));

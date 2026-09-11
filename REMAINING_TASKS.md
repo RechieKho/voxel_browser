@@ -213,8 +213,9 @@ network space; client window + render loop alive.
       toggle on click / Tab / Esc.
 - [x] Debug overlay: position, yaw/pitch, FPS, connection status line.
 - [x] Placeholder grid/cube render until Phase 2 meshing.
-- [ ] Spawn/orient from `S2C_JoinAccept` in the *multiplayer* path too (only the
-      singleplayer path feeds spawn_pos in so far).
+- [x] Spawn/orient from `S2C_JoinAccept` in the *multiplayer* path too — the
+      Phase 1.2 `main.cpp` refactor unified singleplayer and remote play
+      behind one `ClientSession*`, so both read `spawn_pos` the same way now.
 
 **Phase 1 exit:** `voxel_browser_server` accepts connections; `voxel_browser`
 connects, completes handshake, opens a window; integration test for mutual
@@ -384,8 +385,15 @@ with prediction/interpolation.
       `WorldGenWorkerPool`, which existing integration tests avoid via
       `kSynchronous` (generates instantly, structurally can't reproduce the
       gap). See `STATE.md` for the full reasoning if this needs revisiting.
-
-### 3.4 Replication + netcode (§8.4)
+- [x] Fixed spawn *position* itself (a separate bug from the one above):
+      `JoinGrant::spawn_pos` defaulted to a fixed `{0, 64, 0}` regardless of
+      seed — 63% of 30 probed seeds had a real surface height `>= 64` at
+      that column, embedding the player in solid terrain outright, no
+      falling needed. Singleplayer's hardcoded seed 7 masked this for all of
+      Phase 3-5 (its surface there happens to be 56). Fixed via
+      `worldgen::default_spawn_position()` wired into a
+      `HandshakeServerHost::on_ready` in both `--singleplayer` and the
+      dedicated server. Tests in `tests/unit/worldgen_test.cpp`.
 
 - [x] `S2C_EntitySnapshot` carries `last_acked_input_seq` + the recipient's own
       authoritative `local` record (interest culling excludes self). `flags` bit 0

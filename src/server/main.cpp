@@ -88,8 +88,9 @@ int main(int argc, char **argv) {
 	vb::world::World world(vb::world::BlockRegistry::base());
 	vb::worldgen::WorldGenParams gen_params;
 	gen_params.seed = seed;
-	vb::worldgen::WorldGenWorkerPool pool(
-			vb::worldgen::WorldGenerator(gen_params, vb::world::BlockRegistry::base()));
+	const vb::worldgen::WorldGenerator generator(gen_params,
+			vb::world::BlockRegistry::base());
+	vb::worldgen::WorldGenWorkerPool pool(generator); // copies into the pool
 
 	vb::net::GnsTransport transport;
 	auto listen_status = transport.listen(config.port);
@@ -117,7 +118,18 @@ int main(int argc, char **argv) {
 	hs_config.max_players = config.max_players;
 	hs_config.world_seed = seed;
 
-	vb::net::ServerSession session(transport, hs_config);
+	// JoinGrant::spawn_pos otherwise defaults to a fixed {0, 64, 0} regardless
+	// of seed -- with base_height=64 and amplitude=28 the real surface ranges
+	// roughly [36, 92], so a fixed Y can land at or below it and spawn the
+	// player embedded in solid terrain outright (no fall involved).
+	vb::net::HandshakeServerHost host;
+	host.on_ready = [generator](std::string_view) {
+		vb::net::JoinGrant grant;
+		grant.spawn_pos = vb::worldgen::default_spawn_position(generator);
+		return grant;
+	};
+
+	vb::net::ServerSession session(transport, hs_config, host);
 	session.set_world_replicator(std::make_unique<vb::net::WorldReplicator>(world,
 			pool, vb::world::BlockRegistry::base(),
 			static_cast<int>(config.view_distance), 3));
