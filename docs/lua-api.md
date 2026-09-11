@@ -32,7 +32,9 @@ Error classes: `kSyntax`, `kRuntime`, `kBudgetExceeded` (hook fired),
 
 - Registration (pack load only): `vb.register_block`, `vb.register_item`,
   `vb.register_entity`, `vb.register_biome`, `vb.register_craft`,
-  `vb.worldgen.set_pipeline`.
+  `vb.worldgen.set_pipeline`. `register_entity`'s `visual = {atlas, frame_size,
+  facings, clips}` table defines its billboard sprite presentation — see
+  `ARCHITECTURE_SPEC.md` §11.3.
 - Runtime world: `vb.world.get_block/set_block/raycast/spawn`.
 - Entities / players: `entity:*`, `player:send_message/open_ui/give/get_name`.
 - Events: `vb.on("player_join"|"player_leave"|"block_break"|"block_place"|

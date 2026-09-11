@@ -7,7 +7,7 @@
 > Companion docs: `ARCHITECTURE_SPEC.md` (target design) · `REMAINING_TASKS.md`
 > (implementation backlog). This file is for *traps and context*, not the plan.
 
-Last updated: 2026-09-11 (smoke-test bugfixes)
+Last updated: 2026-09-11 (entity billboard-sprite design)
 
 ---
 
@@ -204,7 +204,23 @@ _(Move items here with a date + commit when fixed, so the history is visible.)_
   then-client-polls each tick = one message hop per tick).
   **Next:** `GnsTransport` behind `VB_WITH_NET`.
 
-- **2026-09-11 — Bugfixes from the first manual smoke test** (uncommitted).
+- **2026-09-11 — Entity visual presentation decided: billboard sprites**
+  (design only, no code). Players/entities are Don't Starve-style 2D
+  billboards, not 3D blocky models — `ARCHITECTURE_SPEC.md` §11.3, open
+  question §19 Q7, backlog `REMAINING_TASKS.md` Phase 3.5. Closes a real,
+  previously-silent gap: nothing has ever drawn a remote player client-side —
+  `remote_entities()`/`interpolated_pos()` (Phase 3.4) are correct but nothing
+  visible used them. Key technical finding baked into the design: raylib's
+  `DrawBillboardPro(..., up={0,1,0}, ...)` gives exactly the wanted Y-axis
+  (cylindrical) billboard for free — checked directly against `rmodels.c`
+  (5.5): its `right` vector comes from the camera view matrix but is always
+  horizontal regardless of pitch (cross of any forward vector with world-up has
+  zero Y component), so no custom quad math is needed. Plan: Phase 3 ships a
+  hardcoded single-frame placeholder (no Lua/pack dependency, mirrors how
+  Phase 2 shipped a mesher ahead of Cellulose); real art + the
+  `vb.register_entity{ visual = {...} }` surface land with 4.2/4.4/5.1.
+
+- **2026-09-11 — Bugfixes from the first manual smoke test** (committed `009195e`).
   Three real bugs found by testing on Windows + macOS:
   1. **`sol::nil` doesn't exist on Apple platforms** — sol2 disables its `nil`
      alias by default whenever `__MAC_OS_X_VERSION_MAX_ALLOWED`/`__OBJC__`/a

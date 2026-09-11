@@ -255,7 +255,7 @@ The server runs a fixed-tick simulation (default **20 Hz**, `TICK_DT = 50 ms`).
 | `PlayerInput`    | ring buffer of `InputCmd` (seq, dt, move, look, buttons) | filled from client packets      |
 | `PlayerTag`      | connection handle, account name, view distance    |                                        |
 | `NetReplicated`  | network id, interest radius, last sent revision   | bridges to librg                       |
-| `EntityKind`     | Lua-registered type id                            | drives client-side model selection     |
+| `EntityKind`     | Lua-registered type id                            | drives client-side billboard sprite/animation selection (§11.3) |
 | `ScriptState`    | `LuaRef` table                                    | per-entity Lua data                    |
 | `Health`, `Inventory`, `ItemStack` | ...                             | base-provided, Lua-extensible          |
 
@@ -280,8 +280,10 @@ components but can register **entity kinds** with tick callbacks.
 
 The client uses a lightweight EnTT registry too, holding only:
 `NetId`, `Position` (current + previous for interpolation), `Rotation`,
-`EntityKind`, `RenderHandle`. The local player additionally has
-`PredictedState` and an unacknowledged `InputCmd` history for reconciliation.
+`EntityKind`, `RenderHandle` (a `SpriteVisual` def + the per-entity animation
+state that picks a frame from it each draw — see §11.3). The local player
+additionally has `PredictedState` and an unacknowledged `InputCmd` history for
+reconciliation.
 
 ---
 
@@ -536,7 +538,73 @@ immediate-mode overlay.
 - Transparent blocks (water, leaves-as-cutout) drawn in a second pass, back to
   front.
 
-### 11.3 Frame loop
+### 11.3 Entity rendering — billboard sprites
+
+**Decided (2026-09-11, §19 Q7): players and Lua entity kinds are 2D sprites, not
+3D blocky models** — a *Don't Starve*-style presentation: a single flat billboard
+per entity, with a handful of directional poses and per-state animation clips
+standing in for full 3D animation, inside an otherwise fully 3D, free-look
+first-person world (unlike Don't Starve's fixed isometric camera, so the
+direction-selection math below has to do real work instead of being baked in at
+authoring time).
+
+**Billboarding.** Each entity draws as one `DrawBillboardPro(camera, atlas,
+frame_rect, feet_position, up = {0,1,0}, size, origin, rotation = 0, tint)` call.
+Passing a fixed world-up locks the quad vertical (it never leans with camera
+pitch/roll); raylib still derives the quad's *right* edge from the camera's view
+matrix, but that vector is always horizontal regardless of pitch (the cross
+product of any forward vector with world-up has zero Y component) — so the quad
+yaws to face the camera's bearing and nothing else. This is confirmed directly
+from raylib 5.5's `rmodels.c`, not assumed; no custom quad math is needed. The
+quad is anchored at the entity's feet (matching `Position`/`Collider`'s own
+convention) and horizontally centered.
+
+**Directional pose selection.** An entity kind declares `facings` (4 or 8,
+default 8). Each frame, the client computes the bearing from the entity to the
+camera in the world XZ plane, subtracts the entity's own facing yaw
+(`Rotation.yaw`), normalizes to [0°, 360°), and buckets into `facings` equal
+sectors to pick the pose — the classic "which side of you is the viewer standing
+on" trick from isometric/2.5D games. A small hysteresis (the bucket must change
+*and* persist a couple of frames, or a small angular deadzone at sector
+boundaries) stops flicker when the viewer sits exactly between two sectors.
+Packs only need to author the unique half of the poses — front, front-diagonal,
+side, back-diagonal, back (5 sprites) for 8-way, or front/side/back (3) for
+4-way — the engine mirrors the rest via `DrawBillboardPro`'s negative-`size.x`
+horizontal flip, halving the art budget.
+
+**Animation state.** Driven entirely by data already on the wire (§8.4's
+`EntityRecord`), no extra round trip: horizontal speed from `vel` buckets
+walk/run, and `flags` (currently only bit 0, `on_ground`) grows three more bits
+— `dead`, `hurt_pulse` (edge-triggered: the client plays it once then the sender
+clears it), `acting` — giving a fixed client-side priority resolution `dead >
+hurt_pulse > acting > jump/fall > run > walk > idle`. Each clip is an ordered
+list of atlas rects with an fps and a loop-or-hold-last-frame flag, defined per
+entity kind, not hardcoded per clip name beyond that small base set. Wiring
+the new `flags` bits bumps `kEngineProtocolVersion` and `docs/protocol.md` when
+it happens (Phase 3.5) — this section records the *plan*, not a shipped wire
+change.
+
+**Where it's defined.** `vb.register_entity{ visual = { atlas, frame_size,
+facings, clips = { idle = {...}, walk = {...}, ... } } }` (§10.3, Phase 4.2) is
+the single source of truth; the atlas PNG travels through Asset Sync (§9, Phase
+4.4) like any other texture, with no separate synced manifest. Phase 3 ships
+first against a **hardcoded single-frame placeholder** (`facings = 1`, a flat
+tint) so remote players are visible before Lua/asset-sync exist, the same way
+Phase 2 shipped a hand-rolled mesher ahead of Cellulose — real art (5.1) is a
+local swap once 4.2/4.4 land.
+
+**Client-side.** `vb/render/entity_renderer` (sibling to `vb/render/chunk_renderer`)
+keeps one `EntityRenderState` (clip, elapsed time, direction bucket + hysteresis
+counter) per replicated `NetId`, updated from `ClientSession::remote_entities()`
++ `interpolated_pos()` (already built for §8.4). The local player is not drawn
+as a billboard in first person (no viewmodel in scope).
+
+**Explicitly out of scope for v1:** skeletal/vertex animation, per-limb
+equipment layering, blob shadows, and dynamic per-entity lighting sampled from
+the block underfoot (chunks already compute the light value that would need —
+cheap follow-up, not core).
+
+### 11.4 Frame loop
 
 ```
 poll input ─▶ sample InputCmd, push to history, send on lane 4
@@ -544,14 +612,14 @@ poll input ─▶ sample InputCmd, push to history, send on lane 4
 recv network ─▶ apply snapshots, reconcile local player, apply chunk deltas
 interpolate remote entities at (server_time_est - interp_delay)
 update dirty meshes (bounded)
-render: sky ─▶ opaque chunks ─▶ entities ─▶ transparent chunks ─▶ particles
-        ─▶ raygui HUD ─▶ open Lua-defined UI ─▶ debug overlay
+render: sky ─▶ opaque chunks ─▶ billboard entities (§11.3) ─▶ transparent chunks
+        ─▶ particles ─▶ raygui HUD ─▶ open Lua-defined UI ─▶ debug overlay
 present
 ```
 
 Target 60 FPS decoupled from the 20 Hz server tick.
 
-### 11.4 Camera & input
+### 11.5 Camera & input
 
 First-person camera driven by predicted local player transform. Mouse-look with
 capture toggle. Keybindings configurable via a local (non-synced) settings file.
@@ -644,9 +712,10 @@ keybindings, asset cache size cap, last-connected servers list.
 pack.toml            name, version, engine_version_req, entry = "init.lua"
 init.lua             requires blocks/*, entities/*, registers worldgen + biomes
 blocks/*.lua         vb.register_block{...}  (dirt, grass, stone, sand, wood, leaves)
-entities/*.lua       player defaults, dropped-item entity
+entities/*.lua       player defaults, dropped-item entity, visual = {...} (§11.3)
 ui/*.lua             inventory screen, pause menu content
 textures/*.png       16×16 block textures; packed into an atlas client-side
+textures/entities/*.png  billboard sprite atlases (§11.3), directional × animation frames
 ```
 
 The base pack is the reference implementation of the Lua API and the smoke-test
@@ -721,3 +790,13 @@ to the extent practical (no code exec, no arbitrary FS writes).
    playable, but the chunk store should not assume in-memory-forever.
 6. **Account/auth**: `auth_mode = none | token` — token verification service is
    out of scope for v0 but the handshake reserves the field.
+7. **Entity visual presentation**: 3D blocky models vs. 2D sprites.
+   **Resolved (2026-09-11): Don't Starve-style Y-axis-billboarded sprites**, not
+   blocky models — full design in §11.3. Key parameters locked in: raylib
+   `DrawBillboardPro` with a fixed world-up (verified against `rmodels.c`, no
+   custom quad math); default 8 discrete facings authored as 5 unique poses +
+   engine-side mirroring; animation state resolved client-side from
+   `EntityRecord.vel` + `flags` bits (`on_ground` existing, `dead`/`hurt_pulse`/
+   `acting` new — not yet wired on the wire, see `REMAINING_TASKS.md` 3.5).
+   Deferred to implementation time: exact clip-name base set beyond the priority
+   list itself, and whether a blob-shadow decal ships alongside v1 or later.

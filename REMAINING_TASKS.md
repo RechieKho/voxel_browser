@@ -347,16 +347,65 @@ with prediction/interpolation.
       RTT; the loopback path has no latency to estimate).
 - [ ] Map players ↔ librg network entities — with the rest of `VB_WITH_REPLICATION`.
 
-**Phase 3 exit:** two players walk around shared terrain, colliding with voxels,
-smooth on each other's screens, local motion is responsive (predicted).
+### 3.5 Entity visual presentation — billboard sprites (§11.3)
 
-**Phase 3 status (2026-09-11): substantially met over the loopback transport.**
-Shared voxel physics, the input pipeline, authoritative server movement, client
-prediction/reconciliation and remote interpolation are done and tested; the
-client (`--singleplayer`) now walks input-driven with terrain collision instead
-of the free-fly cam. Deferred: a formal EnTT registry + system runner (Phase 3.1
-— not blocking; revisit when Lua entities need it), wall-clock server-time
-estimation and the librg entity mapping (both need the real `GnsTransport`).
+**Gap:** nothing today draws a remote player or entity at all — `remote_entities()`
+/ `interpolated_pos()` (3.4) give correct positions, but the client only renders
+terrain. "Smooth on each other's screens" (the Phase 3 exit line below) has only
+ever been true of the *data*, not anything visible. Design: `ARCHITECTURE_SPEC.md`
+§11.3 (Don't Starve-style Y-axis-billboarded, directionally-animated sprites,
+decided 2026-09-11 — see §19 Q7).
+
+- [ ] `vb/render/entity_renderer.{hpp,cpp}` (sibling to `chunk_renderer`): per-`NetId`
+      render state (current clip, elapsed time, direction bucket + hysteresis);
+      draws each visible remote entity as one `DrawBillboardPro` call per frame
+      (`up = {0,1,0}` for the Y-axis lock; raylib's `right` there comes from the
+      view matrix and is always horizontal regardless of pitch — confirmed in
+      `rmodels.c`, no custom quad math needed).
+- [ ] Direction-bucket selection: bearing from entity to camera minus the entity's
+      own yaw, bucketed into `facings` (4 or 8) sectors, with hysteresis so
+      standing near a sector boundary doesn't flicker. Mirroring via negative
+      `size.x` in `DrawBillboardPro` (halves the required art: 5 unique poses
+      cover all 8 facings).
+- [ ] Client animation state machine (data already on the wire — no new round
+      trip): priority `dead > hurt-pulse > acting > jump/fall > run > walk > idle`,
+      driven by `EntityRecord.vel` (speed thresholds) + new `flags` bits (`dead`,
+      `hurt_pulse` edge-triggered, `acting`) alongside the existing bit 0
+      (`on_ground`). Bumps `kEngineProtocolVersion` + `docs/protocol.md` when wired.
+- [ ] `vb/ecs/components.hpp` gains a `SpriteVisual` component (atlas handle,
+      `facings`, per-clip frame lists/fps/loop) — the kind's static visual def,
+      separate from the already-shipped `InterpBuffer` (position smoothing, reused
+      as-is, not duplicated).
+- [ ] **Hardcoded fallback ships in this phase, no Lua/pack dependency**: a single
+      flat-tinted placeholder quad (1 frame, `facings = 1`) so remote players are
+      visible immediately — mirrors how Phase 2 shipped a hand-rolled mesher ahead
+      of Cellulose. Swap-in point for the real thing is local.
+- [ ] Real content (atlas art, per-clip frame data) is pack-defined —
+      `vb.register_entity{ visual = {...} }` (4.2) + the atlas travels over Asset
+      Sync (4.4) like any texture; base-pack sprites are 5.1.
+- [ ] Local player: **not** billboarded in first-person (no viewmodel in scope);
+      third-person / spectator views are future work.
+- [ ] Unit tests: direction-bucket math (bearing→sector, mirroring sign, hysteresis
+      doesn't flicker at a boundary), animation-state priority resolution from a
+      given `(vel, flags)`.
+- [ ] Non-goals for v1 (explicitly deferred, not forgotten): skeletal/vertex
+      animation, per-limb equipment layering, blob shadows, dynamic per-entity
+      lighting from the block they stand in (chunks already compute this — cheap
+      follow-up, not core).
+
+**Phase 3 exit:** two players walk around shared terrain, colliding with voxels,
+**visibly** smooth on each other's screens (3.5), local motion is responsive
+(predicted).
+
+**Phase 3 status (2026-09-11): substantially met over the loopback transport,
+visual presentation (3.5) planned but not yet built.** Shared voxel physics, the
+input pipeline, authoritative server movement, client prediction/reconciliation
+and remote interpolation are done and tested; the client (`--singleplayer`) now
+walks input-driven with terrain collision instead of the free-fly cam. Deferred:
+a formal EnTT registry + system runner (Phase 3.1 — not blocking; revisit when
+Lua entities need it), wall-clock server-time estimation and the librg entity
+mapping (both need the real `GnsTransport`), and 3.5 (nothing renders a remote
+player yet — design is written, `entity_renderer` isn't).
 
 ---
 
@@ -385,6 +434,9 @@ Lua-defined UI.
 
 - [ ] Registration API: `register_block`, `register_item`, `register_entity`,
       `register_biome`, `register_craft`, `worldgen.set_pipeline`.
+      `register_entity`'s `visual = {...}` sub-table (atlas, `facings`, per-clip
+      frame lists) is the billboard sprite definition consumed by 3.5's
+      `entity_renderer` — shape in `ARCHITECTURE_SPEC.md` §11.3.
 - [ ] Freeze registries after pack load; assign stable `BlockId`s.
 - [ ] Runtime world API: `get_block`/`set_block`/`raycast`/`spawn`.
 - [ ] Entity + player API: pos/velocity/inventory/messages/`open_ui`/`give`.
@@ -447,6 +499,8 @@ Goal: a small, coherent, playable multiplayer sandbox.
 - [ ] Blocks: dirt, grass, wood, leaves, stone, sand (+ air) — `blocks/*.lua`,
       16×16 textures, correct solid/opaque/model flags.
 - [ ] Biome(s): plains/forest with surface rules + simple tree decoration.
+- [ ] Player + dropped-item billboard sprite atlases (§11.3 / 3.5) — replaces the
+      Phase 3 flat-placeholder quad with real directional art.
 - [ ] Dropped-item entity; basic inventory + hotbar.
 - [ ] Simple crafting recipes (wood → planks → sticks, etc.) — optional.
 
