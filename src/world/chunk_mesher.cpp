@@ -41,6 +41,14 @@ constexpr std::array<std::array<IVec3, 2>, 6> kFaceTangents{ {
 // Which (u,v) sign each of the 4 corners sits at, matching kFaceCorners order.
 constexpr std::array<std::array<int, 2>, 4> kCornerUV{ { { -1, -1 }, { -1, 1 }, { 1, 1 }, { 1, -1 } } };
 
+// raylib's Mesh.indices is `unsigned short*` — a hard 16-bit vertex cap per
+// chunk mesh. Water is non-opaque, so without this a fully submerged region
+// meshes every internal face of every water voxel (nothing culls water against
+// water) and can blow past 65535 vertices, silently wrapping the index and
+// corrupting the whole chunk's geometry. Stop early rather than emit garbage;
+// this should only ever bite pathological cases now that liquids cull too.
+inline constexpr std::size_t kMaxMeshVertices = 65532; // multiple of 4, < 65536
+
 float ao_level(bool side1, bool side2, bool corner) {
 	if (side1 && side2) {
 		return 0.0f;
@@ -59,8 +67,14 @@ MeshData mesh_chunk(const ClientChunkStore &store, core::ChunkCoord coord) {
 	const BlockRegistry &reg = store.registry();
 	const IVec3 origin = core::chunk_origin(coord);
 
-	const auto is_opaque = [&](IVec3 world_voxel) {
-		return reg.is_opaque(store.block_at(world_voxel));
+	// Faces cull against anything that visually seals the gap. Liquids aren't
+	// opaque (light passes through, physics doesn't collide with them) but they
+	// still need to cull mesh faces against each other and against solids —
+	// see the kMaxMeshVertices comment above. Water renders as a solid-looking
+	// box until the Phase 4.3 transparent pass.
+	const auto blocks_face = [&](IVec3 world_voxel) {
+		const core::BlockId id = store.block_at(world_voxel);
+		return reg.is_opaque(id) || reg.is_liquid(id);
 	};
 
 	for (int ly = 0; ly < kChunkDim; ++ly) {
@@ -73,9 +87,12 @@ MeshData mesh_chunk(const ClientChunkStore &store, core::ChunkCoord coord) {
 				const IVec3 wv{ origin.x + lx, origin.y + ly, origin.z + lz };
 
 				for (int f = 0; f < 6; ++f) {
+					if (mesh.vertices.size() + 4 > kMaxMeshVertices) {
+						return mesh; // hit the 16-bit index cap; see the comment above
+					}
 					const IVec3 n = kFaceNormal[static_cast<std::size_t>(f)];
 					const IVec3 outside{ wv.x + n.x, wv.y + n.y, wv.z + n.z };
-					if (is_opaque(outside)) {
+					if (blocks_face(outside)) {
 						continue; // culled
 					}
 
@@ -103,8 +120,8 @@ MeshData mesh_chunk(const ClientChunkStore &store, core::ChunkCoord coord) {
 						const IVec3 d{ outside.x + tu.x * su + tv.x * sv,
 							outside.y + tu.y * su + tv.y * sv,
 							outside.z + tu.z * su + tv.z * sv };
-						const float ao = ao_level(is_opaque(a), is_opaque(bpt),
-								is_opaque(d));
+						const float ao = ao_level(blocks_face(a), blocks_face(bpt),
+								blocks_face(d));
 						const float vlight = base_light * (0.55f + 0.15f * ao);
 
 						MeshVertex vert;

@@ -106,6 +106,33 @@ TEST_CASE("transparent leaves do not cull neighbouring faces") {
 	CHECK(mesh_chunk(store, { 0, 0, 0 }).quad_count() == 11);
 }
 
+TEST_CASE("liquid blocks cull faces against each other and against solids") {
+	// A full chunk of water must mesh only its outer shell, exactly like a
+	// solid block would — otherwise nothing culls internal water-water faces
+	// and the mesh blows past raylib's 16-bit index cap (the sand/beach bug).
+	Chunk c({ 0, 0, 0 });
+	c.blocks().fill(base_block::water);
+	ClientChunkStore store(BlockRegistry::base());
+	put(store, c);
+
+	CHECK(mesh_chunk(store, { 0, 0, 0 }).quad_count() == 6144);
+}
+
+TEST_CASE("a water block on solid ground only shows its top face") {
+	Chunk c({ 0, 0, 0 });
+	c.blocks().set(5, 4, 5, base_block::stone);
+	c.blocks().set(5, 5, 5, base_block::water); // sits on the stone, open to air
+	LightEngine(BlockRegistry::base()).relight_chunk(c);
+
+	ClientChunkStore store(BlockRegistry::base());
+	put(store, c);
+
+	// stone: 5 faces (bottom buried by nothing loaded below is still exposed,
+	// top culled by the water sitting on it) = 5; water: bottom culled by the
+	// stone below, 4 sides + top exposed = 5.
+	CHECK(mesh_chunk(store, { 0, 0, 0 }).quad_count() == 10);
+}
+
 TEST_CASE("darker light yields darker vertices") {
 	auto reg = BlockRegistry::base();
 	Chunk c({ 0, 0, 0 });

@@ -7,7 +7,7 @@
 > Companion docs: `ARCHITECTURE_SPEC.md` (target design) · `REMAINING_TASKS.md`
 > (implementation backlog). This file is for *traps and context*, not the plan.
 
-Last updated: 2026-09-11 (Phase 5.2 block editing)
+Last updated: 2026-09-11 (smoke-test bugfixes)
 
 ---
 
@@ -204,8 +204,56 @@ _(Move items here with a date + commit when fixed, so the history is visible.)_
   then-client-polls each tick = one message hop per tick).
   **Next:** `GnsTransport` behind `VB_WITH_NET`.
 
+- **2026-09-11 — Bugfixes from the first manual smoke test** (uncommitted).
+  Three real bugs found by testing on Windows + macOS:
+  1. **`sol::nil` doesn't exist on Apple platforms** — sol2 disables its `nil`
+     alias by default whenever `__MAC_OS_X_VERSION_MAX_ALLOWED`/`__OBJC__`/a
+     `nil` macro is visible (avoids clashing with Objective-C `nil`); see
+     `sol/version.hpp` `SOL_NIL_I_`. Fixed by using `sol::lua_nil` (the
+     always-defined underlying constant) instead of `sol::nil` in `vm.cpp`.
+     **Lesson: never use `sol::nil`/`sol::type` names that shadow platform
+     macros — prefer the `lua_`-prefixed sol2 spellings.**
+  2. **Sprint had no effect (and walking was already ~17% under `walk_speed`)**
+     — `step_movement` applied ground friction *every* tick regardless of
+     input, fighting the acceleration step every frame. The fixed point of
+     that tug-of-war is `accel/friction` (≈3.75 m/s with the shipped
+     constants) **independent of the wish speed**, so both walk (4.5) and
+     sprint (7.0) converged to the same capped speed. Fixed: friction now only
+     applies when there's no active wish direction (skid-to-a-stop on
+     release); acceleration alone drives velocity toward `wish_vel` while
+     moving. Regression tests added (`physics_test.cpp`): sustained-movement
+     reaches `walk_speed`/`sprint_speed`, and releasing input decelerates via
+     friction. **Lesson: an FPS-style accel/friction model needs friction
+     gated on "no input", not unconditional — the two tests that existed
+     before only checked qualitative behaviour (stops at a wall, settles on a
+     floor), never a steady-state speed value, so this shipped unnoticed.**
+  3. **Mesh corruption near water ("holes"/wrong AO, worst on beaches)** —
+     `chunk_mesher` only culled faces against `is_opaque` neighbours; water is
+     non-opaque, so nothing culled water-against-water internal faces. A
+     submerged region could emit enough vertices to overflow raylib's
+     `Mesh.indices` (`unsigned short*`, 65535 max), silently wrapping the index
+     and corrupting the chunk's whole mesh — exactly the beach-adjacent
+     glitches reported. Fixed: face culling (and AO sampling) now also treats
+     `is_liquid` neighbours as face-blocking, so water meshes as a solid-looking
+     box (proper transparency stays Phase 4.3). Added a defensive
+     `kMaxMeshVertices` cap as a backstop against any future case that still
+     overflows — degrades to a truncated mesh instead of corrupted geometry.
+     Regression tests added (`mesher_test.cpp`): a full water chunk only meshes
+     its outer shell; water-on-stone culls the shared face both ways.
+     **Lesson: `raylib::Mesh` is a hard 16-bit-index format — any per-chunk
+     mesh generator needs either a face-count safety margin or an explicit cap;
+     there wasn't one.**
+
+  **Known, deliberately not fixed:** auto-step-up "jerks" the camera (the
+  physics teleports the feet up ~1 block in a single tick — correct and
+  robust, but visually abrupt). Fixing it well means smoothing the *rendered*
+  eye height independently of the physics position (physics/prediction must
+  stay exact; only the camera can lag), which is real work I didn't want to
+  rush alongside the two correctness bugs above. Tracked in
+  `REMAINING_TASKS.md` Phase 3.3 as a follow-up.
+
 - **2026-09-11 — Phase 5.2 block breaking / placing over the network**
-  (uncommitted). `C2S_BlockEdit` / `S2C_BlockEditResult` (`vb/protocol/world`) →
+  (committed `e5e5640`). `C2S_BlockEdit` / `S2C_BlockEditResult` (`vb/protocol/world`) →
   **`kEngineProtocolVersion` 2 → 3**. `WorldReplicator::apply_block_edit` (reach
   ≤5.5, target validity, no-floating-placement, whole-chunk `relight_chunk`,
   builds an `S2C_ChunkDelta` with the block + diffed light bytes, fans out to

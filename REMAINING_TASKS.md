@@ -321,7 +321,14 @@ with prediction/interpolation.
 - [x] `MoveParams` tunables (speeds, gravity, jump, step height); `ServerSession`
       / `ClientSession` `set_move_params`. Config wiring (`server.toml`) → Phase 5.
 - [x] Unit tests (`tests/unit/physics_test.cpp`): floor rest, no tunnelling at
-      terminal velocity, wall stop + slide, jump arc, step-up, yaw basis.
+      terminal velocity, wall stop + slide, jump arc, step-up, yaw basis,
+      sustained speed reaches walk/sprint, friction stops on release.
+- [ ] **Follow-up (smoke test):** step-up teleports the feet up to a full block
+      in one physics tick — correct, but visually abrupt ("jerk"). Physics
+      must stay exact for prediction/reconciliation; the fix is a
+      render-only eye-height smoothing layer in the client (lerp the rendered
+      camera Y toward the true feet+eye position, capped so it doesn't lag
+      behind normal fall/jump motion) — not attempted yet.
 
 ### 3.4 Replication + netcode (§8.4)
 

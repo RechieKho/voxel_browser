@@ -100,14 +100,14 @@ void strip_sandbox(sol::state &L) {
 		}
 		for (const std::string &k : keys) {
 			if (k != "traceback") {
-				dbg[k] = sol::nil;
+				dbg[k] = sol::lua_nil;
 			}
 		}
 	}
 	// Base-environment globals that reach the host or load bytecode.
 	for (const char *g : { "dofile", "loadfile", "load", "loadstring",
 				 "collectgarbage", "require", "package", "os", "io" }) {
-		L[g] = sol::nil;
+		L[g] = sol::lua_nil;
 	}
 }
 

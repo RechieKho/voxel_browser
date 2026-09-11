@@ -31,11 +31,13 @@ struct FlatWorld final : world::BlockSolidQuery {
 	}
 };
 
-physics::MoveInput walk(Vec3d dir, double dt, bool jump = false) {
+physics::MoveInput walk(Vec3d dir, double dt, bool jump = false,
+		bool sprint = false) {
 	physics::MoveInput in;
 	in.wish_dir = dir;
 	in.dt = dt;
 	in.jump = jump;
+	in.sprint = sprint;
 	return in;
 }
 
@@ -147,6 +149,58 @@ TEST_CASE("step-up: walk onto a one-block ledge without jumping") {
 	}
 	CHECK(s.position.x > 3.0); // climbed onto the platform and kept going
 	CHECK(s.position.y == doctest::Approx(1.0).epsilon(0.1));
+}
+
+TEST_CASE("sustained ground movement reaches walk_speed, and sprint is faster") {
+	// Regression: friction was applied every tick regardless of input, fighting
+	// the acceleration step and capping the reachable speed at accel/friction
+	// (~3.75 m/s) regardless of walk_speed/sprint_speed -- sprint had no
+	// observable effect. Friction must only decelerate on release of input.
+	FlatWorld world;
+	world.floor_y = 0;
+	physics::MoveParams p;
+
+	physics::MoveState walking;
+	walking.position = { 0.0, 0.0, 0.0 };
+	walking.on_ground = true;
+	double walk_speed = 0.0;
+	for (int i = 0; i < 120; ++i) {
+		walking = physics::step_movement(walking, walk({ 0.0, 0.0, 1.0 }, 0.05), p, world);
+		walk_speed = std::sqrt(walking.velocity.x * walking.velocity.x +
+				walking.velocity.z * walking.velocity.z);
+	}
+	CHECK(walk_speed == doctest::Approx(p.walk_speed).epsilon(0.02));
+
+	physics::MoveState sprinting;
+	sprinting.position = { 0.0, 0.0, 0.0 };
+	sprinting.on_ground = true;
+	double sprint_speed = 0.0;
+	for (int i = 0; i < 120; ++i) {
+		sprinting = physics::step_movement(
+				sprinting, walk({ 0.0, 0.0, 1.0 }, 0.05, false, true), p, world);
+		sprint_speed = std::sqrt(sprinting.velocity.x * sprinting.velocity.x +
+				sprinting.velocity.z * sprinting.velocity.z);
+	}
+	CHECK(sprint_speed == doctest::Approx(p.sprint_speed).epsilon(0.02));
+	CHECK(sprint_speed > walk_speed);
+}
+
+TEST_CASE("releasing input lets ground friction stop the player") {
+	FlatWorld world;
+	world.floor_y = 0;
+	physics::MoveParams p;
+	physics::MoveState s;
+	s.position = { 0.0, 0.0, 0.0 };
+	s.on_ground = true;
+	for (int i = 0; i < 40; ++i) {
+		s = physics::step_movement(s, walk({ 0.0, 0.0, 1.0 }, 0.05), p, world);
+	}
+	REQUIRE(s.velocity.z > 1.0); // up to speed
+
+	for (int i = 0; i < 40; ++i) {
+		s = physics::step_movement(s, walk({}, 0.05), p, world); // no input
+	}
+	CHECK(s.velocity.z == doctest::Approx(0.0).epsilon(0.01));
 }
 
 TEST_CASE("wish_dir_from_local respects yaw (forward is -Z at yaw 0)") {

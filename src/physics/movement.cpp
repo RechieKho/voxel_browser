@@ -138,6 +138,7 @@ MoveState step_movement(const MoveState &state, const MoveInput &input,
 
 	core::Vec3d wish = input.wish_dir;
 	const double wlen = std::sqrt(wish.x * wish.x + wish.z * wish.z);
+	const bool has_wish = wlen > 1e-6;
 	if (wlen > 1.0) {
 		wish.x /= wlen;
 		wish.z /= wlen;
@@ -152,11 +153,15 @@ MoveState step_movement(const MoveState &state, const MoveInput &input,
 	} else {
 		const double target_speed =
 				input.sprint ? params.sprint_speed : params.walk_speed;
-		const core::Vec3d wish_vel{ wish.x * target_speed, 0.0,
-			wish.z * target_speed };
+		const core::Vec3d wish_vel{ has_wish ? wish.x * target_speed : 0.0, 0.0,
+			has_wish ? wish.z * target_speed : 0.0 };
 
-		// Ground friction.
-		if (out.on_ground) {
+		// Ground friction — only decelerate when there is no active wish
+		// direction (skid to a stop on release). Applying it unconditionally
+		// fought the acceleration step below every tick and capped the
+		// reachable top speed at accel/friction, well under walk_speed and
+		// identical regardless of sprint — sprint had no effect.
+		if (out.on_ground && !has_wish) {
 			const double sp = std::sqrt(out.velocity.x * out.velocity.x +
 					out.velocity.z * out.velocity.z);
 			if (sp > 0.0) {
