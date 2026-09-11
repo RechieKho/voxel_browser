@@ -6,10 +6,12 @@
 // and joins it (spec §3 — one code path for single- and multiplayer).
 // `--headless` does no GL work so CI and integration tests share this path.
 
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <string>
 
@@ -22,6 +24,7 @@
 #include "vb/net/world_replicator.hpp"
 #include "vb/physics/movement.hpp"
 #include "vb/protocol/input.hpp"
+#include "vb/protocol/world.hpp"
 #include "vb/render/camera.hpp"
 #include "vb/render/chunk_renderer.hpp"
 #include "vb/render/window.hpp"
@@ -112,6 +115,62 @@ vb::protocol::InputCmd sample_input_cmd(std::uint32_t seq, double dt, double yaw
 		}
 	}
 	return cmd;
+}
+
+struct VoxelRayHit {
+	bool hit = false;
+	vb::core::IVec3 voxel{};
+	vb::core::IVec3 normal{};
+};
+
+// Amanatides & Woo voxel grid traversal from `origin` along `dir` (unit).
+VoxelRayHit raycast_voxel(const vb::world::BlockSolidQuery &world,
+		vb::core::Vec3d origin, vb::core::Vec3d dir, double max_dist) {
+	const double inf = std::numeric_limits<double>::infinity();
+	auto fl = [](double v) { return static_cast<int>(std::floor(v)); };
+	auto step_of = [](double v) { return v > 0.0 ? 1 : (v < 0.0 ? -1 : 0); };
+
+	int x = fl(origin.x), y = fl(origin.y), z = fl(origin.z);
+	const int sx = step_of(dir.x), sy = step_of(dir.y), sz = step_of(dir.z);
+
+	auto t_first = [&](double o, double d, int s) {
+		if (s == 0) {
+			return inf;
+		}
+		const double edge = s > 0 ? std::floor(o) + 1.0 - o : o - std::floor(o);
+		return edge / std::fabs(d);
+	};
+	double t_max_x = t_first(origin.x, dir.x, sx);
+	double t_max_y = t_first(origin.y, dir.y, sy);
+	double t_max_z = t_first(origin.z, dir.z, sz);
+	const double t_dx = sx == 0 ? inf : 1.0 / std::fabs(dir.x);
+	const double t_dy = sy == 0 ? inf : 1.0 / std::fabs(dir.y);
+	const double t_dz = sz == 0 ? inf : 1.0 / std::fabs(dir.z);
+
+	vb::core::IVec3 normal{};
+	double t = 0.0;
+	for (int i = 0; i < 512 && t <= max_dist; ++i) {
+		if (world.solid_at({ x, y, z })) {
+			return { true, { x, y, z }, normal };
+		}
+		if (t_max_x < t_max_y && t_max_x < t_max_z) {
+			x += sx;
+			t = t_max_x;
+			t_max_x += t_dx;
+			normal = { -sx, 0, 0 };
+		} else if (t_max_y < t_max_z) {
+			y += sy;
+			t = t_max_y;
+			t_max_y += t_dy;
+			normal = { 0, -sy, 0 };
+		} else {
+			z += sz;
+			t = t_max_z;
+			t_max_z += t_dz;
+			normal = { 0, 0, -sz };
+		}
+	}
+	return {};
 }
 
 Camera3D to_camera(const vb::render::FirstPersonController &c, float fovy) {
@@ -232,6 +291,7 @@ int main(int argc, char **argv) {
 		sp->game.client().set_local_feet(spawn);
 	}
 	std::uint32_t input_seq = 0;
+	std::uint32_t edit_seq = 0;
 
 	std::unique_ptr<vb::render::ChunkRenderer> chunk_renderer;
 	if (!window.headless()) {
@@ -274,6 +334,29 @@ int main(int argc, char **argv) {
 					{ feet.x, feet.y + move_params.eye_height, feet.z });
 		}
 
+		// Block break / place: raycast from the eye, act on click (spec §5.2).
+		VoxelRayHit look_hit;
+		if (sp && mouse_captured && !window.headless()) {
+			look_hit = raycast_voxel(sp->game.client().chunk_store(),
+					controller.position(), controller.forward(), 5.0);
+			if (look_hit.hit && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+				vb::protocol::C2SBlockEdit e;
+				e.predicted_seq = ++edit_seq;
+				e.action = vb::protocol::BlockEditAction::kBreak;
+				e.pos = look_hit.voxel;
+				sp->game.client().push_block_edit(e);
+			} else if (look_hit.hit && IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) {
+				vb::protocol::C2SBlockEdit e;
+				e.predicted_seq = ++edit_seq;
+				e.action = vb::protocol::BlockEditAction::kPlace;
+				e.pos = { look_hit.voxel.x + look_hit.normal.x,
+					look_hit.voxel.y + look_hit.normal.y,
+					look_hit.voxel.z + look_hit.normal.z };
+				e.block = vb::world::base_block::stone;
+				sp->game.client().push_block_edit(e);
+			}
+		}
+
 		std::size_t chunk_count = 0;
 		if (chunk_renderer && sp) {
 			chunk_renderer->sync(sp->game.client().chunk_store(), /*budget*/ 8);
@@ -287,6 +370,12 @@ int main(int argc, char **argv) {
 			DrawGrid(64, 4.0f);
 			if (chunk_renderer) {
 				chunk_renderer->draw();
+			}
+			if (look_hit.hit) {
+				DrawCubeWires({ static_cast<float>(look_hit.voxel.x) + 0.5f,
+									  static_cast<float>(look_hit.voxel.y) + 0.5f,
+									  static_cast<float>(look_hit.voxel.z) + 0.5f },
+						1.02f, 1.02f, 1.02f, BLACK);
 			}
 			EndMode3D();
 			draw_overlay(controller, status, chunk_count, mouse_captured);

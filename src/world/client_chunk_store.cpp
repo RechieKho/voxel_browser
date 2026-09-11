@@ -49,6 +49,46 @@ void ClientChunkStore::apply_remove(const protocol::S2CChunkRemove &msg) {
 	chunks_.erase(msg.coord);
 }
 
+core::BlockId ClientChunkStore::edit_block(core::IVec3 world_voxel,
+		core::BlockId block) {
+	const VoxelAddress a = address_of(world_voxel);
+	const auto it = chunks_.find(a.chunk);
+	if (it == chunks_.end()) {
+		return core::BlockId::kAir;
+	}
+	Chunk &chunk = *it->second;
+	const core::BlockId prev = chunk.get(a.lx, a.ly, a.lz);
+	if (chunk.set(a.lx, a.ly, a.lz, block)) {
+		// A border edit changes the neighbour's culled faces too.
+		auto bump_neighbour = [&](int dx, int dy, int dz) {
+			const auto n = chunks_.find({ a.chunk.x + dx, a.chunk.y + dy,
+					a.chunk.z + dz });
+			if (n != chunks_.end()) {
+				n->second->bump_revision();
+			}
+		};
+		if (a.lx == 0) {
+			bump_neighbour(-1, 0, 0);
+		}
+		if (a.lx == kChunkDim - 1) {
+			bump_neighbour(1, 0, 0);
+		}
+		if (a.ly == 0) {
+			bump_neighbour(0, -1, 0);
+		}
+		if (a.ly == kChunkDim - 1) {
+			bump_neighbour(0, 1, 0);
+		}
+		if (a.lz == 0) {
+			bump_neighbour(0, 0, -1);
+		}
+		if (a.lz == kChunkDim - 1) {
+			bump_neighbour(0, 0, 1);
+		}
+	}
+	return prev;
+}
+
 const Chunk *ClientChunkStore::find(core::ChunkCoord c) const {
 	const auto it = chunks_.find(c);
 	return it == chunks_.end() ? nullptr : it->second.get();

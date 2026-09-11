@@ -28,6 +28,12 @@ public:
 			const protocol::S2CChunkDelta &msg);
 	void apply_remove(const protocol::S2CChunkRemove &msg);
 
+	// Single-voxel edit for client-side optimistic block placement / breaking
+	// (spec §5.2). Bumps the chunk revision (and any bordering chunk's) so the
+	// renderer re-meshes. Returns the block that was there, or kAir if the chunk
+	// isn't loaded (in which case nothing changed).
+	core::BlockId edit_block(core::IVec3 world_voxel, core::BlockId block);
+
 	const Chunk *find(core::ChunkCoord c) const;
 	bool has(core::ChunkCoord c) const { return chunks_.count(c) != 0; }
 	std::size_t size() const { return chunks_.size(); }

@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "vb/core/ids.hpp"
+#include "vb/core/math.hpp"
 #include "vb/protocol/handshake.hpp" // Decoded<>
 #include "vb/protocol/message.hpp"
 
@@ -59,6 +60,39 @@ struct S2CChunkRemove {
 
 	void encode(std::vector<std::byte> &out) const;
 	static Decoded<S2CChunkRemove> decode(std::span<const std::byte> in);
+};
+
+// --- block editing (spec §8.5 / §5.2) -----------------------------------
+
+enum class BlockEditAction : std::uint8_t {
+	kBreak = 0, // remove the block at `pos`
+	kPlace = 1, // fill the (empty) cell at `pos` with `block`
+};
+constexpr bool valid(BlockEditAction a) {
+	return a == BlockEditAction::kBreak || a == BlockEditAction::kPlace;
+}
+
+struct C2SBlockEdit {
+	static constexpr MessageType kType = MessageType::kC2SBlockEdit;
+
+	std::uint32_t predicted_seq = 0; // client's optimistic-apply id
+	BlockEditAction action = BlockEditAction::kBreak;
+	core::IVec3 pos{}; // world voxel coordinate
+	core::BlockId block = core::BlockId::kAir; // kPlace only
+
+	void encode(std::vector<std::byte> &out) const;
+	static Decoded<C2SBlockEdit> decode(std::span<const std::byte> in);
+};
+
+struct S2CBlockEditResult {
+	static constexpr MessageType kType = MessageType::kS2CBlockEditResult;
+
+	std::uint32_t predicted_seq = 0;
+	bool accepted = false; // false -> client rolls its optimistic apply back
+	core::IVec3 pos{};
+
+	void encode(std::vector<std::byte> &out) const;
+	static Decoded<S2CBlockEditResult> decode(std::span<const std::byte> in);
 };
 
 } // namespace vb::protocol

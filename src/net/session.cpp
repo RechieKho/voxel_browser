@@ -120,6 +120,34 @@ void ServerSession::handle_input_batch(Conn &conn,
 	interest_.upsert(s);
 }
 
+void ServerSession::handle_block_edit(ConnId conn, Conn &state,
+		const protocol::Frame &frame) {
+	if (!replicator_) {
+		return;
+	}
+	auto edit = protocol::C2SBlockEdit::decode(frame.payload);
+	if (!edit) {
+		return;
+	}
+	const replication::EntityState *e = interest_.get(state.net_id);
+	core::Vec3d eye = e ? e->pos : core::Vec3d{};
+	eye.y += move_params_.eye_height;
+
+	protocol::S2CBlockEditResult result;
+	auto per_player =
+			replicator_->apply_block_edit(state.net_id, eye, *edit, result);
+	send_message(transport_, conn, result);
+
+	for (auto &pf : per_player) {
+		for (auto &[other_conn, other] : conns_) {
+			if (other.playing && other.net_id == pf.id) {
+				send_frames(transport_, other_conn, pf.frames);
+				break;
+			}
+		}
+	}
+}
+
 const physics::MoveState *ServerSession::player_move_state(core::NetId id) const {
 	for (const auto &[conn, state] : conns_) {
 		(void)conn;
@@ -160,7 +188,12 @@ void ServerSession::tick(double dt_seconds) {
 						}
 						break;
 					}
-					// Other post-join C2S messages (block edits, chat) land in
+					if (frame->header.type ==
+							protocol::MessageType::kC2SBlockEdit) {
+						handle_block_edit(ev.conn, it->second, *frame);
+						break;
+					}
+					// Other post-join C2S messages (chat / UI events) land in
 					// later phases; ignore unknown types rather than dropping.
 					break;
 				}
@@ -412,6 +445,13 @@ bool ClientSession::apply_gameplay_frame(const protocol::Frame &frame) {
 		case MessageType::kS2CChunkDelta: {
 			if (auto m = protocol::S2CChunkDelta::decode(frame.payload)) {
 				(void)chunks_.apply_delta(*m);
+				forget_pending_edits_for(m->coord); // authoritative wins
+			}
+			return true;
+		}
+		case MessageType::kS2CBlockEditResult: {
+			if (auto m = protocol::S2CBlockEditResult::decode(frame.payload)) {
+				handle_block_edit_result(*m);
 			}
 			return true;
 		}
@@ -492,6 +532,40 @@ void ClientSession::push_input(const protocol::InputCmd &cmd) {
 	protocol::C2SInputBatch batch;
 	batch.cmds = history_;
 	send_message(transport_, conn_, batch);
+}
+
+void ClientSession::push_block_edit(const protocol::C2SBlockEdit &edit) {
+	if (!joined()) {
+		return;
+	}
+	const core::BlockId applied = edit.action == protocol::BlockEditAction::kBreak
+			? core::BlockId::kAir
+			: edit.block;
+	const core::BlockId prev = chunks_.edit_block(edit.pos, applied);
+	pending_edits_.push_back(
+			{ edit.predicted_seq, edit.pos, prev, core::chunk_of(edit.pos) });
+	send_message(transport_, conn_, edit);
+}
+
+void ClientSession::handle_block_edit_result(
+		const protocol::S2CBlockEditResult &res) {
+	for (auto it = pending_edits_.begin(); it != pending_edits_.end(); ++it) {
+		if (it->seq != res.predicted_seq) {
+			continue;
+		}
+		if (!res.accepted) {
+			// Roll the optimistic apply back; the authoritative delta (if any)
+			// will still correct light on accept.
+			chunks_.edit_block(it->pos, it->prev);
+		}
+		pending_edits_.erase(it);
+		return;
+	}
+}
+
+void ClientSession::forget_pending_edits_for(core::ChunkCoord coord) {
+	std::erase_if(pending_edits_,
+			[coord](const PendingEdit &e) { return e.coord == coord; });
 }
 
 core::Vec3d ClientSession::interpolated_pos(core::NetId id) const {

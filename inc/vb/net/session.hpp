@@ -13,11 +13,11 @@
 #include "vb/core/ids.hpp"
 #include "vb/core/math.hpp"
 #include "vb/net/handshake.hpp"
-#include "vb/physics/movement.hpp"
-#include "vb/protocol/input.hpp"
 #include "vb/net/transport.hpp"
 #include "vb/net/world_replicator.hpp"
+#include "vb/physics/movement.hpp"
 #include "vb/protocol/handshake.hpp"
+#include "vb/protocol/input.hpp"
 #include "vb/protocol/snapshot.hpp"
 #include "vb/replication/interest.hpp"
 #include "vb/world/client_chunk_store.hpp"
@@ -98,6 +98,8 @@ private:
 	void drop(ConnId conn, const std::string &reason);
 	const world::BlockSolidQuery &world_query() const;
 	void handle_input_batch(Conn &conn, const protocol::C2SInputBatch &batch);
+	void handle_block_edit(ConnId conn, Conn &state,
+			const protocol::Frame &frame);
 	void broadcast_snapshots();
 	void broadcast_world();
 
@@ -162,6 +164,14 @@ public:
 	// unacked history, and send a batch of recent commands on lane 4.
 	void push_input(const protocol::InputCmd &cmd);
 
+	// --- block editing (spec §5.2) --------------------------------------
+
+	// Optimistically apply an edit to the local chunk mirror, remember it for
+	// rollback, and send it. The server confirms with S2C_BlockEditResult and
+	// the authoritative S2C_ChunkDelta.
+	void push_block_edit(const protocol::C2SBlockEdit &edit);
+	std::size_t pending_edit_count() const { return pending_edits_.size(); }
+
 	const physics::MoveState &predicted_state() const { return predicted_; }
 	core::Vec3d predicted_feet() const { return predicted_.position; }
 	std::uint32_t last_acked_input_seq() const { return last_acked_seq_; }
@@ -183,6 +193,15 @@ private:
 	void apply_snapshot(const protocol::S2CEntitySnapshot &snap);
 	void reconcile(const protocol::EntityRecord &authoritative,
 			std::uint32_t acked_seq);
+	void handle_block_edit_result(const protocol::S2CBlockEditResult &res);
+	void forget_pending_edits_for(core::ChunkCoord coord);
+
+	struct PendingEdit {
+		std::uint32_t seq = 0;
+		core::IVec3 pos{};
+		core::BlockId prev = core::BlockId::kAir;
+		core::ChunkCoord coord{};
+	};
 
 	struct RemoteSample {
 		core::Vec3d prev_pos{};
@@ -206,6 +225,7 @@ private:
 	physics::MoveParams move_params_;
 	std::vector<protocol::InputCmd> history_; // unacked, ascending seq
 	std::uint32_t last_acked_seq_ = 0;
+	std::vector<PendingEdit> pending_edits_;
 };
 
 } // namespace vb::net

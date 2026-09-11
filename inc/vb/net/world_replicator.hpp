@@ -7,6 +7,7 @@
 #include "vb/core/ids.hpp"
 #include "vb/core/math.hpp"
 #include "vb/net/handshake.hpp" // OutgoingFrame + frame_message
+#include "vb/protocol/world.hpp"
 #include "vb/world/block.hpp"
 #include "vb/world/chunk_lifecycle.hpp"
 #include "vb/world/world.hpp"
@@ -35,6 +36,17 @@ public:
 			const std::vector<std::pair<core::NetId, core::Vec3d>> &players);
 
 	void forget_player(core::NetId id) { last_sent_.erase(id); }
+
+	// Validate + apply one block edit (spec §5.2 / §8.5). Fills `out_result` for
+	// the editor and returns an S2C_ChunkDelta frame for every player who has the
+	// affected chunk. `eye_pos` is the editor's authoritative eye position, used
+	// for the reach check. A rejected edit changes nothing and returns no deltas.
+	std::vector<PlayerFrames> apply_block_edit(core::NetId editor,
+			core::Vec3d eye_pos, const protocol::C2SBlockEdit &edit,
+			protocol::S2CBlockEditResult &out_result);
+
+	// Chunks that a player currently mirrors (for edit fan-out + tests).
+	bool player_has_chunk(core::NetId id, core::ChunkCoord c) const;
 
 	const world::World &world() const { return world_; }
 	std::size_t requested_chunk_count() const {

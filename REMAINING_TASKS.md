@@ -443,17 +443,30 @@ Goal: a small, coherent, playable multiplayer sandbox.
 - [ ] Dropped-item entity; basic inventory + hotbar.
 - [ ] Simple crafting recipes (wood → planks → sticks, etc.) — optional.
 
-### 5.2 Block breaking / placing over the network (§8.5)
+### 5.2 Block breaking / placing over the network (§8.5)  🚧
 
-- [ ] `C2S_BlockEdit` (break/place, `predicted_seq`, pos, face, block_id?).
-- [ ] Client optimistic apply + rollback on reject.
-- [ ] Server validation: reach distance, target validity, tool, Lua
-      `block_break`/`block_place` veto, region protection API.
-- [ ] `BlockEditSystem`: apply, bump `revision`, dirty light + mesh, fire
-      `on_break`/`on_place`, emit drops.
-- [ ] `S2C_BlockEditResult` + `S2C_ChunkDelta` fan-out to interested players.
-- [ ] Incremental relight on edit verified visually + in tests.
-- [ ] Selection raycast + block highlight + break progress on the client.
+- [x] `C2S_BlockEdit` (break/place, `predicted_seq`, world `pos`, `block_id`) +
+      `S2C_BlockEditResult` — `vb/protocol/world.{hpp,cpp}`, round-trip tested.
+      Proto version 2 → 3.
+- [x] Client optimistic apply + rollback on reject — `ClientSession::push_block_edit`
+      / `handle_block_edit_result`; `ClientChunkStore::edit_block` re-meshes the
+      chunk + its border neighbours.
+- [x] Server validation: reach (≤5.5 m), target validity, non-floating placement
+      — `WorldReplicator::apply_block_edit`. **Lua veto + region protection: seam
+      left, waits on Phase 4.2.** Tool/hardness times: not yet.
+- [x] Apply + bump `revision` + dirty light/mesh + whole-chunk `relight_chunk`.
+      `on_break`/`on_place` callbacks + drops: waits on Phase 4.2 / items (5.1).
+- [x] `S2C_BlockEditResult` to the editor + `S2C_ChunkDelta` (block + diffed
+      light) fan-out to every player mirroring the chunk.
+- [~] Relight on edit: per-chunk from scratch each edit; cross-chunk propagation
+      (breaking a floor lets light into the chunk below) still TODO.
+- [x] Selection raycast (Amanatides–Woo) + wire-cube highlight; LMB break /
+      RMB place stone. Break *progress* (hold-to-break): not yet.
+
+### 5.2 status (2026-09-11): playable over loopback. `voxel_browser --singleplayer`
+can break and place blocks; a second client sees the change via `S2C_ChunkDelta`;
+out-of-reach edits roll back. Remaining: Lua veto (4.2), drops/tools/items (5.1),
+hold-to-break progress, cross-chunk relight.
 
 ### 5.3 Main menu (raygui, engine-level, not pack)
 

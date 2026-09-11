@@ -4,8 +4,9 @@
 > as any change to a struct in `inc/vb/protocol/`, and bump
 > `kEngineProtocolVersion` in `cmake/version.hpp.in`.
 
-Current `ENGINE_PROTOCOL_VERSION`: **2**.
+Current `ENGINE_PROTOCOL_VERSION`: **3**.
 
+- **3** — `C2S_BlockEdit` (44) + `S2C_BlockEditResult` (45) payloads defined.
 - **2** — `S2C_EntitySnapshot` gains `bool has_local` + trailing `EntityRecord local`
   (the recipient's own authoritative state, for client reconciliation);
   `C2S_InputBatch` (80) payload defined.
@@ -89,10 +90,24 @@ bit3 secondary, bit4 fly-up, bit5 fly-down). Sent every client frame; each batch
 resends recent unacked commands. The server simulates any `seq` above the last it
 has run and acks the highest via `S2C_EntitySnapshot.last_acked_input_seq`.
 
+### World editing — `inc/vb/protocol/world.hpp` (implemented)
+
+| Type (id)               | Fields                                                        |
+| ----------------------- | ----------------------------------------------------------- |
+| `C2S_BlockEdit` (44)      | `u32 predicted_seq`, `u8 action` (0 break / 1 place), `svarint×3 pos` (world voxel), `u16 block` (place only) |
+| `S2C_BlockEditResult` (45) | `u32 predicted_seq`, `bool accepted`, `svarint×3 pos`        |
+
+Client applies the edit optimistically to its chunk mirror keyed by
+`predicted_seq`, then rolls back if `accepted` is false. The authoritative block +
+light change fans out to every interested player as an `S2C_ChunkDelta`; the
+server validates reach (≤ 5.5 blocks from the eye), target validity, and
+non-floating placement (a Lua `block_break`/`block_place` veto slots in at
+Phase 4.2).
+
 ### Not yet implemented
 
-Asset sync (20–23), block edits (44–45), block registry (40), chat/UI (100–103)
-— types are reserved in `MessageType`; payloads land in Phases 4–5.
+Asset sync (20–23), block registry (40), chat/UI (100–103) — types are reserved
+in `MessageType`; payloads land in Phases 4–5.
 
 ## Handshake sequence
 

@@ -7,7 +7,7 @@
 > Companion docs: `ARCHITECTURE_SPEC.md` (target design) · `REMAINING_TASKS.md`
 > (implementation backlog). This file is for *traps and context*, not the plan.
 
-Last updated: 2026-09-11 (Phase 4.1 Lua VM)
+Last updated: 2026-09-11 (Phase 5.2 block editing)
 
 ---
 
@@ -204,7 +204,26 @@ _(Move items here with a date + commit when fixed, so the history is visible.)_
   then-client-polls each tick = one message hop per tick).
   **Next:** `GnsTransport` behind `VB_WITH_NET`.
 
-- **2026-09-11 — Phase 4.1 Lua VM** (uncommitted). `inc/vb/script/vm.hpp` +
+- **2026-09-11 — Phase 5.2 block breaking / placing over the network**
+  (uncommitted). `C2S_BlockEdit` / `S2C_BlockEditResult` (`vb/protocol/world`) →
+  **`kEngineProtocolVersion` 2 → 3**. `WorldReplicator::apply_block_edit` (reach
+  ≤5.5, target validity, no-floating-placement, whole-chunk `relight_chunk`,
+  builds an `S2C_ChunkDelta` with the block + diffed light bytes, fans out to
+  every player whose `last_sent_` has that chunk). `ServerSession::handle_block_edit`
+  routes it. `ClientSession::push_block_edit` (optimistic apply to `chunks_`,
+  rollback on a `!accepted` result, drop pending on the authoritative delta) +
+  `ClientChunkStore::edit_block` (bumps the chunk + bordering chunk revisions so
+  the renderer re-meshes). Client `main.cpp`: Amanatides–Woo voxel raycast from
+  the eye, wire-cube highlight, LMB break / RMB place stone (singleplayer path).
+  Tests: `tests/unit/blockedit_test.cpp` (round-trip + 2-client fan-out + reject
+  rollback).
+  - **Lua veto seam:** `apply_block_edit` has a `[Phase 4.2]` comment where the
+    `block_break`/`block_place` handler hooks in; region protection too.
+  - **Not done:** cross-chunk light propagation on edit (relight is per-chunk),
+    break progress / tool times (instant break), drops (needs items — Phase 5.1),
+    `S2C_BlockEditResult` reason codes.
+
+- **2026-09-11 — Phase 4.1 Lua VM** (committed `2e3d297`). `inc/vb/script/vm.hpp` +
   `src/script/vm.cpp`: `vb::script::Vm` — pImpl over one `sol::state`, sandboxed
   at construction (base/string/table/math/coroutine/utf8 only; os/io/load/require/
   package/collectgarbage nilled; `debug` trimmed to `traceback`), ceiling

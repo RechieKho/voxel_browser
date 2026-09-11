@@ -135,4 +135,63 @@ Decoded<S2CChunkRemove> S2CChunkRemove::decode(std::span<const std::byte> in) {
 	return finish(r, std::move(m));
 }
 
+namespace {
+
+void write_ivec3(ByteWriter &w, core::IVec3 v) {
+	w.svarint(v.x);
+	w.svarint(v.y);
+	w.svarint(v.z);
+}
+
+core::IVec3 read_ivec3(ByteReader &r) {
+	core::IVec3 v;
+	v.x = static_cast<std::int32_t>(r.svarint());
+	v.y = static_cast<std::int32_t>(r.svarint());
+	v.z = static_cast<std::int32_t>(r.svarint());
+	return v;
+}
+
+} // namespace
+
+// --- C2SBlockEdit --------------------------------------------------------
+void C2SBlockEdit::encode(std::vector<std::byte> &out) const {
+	ByteWriter w(out);
+	w.u32(predicted_seq);
+	w.u8(static_cast<std::uint8_t>(action));
+	write_ivec3(w, pos);
+	w.u16(static_cast<std::uint16_t>(block));
+}
+
+Decoded<C2SBlockEdit> C2SBlockEdit::decode(std::span<const std::byte> in) {
+	ByteReader r(in);
+	C2SBlockEdit m;
+	m.predicted_seq = r.u32();
+	const auto action = static_cast<BlockEditAction>(r.u8());
+	if (!valid(action)) {
+		return Err{ core::ProtocolError::kBadEnum };
+	}
+	m.action = action;
+	m.pos = read_ivec3(r);
+	m.block = static_cast<core::BlockId>(r.u16());
+	return finish(r, std::move(m));
+}
+
+// --- S2CBlockEditResult -------------------------------------------------
+void S2CBlockEditResult::encode(std::vector<std::byte> &out) const {
+	ByteWriter w(out);
+	w.u32(predicted_seq);
+	w.boolean(accepted);
+	write_ivec3(w, pos);
+}
+
+Decoded<S2CBlockEditResult> S2CBlockEditResult::decode(
+		std::span<const std::byte> in) {
+	ByteReader r(in);
+	S2CBlockEditResult m;
+	m.predicted_seq = r.u32();
+	m.accepted = r.boolean();
+	m.pos = read_ivec3(r);
+	return finish(r, std::move(m));
+}
+
 } // namespace vb::protocol
