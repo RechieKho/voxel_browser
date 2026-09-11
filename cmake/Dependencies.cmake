@@ -109,19 +109,51 @@ if(VB_BUILD_TESTS)
 endif()
 
 # ===========================================================================
-# GameNetworkingSockets — reliable/unreliable UDP transport (Phase 1)
-#   Transitive: protobuf + a crypto backend (OpenSSL or libsodium/BCrypt).
-#   Prefer a system install; the FetchContent path also pulls protobuf.
+# GameNetworkingSockets — reliable/unreliable UDP transport (Phase 1.2)
+#   Transitive: protobuf (GNS's own CMakeLists does a plain
+#   find_package(Protobuf REQUIRED) — it vendors nothing) + a crypto backend.
+#   Protobuf must be a real *installed* package (headers + built libs + a
+#   discoverable CMake config) — FetchContent-ing its source doesn't work:
+#   protobuf only emits its CMake config as part of an install step, and the
+#   library doesn't exist yet at configure time. So, unlike every other
+#   dependency here, protobuf (and OpenSSL where BCrypt isn't available) come
+#   from a package manager instead of FetchContent:
+#     Windows: vcpkg (`vcpkg install protobuf`), pass
+#       -DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake.
+#       GitHub's windows-latest runners ship vcpkg pre-installed.
+#     Linux:   apt-get install protobuf-compiler libprotobuf-dev libssl-dev
+#     macOS:   brew install protobuf openssl
+#   Crypto: Windows uses BCrypt (built into the OS — no OpenSSL needed there);
+#   Linux/macOS use GNS's default, system OpenSSL.
+#   GNS itself is still FetchContent'd (its own CMakeLists builds cleanly from
+#   source once protobuf/crypto are satisfied — the fragile link was only
+#   protobuf). ICE/WebRTC (P2P NAT punching) is off: this engine only ever
+#   dials a known dedicated-server address, and ICE pulls a multi-hundred-MB
+#   webrtc submodule for a feature we'd never use.
 # ===========================================================================
 if(VB_WITH_NET)
   find_package(GameNetworkingSockets QUIET)
   if(NOT GameNetworkingSockets_FOUND)
-    message(STATUS "vb: fetching GameNetworkingSockets (pulls protobuf; needs OpenSSL)")
+    find_package(Protobuf REQUIRED)
+
+    message(STATUS "vb: fetching GameNetworkingSockets")
     set(BUILD_EXAMPLES OFF CACHE INTERNAL "")
     set(BUILD_TESTS OFF CACHE INTERNAL "")
-    vb_fetch(gamenetworkingsockets
-      TAG v1.4.1
-      REPO https://github.com/ValveSoftware/GameNetworkingSockets.git)
+    set(BUILD_SHARED_LIB OFF CACHE INTERNAL "") # we only ever link GameNetworkingSockets::static
+    set(ENABLE_ICE OFF CACHE INTERNAL "")
+    set(USE_STEAMWEBRTC OFF CACHE INTERNAL "")
+    if(WIN32)
+      set(USE_CRYPTO "BCrypt" CACHE STRING "" FORCE)
+    endif()
+
+    FetchContent_Declare(gamenetworkingsockets
+      GIT_REPOSITORY https://github.com/ValveSoftware/GameNetworkingSockets.git
+      GIT_TAG v1.6.0
+      GIT_SHALLOW TRUE
+      GIT_PROGRESS TRUE
+      # Skip the webrtc submodule (only needed by ICE, which is off above).
+      GIT_SUBMODULES "src/external/abseil;src/external/vjson")
+    FetchContent_MakeAvailable(gamenetworkingsockets)
   endif()
 endif()
 

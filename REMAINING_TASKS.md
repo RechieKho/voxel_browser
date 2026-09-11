@@ -98,8 +98,25 @@ network space; client window + render loop alive.
       `inc/vb/net/transport.hpp`.
 - [x] `LoopbackTransport` (`inc/vb/net/loopback.hpp` + `.cpp`): in-process,
       deterministic, dependency-free backend for tests + integrated singleplayer.
-- [ ] `GnsTransport` over `ISteamNetworkingSockets`: init/shutdown, real UDP,
-      per-connection lifecycle. **(needs `VB_WITH_NET`; Phase 1.2 spike)**
+- [x] `GnsTransport` over `ISteamNetworkingSockets` — `vb/net/gns_transport.{hpp,cpp}`,
+      real UDP, built under `VB_WITH_NET`; a `kBackendUnavailable` stub otherwise
+      (same pattern as `vb::script::Vm`). One process-wide `GnsRuntime` (refcounted
+      init/shutdown, the single global connection-status callback GNS exposes)
+      routes events to the owning `GnsTransport` via listen-socket/connection
+      handle registries — matters for tests running a server + several clients
+      in one process; application code just uses `Transport` normally. ICE/WebRTC
+      off (direct dedicated-server connections only, not P2P). `bound_port()`
+      (GNS-specific, not on the `Transport` interface) exposes the real port
+      after `listen(0)`. Unit test: real UDP connect/send/disconnect over
+      127.0.0.1 (`tests/unit/gns_transport_test.cpp`).
+      **Dependency note:** GNS needs protobuf as a real *installed* package
+      (its CMake config, not just a source checkout — FetchContent-ing
+      protobuf's source doesn't work, see the long comment in
+      `cmake/Dependencies.cmake`). Windows: vcpkg. Linux: apt
+      (`libprotobuf-dev protobuf-compiler libssl-dev`). macOS: brew
+      (`protobuf openssl`) — **not yet wired into CI**, see below.
+      Pin bumped v1.4.1 → v1.6.0 (v1.4.1 doesn't compile under MSVC:
+      `std::string_view::c_str()` doesn't exist, fixed upstream by v1.6.0).
 - [x] Lane/channel configuration (§8.2): `lane_for(MessageType)` +
       `send_mode_for_lane(Lane)` (reliable vs. unreliable).
 - [x] Message envelope `{type, flags, payload_len}` + varint helpers —
@@ -132,9 +149,35 @@ network space; client window + render loop alive.
       `inc/vb/net/{session,integrated}.hpp`.
 - [x] Integrated singleplayer wired into `voxel_browser --singleplayer`
       (works headless; `singleplayer_smoke` CTest asserts the join line).
-- [ ] Per-IP connection cap belongs to the server loop once `GnsTransport` lands.
+- [x] `voxel_browser_server` actually runs a game now (it only sleep-looped
+      before): owns a `World` + `WorldGenWorkerPool`, listens via `GnsTransport`,
+      drives one `ServerSession` + `WorldReplicator`, logs joins/leaves. Random
+      seed when `world_seed = 0`. Bind address is always "any interface" for now
+      (`config.bind_address` isn't wired into the actual bind yet). Built
+      without `VB_WITH_NET`, `listen()` returns `kBackendUnavailable`, which is
+      treated as non-fatal (warns, keeps ticking with no one able to connect) —
+      every *other* `listen()` failure (port in use, bind denied) is still
+      fatal. Keeps the binary testable/CI-runnable without the heavy dep, same
+      spirit as `vb::script::Vm` degrading without `VB_WITH_LUA`.
+- [x] `voxel_browser` connects for real: `--server`/`--port` build a
+      `GnsTransport` + `ClientSession` (`RemoteConnection` in `main.cpp`), same
+      render/prediction/block-edit loop `--singleplayer` already used, unified
+      behind one `ClientSession*` regardless of which path is active.
+- [ ] Per-IP connection cap belongs to the server loop.
 - [ ] `ENGINE_PROTOCOL_VERSION` mismatch → both FSMs already reject; surface it
       in the client connect UI (Phase 5.3 main menu).
+- [ ] Hostname resolution: `connect()` only accepts numeric IP literals today
+      (`SteamNetworkingIPAddr::ParseString` doesn't resolve DNS). "localhost" /
+      real hostnames need `getaddrinfo` in `GnsTransport::connect`.
+- [ ] macOS CI doesn't build `VB_WITH_NET` yet: it's a universal (arm64+x86_64)
+      build, but a brew-installed protobuf is single-arch, which breaks linking
+      the other slice. Needs a universal protobuf (vcpkg triplet, or building
+      protobuf from source for both arches) — see `build_macos.yml`.
+- [ ] Two live `voxel_browser` + `voxel_browser_server` processes have not
+      been run against each other manually yet — validated so far by
+      `gns_transport_test.cpp` (raw transport, one process) and the existing
+      Loopback-based session/handshake/replication tests (application logic,
+      generically transport-agnostic). Worth an actual two-terminal smoke test.
 
 ### 1.4 Replication bootstrap (`vb_core/replication`)
 
@@ -177,14 +220,17 @@ network space; client window + render loop alive.
 connects, completes handshake, opens a window; integration test for mutual
 visibility of two clients is green in CI.
 
-**Phase 1 status (2026-09-10):** everything except the real `GnsTransport`
-socket backend (1.2). Core primitives, TOML config, wire codec, handshake FSMs,
-transport abstraction + loopback backend, session layer, integrated
-singleplayer, client shell, interest management + entity snapshots + the
-two-client visibility test — all done and tested (~280 assertions). The librg
-integration is deferred to Phase 3 (needs moving players to be meaningful); the
-`Transport` seam is where `GnsTransport` plugs in, and the replication test just
-needs re-running over it.
+**Phase 1 status (2026-09-11): met.** `GnsTransport` (real UDP over
+GameNetworkingSockets) landed alongside everything from 2026-09-10 (core
+primitives, TOML config, wire codec, handshake FSMs, session layer, client
+shell, interest management + entity snapshots). Both binaries are wired to it:
+the dedicated server actually runs a game now instead of an empty tick loop,
+and the client's non-singleplayer path connects for real. The librg
+integration is still deferred to Phase 3 (needs moving players to be
+meaningful) — the `Transport` seam it needs is unaffected either way. Not yet
+done: re-running the multi-client Loopback tests over `GnsTransport` (the raw
+transport has its own real-UDP test instead), hostname resolution, and macOS
+CI (see 1.2's notes).
 
 ---
 

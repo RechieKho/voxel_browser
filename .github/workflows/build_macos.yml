@@ -39,6 +39,12 @@ jobs:
 
       - name: Configure
         shell: bash
+        # VB_WITH_NET is intentionally left off here: this is a universal
+        # (arm64+x86_64) build, but a brew-installed protobuf/OpenSSL is
+        # single-arch (matching the runner's host arch) and would break
+        # linking the other slice. Needs a universal protobuf (e.g. a vcpkg
+        # triplet built for both arches, or building protobuf from source for
+        # both) before enabling — tracked in STATE.md / REMAINING_TASKS.md.
         run: |
           cmake -S "${{ github.workspace }}" -B "${{ github.workspace }}/build" -G Ninja \
             -DCMAKE_BUILD_TYPE="${{ matrix.cmake_build_type_keyword }}" \

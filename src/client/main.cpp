@@ -6,6 +6,7 @@
 // and joins it (spec §3 — one code path for single- and multiplayer).
 // `--headless` does no GL work so CI and integration tests share this path.
 
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -13,13 +14,16 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
+#include <thread>
 
 #include <raylib.h>
 
 #include "vb/core/build_info.hpp"
 #include "vb/core/cli.hpp"
 #include "vb/core/config.hpp"
+#include "vb/net/gns_transport.hpp"
 #include "vb/net/integrated.hpp"
 #include "vb/net/world_replicator.hpp"
 #include "vb/physics/movement.hpp"
@@ -85,6 +89,27 @@ struct Singleplayer {
 		game.server().set_world_replicator(
 				std::make_unique<vb::net::WorldReplicator>(world, pool,
 						vb::world::BlockRegistry::base(), view_distance, 3));
+	}
+};
+
+// Real multiplayer: a GnsTransport dialing a dedicated voxel_browser_server
+// (spec §8.1). `session` is empty if connect() itself failed (bad address, or
+// built without VB_WITH_NET); a *later* handshake failure instead shows up as
+// client->failed() once the join-wait loop runs.
+struct RemoteConnection {
+	vb::net::GnsTransport transport;
+	std::optional<vb::net::ClientSession> session;
+
+	RemoteConnection(const std::string &host, std::uint16_t port,
+			const std::string &name) {
+		auto conn = transport.connect(host, port);
+		if (!conn) {
+			return;
+		}
+		vb::net::HandshakeClientConfig c;
+		c.player_name = name;
+		c.client_version = vb::kVersionString;
+		session.emplace(transport, *conn, std::move(c));
 	}
 };
 
@@ -244,33 +269,55 @@ int main(int argc, char **argv) {
 			  << "client: " << (headless ? "headless" : "windowed") << " mode\n";
 
 	std::unique_ptr<Singleplayer> sp;
+	std::unique_ptr<RemoteConnection> remote;
+	vb::net::ClientSession *client = nullptr;
 	vb::core::NetId net_id = vb::core::NetId::kInvalid;
 	vb::core::Vec3d spawn{ 0.0, 72.0, 0.0 };
 	std::string status;
 
 	if (singleplayer) {
 		sp = std::make_unique<Singleplayer>(7, config.player_name, view_distance);
-		for (int i = 0; i < 128 && !sp->game.client_joined() &&
-				!sp->game.client_failed();
-				++i) {
+		client = &sp->game.client();
+		for (int i = 0; i < 128 && !client->joined() && !client->failed(); ++i) {
 			sp->game.tick(0.05);
 		}
-		if (!sp->game.client_joined()) {
-			std::cout << "client: singleplayer join failed: "
-					  << sp->game.client().failure_reason() << '\n';
+	} else {
+		std::cout << "client: connecting to " << server << ':' << port << "...\n";
+		remote = std::make_unique<RemoteConnection>(
+				server, static_cast<std::uint16_t>(port), config.player_name);
+		if (!remote->session) {
+			std::cout << "client: could not connect to " << server << ':' << port
+					  << " (bad address, or built without VB_WITH_NET)\n";
 			return EXIT_FAILURE;
 		}
-		const auto &accept = *sp->game.client().join_accept();
+		client = &*remote->session;
+
+		// Real UDP round-trips take actual wall-clock time, unlike the
+		// synchronous in-process loopback singleplayer uses above.
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+		while (!client->joined() && !client->failed() &&
+				std::chrono::steady_clock::now() < deadline) {
+			client->tick(0.05);
+			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		}
+	}
+
+	if (!client->joined()) {
+		std::cout << "client: join failed: "
+				  << (client->failed() ? client->failure_reason() : "timed out")
+				  << '\n';
+		return EXIT_FAILURE;
+	}
+	{
+		const auto &accept = *client->join_accept();
 		net_id = accept.your_net_id;
 		spawn = accept.spawn_pos;
-		status = "singleplayer — net id " +
-				std::to_string(static_cast<std::uint32_t>(net_id)) + ", seed " +
-				std::to_string(accept.world_seed);
+		status = (singleplayer ? std::string("singleplayer")
+							   : ("connected to " + server + ':' +
+										 std::to_string(port))) +
+				" — net id " + std::to_string(static_cast<std::uint32_t>(net_id)) +
+				", seed " + std::to_string(accept.world_seed);
 		std::cout << "client: joined " << status << '\n';
-	} else {
-		status = "not connected (" + server + ":" + std::to_string(port) +
-				") — remote transport lands with VB_WITH_NET";
-		std::cout << "client: " << status << '\n';
 	}
 
 	vb::render::WindowConfig wcfg;
@@ -289,10 +336,8 @@ int main(int argc, char **argv) {
 	controller.set_sensitivity(config.mouse_sensitivity);
 
 	vb::physics::MoveParams move_params;
-	if (sp) {
-		sp->game.client().set_move_params(move_params);
-		sp->game.client().set_local_feet(spawn);
-	}
+	client->set_move_params(move_params);
+	client->set_local_feet(spawn);
 	std::uint32_t input_seq = 0;
 	std::uint32_t edit_seq = 0;
 
@@ -329,27 +374,34 @@ int main(int argc, char **argv) {
 		}
 		controller.update(look_in, dt);
 
-		if (sp) {
+		{
 			const vb::protocol::InputCmd cmd = sample_input_cmd(++input_seq, dt,
 					controller.yaw(), controller.pitch(), mouse_captured);
-			sp->game.client().push_input(cmd);
-			sp->game.tick(dt);
-			const vb::core::Vec3d feet = sp->game.client().predicted_feet();
+			client->push_input(cmd);
+			// Singleplayer ticks the whole embedded game (client + server,
+			// over loopback); a real connection just pumps this client's
+			// GnsTransport -- the dedicated server ticks itself.
+			if (sp) {
+				sp->game.tick(dt);
+			} else {
+				client->tick(dt);
+			}
+			const vb::core::Vec3d feet = client->predicted_feet();
 			controller.set_position(
 					{ feet.x, feet.y + move_params.eye_height, feet.z });
 		}
 
 		// Block break / place: raycast from the eye, act on click (spec §5.2).
 		VoxelRayHit look_hit;
-		if (sp && mouse_captured && !window.headless()) {
-			look_hit = raycast_voxel(sp->game.client().chunk_store(),
-					controller.position(), controller.forward(), 5.0);
+		if (mouse_captured && !window.headless()) {
+			look_hit = raycast_voxel(client->chunk_store(), controller.position(),
+					controller.forward(), 5.0);
 			if (look_hit.hit && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
 				vb::protocol::C2SBlockEdit e;
 				e.predicted_seq = ++edit_seq;
 				e.action = vb::protocol::BlockEditAction::kBreak;
 				e.pos = look_hit.voxel;
-				sp->game.client().push_block_edit(e);
+				client->push_block_edit(e);
 			} else if (look_hit.hit && IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) {
 				vb::protocol::C2SBlockEdit e;
 				e.predicted_seq = ++edit_seq;
@@ -358,20 +410,20 @@ int main(int argc, char **argv) {
 					look_hit.voxel.y + look_hit.normal.y,
 					look_hit.voxel.z + look_hit.normal.z };
 				e.block = vb::world::base_block::stone;
-				sp->game.client().push_block_edit(e);
+				client->push_block_edit(e);
 			}
 		}
 
 		std::size_t chunk_count = 0;
 		std::size_t entity_count = 0;
-		if (chunk_renderer && sp) {
-			chunk_renderer->sync(sp->game.client().chunk_store(), /*budget*/ 8);
+		if (chunk_renderer) {
+			chunk_renderer->sync(client->chunk_store(), /*budget*/ 8);
 			chunk_count = chunk_renderer->uploaded_count();
 		}
-		if (entity_renderer && sp) {
+		if (entity_renderer) {
 			const vb::render::CameraView camera_view{ controller.position(),
 				controller.target() };
-			entity_renderer->sync(sp->game.client(), camera_view, dt);
+			entity_renderer->sync(*client, camera_view, dt);
 			entity_count = entity_renderer->tracked_count();
 		}
 

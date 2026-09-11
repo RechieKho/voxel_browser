@@ -1,9 +1,11 @@
 # vb/net — transport abstraction + connection handshake. Compiled into vb_core.
-# The GnsTransport backend (GameNetworkingSockets) is added here under
-# VB_WITH_NET once the Phase 1.2 spike confirms the build.
+# gns_transport.cpp builds a kBackendUnavailable stub unless VB_WITH_NET is set
+# (GameNetworkingSockets::static is linked from src/core/CMakeLists.txt under
+# that flag).
 
 target_sources(vb_core PRIVATE
   loopback.cpp
+  gns_transport.cpp
   handshake.cpp
   session.cpp
   integrated.cpp

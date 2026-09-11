@@ -35,12 +35,13 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          # raylib needs X11/GL headers; GameNetworkingSockets (Phase 1) will
-          # additionally need: libssl-dev libprotobuf-dev protobuf-compiler.
+          # raylib needs X11/GL headers; GameNetworkingSockets (Phase 1.2)
+          # needs protobuf + OpenSSL (its default crypto backend on Linux).
           sudo apt-get install -y \
             ninja-build cmake build-essential \
             libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
-            libgl1-mesa-dev libglu1-mesa-dev
+            libgl1-mesa-dev libglu1-mesa-dev \
+            libssl-dev libprotobuf-dev protobuf-compiler
 
       - name: Configure
         shell: bash
@@ -50,7 +51,8 @@ jobs:
             -DCMAKE_CXX_FLAGS="${{ matrix.cxxflags }}" \
             -DVB_WARNINGS_AS_ERRORS=ON \
             -DVB_HEADLESS=OFF \
-            -DVB_WITH_LUA=ON
+            -DVB_WITH_LUA=ON \
+            -DVB_WITH_NET=ON
 
       - name: Build
         shell: bash

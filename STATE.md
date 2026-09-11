@@ -7,7 +7,7 @@
 > Companion docs: `ARCHITECTURE_SPEC.md` (target design) · `REMAINING_TASKS.md`
 > (implementation backlog). This file is for *traps and context*, not the plan.
 
-Last updated: 2026-09-11 (entity billboard-sprite placeholder implemented)
+Last updated: 2026-09-11 (Phase 1.2 GnsTransport — real UDP networking)
 
 ---
 
@@ -203,6 +203,99 @@ _(Move items here with a date + commit when fixed, so the history is visible.)_
   the `JoinGrant`. `IntegratedGame` needs ~4 `tick()`s to settle (server-polls-
   then-client-polls each tick = one message hop per tick).
   **Next:** `GnsTransport` behind `VB_WITH_NET`.
+
+- **2026-09-11 — Phase 1.2: `GnsTransport`, real UDP networking** (uncommitted).
+  `vb/net/gns_transport.{hpp,cpp}` — a real `Transport` backend over
+  GameNetworkingSockets, same "always-present header, `kBackendUnavailable`
+  stub without the flag" pattern as `vb::script::Vm`. One process-wide
+  `GnsRuntime` (refcounted `GameNetworkingSockets_Init`/`_Kill`; GNS exposes
+  exactly ONE global connection-status callback for the whole process, not
+  one per interface) routes each status-change event to the owning
+  `GnsTransport` via listen-socket/connection-handle registries — needed so a
+  server + several clients can share one process (tests) without cross-talk.
+  `voxel_browser_server` now actually runs a game (`World` +
+  `WorldGenWorkerPool` + `ServerSession` + `WorldReplicator` over a real
+  listen socket) instead of an empty sleep loop. `voxel_browser`'s
+  non-singleplayer path connects for real (`RemoteConnection` in `main.cpp`);
+  `main.cpp` was refactored to drive singleplayer and remote play through one
+  `ClientSession*` instead of duplicating the per-frame logic.
+  `tests/unit/gns_transport_test.cpp`: real UDP connect/send/disconnect over
+  127.0.0.1 (`#if VB_WITH_NET`, mirrors the `vb::script::Vm` test-gating style).
+
+  **This was the single hardest dependency in the project so far — details
+  matter if it needs touching again:**
+  - **Protobuf cannot be `FetchContent`-ed for this.** GameNetworkingSockets'
+    CMakeLists does a bare `find_package(Protobuf REQUIRED)`. Protobuf's own
+    CMake only *generates* a discoverable config (`protobuf-config.cmake`) as
+    part of an `install()` step, and its library doesn't exist yet at
+    FetchContent's configure time either way — there is no clean way to
+    satisfy `find_package(Protobuf)` from a bare source checkout. Protobuf
+    must come from a real package manager: **vcpkg on Windows**
+    (`vcpkg install protobuf:x64-windows` +
+    `-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake` — this
+    box now has vcpkg cloned+bootstrapped at `D:\vcpkg`), **apt on Linux**
+    (`libprotobuf-dev protobuf-compiler`), **brew on macOS** (`protobuf`).
+    `cmake/Dependencies.cmake` has the full write-up.
+  - **sol2's pattern does not repeat here**: unlike sol2 (bump the pin, done),
+    this is a "the dependency's own build system requires a pre-installed
+    sub-dependency" problem — no version bump fixes it.
+  - **GNS pin bumped v1.4.1 → v1.6.0**: v1.4.1 doesn't compile at all under a
+    strict/modern stdlib — `std::string_view::c_str()` (not a real API) in
+    `csteamnetworkingsockets.cpp` and two other files. Fixed upstream by v1.6.0.
+  - **ICE/WebRTC disabled** (`ENABLE_ICE=OFF`, `USE_STEAMWEBRTC=OFF`) — we only
+    ever dial a known dedicated-server address, never P2P/NAT-punched. Also
+    restricted `GIT_SUBMODULES` on the FetchContent_Declare to skip the
+    multi-hundred-MB `webrtc` submodule (**note**: v1.6.0 renamed the other
+    required submodule from `picojson` to `vjson` — check `.gitmodules` again
+    if the pin moves).
+  - **Crypto backend**: `USE_CRYPTO=BCrypt` on Windows (built into the OS, no
+    extra dependency); Linux/macOS use GNS's default, system OpenSSL
+    (`libssl-dev` / `brew install openssl`).
+  - **Link statically** (`GameNetworkingSockets::static`, `BUILD_SHARED_LIB
+    OFF`) — every other dependency here is static/header-only; a shared GNS
+    lib would need copying next to the .exe on Windows (no RPATH equivalent).
+  - **GNS's public headers need the SYSTEM-include treatment**: same fix as
+    doctest/raygui/toml++ (`get_target_property(... INTERFACE_INCLUDE_DIRECTORIES)`
+    + re-add `SYSTEM`) — its headers trip `-Wold-style-cast`/`-Wsign-conversion`/
+    `-Wlanguage-extension-token` under our `-Werror` set. Done in
+    `src/core/CMakeLists.txt`.
+  - **macOS CI does NOT build `VB_WITH_NET` yet** — it's a universal
+    (arm64+x86_64) build, and a brew-installed protobuf is single-arch, which
+    breaks linking the slice that doesn't match the runner's host arch. Needs
+    a universal protobuf (vcpkg triplet, or building protobuf from source for
+    both arches) before enabling.
+  - **`connect()` only accepts numeric IP literals** — `SteamNetworkingIPAddr::
+    ParseString()` doesn't resolve DNS. "localhost" / hostnames need
+    `getaddrinfo` added to `GnsTransport::connect`; not done.
+  - **Local-box-only linker quirk (not a CI concern)**: plain `clang++.exe`
+    (GNU driver) targeting the MSVC ABI makes CMake's `MSVC` variable true, so
+    GNS's *vendored* abseil submodule (still built even with ICE off — some
+    non-ICE code apparently uses it) applies MSVC-style linker flags
+    (`-ignore:4221`) that only a Microsoft-syntax-aware driver understands.
+    Plain `clang++` rejects it ("unknown argument"); **`clang-cl.exe`** (same
+    LLVM install, MSVC-compatible driver) accepts it fine. Real CI is
+    unaffected — Windows CI uses actual `cl.exe` via `msvc-dev-cmd`,
+    Linux/macOS CI never sets `MSVC` true. Local verification builds on this
+    box needing `VB_WITH_NET` should use `clang-cl`/`clang-cl++`, not
+    `clang`/`clang++`.
+  - Full local validation trail: GNS built standalone under both plain
+    `clang++` (compiles; only the unrelated abseil link flag fails) and is
+    expected clean under `clang-cl` (build was in flight when this was
+    written — check `voxel_browser`/`voxel_browser_server`/`vb_tests` actually
+    linked before trusting this note blindly next time).
+  - **Smoke-test regression caught and fixed**: `server_smoke`/`client_smoke`
+    (default build, `VB_WITH_NET` off) broke the moment the binaries started
+    actually calling `listen()`/`connect()` instead of being no-ops. Fixed by
+    (a) making the server treat `kBackendUnavailable` specifically as
+    non-fatal (see above) and (b) flipping `client_smoke`'s CTest expectation
+    — with no `--singleplayer`/`--server` override it now legitimately tries
+    to reach `127.0.0.1:27015` with nothing listening, so the smoke test
+    became "fails gracefully with a clear message," not "succeeds";
+    `PASS_REGULAR_EXPRESSION` alone (not `WILL_FAIL` — the two combine by
+    inverting an already-passing regex match into a reported failure, don't
+    stack them) asserts that. Lesson: wiring a previously-inert code path for
+    real changes what "the binary just starts up" tests actually exercise —
+    re-check smoke tests whenever a stub becomes real.
 
 - **2026-09-11 — Entity billboard-sprite placeholder implemented** (Phase 3.5,
   uncommitted). `inc/vb/render/entity_visual.hpp` (header-only, no raylib,

@@ -9,6 +9,7 @@ add_executable(vb_tests
   unit/config_test.cpp
   unit/core_test.cpp
   unit/entity_visual_test.cpp
+  unit/gns_transport_test.cpp
   unit/lighting_test.cpp
   unit/mesher_test.cpp
   unit/netcode_test.cpp
@@ -49,7 +50,17 @@ if(VB_BUILD_SERVER)
   add_test(NAME server_smoke COMMAND voxel_browser_server --ticks 2 --tick-rate 60)
 endif()
 if(VB_BUILD_CLIENT)
+  # No --singleplayer / --server given -> the client tries to reach the
+  # default 127.0.0.1:27015, where nothing is listening. That's now a real
+  # connection attempt (Phase 1.2's GnsTransport), so this smoke-tests the
+  # graceful-failure path instead of a successful run: without VB_WITH_NET it
+  # fails immediately (no backend); with it, ConnectByIPAddress "succeeds"
+  # locally and the client only discovers no one answered after the join-wait
+  # timeout (up to 10s) -- hence the generous TIMEOUT here.
   add_test(NAME client_smoke COMMAND voxel_browser --headless --frames 2)
+  set_tests_properties(client_smoke PROPERTIES
+    PASS_REGULAR_EXPRESSION "client: (could not connect|join failed)"
+    TIMEOUT 30)
   add_test(NAME singleplayer_smoke
     COMMAND voxel_browser --headless --frames 2 --singleplayer --name CiBot
             --render-distance 2)

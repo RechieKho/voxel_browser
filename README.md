@@ -143,8 +143,11 @@ Binaries land in `build/`:
 ```
 
 Copy `server.toml.example` / `client.toml.example` and edit; every key is
-optional and CLI flags override the file. Real remote connections (`--server`)
-arrive with the GameNetworkingSockets transport (`VB_WITH_NET`).
+optional and CLI flags override the file. Real remote connections
+(`voxel_browser --server <addr> --port <n>` against a running
+`voxel_browser_server`) need `-DVB_WITH_NET=ON`, which links
+GameNetworkingSockets — see the next section for its one extra system
+dependency (protobuf).
 
 ### Build options
 
@@ -157,4 +160,16 @@ arrive with the GameNetworkingSockets transport (`VB_WITH_NET`).
 | `VB_WARNINGS_AS_ERRORS` | `OFF`   | `-Werror` / `/WX` (CI turns this on)                |
 | `VB_ENABLE_ASAN` / `_UBSAN` / `_TSAN` | `OFF` | sanitizer builds                       |
 | `VB_WITH_NET` / `_REPLICATION` / `_WORLDGEN` / `_COMPRESSION` / `_LUA` / `_MESHING` | `OFF` | pull in the heavy dependency owned by each later phase |
+
+`VB_WITH_NET=ON` needs a real, installed protobuf (GameNetworkingSockets'
+build requirement — FetchContent-ing protobuf's source doesn't work, see the
+comment in `cmake/Dependencies.cmake`):
+
+- **Windows:** [vcpkg](https://github.com/microsoft/vcpkg) —
+  `vcpkg install protobuf:x64-windows`, then add
+  `-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake` to the
+  configure command. GitHub's `windows-latest` runners ship vcpkg pre-installed.
+- **Linux:** `apt-get install protobuf-compiler libprotobuf-dev libssl-dev`
+- **macOS:** `brew install protobuf openssl` (not yet wired into CI's universal
+  build — see `STATE.md`)
 

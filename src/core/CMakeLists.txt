@@ -30,8 +30,20 @@ target_link_libraries(vb_core
 )
 
 if(VB_WITH_NET)
-  target_link_libraries(vb_core PUBLIC GameNetworkingSockets::GameNetworkingSockets)
+  # Static: avoids shipping/locating a GNS shared lib next to the exe (every
+  # other dependency here is static or header-only; keep it that way).
+  target_link_libraries(vb_core PUBLIC GameNetworkingSockets::static)
   target_compile_definitions(vb_core PUBLIC VB_WITH_NET=1)
+
+  # GNS's public headers trip several of our -Werror flags (old-style casts,
+  # sign conversion, __int64 as a language extension) — same fix as
+  # doctest/raygui/toml++: re-add its include dir as SYSTEM so the warning
+  # flags don't apply to third-party code.
+  get_target_property(_vb_gns_inc GameNetworkingSockets::static
+    INTERFACE_INCLUDE_DIRECTORIES)
+  if(_vb_gns_inc)
+    target_include_directories(vb_core SYSTEM PRIVATE ${_vb_gns_inc})
+  endif()
 endif()
 
 if(VB_WITH_REPLICATION)

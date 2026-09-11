@@ -128,8 +128,13 @@ Implemented, transport-agnostic, in `inc/vb/net/handshake.hpp`:
   server-provided message.
 
 The `Transport` interface (`inc/vb/net/transport.hpp`) delivers whole framed
-messages per lane. Backends: `LoopbackTransport` (in-process, done) and
-`GnsTransport` (GameNetworkingSockets, `VB_WITH_NET`, pending).
+messages per lane. Backends: `LoopbackTransport` (in-process, tests +
+integrated singleplayer) and `GnsTransport` (GameNetworkingSockets, real UDP,
+`VB_WITH_NET`) — both implemented. `GnsTransport` maps each `Lane`'s
+reliability (see `send_mode_for_lane`) straight onto GNS send flags; it does
+not yet use GNS's own connection-lanes feature, so all reliable traffic shares
+one ordered stream (a latency nuance, not a correctness issue — see
+`REMAINING_TASKS.md` 1.2).
 
 ## Dependency pins
 
@@ -139,7 +144,7 @@ messages per lane. Backends: `LoopbackTransport` (in-process, done) and
 | EnTT                  | `v3.13.2`  | ECS                                     |
 | tomlplusplus          | `v3.4.0`   | server.toml / client.toml loader        |
 | doctest               | `v2.4.11`  | tests                                   |
-| GameNetworkingSockets | `v1.4.1`   | Phase 1; pulls protobuf, needs OpenSSL  |
+| GameNetworkingSockets | `v1.6.0`   | Phase 1.2; needs a real protobuf install (vcpkg/apt/brew — not FetchContent-able, see `cmake/Dependencies.cmake`) + BCrypt (Windows) or OpenSSL (Linux/macOS) |
 | zpl / librg           | `v18.1.4` / `v7.2.2` | Phase 1.4 spike — confirm API |
 | FastNoise2            | `v0.10.0`  | Phase 2                                 |
 | lz4 / xxHash          | `v1.9.4` / `v0.8.2` | Phase 2/4 codecs                |

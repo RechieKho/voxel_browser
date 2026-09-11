@@ -36,6 +36,14 @@ jobs:
         with:
           arch: ${{ matrix.cmake_arch_keyword }}
 
+      - name: Install protobuf (vcpkg, for GameNetworkingSockets)
+        shell: cmd
+        # windows-latest ships vcpkg pre-installed at %VCPKG_INSTALLATION_ROOT%.
+        # protobuf's own CMake only emits a discoverable config as part of an
+        # install step, so FetchContent-ing its source doesn't work (see
+        # cmake/Dependencies.cmake) — a real package manager install is needed.
+        run: "%VCPKG_INSTALLATION_ROOT%\\vcpkg install protobuf:x64-windows"
+
       - name: Configure
         shell: cmd
         run: |
@@ -43,7 +51,9 @@ jobs:
             -DCMAKE_BUILD_TYPE="${{ matrix.cmake_build_type_keyword }}" ^
             -DVB_WARNINGS_AS_ERRORS=ON ^
             -DVB_HEADLESS=OFF ^
-            -DVB_WITH_LUA=ON
+            -DVB_WITH_LUA=ON ^
+            -DVB_WITH_NET=ON ^
+            -DCMAKE_TOOLCHAIN_FILE=%VCPKG_INSTALLATION_ROOT%\scripts\buildsystems\vcpkg.cmake
 
       - name: Build
         shell: cmd
