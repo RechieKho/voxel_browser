@@ -134,7 +134,14 @@ endif()
 if(VB_WITH_NET)
   find_package(GameNetworkingSockets QUIET)
   if(NOT GameNetworkingSockets_FOUND)
-    find_package(Protobuf REQUIRED)
+    # Deliberately NOT calling find_package(Protobuf REQUIRED) here ourselves:
+    # GNS's own src/CMakeLists.txt already does, and calling it a second time
+    # in the same configure run is unsafe with some protobuf installs (seen
+    # with Homebrew's on macOS) -- protobuf's generated config fatal-errors
+    # ("Some (but not all) targets in this export set were already defined")
+    # because the two find_package() calls request slightly different
+    # component sets. Let GNS's own call be the only one; it already fails
+    # with a clear "Could NOT find Protobuf" message if it's missing.
 
     message(STATUS "vb: fetching GameNetworkingSockets")
     set(BUILD_EXAMPLES OFF CACHE INTERNAL "")
