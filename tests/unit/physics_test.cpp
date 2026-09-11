@@ -2,6 +2,8 @@
 
 #include <ostream>
 
+#include <vector>
+
 #include "vb/physics/movement.hpp"
 #include "vb/world/block_query.hpp"
 
@@ -217,4 +219,56 @@ TEST_CASE("wish_dir_from_local respects yaw (forward is -Z at yaw 0)") {
 	const Vec3d y90 = physics::wish_dir_from_local(Vec3f{ 0.0f, 0.0f, 1.0f }, 90.0f);
 	CHECK(y90.x == doctest::Approx(1.0));
 	CHECK(y90.z == doctest::Approx(0.0).epsilon(1e-6));
+}
+
+// ground_area_loaded() is what stops a freshly-joined player from free-falling
+// through an unloaded (air-by-default) spawn column and ending up embedded in
+// the terrain the moment it finishes generating -- see
+// ServerSession::handle_input_batch / ClientSession::push_input. A fake
+// "which chunks exist" predicate stands in for both World::has_chunk and
+// ClientChunkStore::has, which is the whole point of the function being a
+// template over a callable rather than tied to one store type.
+namespace {
+
+struct FakeChunkSet {
+	std::vector<core::ChunkCoord> loaded;
+	bool operator()(core::ChunkCoord c) const {
+		for (const auto &l : loaded) {
+			if (l == c) {
+				return true;
+			}
+		}
+		return false;
+	}
+};
+
+} // namespace
+
+TEST_CASE("ground_area_loaded: nothing loaded -> not ready") {
+	FakeChunkSet none;
+	CHECK_FALSE(physics::ground_area_loaded(Vec3d{ 8, 64, 8 }, none));
+}
+
+TEST_CASE("ground_area_loaded: own chunk loaded but the ones below are not") {
+	// Player's feet at y=64 -> chunk y-index 2 (64/32). Only that one loaded;
+	// the surface is very likely one or two chunks lower, which is exactly the
+	// gap that let a player fall through and end up embedded.
+	FakeChunkSet only_own{ { { 0, 2, 0 } } };
+	CHECK_FALSE(physics::ground_area_loaded(Vec3d{ 8, 64, 8 }, only_own));
+}
+
+TEST_CASE("ground_area_loaded: own chunk plus the 2 below it -> ready") {
+	FakeChunkSet enough{ { { 0, 2, 0 }, { 0, 1, 0 }, { 0, 0, 0 } } };
+	CHECK(physics::ground_area_loaded(Vec3d{ 8, 64, 8 }, enough));
+}
+
+TEST_CASE("ground_area_loaded: missing just one of the required chunks -> not ready") {
+	FakeChunkSet missing_middle{ { { 0, 2, 0 }, { 0, 0, 0 } } }; // skips y=1
+	CHECK_FALSE(physics::ground_area_loaded(Vec3d{ 8, 64, 8 }, missing_middle));
+}
+
+TEST_CASE("ground_area_loaded: negative-Y feet still map to the right chunk") {
+	// floor_div, not truncating division: feet at y=-5 is chunk y=-1, not 0.
+	FakeChunkSet enough{ { { 0, -1, 0 }, { 0, -2, 0 }, { 0, -3, 0 } } };
+	CHECK(physics::ground_area_loaded(Vec3d{ 8, -5, 8 }, enough));
 }

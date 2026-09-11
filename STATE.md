@@ -7,7 +7,7 @@
 > Companion docs: `ARCHITECTURE_SPEC.md` (target design) · `REMAINING_TASKS.md`
 > (implementation backlog). This file is for *traps and context*, not the plan.
 
-Last updated: 2026-09-11 (chunk-neighbour remesh bug fixed)
+Last updated: 2026-09-11 (join-time fall-through-world / embedding bug fixed)
 
 ---
 
@@ -228,7 +228,53 @@ _(Move items here with a date + commit when fixed, so the history is visible.)_
   then-client-polls each tick = one message hop per tick).
   **Next:** `GnsTransport` behind `VB_WITH_NET`.
 
-- **2026-09-11 — Chunk-neighbour remesh bug fixed** (uncommitted). Reported by
+- **2026-09-11 — Join-time fall-through-world / embedding bug fixed**
+  (uncommitted). Reported: "when the player joins, the player immediately
+  falls outside the world first, which leads to player get embedded inside
+  the terrain." Root cause: physics is entirely input-driven
+  (`ServerSession::handle_input_batch` only runs `step_movement` when a
+  `C2SInputBatch` arrives) and starts the instant the client sends its first
+  input, which can easily be *before* the spawn chunk's async worldgen has
+  finished (`WorldGenWorkerPool` runs on real background threads outside
+  `kSynchronous` mode — `--singleplayer`'s pool included). An unloaded chunk's
+  `solid_at`/`has_chunk` reads as plain air, so the player free-falls with
+  **zero collision** for however many ticks generation takes; swept collision
+  only ever prevents *new* penetration during a move, it never resolves a
+  pre-existing one, so once the chunk finally loads with the player's Y
+  already below the real surface, they're just stuck inside solid terrain —
+  nothing ever pushes them back out.
+  Fix: `physics::ground_area_loaded(feet, has_chunk)` (new, header-only
+  template in `movement.hpp` so it works against both `World::has_chunk` and
+  `ClientChunkStore::has` without a shared interface) checks the player's own
+  chunk plus two below it; `ServerSession::handle_input_batch` and
+  `ClientSession::push_input` both skip `step_movement` entirely (freezing
+  position/velocity, not just zeroing gravity) whenever it's false. The
+  server's freeze is what actually matters for correctness (it's
+  authoritative); the client-side one is belt-and-suspenders so the local
+  camera doesn't show a premature fall before the first snapshot arrives —
+  verified this doesn't fight `reconcile()` (unguarded on purpose: replaying
+  unacked inputs against *current*, likely-by-then-loaded chunk data is
+  correct) by working through why `netcode_test.cpp`'s fly-mode tests (no
+  `WorldReplicator` attached at all, so `chunks_` never receives any chunks)
+  still pass: `reconcile()` snaps `predicted_` straight to the server's
+  authoritative position every tick regardless of what `push_input` did
+  locally, so the client-side freeze only ever affects the sub-tick gap
+  before the next snapshot, never overall convergence.
+  Tests: `tests/unit/physics_test.cpp` — 5 direct cases against
+  `ground_area_loaded()` (nothing loaded, own chunk only, own+2 below, one
+  gap in the middle, negative-Y `floor_div` correctness).
+  **Known test-coverage gap, stated plainly:** there is *no* automated
+  integration test reproducing the actual async join race end-to-end.
+  `WorldGenWorkerPool::kSynchronous` (used by most existing integration
+  tests) generates instantly inside `submit()`, so it structurally cannot
+  exhibit the gap this bug lived in; the real async pool's timing isn't
+  controllable enough for a deterministic CI test without adding test-only
+  hooks, which felt like over-engineering for this fix. Confidence rests on
+  the unit-tested decision function + code-inspection of the two call sites,
+  not an end-to-end repro — say so if a future change to the join sequence
+  needs that confirmed differently.
+
+- **2026-09-11 — Chunk-neighbour remesh bug fixed** (`c3393be`). Reported by
   the user: "very minor AO error, perhaps arises from receiving data from the
   server" + "square chunks visible under water." Root cause:
   `ChunkRenderer::sync()` only re-`mesh_chunk()`s a chunk when

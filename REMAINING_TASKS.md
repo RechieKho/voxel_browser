@@ -375,6 +375,15 @@ with prediction/interpolation.
       render-only eye-height smoothing layer in the client (lerp the rendered
       camera Y toward the true feet+eye position, capped so it doesn't lag
       behind normal fall/jump motion) — not attempted yet.
+- [x] Join-time fall-through-world / embedding fix: `physics::
+      ground_area_loaded()` freezes `step_movement` (both server and client)
+      until the spawn column's chunk + 2 below are loaded, so a player can't
+      free-fall through not-yet-generated terrain and end up stuck inside it
+      once the chunk arrives. Unit-tested (5 cases); **not** covered by an
+      end-to-end integration test — the race needs the real async
+      `WorldGenWorkerPool`, which existing integration tests avoid via
+      `kSynchronous` (generates instantly, structurally can't reproduce the
+      gap). See `STATE.md` for the full reasoning if this needs revisiting.
 
 ### 3.4 Replication + netcode (§8.4)
 

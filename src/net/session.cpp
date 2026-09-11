@@ -100,8 +100,20 @@ void ServerSession::handle_input_batch(Conn &conn,
 		if (cmd.seq <= conn.last_input_seq) {
 			continue; // already simulated (batches resend recent commands)
 		}
-		conn.move = physics::step_movement(conn.move, to_move_input(cmd),
-				move_params_, world);
+		// The spawn chunk may still be generating (async worldgen worker) --
+		// simulating gravity against unloaded-as-air terrain lets the player
+		// free-fall with no collision and end up embedded in the ground the
+		// moment it finishes loading. Freeze position/velocity until the
+		// column is actually there; still ack the seq so the client doesn't
+		// pile up a backlog to replay once it unfreezes.
+		if (replicator_ == nullptr ||
+				physics::ground_area_loaded(conn.move.position,
+						[this](core::ChunkCoord c) {
+							return replicator_->world().has_chunk(c);
+						})) {
+			conn.move = physics::step_movement(conn.move, to_move_input(cmd),
+					move_params_, world);
+		}
 		conn.last_input_seq = cmd.seq;
 		conn.look = { cmd.yaw, cmd.pitch };
 	}
@@ -523,8 +535,16 @@ void ClientSession::push_input(const protocol::InputCmd &cmd) {
 	if (!joined()) {
 		return;
 	}
-	predicted_ = physics::step_movement(predicted_, to_move_input(cmd),
-			move_params_, chunks_);
+	// Mirror the server's freeze while the local chunk mirror doesn't have the
+	// spawn column yet -- otherwise the client predicts its own independent
+	// fall into empty space and gets snapped back once a reconcile catches up,
+	// which looks like falling through the world even when the server itself
+	// never actually let the player move (see ServerSession::handle_input_batch).
+	if (physics::ground_area_loaded(predicted_.position,
+				[this](core::ChunkCoord c) { return chunks_.has(c); })) {
+		predicted_ = physics::step_movement(predicted_, to_move_input(cmd),
+				move_params_, chunks_);
+	}
 	history_.push_back(cmd);
 	while (history_.size() > protocol::C2SInputBatch::kMaxCmds) {
 		history_.erase(history_.begin());

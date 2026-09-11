@@ -1,5 +1,8 @@
 #pragma once
 
+#include <cmath>
+
+#include "vb/core/ids.hpp"
 #include "vb/core/math.hpp"
 #include "vb/world/block_query.hpp"
 
@@ -60,5 +63,38 @@ core::Vec3d wish_dir_from_local(core::Vec3f local_move, float yaw_degrees);
 
 // The player AABB with its feet at `feet`.
 core::AABB player_box(core::Vec3d feet, const MoveParams &params);
+
+// True if the chunk column a player is standing in is loaded deeply enough
+// that falling wouldn't tunnel into unloaded (air-by-default) space before
+// hitting real ground: the player's own chunk plus two chunks below it (a
+// generous margin -- spawn is normally within one chunk of the surface).
+//
+// Guards the join-time race between "world replication requested the spawn
+// chunk" and "the async worldgen worker actually finished it": without this,
+// a freshly-joined player free-falls with zero collision (unloaded chunks
+// have no blocks) until the chunk arrives, by which point their position may
+// already be below the real surface -- collision only ever prevents *new*
+// penetration during a move, it never resolves a pre-existing one, so they'd
+// end up permanently embedded in terrain. Callers should skip step_movement
+// entirely (leave the player's position/velocity frozen) while this is false,
+// rather than call it with a zero/degenerate input -- freezing avoids not
+// just falling but also any horizontal drift while the world is still empty.
+//
+// `has_chunk` is anything callable as `bool(core::ChunkCoord)` -- lets this
+// work against both the server's World and the client's ClientChunkStore
+// without a shared base interface for chunk presence.
+template <typename HasChunkFn>
+bool ground_area_loaded(core::Vec3d feet, HasChunkFn &&has_chunk) {
+	const core::IVec3 voxel{ static_cast<std::int32_t>(std::floor(feet.x)),
+		static_cast<std::int32_t>(std::floor(feet.y)),
+		static_cast<std::int32_t>(std::floor(feet.z)) };
+	const core::ChunkCoord base = core::chunk_of(voxel);
+	for (std::int32_t dy = 0; dy >= -2; --dy) {
+		if (!has_chunk(core::ChunkCoord{ base.x, base.y + dy, base.z })) {
+			return false;
+		}
+	}
+	return true;
+}
 
 } // namespace vb::physics
