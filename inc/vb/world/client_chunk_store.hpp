@@ -52,10 +52,12 @@ public:
 	Light light_at(core::IVec3 world_voxel) const;
 
 private:
-	// Bumps the revision of every already-loaded face-adjacent neighbour of
-	// `coord`, unconditionally. Needed whenever a chunk's own content changes
-	// in a way a neighbour's meshing/AO may have depended on (it was meshed
-	// against "neighbour unloaded -> treat as air") -- a new chunk arriving
+	// Bumps the revision of every already-loaded neighbour of `coord` in the
+	// full 26-neighbourhood (not just the 6 face-adjacent ones -- AO samples
+	// can reach into edge/corner-adjacent chunks too, see the .cpp),
+	// unconditionally. Needed whenever a chunk's own content changes in a way
+	// a neighbour's meshing/AO may have depended on (it was meshed against
+	// "neighbour unloaded -> treat as air") -- a new chunk arriving
 	// (apply_add), an authoritative edit landing anywhere in it (apply_delta),
 	// or the chunk unloading (apply_remove). edit_block has its own tighter,
 	// border-only variant since it only ever touches one voxel.

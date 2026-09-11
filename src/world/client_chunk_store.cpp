@@ -7,19 +7,25 @@
 namespace vb::world {
 
 void ClientChunkStore::bump_all_neighbor_revisions(core::ChunkCoord coord) {
-	static constexpr core::ChunkCoord kOffsets[6] = {
-		{ 1, 0, 0 },
-		{ -1, 0, 0 },
-		{ 0, 1, 0 },
-		{ 0, -1, 0 },
-		{ 0, 0, 1 },
-		{ 0, 0, -1 },
-	};
-	for (const core::ChunkCoord &o : kOffsets) {
-		const auto it = chunks_.find(
-				{ coord.x + o.x, coord.y + o.y, coord.z + o.z });
-		if (it != chunks_.end()) {
-			it->second->bump_revision();
+	// The full 26-neighbourhood, not just the 6 face-adjacent chunks: AO
+	// samples the 3 voxels diagonally around each face corner (see
+	// chunk_mesher.cpp's `a`/`bpt`/`d`), and for a voxel sitting on a chunk
+	// edge or corner those samples land in an edge- or corner-adjacent chunk,
+	// not a face neighbour. Only bumping the 6 face neighbours left AO at
+	// chunk edges/corners permanently stale whenever the chunk that actually
+	// supplied that diagonal sample arrived/changed/left later.
+	for (int dz = -1; dz <= 1; ++dz) {
+		for (int dy = -1; dy <= 1; ++dy) {
+			for (int dx = -1; dx <= 1; ++dx) {
+				if (dx == 0 && dy == 0 && dz == 0) {
+					continue;
+				}
+				const auto it = chunks_.find(
+						{ coord.x + dx, coord.y + dy, coord.z + dz });
+				if (it != chunks_.end()) {
+					it->second->bump_revision();
+				}
+			}
 		}
 	}
 }

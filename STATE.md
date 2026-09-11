@@ -7,7 +7,7 @@
 > Companion docs: `ARCHITECTURE_SPEC.md` (target design) · `REMAINING_TASKS.md`
 > (implementation backlog). This file is for *traps and context*, not the plan.
 
-Last updated: 2026-09-11 (fixed spawn position — was embedded in terrain for ~half of all seeds)
+Last updated: 2026-09-11 (investigated a reported invisible-but-walkable chunk gap; fixed a real diagonal-neighbour AO staleness bug and silent-error-swallowing on chunk decode failures, but could NOT confirm either is the actual root cause — see §8)
 
 ---
 
@@ -112,6 +112,15 @@ with *both* binaries (bundle/publish still merge by `voxel_browser-*` pattern).
 - `libfantastic` (the lib target) is `add_library(... INTERFACE)` — assumes
   header-only. The Phase 0 split makes `vb_core` a real STATIC lib; don't carry
   the INTERFACE assumption forward.
+- **`std::erase`/`std::remove` on a `std::vector<ChunkCoord>` (or any small
+  trivially-copyable struct of that size/alignment shape) fails to compile**
+  with this repo's toolchain (clang targeting the MSVC STL): `<xutility>`'s
+  `_Find_vectorized`/`_Remove_vectorized` hit `static_assert(false, "unexpected
+  size")`. Seen 2026-09-11 in world_replicator.cpp. Workaround: a manual
+  `for (it...) if (*it == x) { v.erase(it); break; }` loop instead of
+  `std::erase(v, x)`. Haven't checked whether this is specific to 12-byte
+  structs, this exact clang/MSVC-STL version pairing, or something else —
+  just avoid `std::erase`/`std::remove` on small POD-struct vectors here.
 
 ---
 
@@ -190,6 +199,77 @@ Other undecided-but-not-yet-in-spec:
 ## 8. Done / resolved
 
 _(Move items here with a date + commit when fixed, so the history is visible.)_
+
+- **2026-09-11 — investigated "big rectangular gap, doesn't render but I can
+  walk on it" (dedicated server + separate client, ~1811 chunks loaded,
+  persists across relog).** This is **not fully resolved** — read this before
+  assuming it's fixed. What I confirmed from the report + code:
+  - Walkable ⇒ the *server's* authoritative `World` genuinely has solid block
+    data there (physics reads directly from it). Persists across a full
+    client restart ⇒ it's not a client-side stale-mesh-cache issue (a fresh
+    `ClientChunkStore`/`ChunkRenderer` reproduces it too). So the bug is
+    either (a) something server-side deterministically not sending/encoding
+    that chunk's data correctly for this client, or (b) `mesh_chunk`
+    deterministically producing an empty/wrong mesh from otherwise-correct
+    data.
+  - Ruled out empirically, not just by inspection: the `kMaxMeshVertices`
+    65532 cap added for the water-culling fix (chunk_mesher.cpp) was the
+    prime suspect, but a probe across 40 seeds of real `WorldGenerator`
+    terrain (base_height=64, amplitude=28, sea level 62, 3×3×5 chunk
+    neighbourhoods so `mesh_chunk` has full context) found a worst case of
+    only ~6260 vertices — nowhere near the cap. Smooth heightmap terrain
+    structurally can't produce enough exposed faces per chunk to hit it.
+  - Ruled out by code reading: `ChunkLifecycleSystem::update()`'s `ingest()`
+    silently discards a `pool_.poll_completed()` chunk if it's no longer in
+    `wanted` (player moved away between request and completion) — a real
+    wasted-work bug, but it can't produce a *permanent* gap for a chunk the
+    player is currently standing on/in view of, since the very next
+    `update()` call re-requests it (not walkable if the data were truly
+    missing anyway — see above). Left unfixed; not the reported symptom.
+  - Ruled out by code reading: `WorldReplicator::forget_player()` is called
+    on leave (session.cpp), so `last_sent_` doesn't go stale across a
+    reconnect with a reused `NetId`. `kWorld` lane (chunk add/delta/remove)
+    is `kReliableOrdered`, so a plain dropped UDP packet can't be the cause
+    either — GNS retransmits.
+  - Ruled out by code reading: `PalettedChunkStore`/`chunk_codec.cpp`
+    round-trip is self-consistent by construction — `get()` can only ever
+    return a value present in `palette()`, so the encoder's `index_in()`
+    can't silently mis-encode a block as palette index 0. No corruption path
+    found there.
+  - **Found and fixed (real bug, but unconfirmed as THE cause):**
+    `ClientChunkStore::bump_all_neighbor_revisions()` only bumped the 6
+    face-adjacent chunks. AO samples 3 voxels diagonally around each face
+    corner (chunk_mesher.cpp's `a`/`bpt`/`d`), which for a voxel on a chunk's
+    edge/corner lands in an edge- or corner-adjacent chunk — one of the other
+    20 in the 26-neighbourhood. Those chunks arriving/changing/leaving never
+    triggered a re-mesh, leaving AO permanently stale at chunk
+    edges/corners. Fixed by bumping the full 26-neighbourhood instead of just
+    the 6 faces. This only affects per-vertex *lighting*, not face culling —
+    it cannot by itself make a chunk render as fully empty, so it's very
+    unlikely to be the reported bug, but it's a real fix regardless
+    (regression test: "apply_add bumps a diagonally-adjacent neighbour's
+    revision too" in mesher_test.cpp, verified to fail without the fix).
+  - **Found and fixed (real code-quality bug, most promising lead for next
+    repro):** `ClientSession::apply_gameplay_frame()` discarded the
+    `Result<void, ProtocolError>` from `chunks_.apply_add()`/`apply_delta()`
+    with `(void)` — any decode/apply failure was completely silent. If a
+    chunk *does* ever fail to decode/apply for some data-dependent reason I
+    haven't found, this is exactly how it'd manifest: never rendered (mesher
+    sees it as unloaded), never retried (server's `last_sent_` already marks
+    it sent), zero trace. Now logs via `VB_ERROR("net", ...)` with the coord
+    and the `ProtocolError` message on both a malformed frame and a rejected
+    apply. **If this bug recurs, check the client's stderr/log output for a
+    `chunk (...) add rejected: ...` or `malformed S2C_ChunkAdd: ...` line
+    around the time/place it happens** — that will point straight at the
+    actual cause (or rule out this whole class of failure if nothing logs,
+    which would point back toward the server not sending it at all — check
+    `WorldReplicator::tick()`'s per-player diff.entered / `world_.find_chunk`
+    lookup next).
+  - Not yet checked: whether the server ever logs anything for a chunk that
+    was in a player's `diff.entered` but `world_.find_chunk(c) == nullptr`
+    (the `continue` in `WorldReplicator::tick()`, world_replicator.cpp) — this
+    branch is currently silent too and would be worth instrumenting the same
+    way if the client-side logging above never fires on the next repro.
 
 - **2026-09-10 — Phase 0 restructure** (uncommitted). Modular CMake
   (`vb_core`/`vb_render`/`voxel_browser`/`voxel_browser_server`/`vb_tests`),

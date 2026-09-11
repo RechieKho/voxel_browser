@@ -272,3 +272,28 @@ TEST_CASE("darker light yields darker vertices") {
 	}
 	CHECK(top > bottom);
 }
+
+// Regression: bump_all_neighbor_revisions only bumped the 6 face-adjacent
+// chunks. AO samples the 3 voxels diagonally around a face corner, which for
+// a voxel sitting on a chunk's edge/corner can land in an edge- or
+// corner-adjacent chunk -- one of the other 20 in the 26-neighbourhood.
+// Those chunks arriving/changing/leaving never triggered a re-mesh, so AO at
+// chunk edges/corners could stay stale indefinitely.
+TEST_CASE("apply_add bumps a diagonally-adjacent neighbour's revision too") {
+	ClientChunkStore store(BlockRegistry::base());
+
+	Chunk a({ 0, 0, 0 });
+	// Corner voxel, world (31, 31, 31): its top face's "far" AO corner sample
+	// (su=+1, sv=+1) lands at world (32, 32, 32) -- inside chunk (1,1,1), a
+	// *corner* neighbour of (0,0,0), not a face neighbour.
+	a.blocks().set(31, 31, 31, base_block::stone);
+	LightEngine(BlockRegistry::base()).relight_chunk(a);
+	put(store, a);
+	const std::uint64_t rev_before = store.find({ 0, 0, 0 })->revision();
+
+	Chunk corner_neighbor({ 1, 1, 1 });
+	corner_neighbor.blocks().set(0, 0, 0, base_block::stone); // world (32,32,32)
+	put(store, corner_neighbor);
+
+	CHECK(store.find({ 0, 0, 0 })->revision() > rev_before);
+}

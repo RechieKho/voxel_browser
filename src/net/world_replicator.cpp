@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 
+#include "vb/core/log.hpp"
 #include "vb/protocol/world.hpp"
 #include "vb/world/chunk_codec.hpp"
 #include "vb/world/chunk_interest.hpp"
@@ -80,6 +81,27 @@ std::vector<WorldReplicator::PlayerFrames> WorldReplicator::tick(
 		for (core::ChunkCoord c : diff.entered) {
 			const world::Chunk *chunk = world_.find_chunk(c);
 			if (chunk == nullptr) {
+				// `visible` was built moments ago from world_.has_chunk(c) ==
+				// true; this should be unreachable in a single-threaded tick. If
+				// it ever fires, that chunk would otherwise silently never get
+				// sent to this player -- and since `visible` (built above) still
+				// contains it, it'd land in last_sent_ below and never be
+				// retried either: a permanent, invisible-but-walkable gap with
+				// no other trace. Surface it loudly, and drop it from `visible`
+				// so the diff sees it as still "not sent" and retries next tick
+				// instead of wedging it forever.
+				VB_ERROR("net", "chunk (", c.x, ",", c.y, ",", c.z,
+						") was visible but find_chunk() returned null for player ",
+						static_cast<std::uint32_t>(id));
+				// A plain loop, not std::erase/std::remove -- MSVC STL's
+				// vectorized find/remove chokes on this 12-byte struct with
+				// clang ("unexpected size" static_assert in <xutility>).
+				for (auto it = visible.begin(); it != visible.end(); ++it) {
+					if (*it == c) {
+						visible.erase(it);
+						break;
+					}
+				}
 				continue;
 			}
 			protocol::S2CChunkAdd msg;

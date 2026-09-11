@@ -450,14 +450,31 @@ bool ClientSession::apply_gameplay_frame(const protocol::Frame &frame) {
 		}
 		case MessageType::kS2CChunkAdd: {
 			if (auto m = protocol::S2CChunkAdd::decode(frame.payload)) {
-				(void)chunks_.apply_add(*m);
+				// A failure here used to be silently swallowed: the chunk would
+				// never render (mesher sees it as unloaded) yet the server still
+				// thinks it was sent (last_sent_ includes it), so it's never
+				// retried -- a permanent, invisible hole with no trace of why.
+				// Log it loudly so a report like that has something to go on.
+				if (auto applied = chunks_.apply_add(*m); !applied) {
+					VB_ERROR("net", "chunk (", m->coord.x, ",", m->coord.y, ",",
+							m->coord.z, ") add rejected: ",
+							core::message(applied.error()));
+				}
+			} else {
+				VB_ERROR("net", "malformed S2C_ChunkAdd: ", core::message(m.error()));
 			}
 			return true;
 		}
 		case MessageType::kS2CChunkDelta: {
 			if (auto m = protocol::S2CChunkDelta::decode(frame.payload)) {
-				(void)chunks_.apply_delta(*m);
+				if (auto applied = chunks_.apply_delta(*m); !applied) {
+					VB_ERROR("net", "chunk (", m->coord.x, ",", m->coord.y, ",",
+							m->coord.z, ") delta rejected: ",
+							core::message(applied.error()));
+				}
 				forget_pending_edits_for(m->coord); // authoritative wins
+			} else {
+				VB_ERROR("net", "malformed S2C_ChunkDelta: ", core::message(m.error()));
 			}
 			return true;
 		}
