@@ -214,6 +214,17 @@ Other undecided-but-not-yet-in-spec:
 - Final project name (§2 above).
 - Whether the client embeds the server for singleplayer as a library or spawns a
   child process (spec says in-process library).
+- **TODO, not urgent:** `WorldReplicator` streams a whole player's view box in
+  one uncapped burst (every `diff.entered` chunk queued in a single
+  `broadcast_world()` call, no pacing across ticks) — see §8's 2026-09-15
+  entry. Raising GNS's send buffer to 32 MiB fixes it for the *shipped
+  default* `view_distance`/`vertical_view` (8/3, ~2023 chunks, ~545 KB
+  measured), but doesn't add real backpressure: a larger view distance, a
+  denser/less-compressible world, or several players joining at once sharing
+  one connection's budget could still overflow it. Proper fix is a
+  per-connection byte-budget-per-tick on the `diff.entered` send loop instead
+  of relying on a bigger fixed buffer. Revisit before ever raising the
+  shipped default view distance.
 
 ---
 
