@@ -1,6 +1,7 @@
 #include "vb/world/client_chunk_store.hpp"
 
 #include "vb/world/chunk_codec.hpp"
+#include "vb/world/lighting.hpp"
 #include "vb/world/paletted_chunk_store.hpp"
 #include "vb/world/world.hpp"
 
@@ -94,6 +95,18 @@ core::BlockId ClientChunkStore::edit_block(core::IVec3 world_voxel,
 	Chunk &chunk = *it->second;
 	const core::BlockId prev = chunk.get(a.lx, a.ly, a.lz);
 	if (chunk.set(a.lx, a.ly, a.lz, block)) {
+		// Predicted edits only ever touched the block, never the light volume,
+		// which used to leave whatever light value was there before the edit
+		// (e.g. 0 for a block that was buried underground) on the voxel that
+		// just became open air -- mesh_chunk reads that stale value for any
+		// newly-exposed neighbouring face, so breaking a block flashed a
+		// near-black face for the round trip until the server's authoritative
+		// S2C_ChunkDelta (which does carry a relit value) arrived. Relighting
+		// here immediately, with the exact same per-chunk algorithm the
+		// server runs on the same edit, makes the prediction already match
+		// what that delta will say in the common case (no concurrent edit to
+		// this chunk), instead of just shortening the stale window.
+		LightEngine(registry_).relight_chunk(chunk);
 		// A border edit changes the neighbour's culled faces too.
 		auto bump_neighbour = [&](int dx, int dy, int dz) {
 			const auto n = chunks_.find({ a.chunk.x + dx, a.chunk.y + dy,

@@ -5,6 +5,8 @@ target_sources(vb_core PRIVATE
   chunk_codec.cpp
   chunk_lifecycle.cpp
   chunk_mesher.cpp
+  chunk_mesh_snapshot.cpp
+  chunk_mesh_worker_pool.cpp
   client_chunk_store.cpp
   lighting.cpp
   paletted_chunk_store.cpp

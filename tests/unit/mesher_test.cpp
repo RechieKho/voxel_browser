@@ -1,11 +1,15 @@
 #include <doctest/doctest.h>
 
 #include <ostream>
+#include <thread>
+#include <vector>
 
 #include "vb/protocol/world.hpp"
 #include "vb/world/block.hpp"
 #include "vb/world/chunk.hpp"
 #include "vb/world/chunk_codec.hpp"
+#include "vb/world/chunk_mesh_snapshot.hpp"
+#include "vb/world/chunk_mesh_worker_pool.hpp"
 #include "vb/world/chunk_mesher.hpp"
 #include "vb/world/client_chunk_store.hpp"
 #include "vb/world/lighting.hpp"
@@ -296,4 +300,140 @@ TEST_CASE("apply_add bumps a diagonally-adjacent neighbour's revision too") {
 	put(store, corner_neighbor);
 
 	CHECK(store.find({ 0, 0, 0 })->revision() > rev_before);
+}
+
+// --- ChunkMeshSnapshot / ChunkMeshWorkerPool ---------------------------
+// mesh_chunk() (above) is now a thin wrapper: build_chunk_mesh_snapshot() +
+// mesh_chunk_from_snapshot(). These cases exercise the split directly, since
+// that split is what lets meshing move to a worker thread (see
+// chunk_mesh_worker_pool.hpp) without touching ClientChunkStore off the main
+// thread.
+
+TEST_CASE("a snapshot of an unloaded chunk is unloaded and meshes to nothing") {
+	ClientChunkStore store(BlockRegistry::base());
+	const ChunkMeshSnapshot snap = build_chunk_mesh_snapshot(store, { 0, 0, 0 });
+	CHECK_FALSE(snap.loaded);
+	CHECK(mesh_chunk_from_snapshot(snap, store.registry()).empty());
+}
+
+TEST_CASE("meshing from a snapshot matches meshing straight off the store") {
+	ClientChunkStore store(BlockRegistry::base());
+
+	Chunk a({ 0, 0, 0 });
+	a.blocks().fill(base_block::stone);
+	put(store, a);
+	Chunk b({ 1, 0, 0 }); // +X neighbour, culls a's border face
+	b.blocks().fill(base_block::stone);
+	put(store, b);
+
+	const ChunkMeshSnapshot snap = build_chunk_mesh_snapshot(store, { 0, 0, 0 });
+	REQUIRE(snap.loaded);
+	CHECK(snap.revision == store.find({ 0, 0, 0 })->revision());
+
+	const MeshData direct = mesh_chunk(store, { 0, 0, 0 });
+	const MeshData from_snapshot = mesh_chunk_from_snapshot(snap, store.registry());
+	CHECK(from_snapshot.vertices == direct.vertices);
+	CHECK(from_snapshot.indices == direct.indices);
+	CHECK(from_snapshot.quad_count() == 6144 - 1024);
+}
+
+TEST_CASE("mesh worker pool: dedup rejects a genuinely in-flight resubmit") {
+	// Real background threads mean this can only be tested for the case that
+	// actually matters: a resubmit while the first job is provably still
+	// tracked (queued or in-flight). Once a job has actually completed and
+	// been drained, resubmitting the same coord is a *new*, legitimate job --
+	// not a bug -- so this deliberately never polls until after both
+	// dedup-relevant submits are done.
+	ClientChunkStore store(BlockRegistry::base());
+	Chunk a({ 0, 0, 0 });
+	a.blocks().fill(base_block::stone); // a full chunk, not one voxel: gives the
+	LightEngine(BlockRegistry::base()).relight_chunk(a); // worker real work to do
+	put(store, a); // instead of racing an ~instant job.
+
+	ChunkMeshWorkerPool pool(1);
+	CHECK(pool.submit(build_chunk_mesh_snapshot(store, { 0, 0, 0 }), store.registry()));
+	CHECK_FALSE(pool.submit(build_chunk_mesh_snapshot(store, { 0, 0, 0 }), store.registry()));
+
+	std::vector<ChunkMeshResult> done;
+	for (int spin = 0; spin < 200000 && done.empty(); ++spin) {
+		for (auto &r : pool.poll_completed()) {
+			done.push_back(std::move(r));
+		}
+		std::this_thread::yield();
+	}
+	REQUIRE(done.size() == 1); // the rejected duplicate never produced a second result
+	CHECK(done[0].coord == ChunkCoord{ 0, 0, 0 });
+	CHECK(done[0].mesh.quad_count() == 6144);
+	CHECK_FALSE(pool.in_flight_or_queued({ 0, 0, 0 }));
+}
+
+TEST_CASE("mesh worker pool: distinct coords mesh concurrently and drain correctly") {
+	ClientChunkStore store(BlockRegistry::base());
+	Chunk a({ 0, 0, 0 });
+	a.blocks().set(16, 16, 16, base_block::stone);
+	LightEngine(BlockRegistry::base()).relight_chunk(a);
+	put(store, a);
+	Chunk b({ 5, 0, 0 });
+	b.blocks().set(4, 4, 4, base_block::stone);
+	LightEngine(BlockRegistry::base()).relight_chunk(b);
+	put(store, b);
+
+	ChunkMeshWorkerPool pool(2);
+	CHECK(pool.submit(build_chunk_mesh_snapshot(store, { 0, 0, 0 }), store.registry()));
+	CHECK(pool.submit(build_chunk_mesh_snapshot(store, { 5, 0, 0 }), store.registry()));
+
+	std::vector<ChunkMeshResult> done;
+	for (int spin = 0; spin < 100000 && done.size() < 2; ++spin) {
+		for (auto &r : pool.poll_completed()) {
+			done.push_back(std::move(r));
+		}
+		std::this_thread::yield();
+	}
+	REQUIRE(done.size() == 2);
+	for (const ChunkMeshResult &r : done) {
+		CHECK_FALSE(pool.in_flight_or_queued(r.coord));
+		CHECK(r.mesh.quad_count() == 6);
+	}
+}
+
+TEST_CASE("mesh worker pool: kSynchronous meshes inline, no background threads") {
+	ClientChunkStore store(BlockRegistry::base());
+	Chunk c({ 0, 0, 0 });
+	c.blocks().set(16, 16, 16, base_block::stone);
+	LightEngine(BlockRegistry::base()).relight_chunk(c);
+	put(store, c);
+
+	ChunkMeshWorkerPool pool(ChunkMeshWorkerPool::kSynchronous);
+	CHECK(pool.thread_count() == 0);
+	CHECK(pool.submit(build_chunk_mesh_snapshot(store, { 0, 0, 0 }), store.registry()));
+
+	const std::vector<ChunkMeshResult> done = pool.poll_completed();
+	REQUIRE(done.size() == 1);
+	CHECK(done[0].coord == ChunkCoord{ 0, 0, 0 });
+	CHECK(done[0].mesh.quad_count() == 6);
+}
+
+// Regression: ClientChunkStore::edit_block() only ever touched the block
+// volume, never the light volume, so a predicted break left whatever light
+// value was there before the edit (0, if the broken block was never lit --
+// e.g. buried underground) on the voxel that just became open air.
+// mesh_chunk reads exactly that value for the newly-exposed face, so the
+// player saw a near-black face flash right where the block used to be, for
+// however long it took the server's authoritative S2C_ChunkDelta (which does
+// carry a relit value) to arrive and correct it.
+TEST_CASE("edit_block relights immediately -- no stale near-black flash on break") {
+	ClientChunkStore store(BlockRegistry::base());
+	Chunk c({ 0, 0, 0 });
+	c.blocks().fill(base_block::stone); // light left at its default (0)
+	put(store, c); // everywhere, as if freshly streamed with no relight yet
+
+	const vb::core::IVec3 top{ 16, kChunkDim - 1, 16 }; // top layer: open sky once broken
+	REQUIRE(store.light_at(top).max() == 0); // stale/never-lit baseline
+
+	store.edit_block(top, vb::core::BlockId::kAir);
+
+	// Already sky-lit right after the predicted edit, matching what the
+	// server's own relight_chunk (same algorithm) will compute for the same
+	// edit -- not the stale 0 from before this fix.
+	CHECK(store.light_at(top).max() == kMaxLight);
 }

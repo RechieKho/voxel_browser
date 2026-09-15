@@ -313,8 +313,13 @@ Goal: server generates terrain, streams chunks, client meshes and renders them.
       `IntegratedGame` + `World` + worldgen pool + `WorldReplicator` alive; the
       render loop feeds player position back and draws the streamed, meshed
       terrain.
-- [ ] Mesh worker pool (needs a chunk+neighbour snapshot), frustum culling,
-      transparent second pass, texture atlas (Phase 4) — follow-ups.
+- [x] Mesh worker pool (`vb/world/chunk_mesh_worker_pool.{hpp,cpp}` +
+      `chunk_mesh_snapshot.{hpp,cpp}`, 2026-09-15): CPU face-culling/AO now
+      runs on background threads from a per-chunk+1-voxel-border snapshot;
+      `ChunkRenderer::sync()` only does the GPU upload on the main thread.
+      Fixes framerate drops while chunks stream in. See `STATE.md` §8.
+- [ ] Frustum culling, transparent second pass, texture atlas (Phase 4) —
+      follow-ups.
 
 **Phase 2 exit:** connect to a server and fly around streamed, meshed terrain
 (dirt/stone/grass/air) with correct chunk load/unload; determinism CI gate green.

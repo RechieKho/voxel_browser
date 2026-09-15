@@ -7,7 +7,7 @@
 > Companion docs: `ARCHITECTURE_SPEC.md` (target design) · `REMAINING_TASKS.md`
 > (implementation backlog). This file is for *traps and context*, not the plan.
 
-Last updated: 2026-09-15 (found and fixed the ACTUAL root cause of the invisible-but-walkable chunk gap: GNS's default 512 KiB per-connection send buffer overflowing during the initial chunk-streaming burst, silently discarded by `GnsTransport::send()` — see §8)
+Last updated: 2026-09-15 (fixed a near-black flash on predicted block breaks: `ClientChunkStore::edit_block()` never relit locally — see §8)
 
 ---
 
@@ -245,6 +245,144 @@ Other undecided-but-not-yet-in-spec:
 ## 8. Done / resolved
 
 _(Move items here with a date + commit when fixed, so the history is visible.)_
+
+- **2026-09-15 — Near-black flash on predicted block breaks fixed
+  (uncommitted).** Reported by the user: "for a split second, I see a black
+  block appear on the block to be destroyed before the cell becomes empty."
+  Root cause: `ClientChunkStore::edit_block()` (`src/world/client_chunk_
+  store.cpp`) only ever mutated the block volume, never the light volume.
+  The voxel that just became air keeps whatever light value it had *while it
+  was still solid* — typically 0, since a buried block was never reached by
+  the sky-light flood. `mesh_chunk`/`mesh_chunk_from_snapshot` read exactly
+  that stale value as the "outside" light for the newly-exposed neighbouring
+  face (`light_at(outside)` in the mesher), so the face right where the
+  block used to be renders at ~15% brightness (`base_light` floor from the
+  `* 0.85 + 0.15` formula) — reads as a near-black block — until the server's
+  authoritative `S2C_ChunkDelta` (which *does* carry a relit value; the
+  server calls the same `relight_chunk` on every edit, per 5.2) arrives and
+  overwrites it. This bug predates the threading work above and isn't caused
+  by it, but the extra pool round-trip that change added between the edit
+  landing and its mesh being collected likely made the flash last longer /
+  more consistently land on an actually-rendered frame instead of being
+  skipped over within the same tick.
+  **Fix:** `edit_block()` now calls `LightEngine(registry_).relight_chunk(chunk)`
+  immediately after a successful `chunk.set()`, mirroring what the server
+  already does for the same edit. Because it's the exact same per-chunk
+  algorithm run against the same (now-identical) block data, the predicted
+  light typically matches the eventual authoritative delta exactly, not just
+  "less stale" — no correction pop, not just a shorter flash. Doesn't change
+  border-neighbour revision bumping (unaffected, still correct).
+  **Known limitation, unchanged by this fix:** `relight_chunk` is
+  per-chunk-only (assumes open sky directly above *this* chunk, no
+  cross-chunk propagation) — same limitation the server's own relight has
+  (`REMAINING_TASKS.md` 2.3/5.2 already track cross-chunk relight as
+  separately TODO). An edit near a chunk boundary where the correct light
+  actually depends on a neighbouring chunk's shadow can still show a brief
+  mismatch until the server's delta corrects it; this fix only closes the
+  common buried-block-with-no-cross-chunk-dependency case, which is what was
+  reported.
+  **Test** (`tests/unit/mesher_test.cpp`, "edit_block relights immediately"):
+  a fully-solid, never-relit chunk (light stays at its all-zero default, the
+  worst case) with one top-layer block broken — asserts the light there is
+  full sky brightness (`kMaxLight`) immediately after `edit_block()`, not the
+  stale 0 the bug would leave. Verified failing without the fix (the assert
+  is exactly what the old code couldn't produce, since it never touched
+  light at all). Full `vb_tests` green on both `build/` and `build-net/`
+  (same one pre-existing sandbox UDP-bind failure noted above, unrelated).
+
+- **2026-09-15 — Chunk meshing moved off the main thread (uncommitted)**,
+  fixing framerate drops while chunks stream in. Reported by the user: the
+  client stutters when receiving new chunks, suspected single-threaded
+  meshing (`REMAINING_TASKS.md` 2.5 already flagged "mesh worker pool" as a
+  follow-up).
+  Root cause confirmed before touching anything: `ChunkRenderer::sync()`
+  (`src/render/chunk_renderer.cpp`) ran `mesh_chunk()` (CPU face-culling + AO,
+  the expensive part) and the GPU upload back-to-back on the main/render
+  thread, budgeted to 8 chunks/frame (`src/client/main.cpp`) — a burst (join,
+  teleport, or the still-unpaced `WorldReplicator` burst noted below) pays
+  that full CPU cost synchronously across however many frames it takes to
+  drain the budget.
+  **Fix, split across new files, all in `vb/world` (not `vb_render`) so
+  they're unit-testable without raylib/GL:**
+  - `inc/vb/world/chunk_mesh_snapshot.hpp` + `.cpp`: `ChunkMeshSnapshot` — a
+    copy of one chunk's voxels/light plus a **1-voxel border shell** from its
+    neighbours (proved sufficient, not just assumed: `mesh_chunk`'s AO corner
+    samples add at most one tangent-axis offset on top of the face normal's
+    one-voxel offset, and normal/tangent axes are always distinct, so no
+    sample ever reaches 2 voxels out on any single axis). `build_chunk_mesh_
+    snapshot(store, coord)` copies it out (must run on the store's own
+    thread); `mesh_chunk_from_snapshot(snapshot, registry)` is the actual
+    face-culling/AO algorithm, moved here verbatim from the old
+    `chunk_mesher.cpp`, now a pure function of the snapshot with zero store
+    access — safe on any thread. `chunk_mesher.cpp`'s `mesh_chunk(store,
+    coord)` is now a 2-line wrapper (`build` + `mesh_from_snapshot`), kept
+    byte-identical in signature/behaviour so every existing `mesher_test.cpp`
+    case (and this session's new "meshing from a snapshot matches meshing
+    straight off the store" case, which diffs the two paths' `MeshData`
+    directly) passes unchanged.
+  - `inc/vb/world/chunk_mesh_worker_pool.hpp` + `.cpp`: `ChunkMeshWorkerPool`,
+    deliberately mirroring `WorldGenWorkerPool`'s shape (mutex+CV queue,
+    dedup-by-coord, `poll_completed()`, `kSynchronous` for tests) since that
+    pattern was already established and tested in this codebase. One
+    difference from `WorldGenWorkerPool`'s default thread count
+    (`hw_concurrency - 1`): this pool defaults to **half** of
+    `hardware_concurrency` — `--singleplayer` runs both pools in the same
+    process, both bursts tend to correlate (both triggered by player
+    movement), so an `hw-1` default here would oversubscribe every core
+    ~2x on top of main/render/net. Also added `in_flight_or_queued(coord)` (not
+    on `WorldGenWorkerPool`) so `ChunkRenderer` can skip building a snapshot
+    for a chunk that's already got a job in flight, instead of wasting the
+    copy only to have `submit()` reject it.
+  - `ChunkRenderer::sync()` (`chunk_renderer.{hpp,cpp}`) restructured into
+    submit/collect halves: drain `pool_.poll_completed()` and GPU-upload each
+    result **unless the chunk's live revision has moved past the result's
+    `revision`** (a neighbour or the chunk itself changed again after the
+    snapshot was taken — discard silently, it self-heals: the coord is no
+    longer in-flight once the stale result is polled, so the submit loop
+    below requeues it against the current revision next call); then submit
+    up to `submit_budget` (still 8, same call site in `main.cpp`, unchanged
+    signature) new/changed chunks, skipping any `in_flight_or_queued`. GPU
+    upload itself (`model_from_mesh` — `MemAlloc` + `UploadMesh`) is
+    unavoidably still main-thread (raylib/GL requirement) but is the cheap
+    half of the old per-chunk cost, not the one causing the stutter.
+  **Why a snapshot copy and not a live store reference on the worker
+  thread:** `ClientChunkStore` is mutated by `apply_add`/`apply_delta`/
+  `apply_remove` as net messages decode, on the same thread that would need
+  to hand work to the pool — handing a worker a live `ClientChunkStore&`
+  while that continues is a data race. The padded-shell copy
+  (34×34×34 = 39,304 `block_at`/`light_at` calls, once, on the main thread)
+  is comparatively cheap: the *old* `mesh_chunk` already made far more such
+  calls per chunk internally (up to 78 world-space lookups per solid voxel,
+  each going through `ClientChunkStore`'s coordinate→chunk hashmap), so the
+  snapshot's dense single pass is a net win even before counting that the
+  actual AO/culling work moves off-thread entirely.
+  **Tests** (`tests/unit/mesher_test.cpp`): snapshot-vs-live-store equality,
+  unloaded-chunk snapshot behaviour, worker-pool dedup (see the note in that
+  test about why it uses a full solid chunk as the target job rather than a
+  single block — a trivial job races the OS waking the worker thread within
+  the same handful of nanoseconds as the immediate duplicate-submit call on
+  the main thread; this was caught as an actual flaky failure while writing
+  the test, not theorized), `kSynchronous` mode, and distinct-coord
+  concurrent drain. Full `vb_tests` green on both `build/` (`VB_WITH_NET=OFF`)
+  and `build-net/` (`VB_WITH_NET=ON`, real GNS) — the only failure on
+  `build-net` is the pre-existing sandbox UDP-bind one noted below, confirmed
+  unrelated (same failure, same test, on unmodified HEAD).
+  **Not yet done / worth knowing before touching this again:**
+  - **Not visually verified against the actual reported stutter** — no
+    before/after frame-time capture exists yet (`ChunkRenderer` isn't
+    unit-testable without a real GL context, so this rests on the reasoning
+    above + the passing test suite, not an eyeballed FPS counter). If the
+    stutter persists after this, the next suspect is GPU upload cost itself
+    (`model_from_mesh`'s `MemAlloc`/`UploadMesh` calls, still synchronous and
+    unbudgeted per collected result each frame) or `submit_budget=8` still
+    being too high for the per-snapshot copy cost on a slower machine — try
+    capping collected uploads per frame too, not just submissions.
+  - Doesn't touch the unpaced `WorldReplicator` burst noted below — that's
+    server→client wire volume, orthogonal to this (client-side CPU meshing).
+  - Cellulose's `greedy_mesh` (`VB_WITH_MESHING`, still not wired) is meant to
+    drop into exactly this seam (`mesh_chunk_from_snapshot`'s call site
+    inside `ChunkMeshWorkerPool::mesh`) — this change doesn't block that,
+    it's the same shape.
 
 - **2026-09-15 — ACTUAL root cause of the invisible-but-walkable chunk gap
   found and fixed: GNS's default 512 KiB send buffer, silently overflowed.**

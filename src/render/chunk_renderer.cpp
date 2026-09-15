@@ -9,6 +9,7 @@
 #include "vb/core/ids.hpp"
 #include "vb/world/block.hpp"
 #include "vb/world/chunk.hpp"
+#include "vb/world/chunk_mesh_snapshot.hpp"
 #include "vb/world/chunk_mesher.hpp"
 
 namespace vb::render {
@@ -87,7 +88,7 @@ Model model_from_mesh(const world::MeshData &data) {
 
 } // namespace
 
-ChunkRenderer::ChunkRenderer() = default;
+ChunkRenderer::ChunkRenderer(std::size_t mesh_threads) : pool_(mesh_threads) {}
 
 ChunkRenderer::~ChunkRenderer() {
 	for (auto &[coord, gpu] : gpu_) {
@@ -109,14 +110,8 @@ void ChunkRenderer::drop(core::ChunkCoord coord) {
 	gpu_.erase(it);
 }
 
-void ChunkRenderer::upload(const world::ClientChunkStore &store,
-		core::ChunkCoord coord) {
-	const world::Chunk *chunk = store.find(coord);
-	if (chunk == nullptr) {
-		return;
-	}
-	const world::MeshData data = world::mesh_chunk(store, coord);
-
+void ChunkRenderer::upload(core::ChunkCoord coord, const world::MeshData &data,
+		std::uint64_t revision) {
 	GpuChunk &slot = gpu_[coord];
 	if (slot.valid) {
 		UnloadModel(slot.model);
@@ -126,11 +121,11 @@ void ChunkRenderer::upload(const world::ClientChunkStore &store,
 		slot.model = model_from_mesh(data);
 		slot.valid = true;
 	}
-	slot.revision = chunk->revision();
+	slot.revision = revision;
 }
 
-void ChunkRenderer::sync(const world::ClientChunkStore &store, int budget) {
-	// Drop meshes for chunks that unloaded.
+void ChunkRenderer::sync(const world::ClientChunkStore &store, int submit_budget) {
+	// Drop GPU state for chunks that unloaded.
 	std::vector<core::ChunkCoord> gone;
 	for (const auto &[coord, gpu] : gpu_) {
 		(void)gpu;
@@ -142,19 +137,33 @@ void ChunkRenderer::sync(const world::ClientChunkStore &store, int budget) {
 		drop(c);
 	}
 
-	// (Re)mesh new / changed chunks, up to the budget.
-	int done = 0;
+	// Upload whatever background meshing finished since the last call. A
+	// result is stale if the chunk changed again after its snapshot was
+	// taken -- drop it silently; the chunk's current revision won't match
+	// gpu_[coord].revision, so the submit loop below requeues it.
+	for (world::ChunkMeshResult &result : pool_.poll_completed()) {
+		const world::Chunk *chunk = store.find(result.coord);
+		if (chunk == nullptr || chunk->revision() != result.revision) {
+			continue; // unloaded or superseded since the snapshot was built
+		}
+		upload(result.coord, result.mesh, result.revision);
+	}
+
+	// Submit new / changed chunks for background meshing, up to the budget.
+	int submitted = 0;
 	for (core::ChunkCoord coord : store.loaded_coords()) {
-		if (done >= budget) {
+		if (submitted >= submit_budget) {
 			break;
 		}
-		const auto it = gpu_.find(coord);
 		const world::Chunk *chunk = store.find(coord);
-		const bool needs = it == gpu_.end() ||
-				it->second.revision != chunk->revision();
-		if (needs) {
-			upload(store, coord);
-			++done;
+		const auto it = gpu_.find(coord);
+		const bool needs = it == gpu_.end() || it->second.revision != chunk->revision();
+		if (!needs || pool_.in_flight_or_queued(coord)) {
+			continue;
+		}
+		world::ChunkMeshSnapshot snapshot = world::build_chunk_mesh_snapshot(store, coord);
+		if (pool_.submit(std::move(snapshot), store.registry())) {
+			++submitted;
 		}
 	}
 }
