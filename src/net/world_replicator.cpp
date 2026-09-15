@@ -60,7 +60,14 @@ std::vector<WorldReplicator::PlayerFrames> WorldReplicator::tick(
 	sort_unique(desired);
 	lifecycle_.update(desired);
 
-	// 2. Per player: diff the loaded-and-visible set vs. what we last sent.
+	// 2. Per player: diff the loaded-and-visible set vs. what we last sent,
+	//    and also catch any still-visible chunk whose revision moved on
+	//    without an entered/left transition -- e.g. a lighting::
+	//    relight_column() cascade (chunk_lifecycle.cpp) correcting a chunk
+	//    that was already streamed with an open-sky guess before its real
+	//    neighbour above had finished generating. Presence/absence alone
+	//    can't see that; per-chunk revision tracking (last_sent_revision_)
+	//    can.
 	std::vector<PlayerFrames> out;
 	out.reserve(players.size());
 	for (auto &[id, view] : per_player) {
@@ -78,7 +85,9 @@ std::vector<WorldReplicator::PlayerFrames> WorldReplicator::tick(
 
 		PlayerFrames pf;
 		pf.id = id;
-		for (core::ChunkCoord c : diff.entered) {
+		auto &revs = last_sent_revision_[id];
+		std::vector<core::ChunkCoord> unreachable;
+		for (core::ChunkCoord c : visible) {
 			const world::Chunk *chunk = world_.find_chunk(c);
 			if (chunk == nullptr) {
 				// `visible` was built moments ago from world_.has_chunk(c) ==
@@ -93,27 +102,38 @@ std::vector<WorldReplicator::PlayerFrames> WorldReplicator::tick(
 				VB_ERROR("net", "chunk (", c.x, ",", c.y, ",", c.z,
 						") was visible but find_chunk() returned null for player ",
 						static_cast<std::uint32_t>(id));
-				// A plain loop, not std::erase/std::remove -- MSVC STL's
-				// vectorized find/remove chokes on this 12-byte struct with
-				// clang ("unexpected size" static_assert in <xutility>).
-				for (auto it = visible.begin(); it != visible.end(); ++it) {
-					if (*it == c) {
-						visible.erase(it);
-						break;
-					}
-				}
+				unreachable.push_back(c);
 				continue;
+			}
+			const std::uint64_t rev = chunk->revision();
+			const auto rev_it = revs.find(c);
+			if (rev_it != revs.end() && rev_it->second == rev) {
+				continue; // already sent this exact revision
 			}
 			protocol::S2CChunkAdd msg;
 			msg.coord = c;
-			msg.revision = chunk->revision();
+			msg.revision = rev;
 			msg.payload = world::encode_chunk_payload(*chunk);
 			pf.frames.push_back(frame_message(msg));
+			revs[c] = rev;
+		}
+		for (core::ChunkCoord c : unreachable) {
+			// A plain loop, not std::erase/std::remove -- MSVC STL's
+			// vectorized find/remove chokes on this 12-byte struct with
+			// clang ("unexpected size" static_assert in <xutility>).
+			for (auto it = visible.begin(); it != visible.end(); ++it) {
+				if (*it == c) {
+					visible.erase(it);
+					break;
+				}
+			}
+			revs.erase(c);
 		}
 		for (core::ChunkCoord c : diff.left) {
 			protocol::S2CChunkRemove msg;
 			msg.coord = c;
 			pf.frames.push_back(frame_message(msg));
+			revs.erase(c);
 		}
 
 		last_sent_[id] = std::move(visible);
@@ -183,51 +203,69 @@ std::vector<WorldReplicator::PlayerFrames> WorldReplicator::apply_block_edit(
 	}
 	// [Phase 4.2] a Lua "block_break"/"block_place" handler may veto here.
 
-	world::Chunk *chunk = world_.find_chunk(cc);
-	if (chunk == nullptr) {
-		return {};
-	}
-
-	const std::array<world::Light, world::kChunkVolume> light_before =
-			chunk->light_volume();
-
 	world_.set_block(p, new_block); // bumps revision + dirty flags
-	const world::LightEngine light_engine(reg);
-	light_engine.relight_chunk(*chunk);
 
-	protocol::S2CChunkDelta delta;
-	delta.coord = cc;
-	delta.new_revision = chunk->revision();
-	delta.base_revision = delta.new_revision - 1;
-	delta.blocks.push_back({ local_index_of_world(p), new_block });
-	const auto &light_after = chunk->light_volume();
-	for (std::size_t i = 0; i < world::kChunkVolume; ++i) {
-		if (light_after[i].packed != light_before[i].packed) {
-			delta.light.push_back(
-					{ static_cast<std::uint32_t>(i), light_after[i].packed });
+	// Relight cc and cascade downward (lighting::relight_column, see
+	// lighting.hpp) instead of a plain single-chunk relight_chunk: an edit at
+	// the top of a chunk can change what the chunk below it should see as
+	// "incoming sky light" too, not just cc itself. Every chunk the cascade
+	// actually touches -- always cc, plus any chunk below it whose light
+	// changed as a result -- gets its own delta, fanned out only to the
+	// players who actually mirror that specific chunk (which may differ from
+	// cc's own watchers).
+	const world::LightEngine light_engine(reg);
+	std::unordered_map<core::NetId, PlayerFrames> by_player;
+	auto fan_out = [&](const protocol::S2CChunkDelta &delta) {
+		bool editor_covered = false;
+		for (const auto &[id, sent] : last_sent_) {
+			if (!std::binary_search(sent.begin(), sent.end(), delta.coord)) {
+				continue;
+			}
+			PlayerFrames &pf = by_player[id];
+			pf.id = id;
+			pf.frames.push_back(frame_message(delta));
+			last_sent_revision_[id][delta.coord] = delta.new_revision;
+			if (id == editor) {
+				editor_covered = true;
+			}
 		}
-	}
+		if (!editor_covered) {
+			PlayerFrames &pf = by_player[editor];
+			pf.id = editor;
+			pf.frames.push_back(frame_message(delta));
+			last_sent_revision_[editor][delta.coord] = delta.new_revision;
+		}
+	};
+
+	world::relight_column(light_engine, cc,
+			[&](core::ChunkCoord c) { return world_.find_chunk(c); },
+			[&](core::ChunkCoord relit_coord,
+					const std::array<world::Light, world::kChunkVolume> &light_before,
+					const world::Chunk &after) {
+				protocol::S2CChunkDelta delta;
+				delta.coord = relit_coord;
+				delta.new_revision = after.revision();
+				delta.base_revision =
+						delta.new_revision > 0 ? delta.new_revision - 1 : 0;
+				if (relit_coord == cc) {
+					delta.blocks.push_back({ local_index_of_world(p), new_block });
+				}
+				const auto &light_after = after.light_volume();
+				for (std::size_t i = 0; i < world::kChunkVolume; ++i) {
+					if (light_after[i].packed != light_before[i].packed) {
+						delta.light.push_back({ static_cast<std::uint32_t>(i),
+								light_after[i].packed });
+					}
+				}
+				fan_out(delta);
+			});
 
 	out_result.accepted = true;
 
 	std::vector<PlayerFrames> out;
-	bool editor_covered = false;
-	for (const auto &[id, sent] : last_sent_) {
-		if (!std::binary_search(sent.begin(), sent.end(), cc)) {
-			continue;
-		}
-		PlayerFrames pf;
-		pf.id = id;
-		pf.frames.push_back(frame_message(delta));
-		out.push_back(std::move(pf));
-		if (id == editor) {
-			editor_covered = true;
-		}
-	}
-	if (!editor_covered) {
-		PlayerFrames pf;
-		pf.id = editor;
-		pf.frames.push_back(frame_message(delta));
+	out.reserve(by_player.size());
+	for (auto &[id, pf] : by_player) {
+		(void)id;
 		out.push_back(std::move(pf));
 	}
 	return out;

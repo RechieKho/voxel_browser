@@ -271,8 +271,14 @@ Goal: server generates terrain, streams chunks, client meshes and renders them.
       flood (full-strength straight down, −1/step sideways) + block-light flood
       from emitters; `transmittance()` from the registry (opaque = 0, water dims
       by 2). Clears the light dirty flag, marks mesh dirty.
-- [ ] Cross-chunk sky occlusion + incremental relight-on-edit — Phase 3/5;
-      reuses the same propagation core.
+- [x] Cross-chunk **vertical** sky occlusion + relight-on-edit cascade
+      (`relight_column` in `lighting.hpp`, 2026-09-15): a chunk's relight now
+      uses its real neighbour above (or cascades down through a whole loaded
+      column) instead of always assuming open sky. Fixed the false-bright
+      band at chunk boundaries reported while mining. See `STATE.md` §8.
+- [ ] Horizontal cross-chunk light propagation (sideways-only spill, e.g.
+      under a horizontal overhang spanning a chunk border) is still
+      per-chunk-only — smaller-magnitude follow-up, not attempted.
 
 ### 2.4 World replication (§8.5)  ✅
 

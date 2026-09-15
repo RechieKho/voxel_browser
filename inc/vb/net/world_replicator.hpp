@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -35,7 +36,10 @@ public:
 	std::vector<PlayerFrames> tick(
 			const std::vector<std::pair<core::NetId, core::Vec3d>> &players);
 
-	void forget_player(core::NetId id) { last_sent_.erase(id); }
+	void forget_player(core::NetId id) {
+		last_sent_.erase(id);
+		last_sent_revision_.erase(id);
+	}
 
 	// Validate + apply one block edit (spec §5.2 / §8.5). Fills `out_result` for
 	// the editor and returns an S2C_ChunkDelta frame for every player who has the
@@ -59,6 +63,21 @@ private:
 	int view_distance_;
 	int vertical_view_;
 	std::unordered_map<core::NetId, std::vector<core::ChunkCoord>> last_sent_;
+	// The chunk revision most recently sent to each player, for each chunk
+	// they mirror. Presence/absence alone (last_sent_ above) only tells tick()
+	// when a chunk enters/leaves a player's view; it says nothing about a
+	// chunk that stays visible but changes server-side without an explicit
+	// edit going through apply_block_edit -- which is exactly what a
+	// lighting::relight_column() cascade does (see chunk_lifecycle.cpp): a
+	// chunk can be generated, lit assuming open sky (nothing loaded above it
+	// yet) and sent to a player, then have that guess corrected once its real
+	// neighbour above finishes generating on another thread, arbitrarily many
+	// ticks later. Without tracking the revision we last actually sent, that
+	// correction never reaches an already-connected player. tick() compares
+	// this against the world's current revision for every visible chunk and
+	// re-sends a full S2C_ChunkAdd when they differ.
+	std::unordered_map<core::NetId, std::unordered_map<core::ChunkCoord, std::uint64_t>>
+			last_sent_revision_;
 };
 
 } // namespace vb::net

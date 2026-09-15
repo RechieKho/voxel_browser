@@ -34,6 +34,8 @@ struct DirtyFlags {
 struct Light {
 	std::uint8_t packed = 0;
 
+	bool operator==(const Light &) const = default;
+
 	std::uint8_t sky() const { return static_cast<std::uint8_t>(packed >> 4); }
 	std::uint8_t block() const { return static_cast<std::uint8_t>(packed & 0x0F); }
 	void set_sky(std::uint8_t v) {

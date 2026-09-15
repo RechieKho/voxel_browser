@@ -34,6 +34,7 @@ public:
 	// isn't loaded (in which case nothing changed).
 	core::BlockId edit_block(core::IVec3 world_voxel, core::BlockId block);
 
+	Chunk *find(core::ChunkCoord c);
 	const Chunk *find(core::ChunkCoord c) const;
 	bool has(core::ChunkCoord c) const { return chunks_.count(c) != 0; }
 	std::size_t size() const { return chunks_.size(); }

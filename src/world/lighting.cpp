@@ -37,7 +37,7 @@ std::uint8_t LightEngine::transmittance(core::BlockId block) const {
 	return 0; // opaque
 }
 
-void LightEngine::relight_chunk(Chunk &chunk) const {
+void LightEngine::relight_chunk(Chunk &chunk, const Chunk *above) const {
 	auto &blocks = chunk.blocks();
 	auto &light = chunk.light_volume();
 
@@ -45,14 +45,39 @@ void LightEngine::relight_chunk(Chunk &chunk) const {
 	std::array<std::uint8_t, kChunkVolume> blk{};
 
 	// --- sky light: seed the whole top face, then flood ---------------------
+	// No `above` loaded means open sky: every original single-chunk caller's
+	// exact behaviour (unattenuated kMaxLight at any transparent top voxel),
+	// unchanged -- this is only really correct for the topmost chunk in a
+	// column, though, so relight_column() passes the real neighbour whenever
+	// one is loaded: `above`'s bottom row (local y = 0) is what's actually
+	// arriving into this chunk, attenuated the same way a normal interior
+	// step is.
 	std::queue<Node> q;
 	for (int z = 0; z < kDim; ++z) {
 		for (int x = 0; x < kDim; ++x) {
 			const std::size_t i = index_of(x, kDim - 1, z);
-			if (transmittance(blocks.get(i)) > 0) {
-				sky[i] = kMaxLight;
-				q.push({ x, kDim - 1, z, kMaxLight });
+			const std::uint8_t pass = transmittance(blocks.get(i));
+			if (pass == 0) {
+				continue;
 			}
+			std::uint8_t seeded = kMaxLight;
+			if (above != nullptr) {
+				const std::uint8_t incoming = above->light(x, 0, z).sky();
+				if (incoming == 0) {
+					continue;
+				}
+				const bool straight_down =
+						incoming == kMaxLight && pass == kMaxLight;
+				const std::uint8_t step = straight_down ? 0 : 1;
+				const std::uint8_t drop =
+						static_cast<std::uint8_t>(kMaxLight - pass + step);
+				if (incoming <= drop) {
+					continue;
+				}
+				seeded = static_cast<std::uint8_t>(incoming - drop);
+			}
+			sky[i] = seeded;
+			q.push({ x, kDim - 1, z, seeded });
 		}
 	}
 	while (!q.empty()) {

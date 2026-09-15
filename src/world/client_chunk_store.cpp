@@ -106,7 +106,16 @@ core::BlockId ClientChunkStore::edit_block(core::IVec3 world_voxel,
 		// server runs on the same edit, makes the prediction already match
 		// what that delta will say in the common case (no concurrent edit to
 		// this chunk), instead of just shortening the stale window.
-		LightEngine(registry_).relight_chunk(chunk);
+		//
+		// relight_column (not a plain relight_chunk call) so a predicted edit
+		// at the top of this chunk also cascades correctly into an
+		// already-loaded chunk below, instead of just fixing this one chunk in
+		// isolation -- see lighting.hpp.
+		const LightEngine light_engine(registry_);
+		relight_column(light_engine, a.chunk,
+				[&](core::ChunkCoord c) { return find(c); },
+				[](core::ChunkCoord, const std::array<Light, kChunkVolume> &,
+						const Chunk &) {});
 		// A border edit changes the neighbour's culled faces too.
 		auto bump_neighbour = [&](int dx, int dy, int dz) {
 			const auto n = chunks_.find({ a.chunk.x + dx, a.chunk.y + dy,
@@ -135,6 +144,11 @@ core::BlockId ClientChunkStore::edit_block(core::IVec3 world_voxel,
 		}
 	}
 	return prev;
+}
+
+Chunk *ClientChunkStore::find(core::ChunkCoord c) {
+	const auto it = chunks_.find(c);
+	return it == chunks_.end() ? nullptr : it->second.get();
 }
 
 const Chunk *ClientChunkStore::find(core::ChunkCoord c) const {

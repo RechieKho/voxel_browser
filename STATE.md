@@ -7,7 +7,7 @@
 > Companion docs: `ARCHITECTURE_SPEC.md` (target design) · `REMAINING_TASKS.md`
 > (implementation backlog). This file is for *traps and context*, not the plan.
 
-Last updated: 2026-09-15 (fixed a near-black flash on predicted block breaks: `ClientChunkStore::edit_block()` never relit locally — see §8)
+Last updated: 2026-09-15 (fixed the cross-chunk sky-light bug: every chunk was relit in isolation, always assuming open sky above it regardless of what's actually loaded there — see §8)
 
 ---
 
@@ -245,6 +245,117 @@ Other undecided-but-not-yet-in-spec:
 ## 8. Done / resolved
 
 _(Move items here with a date + commit when fixed, so the history is visible.)_
+
+- **2026-09-15 — Cross-chunk sky-light bug fixed: false-bright band every 32
+  blocks while mining (uncommitted).** Reported by the user: "as I mine
+  deeper, on coordinate when vertical displacement is 32, the block suddenly
+  becomes bright."
+  Root cause: `LightEngine::relight_chunk` (`src/world/lighting.cpp`)
+  computed sky light **per chunk in total isolation** — it always seeded full
+  brightness at every non-opaque voxel in the chunk's own top layer (local
+  y = 31), with no way to know whether another chunk was loaded directly
+  above it blocking real sunlight. Both call sites relied on this in
+  isolation: `ChunkLifecycleSystem` (on generation) and
+  `WorldReplicator::apply_block_edit` (on edit) each called
+  `relight_chunk(*chunk)` with no neighbour context at all.
+  This generator has **no caves** (`WorldGenerator` fills solid below its
+  heightmap unconditionally, `src/worldgen/generator.cpp`), so a chunk fully
+  below the natural surface is 100% opaque stone including its own top
+  layer — the isolation bug can't actually manifest from generation alone
+  with this generator (transmittance is 0 there regardless of what's above).
+  The real, common trigger is **mining**: breaking a block at the very top
+  of a chunk (world y ≡ 31 mod 32) that's buried under another loaded, solid
+  chunk creates an opening exactly where the old code assumed open sky —
+  `WorldReplicator::apply_block_edit`'s call to a bare `relight_chunk`
+  matches this exactly.
+  **Fix:**
+  - `LightEngine::relight_chunk(Chunk &chunk, const Chunk *above = nullptr)`
+    — `above`'s bottom (local y = 0) sky-light row seeds this chunk's top
+    layer instead of assuming open sky, attenuated the same way a normal
+    interior BFS step is. `above == nullptr` (the default) keeps the exact
+    old unattenuated-kMaxLight behaviour, so every existing direct caller/test
+    is unaffected — only actually correct for the topmost chunk in a loaded
+    column, which relight_column() (next) accounts for.
+  - `relight_column(engine, coord, find, on_relit)` (`lighting.hpp`, header-
+    only template): relights `coord` with its real neighbour above, then
+    cascades the same relight downward through **every** consecutively
+    loaded chunk below it, unconditionally, to the bottom of the loaded
+    stack — bumping each chunk's revision iff its light output actually
+    changed, and invoking `on_relit(coord, light_before, chunk_after)` once
+    per chunk visited so callers can build protocol deltas / track
+    newly-ready chunks without lighting.hpp knowing about the wire format.
+    **Deliberately unconditional, not early-exit-on-"unchanged"**: a first
+    attempt compared each chunk's light output to what it was immediately
+    before that same call to decide whether to keep cascading, but a chunk
+    that had never been lit before starts all-zero by construction, which is
+    indistinguishable from "correctly recomputed to all-zero" (e.g. under a
+    solid roof) — the early-exit stopped the cascade before reaching chunks
+    that still needed it. Caught by a test that asserted the exact chunks
+    visited (`relight_column cascades a solid roof's shadow down through
+    every loaded chunk below it`, `lighting_test.cpp`) before trusting the
+    logic. Loaded columns are shallow (a handful of chunks per the server's
+    vertical view distance) so the extra unconditional relights are cheap.
+  - `ChunkLifecycleSystem::update()`'s `ingest()` (`chunk_lifecycle.cpp`):
+    now inserts every finished chunk from a batch into `world_` **first**,
+    then cascades each via `relight_column` — not relight-then-insert like
+    before. Matters because chunk generation order across worker threads has
+    no relation to column position; the chunk below can easily finish before
+    the chunk above exists yet, and inserting the whole batch before any
+    cascading means a same-tick sibling is already visible to `find_chunk`
+    when its turn comes.
+  - `WorldReplicator::apply_block_edit` (`world_replicator.cpp`): uses
+    `relight_column` instead of a bare `relight_chunk` call, and now builds +
+    fans out **one delta per chunk the cascade actually touches** (the
+    primary edited chunk always carries the block change; any chunk below it
+    only carries light changes), each delta sent only to the players who
+    mirror that *specific* chunk (not necessarily the same watcher set as
+    the primary chunk).
+  - `ClientChunkStore::edit_block` (`client_chunk_store.cpp`): same swap, for
+    the client's local optimistic prediction. Needed a new non-const
+    `Chunk *find(ChunkCoord)` overload (previously const-only) so
+    `relight_column`'s lookup callback can hand back a mutable chunk for the
+    cascade to relight in place.
+  - **New, and probably the least obvious part of this fix:**
+    `WorldReplicator` previously only noticed a chunk if it entered or left a
+    player's view (`diff_chunk_sets` on presence alone) — never an
+    already-visible chunk changing in place. A chunk generated and sent
+    *before* its real neighbour above finished loading (arbitrarily many
+    ticks later, since worker threads process the queue out of column
+    order) gets its light corrected server-side by that neighbour's own
+    cascade, but an already-connected player who received the wrong version
+    would never see the correction otherwise. Added
+    `last_sent_revision_: NetId -> ChunkCoord -> revision` and changed
+    `tick()` to compare it against `world_`'s current revision for every
+    *visible* chunk (not just newly-entered ones), re-sending a full
+    `S2C_ChunkAdd` whenever they differ. `apply_block_edit`'s own delta path
+    updates the same map so tick() doesn't redundantly re-send what an edit
+    already just delta'd.
+  **Scoped out, known follow-up:** no horizontal/diagonal propagation — if a
+  cascaded chunk's new light affects a sideways neighbour's border AO, that
+  neighbour isn't re-flagged here. Much smaller-magnitude than the
+  whole-layer band this fixes; not attempted.
+  **Tests:** `lighting_test.cpp` — `relight_chunk` with/without `above`
+  (including "straight down through open air, no falloff" and "solid
+  `above` stays dark, not falsely sky-lit"), `relight_column` cascade depth
+  and the always-report-the-starting-chunk contract, using a small in-memory
+  `FakeStore` test harness. `world_replication_test.cpp` — two end-to-end
+  tests through the real `World`/`ChunkLifecycleSystem`/`WorldReplicator`
+  stack: breaking a block at the top of a chunk buried under another solid,
+  loaded chunk stays dark (exercises the real mining-trigger scenario, using
+  the fact that any chunk with `top <= world y 31` is guaranteed 100% solid
+  stone regardless of seed, since `WorldGenParams{}`'s default
+  `base_height`/`amplitude` never puts the real surface below y=36); and a
+  focused test of the new `last_sent_revision_` resend path (bump a
+  loaded chunk's revision directly, confirm the next `tick()` re-sends it
+  with no view change). All new tests confirmed to fail without their
+  corresponding fix before being trusted (the flawed early-exit cascade
+  design above was caught this way, not just theorized). Full `vb_tests`
+  green on both `build/` and `build-net/` (`VB_WITH_NET=ON`, real GNS) — only
+  the one pre-existing, unrelated sandbox UDP-bind failure noted elsewhere in
+  this file.
+  **Not yet done:** not visually verified against a live client (same
+  limitation as the meshing-threading entry below — no GL context available
+  here); rests on the test suite + code review.
 
 - **2026-09-15 — Near-black flash on predicted block breaks fixed
   (uncommitted).** Reported by the user: "for a split second, I see a black
