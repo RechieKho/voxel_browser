@@ -18,6 +18,12 @@ struct ChunkRenderer::GpuChunk {
 	Model model{};
 	std::uint64_t revision = 0;
 	bool valid = false;
+	// GPU buffer capacity in elements, >= what's currently drawn (see
+	// model_from_mesh's headroom below). A re-mesh whose new vertex/index
+	// count still fits reuses these buffers via UpdateMeshBuffer() instead of
+	// a full UnloadModel+recreate -- see ChunkRenderer::upload().
+	std::size_t vertex_capacity = 0;
+	std::size_t index_capacity = 0;
 };
 
 namespace {
@@ -44,22 +50,14 @@ Color tint_for(std::uint32_t block_id) {
 	}
 }
 
-Model model_from_mesh(const world::MeshData &data) {
-	Mesh mesh{};
-	mesh.vertexCount = static_cast<int>(data.vertices.size());
-	mesh.triangleCount = static_cast<int>(data.indices.size() / 3);
-
-	mesh.vertices = static_cast<float *>(
-			MemAlloc(static_cast<unsigned int>(data.vertices.size() * 3 * sizeof(float))));
-	mesh.normals = static_cast<float *>(
-			MemAlloc(static_cast<unsigned int>(data.vertices.size() * 3 * sizeof(float))));
-	mesh.texcoords = static_cast<float *>(
-			MemAlloc(static_cast<unsigned int>(data.vertices.size() * 2 * sizeof(float))));
-	mesh.colors = static_cast<unsigned char *>(
-			MemAlloc(static_cast<unsigned int>(data.vertices.size() * 4)));
-	mesh.indices = static_cast<unsigned short *>(
-			MemAlloc(static_cast<unsigned int>(data.indices.size() * sizeof(unsigned short))));
-
+// Writes `data`'s vertices/indices into the front of `mesh`'s (already
+// allocated) CPU-side arrays. Those arrays may be larger than `data` needs
+// (see model_from_mesh's headroom) -- only the first
+// data.vertices.size()/indices.size() entries are touched; any tail is
+// leftover from a previous, larger mesh and never referenced by the draw
+// call (DrawMesh draws exactly mesh.triangleCount*3 indices, and every index
+// value stays < data.vertices.size()).
+void fill_mesh_arrays(const world::MeshData &data, Mesh &mesh) {
 	for (std::size_t i = 0; i < data.vertices.size(); ++i) {
 		const world::MeshVertex &v = data.vertices[i];
 		mesh.vertices[i * 3 + 0] = v.px;
@@ -81,9 +79,61 @@ Model model_from_mesh(const world::MeshData &data) {
 	for (std::size_t i = 0; i < data.indices.size(); ++i) {
 		mesh.indices[i] = static_cast<unsigned short>(data.indices[i]);
 	}
+}
+
+// New GPU buffers are allocated with slack above what's needed right now, so
+// a later re-mesh that grows a little (the common case -- editing a block
+// changes face count by a handful of quads) can reuse them via
+// UpdateMeshBuffer() instead of forcing a full unload/reload. See
+// ChunkRenderer::upload() and the STATE.md write-up on the NVIDIA driver's
+// VAO/VBO-churn heap corruption this is mitigating.
+constexpr float kCapacityHeadroom = 1.25f;
+
+std::size_t capacity_for(std::size_t needed) {
+	return needed == 0 ? 0 : static_cast<std::size_t>(static_cast<float>(needed) * kCapacityHeadroom) + 1;
+}
+
+Model model_from_mesh(const world::MeshData &data, std::size_t vertex_capacity, std::size_t index_capacity) {
+	Mesh mesh{};
+	// vertexCount/triangleCount drive the GPU buffer *size* UploadMesh()
+	// allocates below; they're brought back down to the actual counts
+	// afterwards so DrawMesh only ever draws real geometry (see fill_mesh_arrays).
+	mesh.vertexCount = static_cast<int>(vertex_capacity);
+	mesh.triangleCount = static_cast<int>(index_capacity / 3);
+
+	mesh.vertices = static_cast<float *>(MemAlloc(static_cast<unsigned int>(vertex_capacity * 3 * sizeof(float))));
+	mesh.normals = static_cast<float *>(MemAlloc(static_cast<unsigned int>(vertex_capacity * 3 * sizeof(float))));
+	mesh.texcoords = static_cast<float *>(MemAlloc(static_cast<unsigned int>(vertex_capacity * 2 * sizeof(float))));
+	mesh.colors = static_cast<unsigned char *>(MemAlloc(static_cast<unsigned int>(vertex_capacity * 4)));
+	mesh.indices = static_cast<unsigned short *>(
+			MemAlloc(static_cast<unsigned int>(index_capacity * sizeof(unsigned short))));
+
+	fill_mesh_arrays(data, mesh);
 
 	UploadMesh(&mesh, false);
+	mesh.vertexCount = static_cast<int>(data.vertices.size());
+	mesh.triangleCount = static_cast<int>(data.indices.size() / 3);
 	return LoadModelFromMesh(mesh);
+}
+
+// Re-fills an already-uploaded model's GPU buffers in place (glBufferSubData
+// via UpdateMeshBuffer, no VAO/VBO reallocation) -- caller must already know
+// `data` fits within the model's current vertex_capacity/index_capacity.
+// Buffer index order matches raylib's UploadMesh(): 0 position, 1 texcoord,
+// 2 normal, 3 color, 6 indices (config.h's RL_DEFAULT_SHADER_ATTRIB_LOCATION_*).
+void update_gpu_mesh(Mesh &mesh, const world::MeshData &data) {
+	fill_mesh_arrays(data, mesh);
+
+	const int vbytes3 = static_cast<int>(data.vertices.size() * 3 * sizeof(float));
+	const int vbytes2 = static_cast<int>(data.vertices.size() * 2 * sizeof(float));
+	UpdateMeshBuffer(mesh, 0, mesh.vertices, vbytes3, 0);
+	UpdateMeshBuffer(mesh, 1, mesh.texcoords, vbytes2, 0);
+	UpdateMeshBuffer(mesh, 2, mesh.normals, vbytes3, 0);
+	UpdateMeshBuffer(mesh, 3, mesh.colors, static_cast<int>(data.vertices.size() * 4), 0);
+	UpdateMeshBuffer(mesh, 6, mesh.indices, static_cast<int>(data.indices.size() * sizeof(unsigned short)), 0);
+
+	mesh.vertexCount = static_cast<int>(data.vertices.size());
+	mesh.triangleCount = static_cast<int>(data.indices.size() / 3);
 }
 
 } // namespace
@@ -113,12 +163,28 @@ void ChunkRenderer::drop(core::ChunkCoord coord) {
 void ChunkRenderer::upload(core::ChunkCoord coord, const world::MeshData &data,
 		std::uint64_t revision) {
 	GpuChunk &slot = gpu_[coord];
-	if (slot.valid) {
-		UnloadModel(slot.model);
-		slot.valid = false;
+	if (data.empty()) {
+		if (slot.valid) {
+			UnloadModel(slot.model);
+		}
+		slot = GpuChunk{};
+		slot.revision = revision;
+		return;
 	}
-	if (!data.empty()) {
-		slot.model = model_from_mesh(data);
+
+	const std::size_t needed_v = data.vertices.size();
+	const std::size_t needed_i = data.indices.size();
+	if (slot.valid && needed_v <= slot.vertex_capacity && needed_i <= slot.index_capacity) {
+		// Fits within the existing GPU buffers -- update in place, no
+		// UnloadModel/UploadMesh churn (see the comment on GpuChunk).
+		update_gpu_mesh(slot.model.meshes[0], data);
+	} else {
+		if (slot.valid) {
+			UnloadModel(slot.model);
+		}
+		slot.vertex_capacity = capacity_for(needed_v);
+		slot.index_capacity = capacity_for(needed_i);
+		slot.model = model_from_mesh(data, slot.vertex_capacity, slot.index_capacity);
 		slot.valid = true;
 	}
 	slot.revision = revision;

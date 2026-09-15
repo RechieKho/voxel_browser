@@ -7,7 +7,7 @@
 > Companion docs: `ARCHITECTURE_SPEC.md` (target design) · `REMAINING_TASKS.md`
 > (implementation backlog). This file is for *traps and context*, not the plan.
 
-Last updated: 2026-09-15 (fixed the cross-chunk sky-light bug: every chunk was relit in isolation, always assuming open sky above it regardless of what's actually loaded there — see §8)
+Last updated: 2026-09-15 (mitigated the NVIDIA-driver VAO/VBO-churn crash and fixed a per-voxel hashmap-lookup FPS dip during chunk streaming — see §8; user confirmed both fixed in singleplayer and real multiplayer)
 
 ---
 
@@ -245,6 +245,147 @@ Other undecided-but-not-yet-in-spec:
 ## 8. Done / resolved
 
 _(Move items here with a date + commit when fixed, so the history is visible.)_
+
+- **2026-09-15 — "Heap corruption after normal block" root-caused to the
+  NVIDIA OpenGL driver itself, not this codebase (no code fix; investigation
+  closed, uncommitted).** Reported by the user (Windows, `build-net`, MSVC
+  Debug config, real `voxel_browser.exe`, NVIDIA GeForce RTX 5060 Laptop GPU,
+  driver 32.0.15.9595 / 2026-03-15): Event Viewer showed `voxel_browser.exe`
+  faulting in `ucrtbased.dll` with exception `0x80000003`
+  (`STATUS_BREAKPOINT` — the Debug CRT's own heap-corruption detector
+  hitting `DebugBreak()`), reported as happening after breaking a block.
+  **Investigation path, each step confirmed by an actual before/after repro,
+  not just code reading** (see `cmake/Sanitizers.cmake` below for the ASan
+  build setup this all rode on):
+  - Ruled out `VB_WITH_NET`/GNS: reproduces in plain `--singleplayer`
+    (`GnsTransport` is never even constructed there).
+  - Ruled out a data race in `ChunkMeshWorkerPool` *and* `WorldGenWorkerPool`:
+    reproduces identically with **both** forced to `kSynchronous`
+    (single-threaded) — a stack trace from that run showed the corruption
+    detected inside `main()` itself, single-threaded top to bottom.
+  - Ruled out block-editing as such: reproduces from ordinary chunk
+    streaming/meshing on join alone, no block needs to be broken — the
+    original "after breaking a block" was misleading; breaking blocks just
+    triggers a lot of re-meshing (`bump_all_neighbor_revisions`/
+    `bump_neighbour` cascades), which surfaces it faster, especially at a
+    small `render_distance` where most/all loaded chunks border each other.
+  - `mesh_chunk_from_snapshot`'s indexing and `model_from_mesh`'s raylib
+    `Mesh` buffer sizes were checked byte-for-byte against the vendored
+    raylib 5.5 source (`_deps/raylib-src/src/rmodels.c`) and are correct.
+  - **Built a minimal isolated repro** (`--mesh-stress-test` diagnostic mode,
+    temporarily added to `voxel_browser.exe` then removed once the finding
+    was confirmed — see below to recreate it): a real window, a handful of
+    directly-generated/relit chunks fed into a plain `ClientChunkStore` via
+    the real `encode_chunk_payload`/`apply_add` wire path (no networking, no
+    `WorldGenWorkerPool`, no `WorldReplicator`), then a tight loop of random
+    `ClientChunkStore::edit_block()` calls + `ChunkRenderer::sync()`/`draw()`
+    every iteration. **Reproduced the exact same ASan failure in under 2000
+    iterations with as few as 3 chunks** — proving the bug needs zero
+    networking/worldgen/lighting-cascade machinery and lives entirely in
+    `ChunkRenderer` + raylib's GPU mesh upload/unload path. With a *single*
+    chunk (repeatedly re-edited, re-meshed, re-uploaded 5000×) it never
+    reproduced — the trigger is specifically **many distinct chunks'
+    GPU meshes cycling through create/destroy**, not raw repetition.
+  - **Instrumented `chunk_renderer.cpp` directly** (temporary, removed after
+    diagnosis): recorded every uploaded `Mesh`'s buffer pointers
+    (`vertices`/`texcoords`/`normals`/`colors`/`indices`) and re-validated
+    them immediately before every subsequent `UnloadModel`, and separately
+    asserted every field we never set (`tangents`/`texcoords2`/
+    `animVertices`/`animNormals`/`boneIds`/`boneWeights`/`boneMatrices`/
+    `boneCount`) stays null/zero at three points: right after `Mesh mesh{}`,
+    right before `UploadMesh`, and right before `UnloadModel`. **None of
+    these ever fired** — every pointer our own C++ code sets or expects to
+    stay null was still exactly correct one call away from the crash.
+  - **The actual crash, caught with this instrumentation active, was
+    `AddressSanitizer: attempting free on address which was not malloc()-ed`
+    with the stack trace entirely inside `nvoglv64.dll` (NVIDIA's OpenGL
+    driver), on a driver-spawned thread (`T5`) — not `T0` (ours), not any
+    thread this codebase creates.** Confirmed independent of `FLAG_MSAA_4X_HINT`
+    (still reproduces with MSAA off).
+  **Conclusion:** this is heap corruption originating *inside the NVIDIA
+  OpenGL driver's own internal memory management*, triggered by rapid
+  VAO/VBO create/destroy churn (`UnloadModel`+`UploadMesh` on many distinct
+  chunks in quick succession — exactly what `ChunkRenderer::upload()`'s
+  full-recreate-every-revision-change approach produces, especially at small
+  `render_distance`s where border-neighbour re-mesh cascades touch most of
+  the loaded set on almost every edit). ASan's global allocator interception
+  catches the driver's own internal `free()` calls process-wide, which is
+  how this became visible at all; the plain Debug-CRT crash the user
+  originally saw is presumably the same underlying driver-side corruption,
+  just caught later/differently by `ucrtbased.dll`'s heap validator instead.
+  **This is not a bug in `voxel_browser`'s code** — exhaustive review (this
+  session) and instrumentation found nothing wrong in
+  `ChunkRenderer`/`model_from_mesh`/`mesh_chunk_from_snapshot`/
+  `ClientChunkStore`/`LightEngine`, and the crash's own stack trace is
+  entirely inside the vendor driver DLL.
+  **Recommended for the user:** update the NVIDIA driver first (32.0.15.9595
+  was current as of 2026-03-15 — check for anything newer) as the highest-
+  leverage fix; this class of driver-internal VBO-lifecycle bug is the kind
+  vendors do fix over time, and no code change here can guarantee avoiding
+  it outright.
+  **Follow-up hardening — implemented in a later session (2026-09-15,
+  `src/render/chunk_renderer.cpp`):** `ChunkRenderer::upload()` used to do a
+  full `UnloadModel`+`model_from_mesh`(fresh `UploadMesh`) on *every* revision
+  change, for every affected chunk — real VAO/VBO churn on essentially every
+  edit/re-mesh. It now over-allocates each chunk's GPU buffers with 25%
+  headroom (`capacity_for()`), and a re-mesh whose new vertex/index count
+  still fits reuses the existing VAO/VBOs in place via `UpdateMeshBuffer()`
+  (`update_gpu_mesh()`) instead of recreating them; only a re-mesh that
+  outgrows its current capacity still does a full unload/recreate. Confirmed
+  by the user: the crash (this section's whole investigation) has not
+  recurred since. Doesn't change the fact that occasional full recreation is
+  still necessary (some re-meshes do outgrow capacity), so this reduces the
+  odds of hitting the driver bug rather than eliminating the trigger
+  outright — the driver-level root cause means no application-level change
+  can be a guaranteed fix.
+  **Toolchain note, needed for ANY future ASan work on this project on
+  MSVC (kept, `cmake/Sanitizers.cmake`):** `VB_ENABLE_ASAN=ON` alone fails to
+  link `voxel_browser`/`voxel_browser_server`/`vb_tests` against the
+  (non-ASan-instrumented, FetchContent-built) `GameNetworkingSockets` static
+  lib with `LNK2038` ("mismatch detected for 'annotate_vector'/
+  'annotate_string'/'annotate_optional'"). Fixed by adding
+  `_DISABLE_VECTOR_ANNOTATION`/`_DISABLE_STRING_ANNOTATION`/
+  `_DISABLE_OPTIONAL_ANNOTATION` compile definitions to `vb_sanitizers` when
+  `MSVC AND VB_ENABLE_ASAN` — trades away ASan's container-slack-overflow
+  checks (`vec[vec.size()]` while still under `capacity()`) for the ability
+  to link against non-instrumented static libs at all; every other ASan
+  check (real heap-buffer-overflow, use-after-free, bad-free — everything
+  this investigation actually used) is unaffected. Also: `clang_rt.asan_
+  dynamic-x86_64.dll` (found under `VC\Tools\MSVC\<ver>\bin\Hostx64\x64\`)
+  is not on `PATH` by default and must be copied next to the built `.exe`s
+  or the ASan build won't even launch (`error while loading shared
+  libraries`).
+  **To reproduce the isolated repro again** (e.g. to verify a future driver
+  update, or test the buffer-reuse mitigation above): the `--mesh-stress-test`
+  diagnostic mode described above was removed from `main.cpp` after use, not
+  committed — recreate it from this writeup if needed (real `Window`, a few
+  `WorldGenerator`-generated + `LightEngine`-relit chunks fed through
+  `encode_chunk_payload`/`ClientChunkStore::apply_add`, then a loop of random
+  `edit_block()` + `ChunkRenderer::sync()`/`draw()` calls — reproduced with
+  as few as 3 chunks and ~2000 iterations).
+
+- **2026-09-15 — FPS dip while chunk-streaming/moving, fixed
+  (`src/world/chunk_mesh_snapshot.cpp`).** Reported by the user after the
+  driver-corruption crash above stopped reproducing: still a noticeable FPS
+  dip specifically while chunks streamed in during movement, even with
+  `ChunkMeshWorkerPool`'s background threads doing the actual meshing.
+  Root cause: `build_chunk_mesh_snapshot()` — the per-chunk copy step that
+  *must* run on the main thread (it's the only thread allowed to touch
+  `ClientChunkStore`, see `chunk_mesh_snapshot.hpp`) — was calling
+  `ClientChunkStore::block_at()`/`light_at()` per padded voxel. Each of those
+  does a `ChunkCoord` → `Chunk*` unordered_map lookup from scratch, so one
+  chunk's snapshot (`kMeshSnapshotVolume` ≈ 39k padded voxels) cost ~78k
+  hashmap lookups, done synchronously on the main thread, up to
+  `submit_budget` (8) chunks per frame — squarely on the frame already busy
+  with movement/streaming. Fixed by resolving each of the (up to) 27
+  neighbour chunks once per snapshot via a single `find()` call, then
+  indexing straight into each chunk's block/light arrays (O(1)) for every
+  voxel instead. Verified byte-identical snapshot output against the
+  existing `mesh_chunk()` direct-path test
+  (`mesher_test.cpp`'s "matches mesh_chunk"-style cases). User confirmed:
+  "buttery smooth" after this fix, in both singleplayer and a real
+  server+client multiplayer smoke test (two headless clients joined over
+  real GNS/UDP, streamed chunks, and disconnected cleanly with no crash).
 
 - **2026-09-15 — Cross-chunk sky-light bug fixed: false-bright band every 32
   blocks while mining (uncommitted).** Reported by the user: "as I mine

@@ -1,6 +1,7 @@
 #include "vb/world/chunk_mesh_snapshot.hpp"
 
 #include <array>
+#include <utility>
 
 #include "vb/core/math.hpp"
 
@@ -55,6 +56,19 @@ float ao_level(bool side1, bool side2, bool corner) {
 	return static_cast<float>(3 - (static_cast<int>(side1) + static_cast<int>(side2) + static_cast<int>(corner)));
 }
 
+// Maps one padded axis coordinate (in [-1, kChunkDim]) to which of the 3
+// chunks along that axis it falls in (-1/0/+1) and its local coordinate
+// within that chunk.
+std::pair<int, int> split_padded(int p) {
+	if (p < 0) {
+		return { -1, kChunkDim - 1 };
+	}
+	if (p >= kChunkDim) {
+		return { 1, 0 };
+	}
+	return { 0, p };
+}
+
 } // namespace
 
 ChunkMeshSnapshot build_chunk_mesh_snapshot(const ClientChunkStore &store, core::ChunkCoord coord) {
@@ -70,14 +84,45 @@ ChunkMeshSnapshot build_chunk_mesh_snapshot(const ClientChunkStore &store, core:
 	snapshot.blocks.resize(kMeshSnapshotVolume);
 	snapshot.lights.resize(kMeshSnapshotVolume);
 
-	const IVec3 origin = core::chunk_origin(coord);
+	// This runs on the main thread (the only thread allowed to touch
+	// ClientChunkStore, see the header) -- ClientChunkStore::block_at/
+	// light_at() each do a coord hashmap lookup, and calling them per padded
+	// voxel meant ~2 * kMeshSnapshotVolume (~78k) lookups per chunk, which
+	// showed up as a real per-frame FPS hit while chunks stream in. Instead,
+	// resolve each of the (up to) 27 neighbour chunks once up front and index
+	// straight into them -- O(1) array reads for the other ~39k voxels.
+	std::array<const Chunk *, 27> neighbours{};
+	for (int dz = -1; dz <= 1; ++dz) {
+		for (int dy = -1; dy <= 1; ++dy) {
+			for (int dx = -1; dx <= 1; ++dx) {
+				const std::size_t ni = static_cast<std::size_t>(dx + 1) +
+						3 * (static_cast<std::size_t>(dy + 1) + 3 * static_cast<std::size_t>(dz + 1));
+				neighbours[ni] = (dx == 0 && dy == 0 && dz == 0)
+						? chunk
+						: store.find({ coord.x + dx, coord.y + dy, coord.z + dz });
+			}
+		}
+	}
+
 	for (int py = -1; py <= kChunkDim; ++py) {
+		const auto [dy, ly] = split_padded(py);
 		for (int pz = -1; pz <= kChunkDim; ++pz) {
+			const auto [dz, lz] = split_padded(pz);
 			for (int px = -1; px <= kChunkDim; ++px) {
-				const IVec3 wv{ origin.x + px, origin.y + py, origin.z + pz };
+				const auto [dx, lx] = split_padded(px);
+				const std::size_t ni = static_cast<std::size_t>(dx + 1) +
+						3 * (static_cast<std::size_t>(dy + 1) + 3 * static_cast<std::size_t>(dz + 1));
+				const Chunk *c = neighbours[ni];
 				const std::size_t idx = padded_index(px, py, pz);
-				snapshot.blocks[idx] = store.block_at(wv);
-				snapshot.lights[idx] = store.light_at(wv);
+				if (c == nullptr) {
+					snapshot.blocks[idx] = core::BlockId::kAir;
+					Light full;
+					full.set_sky(15); // matches ClientChunkStore::light_at()'s unloaded default
+					snapshot.lights[idx] = full;
+				} else {
+					snapshot.blocks[idx] = c->get(lx, ly, lz);
+					snapshot.lights[idx] = c->light(lx, ly, lz);
+				}
 			}
 		}
 	}
