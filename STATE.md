@@ -7,7 +7,7 @@
 > Companion docs: `ARCHITECTURE_SPEC.md` (target design) · `REMAINING_TASKS.md`
 > (implementation backlog). This file is for *traps and context*, not the plan.
 
-Last updated: 2026-09-11 (investigated a reported invisible-but-walkable chunk gap; fixed a real diagonal-neighbour AO staleness bug and silent-error-swallowing on chunk decode failures, but could NOT confirm either is the actual root cause — see §8)
+Last updated: 2026-09-15 (found and fixed the ACTUAL root cause of the invisible-but-walkable chunk gap: GNS's default 512 KiB per-connection send buffer overflowing during the initial chunk-streaming burst, silently discarded by `GnsTransport::send()` — see §8)
 
 ---
 
@@ -90,6 +90,20 @@ with *both* binaries (bundle/publish still merge by `voxel_browser-*` pattern).
   installs — hit on Homebrew's, not on vcpkg's — with "Some (but not all)
   targets in this export set were already defined." Fixed 2026-09-11 (§8) by
   deleting the redundant call; don't reintroduce it.
+- **macOS `VB_WITH_NET=ON` builds and passes tests locally (confirmed
+  2026-09-15)**, even though CI still doesn't build it there (see above —
+  that's unchanged, still a universal-binary-vs-single-arch-Homebrew-protobuf
+  problem, not a build-correctness one). A pre-existing local `build-net/`
+  tree on this Mac (Homebrew protobuf + OpenSSL, real `GameNetworkingSockets`
+  linked) configured, built `vb_core`/`vb_tests`/both binaries, and ran the
+  full suite clean under `-Werror` while investigating the §8 chunk-gap bug.
+  One test fails there —
+  `GnsTransport: connect, exchange a message, and disconnect over real UDP`
+  (`server.listen(0)` returns false) — but it reproduces identically on
+  unmodified HEAD too; looks like a local sandbox/environment UDP-bind
+  restriction (this agent's Bash tool runs sandboxed), not a real regression.
+  Don't assume that failure means something's broken; do treat any *other*
+  `VB_WITH_NET` test failure on this box as real.
 
 ---
 
@@ -121,6 +135,27 @@ with *both* binaries (bundle/publish still merge by `voxel_browser-*` pattern).
   `std::erase(v, x)`. Haven't checked whether this is specific to 12-byte
   structs, this exact clang/MSVC-STL version pairing, or something else —
   just avoid `std::erase`/`std::remove` on small POD-struct vectors here.
+- **Local `clang-format --dry-run --Werror` on this Mac (brew's, v22.1.8) is
+  not trustworthy as-is** — it flags dozens of violations even on files
+  freshly checked out from `HEAD` with no edits at all (confirmed 2026-09-15:
+  ran it against an untouched `git show HEAD:...` copy of
+  `gns_transport.cpp` and got the same wall of "code should be
+  clang-formatted" noise as the edited version). This repo's `.clang-format`
+  was presumably validated against whatever version CI's `pip`/`pipx`
+  installs (§3), which isn't pinned to match Homebrew's latest — the two
+  disagree on enough column-wrap/brace decisions that a local diff full of
+  violations doesn't mean *your* edit broke formatting. To actually check
+  whether *your change* introduced a real violation: run it against the
+  unmodified file first (`git show HEAD:path | clang-format --dry-run
+  --Werror -`) and compare, don't trust a bare pass/fail on the edited file.
+- **`doctest`'s `--test-case=` filter is a glob pattern, not a substring
+  match** — `--test-case="GnsTransport: connect, exchange a message..."`
+  (the literal, full test name) matches *zero* cases silently (`0 passed | N
+  skipped`, no error) unless it's the exact full string with no drift at all;
+  wrap it in `*...*` (e.g. `--test-case='*UDP*'`) to match by substring. Also
+  quote it — zsh glob-expands an unquoted `*UDP*` itself before doctest ever
+  sees it, and errors with "no matches found" if nothing in the CWD happens
+  to match.
 
 ---
 
@@ -179,6 +214,17 @@ Other undecided-but-not-yet-in-spec:
 - Final project name (§2 above).
 - Whether the client embeds the server for singleplayer as a library or spawns a
   child process (spec says in-process library).
+- **TODO, not urgent:** `WorldReplicator` streams a whole player's view box in
+  one uncapped burst (every `diff.entered` chunk queued in a single
+  `broadcast_world()` call, no pacing across ticks) — see §8's 2026-09-15
+  entry. Raising GNS's send buffer to 32 MiB fixes it for the *shipped
+  default* `view_distance`/`vertical_view` (8/3, ~2023 chunks, ~545 KB
+  measured), but doesn't add real backpressure: a larger view distance, a
+  denser/less-compressible world, or several players joining at once sharing
+  one connection's budget could still overflow it. Proper fix is a
+  per-connection byte-budget-per-tick on the `diff.entered` send loop instead
+  of relying on a bigger fixed buffer. Revisit before ever raising the
+  shipped default view distance.
 
 ---
 
@@ -200,10 +246,98 @@ Other undecided-but-not-yet-in-spec:
 
 _(Move items here with a date + commit when fixed, so the history is visible.)_
 
+- **2026-09-15 — ACTUAL root cause of the invisible-but-walkable chunk gap
+  found and fixed: GNS's default 512 KiB send buffer, silently overflowed.**
+  Follow-up report after 2026-09-11's investigation below: "the gap is still
+  there" + new evidence — **the invisible blocks can't be broken either**.
+  That second fact was the key: `raycast_voxel()` (client `main.cpp`) queries
+  `ClientChunkStore::solid_at()`, which is a *pure local read* — it never
+  touches the mesher. If breaking also fails, the client's own replicated
+  chunk data is missing/wrong at that spot, not just its mesh — ruling out
+  every mesh/AO-only theory from the 09-11 pass in one shot and pointing
+  straight at chunk streaming (encode → send → receive → decode) instead of
+  meshing.
+  Reread every step of that pipeline; `WorldReplicator::tick()`,
+  `chunk_codec.cpp`'s encode/decode, and `ClientChunkStore::apply_add` all
+  checked out (and 09-11 already added loud `VB_ERROR` logging to the decode/
+  apply and the `find_chunk()`-returned-null paths — if either fired, the
+  report would have said so). That left the one hop with **zero error
+  handling at all**: `GnsTransport::send()` (`src/net/gns_transport.cpp`)
+  called `SendMessageToConnection(...)` and discarded its return value
+  outright — not even captured into a variable. GNS's own header
+  (`steamnetworkingtypes.h`) documents exactly this failure mode:
+  `k_ESteamNetworkingConfig_SendBufferSize` (upper limit of buffered pending
+  bytes) **defaults to 512 KiB (524288 bytes)**, and once hit,
+  `SendMessageToConnection` returns `k_EResultLimitExceeded` **instead of
+  queuing the message** — reliable-lane or not, a message GNS never accepted
+  is never retried by GNS's own reliability machinery, since that machinery
+  only covers messages it already has.
+  **Measured, not assumed:** wrote a throwaway probe (real `WorldGenerator`,
+  seed 1, `encode_chunk_payload` over the *actual default production view
+  box* — `view_distance=8`/`vertical_view=3` from `server.toml.example`, i.e.
+  chunks_in_view = 17×17×7 = **2023 chunks**, matching the original report's
+  "~1811 chunks loaded" order of magnitude) and summed the encoded chunk
+  payload bytes: **545,300 bytes — already past the 524,288-byte default
+  limit from chunk data alone**, before the per-message protocol framing
+  overhead (`frame_message`'s envelope/length-prefix) or any entity-snapshot
+  traffic sharing the same connection is even counted. The whole box streams
+  in one synchronous `WorldReplicator::tick()` → `ServerSession::
+  broadcast_world()` → `send_frames()` burst on join (nothing paces it across
+  ticks), so the buffer fills almost immediately after join, mid-burst.
+  Whichever chunks fall after the fill point in `chunks_in_view`'s iteration
+  order (`for dy { for dz { for dx {...} } }`, y outermost) land as a
+  **contiguous rectangular run of coordinates** — exactly "a big rectangular
+  region" — and are silently never queued. `WorldReplicator::last_sent_`
+  already recorded them as sent (it has no way to know `send()` failed), so
+  they're never retried; the server's authoritative `World` has them
+  (walkable, matches physics reading `World` directly); the client's
+  `ClientChunkStore` never received them (invisible *and* unbreakable, matches
+  both raycast and mesher reading the same missing data); deterministic
+  per-session because the same view box streams in the same order every join
+  (explains "persists across relog" *and* "a fresh client reproduces it too"
+  from 09-11 — every fresh join hits the identical buffer-fill point).
+  Also explains why no test caught it: every existing chunk-streaming test
+  uses `LoopbackNetwork` (in-process `std::vector` queue, no byte-budget
+  concept at all) — this is a `GnsTransport`-only failure mode, and
+  `VB_WITH_NET` real-network coverage is exactly the thin/uneven part of the
+  test suite noted in §3.
+  **Fix** (`src/net/gns_transport.cpp`): (1) raise
+  `k_ESteamNetworkingConfig_SendBufferSize` to 32 MiB via
+  `SteamNetworkingUtils()->SetGlobalConfigValueInt32(...)` once in
+  `GnsRuntime::acquire()`, process-wide, before any listen/connect — gives a
+  full default view box (and meaningfully larger ones) comfortable headroom;
+  (2) `GnsTransport::send()` now captures `SendMessageToConnection`'s
+  `EResult` and `VB_ERROR`-logs a failure instead of discarding it, so if a
+  future world/view-distance config *does* exceed even the raised buffer,
+  it's loud instead of silent, consistent with 09-11's decode/apply logging.
+  **Not done, worth doing if view distances grow much further:** this raises
+  the ceiling, it doesn't add real backpressure — an unbounded view distance
+  or a much larger world could still overflow even 32 MiB in one synchronous
+  burst. A proper fix would pace `WorldReplicator`'s initial `diff.entered`
+  burst across multiple ticks (a per-connection byte budget per tick) instead
+  of relying on a bigger fixed buffer; not done here since the measured
+  numbers show the raised buffer comfortably covers the shipped default
+  config with a large margin.
+  **Verification:** full `vb_tests` suite green on both `build/`
+  (`VB_WITH_NET=OFF`, 125/125 cases) and `build-net/`
+  (`VB_WITH_NET=ON`, real GNS linked, 124/125 — the 1 failure,
+  `GnsTransport: connect, exchange a message, and disconnect over real UDP`,
+  is a pre-existing local-sandbox UDP-bind limitation, confirmed by
+  reproducing it identically on unmodified HEAD before this fix). Smoke tests
+  (`server_smoke`/`client_smoke`/`singleplayer_smoke`) pass on both configs.
+  **Not yet verified against a live repro** — the original report was a real
+  dedicated server + separate client session; this fix rests on the measured
+  byte-count + GNS's documented buffer-overflow behaviour, not a captured
+  `SendMessageToConnection failed (result=...)` log line from an actual
+  overflow. If the gap somehow recurs after this, the new logging in
+  `GnsTransport::send()` will name the exact `EResult` and message size —
+  check the server's stderr around join time first.
+
 - **2026-09-11 — investigated "big rectangular gap, doesn't render but I can
   walk on it" (dedicated server + separate client, ~1811 chunks loaded,
-  persists across relog).** This is **not fully resolved** — read this before
-  assuming it's fixed. What I confirmed from the report + code:
+  persists across relog).** This turned out to be an incomplete fix — see the
+  2026-09-15 entry above for the actual root cause found later. What I
+  confirmed from the report + code at the time:
   - Walkable ⇒ the *server's* authoritative `World` genuinely has solid block
     data there (physics reads directly from it). Persists across a full
     client restart ⇒ it's not a client-side stale-mesh-cache issue (a fresh
@@ -265,11 +399,18 @@ _(Move items here with a date + commit when fixed, so the history is visible.)_
     which would point back toward the server not sending it at all — check
     `WorldReplicator::tick()`'s per-player diff.entered / `world_.find_chunk`
     lookup next).
-  - Not yet checked: whether the server ever logs anything for a chunk that
-    was in a player's `diff.entered` but `world_.find_chunk(c) == nullptr`
-    (the `continue` in `WorldReplicator::tick()`, world_replicator.cpp) — this
-    branch is currently silent too and would be worth instrumenting the same
-    way if the client-side logging above never fires on the next repro.
+  - **Also found and fixed the same session** (the "not yet checked" item
+    below was stale — this was actually done here too, just not called out
+    in this writeup at the time): `WorldReplicator::tick()`'s `diff.entered`
+    loop silently `continue`d if `world_.find_chunk(c)` returned null for a
+    chunk `visible` said was loaded moments earlier — "should be unreachable
+    single-threaded" but was silent and would wedge the coord into
+    `last_sent_` as sent when it wasn't. Now `VB_ERROR`-logs and drops it
+    from `visible` so it retries next tick. (Neither this nor the client-side
+    logging above ever fired on the 2026-09-15 repro — see that entry above
+    for what the actual cause was: a transport-layer silent failure neither
+    of these two code paths could see, since the message never even reached
+    `find_chunk`/decode on either side.)
 
 - **2026-09-10 — Phase 0 restructure** (uncommitted). Modular CMake
   (`vb_core`/`vb_render`/`voxel_browser`/`voxel_browser_server`/`vb_tests`),

@@ -73,6 +73,34 @@ public:
 			}
 			SteamNetworkingUtils()->SetGlobalCallback_SteamNetConnectionStatusChanged(
 					&GnsRuntime::on_status_changed);
+
+			// GNS's per-connection k_ESteamNetworkingConfig_SendBufferSize
+			// defaults to 512 KiB (524288 bytes) -- past that,
+			// SendMessageToConnection() returns k_EResultLimitExceeded instead
+			// of queuing the message, reliable or not. Measured: encoding this
+			// engine's *default* production view box (view_distance=8,
+			// vertical_view=3 -> 2023 chunks, server.toml.example's defaults)
+			// with real WorldGenerator terrain comes to ~545 KB of chunk
+			// payload alone -- already over the default limit before the
+			// per-message protocol framing overhead or any concurrent entity
+			// snapshot traffic on the same connection is even counted. Since
+			// the whole box streams in one synchronous
+			// WorldReplicator::tick()/broadcast_world() burst on join (nothing
+			// paces it across ticks), the default buffer overflows almost
+			// immediately, and GnsTransport::send() used to silently discard
+			// SendMessageToConnection's result -- this was THE root cause of
+			// the "invisible-but-walkable, unbreakable, big rectangular
+			// gap" bug (see STATE.md §8): whichever chunks landed after the
+			// buffer filled were never actually queued, so they never reached
+			// the client, yet WorldReplicator's `last_sent_` already marked
+			// them sent and never retried. Raised generously (32 MiB) so a
+			// full default-config view box -- and meaningfully larger ones --
+			// fits with headroom; send() below now also surfaces a failure
+			// loudly if this limit is ever hit again instead of dropping it
+			// silently.
+			constexpr int32_t kSendBufferBytes = 32 * 1024 * 1024;
+			SteamNetworkingUtils()->SetGlobalConfigValueInt32(
+					k_ESteamNetworkingConfig_SendBufferSize, kSendBufferBytes);
 		}
 	}
 	void release() {
@@ -247,9 +275,23 @@ void GnsTransport::send(ConnId conn, protocol::Lane lane,
 	const int flags = send_mode_for_lane(lane) == SendMode::kReliableOrdered
 			? k_nSteamNetworkingSend_Reliable
 			: k_nSteamNetworkingSend_UnreliableNoNagle;
-	SteamNetworkingSockets()->SendMessageToConnection(
+	// The result used to be discarded entirely. If the send buffer is ever
+	// full (k_EResultLimitExceeded) or the connection is otherwise unusable,
+	// GNS does not queue the message at all -- reliable does not mean
+	// retried if it was never accepted in the first place. That used to be a
+	// silent, permanent message loss (root cause of the "invisible but
+	// walkable" chunk-streaming bug, see the SendBufferSize comment in
+	// GnsRuntime::acquire() and STATE.md §8) with zero trace on either end.
+	// Raising the buffer fixes the common case; log loudly if it still ever
+	// happens so a recurrence isn't silent again.
+	const EResult result = SteamNetworkingSockets()->SendMessageToConnection(
 			static_cast<HSteamNetConnection>(conn), frame.data(),
 			static_cast<std::uint32_t>(frame.size()), flags, nullptr);
+	if (result != k_EResultOK) {
+		VB_ERROR("net", "SendMessageToConnection failed (result=",
+				static_cast<int>(result), ", ", frame.size(),
+				" bytes, lane=", static_cast<int>(lane), "): message dropped");
+	}
 }
 
 void GnsTransport::close(ConnId conn, std::string_view reason) {
