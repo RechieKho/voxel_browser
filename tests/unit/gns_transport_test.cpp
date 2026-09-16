@@ -42,9 +42,14 @@ bool pump_until(int attempts, Pred pred) {
 } // namespace
 
 TEST_CASE("GnsTransport: connect, exchange a message, and disconnect over real UDP") {
+	// GNS's direct-UDP listen path rejects port 0 ("Must specify local
+	// port."), unlike a plain BSD socket -- it has no ephemeral-port
+	// allocation, so tests must pick a concrete port themselves.
+	constexpr std::uint16_t kTestPort = 27201;
+
 	GnsTransport server;
-	REQUIRE(server.listen(0)); // port 0 -> OS picks a free port
-	REQUIRE(server.bound_port() != 0);
+	REQUIRE(server.listen(kTestPort));
+	REQUIRE(server.bound_port() == kTestPort);
 	CHECK(server.is_server());
 
 	GnsTransport client;

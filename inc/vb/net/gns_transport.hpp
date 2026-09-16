@@ -42,8 +42,10 @@ public:
 	bool is_server() const override;
 	std::size_t connection_count() const override;
 
-	// The actual bound UDP port after a successful listen(); differs from the
-	// requested port when 0 ("any free port") was passed. 0 if not listening.
+	// The actual bound UDP port after a successful listen(). 0 if not
+	// listening. Note: unlike a plain BSD socket, GNS's direct-UDP listen
+	// path has no ephemeral-port allocation -- listen(0) always fails with
+	// kBindFailed, so callers must always pass a concrete port.
 	std::uint16_t bound_port() const;
 
 	struct Impl;
