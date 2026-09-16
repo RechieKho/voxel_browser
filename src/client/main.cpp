@@ -290,13 +290,32 @@ int main(int argc, char **argv) {
 	}
 
 	// Client UI VM (spec §10.4, Phase 4.5): a second, restricted Lua VM,
-	// separate from PackRuntime's server-side one. No base pack exists yet
-	// (5.1), so nothing calls ui.define() at real runtime today -- the
-	// mechanism is exercised by tests; this wiring makes it live the moment
-	// content lands.
+	// separate from PackRuntime's server-side one. `ui/*.lua` travels over
+	// Asset Sync like any other pack file (Phase 4.4) -- load every synced
+	// file under `ui/` now that join (and the asset transfer that precedes
+	// it, §8.3) has completed. Loaded in `virtual_pack_fs()`'s (unordered)
+	// iteration order: harmless today since `ui.define` calls only add
+	// independent named entries, never depend on load order across files.
+	// **Known gap:** `--singleplayer` never asset-syncs (no PackRuntime/
+	// manifest on that in-process path, see REMAINING_TASKS.md 4.3), so this
+	// only runs anything for real multiplayer (`--server`) until that's wired.
 	vb::script::UiRuntime ui_runtime;
 	vb::render::UiRenderer ui_renderer;
 	ui_runtime.attach_session(*client);
+	for (const auto &[path, bytes] : client->virtual_pack_fs()) {
+		if (path.rfind("ui/", 0) != 0 || path.size() < 4 ||
+				path.substr(path.size() - 4) != ".lua") {
+			continue;
+		}
+		const std::string source(reinterpret_cast<const char *>(bytes.data()),
+				bytes.size());
+		const vb::script::ScriptResult result =
+				ui_runtime.load_pack_file(source, path);
+		if (!result.ok && result.error != vb::core::ScriptError::kDisabled) {
+			std::cerr << "client: ui pack file '" << path
+					  << "' failed to load: " << result.message << '\n';
+		}
+	}
 
 	vb::render::WindowConfig wcfg;
 	wcfg.headless = headless;

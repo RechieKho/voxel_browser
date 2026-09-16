@@ -1,0 +1,14 @@
+name = "base"
+version = "0.1.0"
+# Informational only (spec §14: "pack_version string is informational; the
+# block registry is always sent in full, so old clients cannot desync on
+# content"). Nothing in the engine parses or enforces this field yet.
+engine_version_req = "*"
+
+# Not read by the engine today: src/script/pack_loader.cpp loads
+# blocks/*.lua, entities/*.lua, biomes/*.lua (each sorted), then init.lua,
+# in that fixed order -- `require` isn't implemented yet (REMAINING_TASKS.md
+# 4.1), so init.lua can't pull the others in itself. Kept here anyway as the
+# spec-documented, forward-compatible field (§16) for whenever real `require`
+# lands and a pack can choose its own load order.
+entry = "init.lua"

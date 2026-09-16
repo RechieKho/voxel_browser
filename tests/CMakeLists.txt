@@ -10,6 +10,7 @@ add_executable(vb_tests
   unit/chunk_codec_test.cpp
   unit/cli_test.cpp
   unit/config_test.cpp
+  unit/content_pack_test.cpp
   unit/core_test.cpp
   unit/entity_visual_test.cpp
   unit/gns_transport_test.cpp
@@ -28,6 +29,13 @@ add_executable(vb_tests
   unit/world_replication_test.cpp
   unit/world_test.cpp
   unit/worldgen_test.cpp
+)
+
+# Lets content_pack_test.cpp find content/base regardless of the test
+# binary's working directory (which ctest sets to the build dir, not the
+# source tree).
+target_compile_definitions(vb_tests PRIVATE
+  VB_PROJECT_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
 )
 
 target_link_libraries(vb_tests

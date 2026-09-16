@@ -27,6 +27,7 @@
 #include "vb/net/session.hpp"
 #include "vb/net/world_replicator.hpp"
 #include "vb/physics/movement.hpp"
+#include "vb/script/pack_loader.hpp"
 #include "vb/script/pack_runtime.hpp"
 #include "vb/world/block.hpp"
 #include "vb/world/world.hpp"
@@ -109,11 +110,17 @@ int main(int argc, char **argv) {
 
 	// One shared, mutable registry: PackRuntime may extend it with
 	// vb.register_block before it's frozen and copied into World/WorldGenerator
-	// (Phase 4.2). No base pack exists yet (waits on 5.1), so this currently
-	// just freezes the Phase 2 base() set unchanged.
+	// (Phase 4.2). Phase 5.1's content/base pack re-declares the Phase 2 base
+	// set by name (`add_or_get` is idempotent), so ids are unchanged unless the
+	// pack adds something new.
 	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
 	vb::script::PackRuntime pack_runtime(transport, registry,
 			std::filesystem::path(config.content_pack) / "storage.json");
+	if (!vb::script::load_content_pack(pack_runtime, config.content_pack)) {
+		std::cerr << "server: content pack '" << config.content_pack
+				  << "' failed to load, aborting\n";
+		return EXIT_FAILURE;
+	}
 	pack_runtime.freeze();
 
 	// Asset manifest (Phase 4.4): built once at startup from the content

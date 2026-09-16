@@ -756,16 +756,91 @@ screen") is content, not mechanism: there is no `content/base` pack yet
 
 Goal: a small, coherent, playable multiplayer sandbox.
 
-### 5.1 Base content pack (`content/base`)
+### 5.1 Base content pack (`content/base`)  🚧 (registration + wiring done; art/inventory-sync deferred)
 
-- [ ] `pack.toml`, `init.lua`.
-- [ ] Blocks: dirt, grass, wood, leaves, stone, sand (+ air) — `blocks/*.lua`,
-      16×16 textures, correct solid/opaque/model flags.
-- [ ] Biome(s): plains/forest with surface rules + simple tree decoration.
+- [x] `pack.toml`, `init.lua`. **`entry` field is not actually read** — real
+      `require` still doesn't exist (4.1), so a pack's `init.lua` can't pull
+      in its own `blocks/*.lua` itself. New `vb::script::load_content_pack`
+      (`inc/vb/script/pack_loader.hpp` + `src/script/pack_loader.cpp`) is the
+      substitute: the *host* walks `blocks/*.lua` (sorted) → `entities/*.lua`
+      (sorted) → `biomes/*.lua` (sorted) → `init.lua`, loading each as its
+      own chunk into the same `PackRuntime`/Lua state — behaviourally one
+      concatenated script, since every file shares `vb.register_*`'s globals.
+      `pack.toml`'s `entry` is kept only as the spec-documented (§16) field
+      for whenever real `require` lands.
+- [x] **Closed a real gap, not just content:** neither binary ever loaded a
+      pack before this — `src/server/main.cpp` constructed a `PackRuntime`
+      and immediately `freeze()`d it with nothing registered (every Phase 4.2
+      test exercised `PackRuntime` directly, never through the server's own
+      main). Now wired: `load_content_pack(pack_runtime, config.content_pack)`
+      before `freeze()`, fatal-erroring the server on a real pack syntax/
+      runtime error (same "broken pack is fatal" pattern as a bad asset
+      manifest), non-fatal + once-logged on a `VB_WITH_LUA`-off build.
+- [x] Blocks: dirt, grass, wood, leaves, stone, sand — `blocks/*.lua`, each
+      `vb.register_block{...}` **re-declaring the exact name** the Phase 2
+      hardcoded `BlockRegistry::base()` (`src/world/block.cpp`) already used
+      (`add_or_get` is idempotent by name), so ids are unchanged unless the
+      pack adds something new. `on_break` gives the broken block back to the
+      breaking player via `player:give(...)` — a real, working drop (not the
+      still-unmaterialized `on_break` *return-value* path
+      `pack_runtime.cpp`'s `on_block_edit_after` only logs). `blocks/grass.lua`
+      drops dirt (`base_dirt_id`, a plain Lua global blocks/dirt.lua sets —
+      the cross-file-shared-globals mechanism the loader above relies on).
+      **No textures** — nothing in the client consumes a per-block texture
+      yet (4.3's known gap: "still just untextured cubes"), so no `.png`
+      files were added; would be inert weight until a texture/atlas loader
+      exists.
+- [~] Biome(s): `biomes/plains.lua` / `biomes/forest.lua` call
+      `vb.register_biome{...}` with surface/filler/stone (+ a `decoration`
+      hint on forest) — **purely declarative**, same as `register_biome`
+      already was: nothing reads a biome back (`WorldGenerator` is still the
+      Phase 2 hardcoded fBm pipeline, `vb.worldgen.set_pipeline` doesn't
+      exist). No tree decoration — the worldgen decoration pass itself is
+      unbuilt (2.2).
+- [x] Client UI screens wired end-to-end for real multiplayer:
+      `src/client/main.cpp` now loads every synced `ui/*.lua` file from
+      `ClientSession::virtual_pack_fs()` (Asset Sync, 4.4) into `UiRuntime`
+      right after join — the same "mechanism shipped, nothing called it"
+      gap 4.5 flagged is closed for *loading*. `ui/pause.lua` and
+      `ui/inventory.lua` (`base:pause` / `base:inventory`) are real,
+      loadable `ui.define` screens.
+      **Known gap, not attempted:** nothing can *open* either screen in
+      real gameplay yet — `player:open_ui` is server-push-only and there is
+      no client gesture or C2S message requesting "open my inventory" /
+      "pause" (5.4 tracks chat/interact messages generally; an open-UI
+      request is the same shape of gap). `ui/inventory.lua` also renders
+      numeric item ids, not names (`vb.register_item` never allocates its
+      own id space — see below), and uses a `list` widget in place of the
+      spec's item-grid (still doesn't exist, 4.5).
+      **`--singleplayer` still doesn't asset-sync at all** (no
+      `PackRuntime`/manifest on that in-process path — REMAINING_TASKS.md
+      4.3's pre-existing note), so this new loading loop only ever finds
+      files for real multiplayer (`--server`) connections, unchanged from
+      before.
 - [ ] Player + dropped-item billboard sprite atlases (§11.3 / 3.5) — replaces the
-      Phase 3 flat-placeholder quad with real directional art.
-- [ ] Dropped-item entity; basic inventory + hotbar.
-- [ ] Simple crafting recipes (wood → planks → sticks, etc.) — optional.
+      Phase 3 flat-placeholder quad with real directional art. Not started.
+- [ ] Dropped-item entity — `entities/dropped_item.lua` registers
+      `base:dropped_item` via `vb.register_entity` (declarative only, same
+      "nothing dispatches spawn/tick" gap as `register_biome` — waits on
+      3.1's EnTT registry); real drops in this pack go straight into the
+      breaking player's inventory (see blocks/*.lua above) instead of
+      spawning a world entity.
+- [ ] Real inventory: `entity:get_inventory()`/`player:give()` (4.2) work and
+      are used by `blocks/*.lua`'s `on_break`, but there is **no wire
+      message syncing inventory contents to the client at all** — it's
+      server-Lua-only state. `ui/inventory.lua` can only show a snapshot
+      handed to it explicitly via `player:open_ui("base:inventory", {slots =
+      player:get_inventory()})` from a script, not anything live. A real
+      hotbar needs this closed first.
+- [ ] Basic hotbar — client HUD, waits on the inventory-sync gap above.
+- [ ] Simple crafting recipes (wood → planks → sticks, etc.) — optional, not
+      attempted; `vb.register_craft` remains captured with zero consumer.
+- [x] New regression coverage: `tests/unit/content_pack_test.cpp` loads the
+      *real* `content/base` files (not inline Lua strings, unlike every
+      other pack_runtime test) through `load_content_pack`, asserting they
+      parse/register cleanly and re-declare the base block ids unchanged;
+      plus a broken-pack-file-is-fatal case. Nothing else in the suite
+      exercises the shipped files themselves.
 
 ### 5.2 Block breaking / placing over the network (§8.5)  🚧
 

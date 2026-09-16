@@ -13,4 +13,7 @@ compile_commands.json
 /server.toml
 /client.toml
 
+# vb.storage's JSON backing file (Phase 4.2) -- runtime state, not content.
+content/*/storage.json
+
 .cache/*

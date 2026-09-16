@@ -7,7 +7,9 @@
 > Companion docs: `ARCHITECTURE_SPEC.md` (target design) · `REMAINING_TASKS.md`
 > (implementation backlog). This file is for *traps and context*, not the plan.
 
-Last updated: 2026-09-16 (Phase 4 — server/client Lua + asset sync + UI VM — complete end-to-end, mechanism-only, no content pack yet; see §8's 2026-09-16 entry)
+Last updated: 2026-09-16 (Phase 5.1 — content/base pack: registration content +
+the load_content_pack wiring that was missing from both binaries; see §8's
+second 2026-09-16 entry)
 
 ---
 
@@ -1415,3 +1417,121 @@ _(Move items here with a date + commit when fixed, so the history is visible.)_
 - Local dev on this Windows box: `clang`/`clang++` (LLVM 21) work; no `gcc`/`cl`
   on PATH in git-bash. `CC=clang CXX=clang++ cmake -G Ninja` configures fine.
   First configure is slow (~130s) — raylib + deep git clones.
+
+- **2026-09-16 — Phase 5.1: `content/base` pack written, and a real gap
+  found & fixed along the way: neither binary ever loaded a content pack at
+  all (uncommitted at time of writing).**
+  Before this: `src/server/main.cpp` constructed a `PackRuntime` and called
+  `freeze()` immediately with nothing registered — `content_pack` in
+  `server.toml` was read (for the asset manifest + storage path) but never
+  actually pointed at anything Lua. Every Phase 4.2 test exercised
+  `PackRuntime` directly (`load_pack_file` with inline source strings), so
+  this never showed up as a test failure — it's the same category of gap as
+  4.5's "nothing calls `ui.define` at real runtime today", just never
+  written down explicitly for the server side.
+  **Why a loader was needed instead of just `pack_runtime.load_pack_file(
+  read_whole_file("init.lua"))`:** the spec's pack layout (§16) has
+  `init.lua` `require` in `blocks/*.lua`/`entities/*.lua`, but `require` is
+  one of the globals nil'd out by the sandbox (`vm.cpp`'s `strip_sandbox`)
+  and was never reimplemented over the virtual pack FS (tracked as a
+  REMAINING_TASKS.md 4.1 follow-up, still open). New
+  `vb::script::load_content_pack` (`inc/vb/script/pack_loader.hpp` +
+  `src/script/pack_loader.cpp`) works around this at the *host* level
+  instead: walks `blocks/*.lua` → `entities/*.lua` → `biomes/*.lua` (each
+  sorted for determinism) → `init.lua`, calling `load_pack_file` once per
+  file. This is behaviourally identical to one concatenated script because
+  every file shares the same Lua globals (`vb.register_block` etc. all live
+  on one `PackRuntime`'s `sol::state`) — a later file (e.g.
+  `blocks/grass.lua`) can read a plain global a sorted-earlier file set
+  (`blocks/dirt.lua` sets `base_dirt_id`), which is how `content/base`
+  itself demonstrates cross-file sharing without `require`.
+  `src/server/main.cpp` now calls this before `freeze()`, and treats a real
+  syntax/runtime error in any pack file as fatal server startup (same "a
+  broken pack is a broken deployment" posture as a bad asset manifest);
+  `core::ScriptError::kDisabled` (a `VB_WITH_LUA`-off build) is treated as
+  non-fatal and logged once, matching every other `VB_WITH_*`-off
+  graceful-degrade in this codebase.
+  **The client had the identical gap for UI screens**, also fixed:
+  `src/client/main.cpp` never called `UiRuntime::load_pack_file` for
+  anything, so `ui.define` was never invoked outside tests either (4.5's
+  exact words: "nothing calls `ui.define` at real runtime today"). Now,
+  right after a real multiplayer join (`--server`, not `--singleplayer` —
+  see below), the client iterates `ClientSession::virtual_pack_fs()`
+  (Asset Sync's in-memory synced-files map, 4.4 — populated by the time
+  join completes, since asset transfer sits between Auth and Ready in the
+  handshake, §8.3) and loads every `ui/*.lua` entry into `UiRuntime`.
+  **Known gap this does NOT close, worth knowing before assuming UI
+  screens are reachable:** `player:open_ui(name, ctx)` is still the *only*
+  way any screen opens (server-push only), and nothing calls it in real
+  gameplay — there's no client keybind or C2S message requesting "open my
+  inventory" or "pause". `content/base/ui/{pause,inventory}.lua` load and
+  register cleanly (verified — see below) but currently can't be triggered
+  by a player. That's a `REMAINING_TASKS.md` 5.1/5.4-shaped follow-up, not
+  attempted here on purpose (adding an ad-hoc trigger, e.g. auto-opening
+  the inventory on every block break, would be surprising unrequested
+  gameplay behaviour, not a real fix).
+  **`--singleplayer` still doesn't wire any of this** — it has no
+  `PackRuntime`/asset manifest on its in-process `IntegratedGame` path at
+  all (pre-existing gap, REMAINING_TASKS.md 4.3 already noted this for the
+  block registry specifically; it applies equally to the pack loader and UI
+  loading added here). Not attempted — wiring a `PackRuntime` into
+  `Singleplayer`'s constructor (`src/client/main.cpp`) is a real, separate
+  chunk of work (needs its own manifest/storage path, and the *client*
+  reading Lua files straight off disk instead of through asset sync since
+  there's no separate server process to sync from), closer in spirit to
+  5.3's "integrated-server path for singleplayer" than to authoring pack
+  content.
+  **Content itself** (`content/base/{pack.toml,init.lua,blocks,entities,
+  biomes,ui}/*.lua`): registers the Phase 2 base block set by name (ids
+  unchanged, `add_or_get` is idempotent), wires `on_break` to actually give
+  the broken block back via `player:give(...)` (a real drop — distinct
+  from `on_break`'s *return value*, which `pack_runtime.cpp`'s
+  `on_block_edit_after` still only logs, not materializes), and declares
+  two biomes + one entity kind purely for the pack-format shape (neither
+  has a consumer yet — worldgen is still the hardcoded Phase 2 pipeline,
+  and generic entities still wait on 3.1's EnTT registry). `vb.storage` is
+  used for real (a boot counter), not just declared, to prove the
+  JSON-round-trip path actually persists across restarts (verified live,
+  see below). Full accounting of what's real vs. still-declarative lives in
+  `REMAINING_TASKS.md`'s Phase 5.1 section now — this entry is the *why*,
+  that one's the checklist.
+  **New test:** `tests/unit/content_pack_test.cpp` loads the real
+  `content/base` files (not inline strings, unlike every existing
+  `pack_runtime_test.cpp` case) via `load_content_pack`, asserting a clean
+  load + unchanged block ids, plus a separate broken-pack-directory-is-
+  fatal case. Needed a new `VB_PROJECT_SOURCE_DIR` compile definition on
+  `vb_tests` (`tests/CMakeLists.txt`) since ctest's working directory is
+  the build dir, not the source tree, and this is the first test that needs
+  to find a real file under the repo root rather than a temp file it wrote
+  itself.
+  **Verified, not just built:** full `vb_tests` green on `build-lua/`
+  (`VB_WITH_LUA=ON`, headless-only build, 180/180) and on `build-net/`
+  (`VB_WITH_NET=ON`, `VB_WITH_LUA=OFF`, real GNS + real client, 147/148 —
+  the 1 failure is the pre-existing sandbox UDP-bind one from §3, confirmed
+  unrelated). Ran the actual dedicated server twice in a row against
+  `content/base` (`build-lua/voxel_browser_server.exe --content-pack
+  content/base`) and watched `vb.storage.boot_count` go 1 → 2 across the
+  two separate process runs, proving the persistence path really works, not
+  just that the code compiles. Ran a real two-process smoke test over
+  `build-net`'s GNS build: `voxel_browser_server.exe --content-pack
+  content/base --port 27099` + a real headless `voxel_browser.exe --server
+  127.0.0.1 --port 27099` joined successfully and received an
+  8-block registry (the unchanged Phase 2 base set, since this build has no
+  Lua) — confirms `load_content_pack`'s `VB_WITH_LUA`-off degrade path
+  doesn't break a live join. **First caught a stale-binary trap while doing
+  this:** `build-net`'s `voxel_browser_server.exe` hadn't been rebuilt after
+  editing `src/server/main.cpp` (only `voxel_browser`/`vb_tests` were
+  explicitly targeted) — the old binary printed the *previous* commit's
+  version banner and rejected the handshake outright (protocol mismatch, 3
+  vs. 7); always rebuild every target that changed, not just the one you
+  think you're testing, before trusting a live-process smoke test.
+  **Not done / worth knowing before touching this again:** no full
+  4-way combination (`VB_WITH_LUA=ON` *and* `VB_WITH_NET=ON` *and* a real
+  client build) exists in this environment's build dirs, so the "a real
+  Lua-driven block registry (more than 8 blocks) reaches a real
+  GNS-connected client" path specifically is unverified live — it rests on
+  `build-lua`'s server-side test coverage (Lua registration definitely
+  works) plus `build-net`'s live-join coverage (the wire path definitely
+  works) separately, not both at once. If content ever adds a genuinely
+  new block (not just a re-declaration), that combination is worth a real
+  live check before trusting it blind.
