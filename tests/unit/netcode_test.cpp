@@ -208,6 +208,62 @@ TEST_CASE("chat: a broadcast reaches every playing client, including the sender"
 	CHECK(b->take_chat_messages().empty());
 }
 
+TEST_CASE("day/night: time_of_day advances server-side and syncs to clients") {
+	LoopbackNetwork net;
+	ServerSession server(net.server(), [] {
+		HandshakeServerConfig c;
+		c.world_seed = 1;
+		return c;
+	}());
+	// 100s/day (240 ticks/sec) instead of the 1200s default -- fast enough to
+	// observe real movement over a handful of test ticks without wrapping.
+	server.set_day_length_seconds(100.0);
+	REQUIRE(net.server().listen(0));
+
+	vb::net::Transport &ta = net.create_client();
+	auto ida = ta.connect("x", 0);
+	REQUIRE(ida);
+	std::optional<ClientSession> a;
+	a.emplace(ta, *ida, HandshakeClientConfig{ "Alice", "", "v", 1 });
+
+	auto pump_a = [&](int n) {
+		for (int i = 0; i < n; ++i) {
+			server.tick(0.05);
+			a->tick(0.05);
+		}
+	};
+	pump_a(16);
+	REQUIRE(a->joined());
+	const std::uint32_t joined_time = a->join_accept()->time_of_day;
+	// No S2C_TimeOfDay has necessarily landed yet -- falls back to
+	// S2C_JoinAccept's value.
+	CHECK(a->time_of_day() == joined_time);
+
+	// Advance past at least one 1s broadcast interval. The client only sees
+	// the last broadcast value, not the server's live-ticking clock, so
+	// assert it moved forward and is no further ahead than the server
+	// currently is -- not exact equality (the server keeps ticking between
+	// broadcasts).
+	pump_a(30);
+	CHECK(a->time_of_day() > joined_time);
+	CHECK(a->time_of_day() <= server.time_of_day());
+
+	// A second client joining later gets a live (later) time_of_day, not
+	// whatever the server started at.
+	vb::net::Transport &tb = net.create_client();
+	auto idb = tb.connect("x", 0);
+	REQUIRE(idb);
+	std::optional<ClientSession> b;
+	b.emplace(tb, *idb, HandshakeClientConfig{ "Bob", "", "v", 2 });
+	for (int i = 0; i < 16; ++i) {
+		server.tick(0.05);
+		a->tick(0.05);
+		b->tick(0.05);
+	}
+	REQUIRE(b->joined());
+	CHECK(b->join_accept()->time_of_day > joined_time);
+}
+
 TEST_CASE(
 		"player join/leave: existing players are listed to a newcomer and "
 		"told when they arrive/leave") {

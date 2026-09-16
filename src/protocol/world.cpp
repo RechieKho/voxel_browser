@@ -228,4 +228,17 @@ Decoded<S2CBlockEditResult> S2CBlockEditResult::decode(
 	return finish(r, std::move(m));
 }
 
+// --- S2CTimeOfDay ---------------------------------------------------------
+void S2CTimeOfDay::encode(std::vector<std::byte> &out) const {
+	ByteWriter w(out);
+	w.u32(time_of_day);
+}
+
+Decoded<S2CTimeOfDay> S2CTimeOfDay::decode(std::span<const std::byte> in) {
+	ByteReader r(in);
+	S2CTimeOfDay m;
+	m.time_of_day = r.u32();
+	return finish(r, std::move(m));
+}
+
 } // namespace vb::protocol

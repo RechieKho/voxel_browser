@@ -45,6 +45,7 @@
 #include "vb/render/window.hpp"
 #include "vb/script/ui_runtime.hpp"
 #include "vb/world/block.hpp"
+#include "vb/world/daynight.hpp"
 #include "vb/world/raycast.hpp"
 #include "vb/world/world.hpp"
 #include "vb/worldgen/generator.hpp"
@@ -196,7 +197,8 @@ Camera3D to_camera(const vb::render::FirstPersonController &c, float fovy) {
 
 void draw_overlay(const vb::render::FirstPersonController &c,
 		const std::string &status, std::size_t chunk_count,
-		std::size_t entity_count, bool mouse_captured) {
+		std::size_t entity_count, bool mouse_captured,
+		std::uint32_t time_of_day) {
 	const vb::core::Vec3d p = c.position();
 	char line[160];
 	DrawText("voxel_browser", 12, 12, 20, RAYWHITE);
@@ -208,10 +210,14 @@ void draw_overlay(const vb::render::FirstPersonController &c,
 	std::snprintf(line, sizeof(line), "look yaw %.0f  pitch %.0f", c.yaw(),
 			c.pitch());
 	DrawText(line, 12, 86, 18, Color{ 170, 170, 180, 255 });
+	// kTicksPerDay (24000) / 24h conveniently gives 1000 ticks/hour.
+	std::snprintf(line, sizeof(line), "time %02u:%02u",
+			time_of_day / 1000u, (time_of_day % 1000u) * 60u / 1000u);
+	DrawText(line, 12, 108, 16, Color{ 170, 170, 180, 255 });
 	DrawText(mouse_captured ? "mouse captured (Tab to release)"
 							: "click to capture mouse",
-			12, 108, 16, Color{ 140, 140, 150, 255 });
-	DrawFPS(12, 132);
+			12, 130, 16, Color{ 140, 140, 150, 255 });
+	DrawFPS(12, 154);
 }
 
 const char *connecting_status_text(vb::net::ClientHandshakeStatus s) {
@@ -737,6 +743,16 @@ int main(int argc, char **argv) {
 					entity_count = entity_renderer->tracked_count();
 				}
 
+				// Day/night sky (spec §5.4): a simple gradient driven by the
+				// server's time_of_day clock (S2C_JoinAccept's initial value,
+				// kept current by periodic S2C_TimeOfDay updates). Overwrites
+				// window.begin_frame()'s flat dark clear for this state only.
+				{
+					const vb::world::SkyColor sky =
+							vb::world::sky_color_for_time(client->time_of_day());
+					ClearBackground(Color{ sky.r, sky.g, sky.b, 255 });
+				}
+
 				const Camera3D camera = to_camera(controller, fov);
 				BeginMode3D(camera);
 				DrawGrid(64, 4.0f);
@@ -755,7 +771,7 @@ int main(int argc, char **argv) {
 				}
 				EndMode3D();
 				draw_overlay(controller, status, chunk_count, entity_count,
-						mouse_captured);
+						mouse_captured, client->time_of_day());
 
 				// Player list (spec §5.4): top-right, this client's name plus
 				// everyone S2C_PlayerList/S2C_PlayerJoin/S2C_PlayerLeave says

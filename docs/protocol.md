@@ -4,8 +4,15 @@
 > as any change to a struct in `inc/vb/protocol/`, and bump
 > `kEngineProtocolVersion` in `cmake/version.hpp.in`.
 
-Current `ENGINE_PROTOCOL_VERSION`: **9**.
+Current `ENGINE_PROTOCOL_VERSION`: **10**.
 
+- **10** — `S2C_TimeOfDay` (46) payload defined (Phase 5.4, day/night cycle):
+  `u32 time_of_day`. The server advances a `time_of_day` clock every tick
+  (`vb::world::advance_time_of_day`, `ServerSession::set_day_length_seconds`,
+  default 1200s/day) and broadcasts it to every playing connection about once
+  a second; `S2C_JoinAccept::time_of_day` already carried the initial value
+  (since version 1) but nothing advanced it server-side or kept an
+  already-connected client in sync until now.
 - **9** — `S2C_PlayerJoin` (104), `S2C_PlayerLeave` (105), `S2C_PlayerList`
   (106) payloads defined (Phase 5.4, player list / join-leave messages).
   Broadcast to already-playing connections when a new player finishes the
@@ -172,6 +179,27 @@ light change fans out to every interested player as an `S2C_ChunkDelta`; the
 server validates reach (≤ 5.5 blocks from the eye), target validity, and
 non-floating placement (a Lua `block_break`/`block_place` veto slots in at
 Phase 4.2).
+
+### Day/night — `inc/vb/protocol/world.hpp` (implemented)
+
+| Type (id)            | Fields                |
+| --------------------- | --------------------- |
+| `S2C_TimeOfDay` (46)  | `u32 time_of_day`     |
+
+Periodic update of the clock `S2C_JoinAccept::time_of_day` already seeds at
+join (spec §5.4). `ServerSession` advances its own `time_of_day` once per
+tick (`vb::world::advance_time_of_day`, day length configurable via
+`ServerSession::set_day_length_seconds`, default 1200s/day) and broadcasts
+`S2C_TimeOfDay` to every playing connection roughly once a second — coarser
+than snapshots since the clock only needs to look smooth, not be exact every
+tick. The client folds it into `ClientSession::time_of_day()`, which returns
+the join-time value until the first update lands. Tick convention: 0 =
+sunrise, `kTicksPerDay/4` = noon, `kTicksPerDay/2` = sunset,
+`3*kTicksPerDay/4` = midnight, wrapping at `kTicksPerDay` (24000) —
+see `vb::world::daynight.hpp`. `src/client/main.cpp` derives a simple
+4-keyframe sky gradient color from it (`sky_color_for_time`) for the
+`ClearBackground` behind the 3D view, plus an "HH:MM" readout in the debug
+overlay.
 
 ### Chat / UI RPC — `inc/vb/protocol/chat.hpp` (implemented)
 

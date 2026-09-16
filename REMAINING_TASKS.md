@@ -951,8 +951,39 @@ hold-to-break progress, cross-chunk relight.
 
 ### 5.4 Play polish
 
-- [ ] Day/night `time_of_day` from `JoinAccept`, advanced server-side, simple sky
-      gradient client-side.
+- [x] Day/night `time_of_day` from `JoinAccept`, advanced server-side, simple sky
+      gradient client-side: `S2C_TimeOfDay` (46) — `inc/vb/protocol/world.hpp`
+      + `src/protocol/world.cpp`, round-trip tested. `kEngineProtocolVersion`
+      bumped 9 → 10. `S2C_JoinAccept::time_of_day` existed since Phase 1.3
+      but nothing ever advanced it or kept an already-connected client in
+      sync — closed both gaps: new pure (no raylib) `vb::world::daynight.hpp`
+      + `.cpp` (`kTicksPerDay = 24000`, `advance_time_of_day`,
+      `sky_brightness`, `sky_color_for_time`; unit-tested,
+      `tests/unit/daynight_test.cpp`), `ServerSession` advances its own
+      `time_of_day` every tick (`set_day_length_seconds`, default
+      1200s/day == 20 real minutes), fills a joining player's `JoinGrant
+      ::time_of_day` from it, and broadcasts `S2C_TimeOfDay` to every playing
+      connection about once a second (coarser than snapshots — the clock
+      only needs to look smooth). `ClientSession::time_of_day()` returns the
+      join-time value until the first update lands, then tracks the latest
+      broadcast. `src/client/main.cpp`: `ClearBackground` behind the 3D view
+      uses `sky_color_for_time(client->time_of_day())` (a 4-keyframe
+      sunrise/noon/sunset/midnight gradient, not a physically based sky),
+      plus an "HH:MM" readout added to the existing debug overlay. Tests:
+      `tests/unit/protocol_test.cpp` (round-trip),
+      `tests/unit/daynight_test.cpp` (rate/wrap/brightness/color math), and a
+      new `tests/unit/netcode_test.cpp` case (sped-up day length; asserts a
+      joined client's clock advances past its join-time value via the
+      periodic broadcast, and a second client joining later gets a later
+      `JoinAccept.time_of_day` than the first — proving the grant is
+      live-filled per join, not fixed at server startup). Full `ctest` green
+      (4/4) on `build-asan-nonet`; clean `-DVB_WARNINGS_AS_ERRORS=ON` build
+      of all three targets.
+      Not attempted: no ambient-light/mob-spawning gameplay coupling (purely
+      cosmetic this pass); no ability for a pack to set/override the day
+      length or a specific starting time_of_day (`set_day_length_seconds` is
+      C++-only, no `vb.` Lua binding); the sky gradient is a flat
+      `ClearBackground` fill, not a real skybox/sun/moon/star render.
 - [x] Chat: `C2S_Chat` (100) + `S2C_Chat` (101) — `inc/vb/protocol/chat.hpp` +
       `src/protocol/chat.cpp`, round-trip tested. `kEngineProtocolVersion`
       bumped 7 → 8. `ServerSession::set_chat_handler` (mirrors

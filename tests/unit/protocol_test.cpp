@@ -211,6 +211,11 @@ TEST_CASE("block registry round-trips, including an empty list") {
 	CHECK(r2.blocks == reg.blocks);
 }
 
+TEST_CASE("time of day round-trips") {
+	auto t = round_trip(S2CTimeOfDay{ 12345 });
+	CHECK(t.time_of_day == 12345);
+}
+
 TEST_CASE("asset sync messages round-trip") {
 	const vb::core::AssetHash h1{ 0x1122334455667788ull, 0x99AABBCCDDEEFF00ull };
 	const vb::core::AssetHash h2{ 0xDEADBEEFDEADBEEFull, 0x1ull };

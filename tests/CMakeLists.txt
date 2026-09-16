@@ -12,6 +12,7 @@ add_executable(vb_tests
   unit/config_test.cpp
   unit/content_pack_test.cpp
   unit/core_test.cpp
+  unit/daynight_test.cpp
   unit/entity_visual_test.cpp
   unit/gns_transport_test.cpp
   unit/lighting_test.cpp

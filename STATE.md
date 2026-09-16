@@ -7,9 +7,12 @@
 > Companion docs: `ARCHITECTURE_SPEC.md` (target design) · `REMAINING_TASKS.md`
 > (implementation backlog). This file is for *traps and context*, not the plan.
 
-Last updated: 2026-09-16 (Phase 5.4 — player list / join-leave messages:
-`S2C_PlayerJoin`/`S2C_PlayerLeave`/`S2C_PlayerList`, `ClientSession::players()`,
-top-right HUD list; see §8's fifth 2026-09-16 entry. Phase 5.4 — chat:
+Last updated: 2026-09-16 (Phase 5.4 — day/night: `S2C_TimeOfDay`,
+`vb::world::daynight.hpp` (pure tick/color math), sky-gradient `ClearBackground`
++ HH:MM overlay readout; see §8's sixth 2026-09-16 entry. Phase 5.4 — player
+list / join-leave messages: `S2C_PlayerJoin`/`S2C_PlayerLeave`/`S2C_PlayerList`,
+`ClientSession::players()`, top-right HUD list; see §8's fifth 2026-09-16
+entry. Phase 5.4 — chat:
 `C2S_Chat`/`S2C_Chat` wired end-to-end, `vb.on("chat")` veto, HUD chat box;
 see §8's fourth 2026-09-16 entry. Phase 5.3 — main menu: `vb::render::MainMenu`
 + an `AppState` machine in `src/client/main.cpp` so the window opens before
@@ -1728,3 +1731,76 @@ _(Move items here with a date + commit when fixed, so the history is visible.)_
   chat, no separate colour or channel); player list carries no extra
   per-player metadata (ping, idle time, `net_id` itself isn't shown in the
   HUD even though it's in the map).
+
+- **2026-09-16 (6th): Phase 5.4 day/night cycle** — `S2C_TimeOfDay` (46);
+  `kEngineProtocolVersion` bumped 9 → 10. `S2C_JoinAccept::time_of_day` has
+  existed since Phase 1.3 (spec §8.3's handshake diagram always included it)
+  but was pure dead weight until now: no server ever advanced it (`JoinGrant
+  ::time_of_day` defaulted to 0 and nothing touched it after), and there was
+  no message to keep an already-connected client's copy current even if it
+  had. Same "shipped mechanism, no content" pattern as most of Phase 4/5.
+  **New pure-logic header**, `inc/vb/world/daynight.hpp` +
+  `src/world/daynight.cpp` — deliberately no raylib dependency (same
+  reasoning as `vb/render/entity_visual.hpp`: keeps it unit-testable without
+  a GL context). `kTicksPerDay = 24000` (0 = sunrise, 1/4 = noon, 1/2 =
+  sunset, 3/4 = midnight — picked to match the existing `S2CJoinAccept`
+  doc-comment "ticks into the day cycle" and give round numbers, not lifted
+  from anywhere in the spec, which doesn't pin an exact tick count).
+  `advance_time_of_day(current, dt, day_length_seconds)` does the
+  accumulate-and-wrap math; `sky_brightness`/`sky_color_for_time` are a
+  simple 4-keyframe (sunrise/noon/sunset/midnight) lerp — "simple sky
+  gradient" per the spec line, not a physically based sky model.
+  **Server:** `ServerSession` gained a `double time_of_day_ticks_`
+  accumulator (double, not the wire `u32`, so slow real-time accrual doesn't
+  get truncated to zero every tick), advanced once per `tick()` via
+  `advance_time_of_day`; `set_day_length_seconds(seconds)` (default 1200.0
+  == 20 real minutes/day, arbitrary but a common game-y pace, no spec
+  number to match). The constructor's existing `on_ready` wrapper (the one
+  that already fills in `net_id`/`world_seed` if a user hook left them at
+  their zero-ish defaults — Phase 1.3) now also unconditionally sets
+  `grant.time_of_day` from the live accumulator, so every join gets the
+  *current* time, not whatever a test/host happened to return. Broadcasts
+  `S2C_TimeOfDay` to every playing connection roughly once a second
+  (`kTimeOfDayBroadcastIntervalSeconds`, a plain accumulator next to the
+  existing `kAssetSendBudgetPerTick`-style anonymous-namespace constants) —
+  deliberately coarser than snapshots/world state, since a clock only needs
+  to *look* smooth, doesn't need per-tick precision over the wire.
+  **Client:** `ClientSession::time_of_day()` returns
+  `join_accept()->time_of_day` until the first `S2C_TimeOfDay` lands, then
+  the latest broadcast value (`std::optional<uint32_t> time_of_day_override_`)
+  — same "unset falls back to the handshake's own copy" shape as
+  `players()`/chat needed no such fallback (those start genuinely empty,
+  this one has a real seed value from the handshake itself).
+  `src/client/main.cpp`: in the `kPlaying` state only, right before
+  `BeginMode3D`, a second `ClearBackground` call (raylib allows multiple
+  per frame; only the state actually drawn after it matters) overwrites
+  `Window::begin_frame()`'s flat dark clear with
+  `sky_color_for_time(client->time_of_day())`. `draw_overlay()` gained an
+  "HH:MM" line, computed from the convenient fact that 24000 ticks/24h is
+  exactly 1000 ticks/hour (`time_of_day / 1000`, `(time_of_day % 1000) *
+  60 / 1000`) — no floating point needed for the readout.
+  **Verified:** `tests/unit/daynight_test.cpp` (new, 8 cases: rate matches
+  `day_length_seconds`, wraps at `kTicksPerDay`, a misconfigured
+  zero/negative day length freezes instead of NaN/dividing by zero,
+  brightness peaks at noon and dims toward midnight, both wrap cleanly past
+  `kTicksPerDay`, color interpolates smoothly not in discrete jumps);
+  `tests/unit/protocol_test.cpp` round-trip; a new
+  `tests/unit/netcode_test.cpp` case (day length sped up to 100s/day so the
+  test doesn't need to wait 1200s) proving a joined client's `time_of_day()`
+  advances past its join-time value once the periodic broadcast lands (with
+  a **known sharp edge, deliberately not over-asserted**: the client only
+  ever reflects the *last broadcast*, not the server's continuously-ticking
+  clock, so the test checks `<=` against `server.time_of_day()`, not `==` —
+  an early draft asserted equality and flaked on timing) and that a second
+  client joining later gets a strictly later `JoinAccept.time_of_day` than
+  the first, proving the grant is live-filled per join. Full `ctest` green
+  (4/4) on `build-asan-nonet`; clean `-DVB_WARNINGS_AS_ERRORS=ON` build of
+  all three targets. Not re-verified with a live windowed launch this pass
+  (same judgment call as the two 2026-09-16 entries above it — the actual
+  sky-color math is unit-tested in isolation, and the render-loop glue is a
+  two-line `ClearBackground`/`DrawText` call over an already-tested value).
+  **Not attempted:** no ambient-light/mob-spawning gameplay coupling
+  (cosmetic only this pass); no Lua binding to read/set the day length or a
+  starting time_of_day (`set_day_length_seconds` is C++-only,
+  `PackRuntime`/`vb.` has nothing for it); the sky is a flat
+  `ClearBackground` fill, not a skybox/sun/moon/star render.

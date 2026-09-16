@@ -8,6 +8,7 @@
 #include "vb/core/math.hpp"
 #include "vb/protocol/message.hpp"
 #include "vb/protocol/world.hpp"
+#include "vb/world/daynight.hpp"
 
 namespace vb::net {
 
@@ -20,6 +21,11 @@ std::span<const std::byte> span_of(const std::vector<std::byte> &v) {
 // Per-tick S2C_AssetData send budget (spec §9.3's pacing, simple per-tick
 // cap rather than literal byte-in-flight windowing).
 constexpr int kAssetSendBudgetPerTick = 4;
+
+// How often S2C_TimeOfDay goes out to already-connected clients (spec §5.4).
+// Coarser than snapshots/world state -- the clock only needs to look smooth,
+// not be exact every tick.
+constexpr double kTimeOfDayBroadcastIntervalSeconds = 1.0;
 
 // Fallback voxel query when no world replicator is attached (entity-only
 // sessions and early tests): everything is open air.
@@ -78,6 +84,7 @@ ServerSession::ServerSession(Transport &transport, HandshakeServerConfig config,
 		if (grant.world_seed == 0) {
 			grant.world_seed = config_.world_seed;
 		}
+		grant.time_of_day = static_cast<std::uint32_t>(time_of_day_ticks_);
 		return grant;
 	};
 }
@@ -362,9 +369,26 @@ void ServerSession::tick(double dt_seconds) {
 		drop(conn, reason);
 	}
 
+	time_of_day_ticks_ = world::advance_time_of_day(
+			time_of_day_ticks_, dt_seconds, day_length_seconds_);
+	time_of_day_broadcast_accum_ += dt_seconds;
+	if (time_of_day_broadcast_accum_ >= kTimeOfDayBroadcastIntervalSeconds) {
+		time_of_day_broadcast_accum_ = 0.0;
+		broadcast_time_of_day();
+	}
+
 	++server_tick_;
 	broadcast_snapshots();
 	broadcast_world();
+}
+
+void ServerSession::broadcast_time_of_day() {
+	const protocol::S2CTimeOfDay msg{ static_cast<std::uint32_t>(time_of_day_ticks_) };
+	for (auto &[conn, state] : conns_) {
+		if (state.playing) {
+			send_message(transport_, conn, msg);
+		}
+	}
 }
 
 void ServerSession::broadcast_world() {
@@ -639,6 +663,15 @@ bool ClientSession::apply_gameplay_frame(const protocol::Frame &frame) {
 				pending_chat_.push_back(std::move(m->text));
 			} else {
 				VB_ERROR("net", "malformed S2C_Chat: ", core::message(m.error()));
+			}
+			return true;
+		}
+		case MessageType::kS2CTimeOfDay: {
+			if (auto m = protocol::S2CTimeOfDay::decode(frame.payload)) {
+				time_of_day_override_ = m->time_of_day;
+			} else {
+				VB_ERROR("net", "malformed S2C_TimeOfDay: ",
+						core::message(m.error()));
 			}
 			return true;
 		}

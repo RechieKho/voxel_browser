@@ -121,4 +121,18 @@ struct S2CBlockEditResult {
 	static Decoded<S2CBlockEditResult> decode(std::span<const std::byte> in);
 };
 
+// --- day/night (spec §5.4) ------------------------------------------------
+// Periodic update of the server's time_of_day clock (whose initial value is
+// already carried by S2C_JoinAccept); keeps already-connected clients' sky
+// in sync as the server's clock advances. See vb::world::daynight.hpp for
+// the tick semantics (0 = sunrise, wraps at kTicksPerDay).
+struct S2CTimeOfDay {
+	static constexpr MessageType kType = MessageType::kS2CTimeOfDay;
+
+	std::uint32_t time_of_day = 0;
+
+	void encode(std::vector<std::byte> &out) const;
+	static Decoded<S2CTimeOfDay> decode(std::span<const std::byte> in);
+};
+
 } // namespace vb::protocol

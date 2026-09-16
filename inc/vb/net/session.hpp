@@ -71,6 +71,14 @@ public:
 
 	void set_interest_radius_cells(int cells) { interest_radius_cells_ = cells; }
 
+	// Day/night cycle (spec §5.4): real seconds for one full in-game day.
+	// Default matches world::advance_time_of_day's expectations; set before
+	// players join if a pack/host wants a different pace.
+	void set_day_length_seconds(double seconds) { day_length_seconds_ = seconds; }
+	std::uint32_t time_of_day() const {
+		return static_cast<std::uint32_t>(time_of_day_ticks_);
+	}
+
 	// Movement tunables applied to every player (spec §7.3). Set before players
 	// join; a Lua pack overrides per entity kind in Phase 4.
 	void set_move_params(physics::MoveParams p) { move_params_ = p; }
@@ -139,6 +147,7 @@ private:
 	void handle_chat(Conn &state, const protocol::Frame &frame);
 	void broadcast_snapshots();
 	void broadcast_world();
+	void broadcast_time_of_day();
 
 	Transport &transport_;
 	HandshakeServerConfig config_;
@@ -150,6 +159,9 @@ private:
 	std::function<bool(core::NetId, std::string_view)> on_chat_;
 	physics::MoveParams move_params_;
 	int interest_radius_cells_ = 2;
+	double time_of_day_ticks_ = 0.0;
+	double day_length_seconds_ = 1200.0; // 20 real minutes per in-game day
+	double time_of_day_broadcast_accum_ = 0.0;
 	std::uint32_t server_tick_ = 0;
 	std::size_t playing_ = 0;
 	std::uint32_t next_net_id_ = 1;
@@ -266,6 +278,19 @@ public:
 		return players_;
 	}
 
+	// Day/night cycle (spec §5.4): S2C_JoinAccept's value until the first
+	// periodic S2C_TimeOfDay update arrives, then the latest of those. Ticks
+	// into the day cycle -- see vb::world::daynight.hpp for the convention.
+	std::uint32_t time_of_day() const {
+		if (time_of_day_override_) {
+			return *time_of_day_override_;
+		}
+		if (join_accept()) {
+			return join_accept()->time_of_day;
+		}
+		return 0;
+	}
+
 private:
 	// Handle a post-join gameplay message (snapshot / chunk). Returns true if
 	// consumed.
@@ -305,6 +330,7 @@ private:
 	std::optional<protocol::S2COpenUi> pending_open_ui_;
 	std::vector<std::string> pending_chat_;
 	std::unordered_map<core::NetId, std::string> players_;
+	std::optional<std::uint32_t> time_of_day_override_;
 
 	physics::MoveState predicted_;
 	physics::MoveParams move_params_;
