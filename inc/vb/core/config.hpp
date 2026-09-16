@@ -42,6 +42,7 @@ struct ClientConfig {
 	std::uint32_t render_distance = 8; // chunks, clamped to server view_distance
 	double mouse_sensitivity = 0.12;
 	std::uint32_t asset_cache_mb = 512;
+	std::string asset_cache_dir; // empty = vb::core::user_cache_dir() / "assets"
 	std::string player_name = "Player";
 	std::vector<std::string> recent_servers;
 };
@@ -58,7 +59,7 @@ Result<ClientConfig, CoreError> load_client_config(const std::string &path);
 
 // Apply recognised CLI flags on top of a config (mutates in place).
 //   server: --bind --port --content-pack --tick-rate --max-players --seed --motd
-//   client: --name --width --height --fov --render-distance
+//   client: --name --width --height --fov --render-distance --asset-cache-dir
 void apply_cli_overrides(ServerConfig &config, const Args &args);
 void apply_cli_overrides(ClientConfig &config, const Args &args);
 

@@ -10,5 +10,6 @@ target_sources(vb_core PRIVATE
   client_chunk_store.cpp
   lighting.cpp
   paletted_chunk_store.cpp
+  raycast.cpp
   world.cpp
 )

@@ -7,7 +7,7 @@
 > Companion docs: `ARCHITECTURE_SPEC.md` (target design) · `REMAINING_TASKS.md`
 > (implementation backlog). This file is for *traps and context*, not the plan.
 
-Last updated: 2026-09-15 (mitigated the NVIDIA-driver VAO/VBO-churn crash and fixed a per-voxel hashmap-lookup FPS dip during chunk streaming — see §8; user confirmed both fixed in singleplayer and real multiplayer)
+Last updated: 2026-09-16 (Phase 4 — server/client Lua + asset sync + UI VM — complete end-to-end, mechanism-only, no content pack yet; see §8's 2026-09-16 entry)
 
 ---
 
@@ -1311,6 +1311,88 @@ _(Move items here with a date + commit when fixed, so the history is visible.)_
   `main.cpp` gained mouse-look + WASD + a debug overlay + spawn-from-JoinAccept.
   `tests/unit/render_test.cpp` (5 cases). Rule: no `1.0f` literals anywhere the
   value flows into a `double` — CI's `-Wdouble-promotion` is fatal.
+
+- **2026-09-16 — Phase 4 complete (4.1–4.5), uncommitted: sandboxed server
+  Lua pack API, block registry replication, asset sync protocol, and a
+  second client-side Lua UI VM, all wired end-to-end over
+  `LoopbackTransport` and verified in both `VB_WITH_LUA=ON`/`OFF` builds.**
+  `kEngineProtocolVersion` went 3→4 (4.2, `S2C_Chat`) →5 (4.3,
+  `S2C_BlockRegistry`) →6 (4.4, asset-sync messages) →7 (4.5, `C2S_UiEvent`).
+  Mechanism only — **no `content/base` pack exists (Phase 5.1)**, so nothing
+  calls `vb.register_block`/`ui.define`/etc. at real runtime today outside
+  of tests; `docs/lua-api.md`/`docs/protocol.md`/`REMAINING_TASKS.md` all say
+  this explicitly, don't let it read as "Phase 4 not done."
+  **Gotchas/landmines for whoever touches this next:**
+  - **xxHash/lz4 header collision, already fixed — don't undo the link
+    order.** lz4's vendored source ships its own old `lib/xxhash.h` with no
+    `XXH3_128bits`/`XXH128_hash_t`. `src/core/CMakeLists.txt`'s
+    `VB_WITH_COMPRESSION` block links `xxHash::xxhash` **before**
+    `LZ4::lz4` on purpose (comment left in place) so the real header wins
+    `-I` search order. Relinking `LZ4::lz4` first silently breaks
+    `assetsync/manifest.cpp`'s hashing with cryptic "unknown type name"
+    errors from inside a *different* header than the one you'd suspect.
+  - `std::vector<std::byte>` can't be built directly from
+    `std::istreambuf_iterator<char>` (no implicit `char`→`std::byte`
+    conversion) — `assetsync/cache.cpp` has a `read_whole_file()` helper
+    (`ifstream` + `tellg`/`seekg`/`.read()` + `reinterpret_cast<char*>`) for
+    this; reuse it rather than re-deriving the istreambuf_iterator pattern.
+  - `vb::net::ClientSession::send_ui_event`/similar helpers inside
+    `session.hpp` are already in `namespace vb::net` — call `send_message`
+    unqualified there, not `net::send_message` (that resolves to a
+    nonexistent `vb::net::net`).
+  - **Known, documented gap, not a bug:** `vb.world.set_block()` (the pack
+    API's direct world-mutation call) does **not** run the relight cascade
+    that `C2S_BlockEdit` triggers — can desync lighting until something
+    else touches the chunk. No test covers a pack calling this yet because
+    no pack does. Fix when a real pack needs `vb.world.set_block` for
+    something other than worldgen-time setup.
+  - **UI layout is evaluated once at `open()`, never re-run.** A
+    server-driven UI that wants to show different content mid-session must
+    `ui.close()` then have the server call `player:open_ui()` again — there
+    is no re-layout/refresh call. Documented in `docs/lua-api.md`, not
+    fixed — if this becomes a real pain in 5.x, the fix point is
+    `UiRuntime::Impl::open()` (`src/script/ui_runtime.cpp`).
+  - **Widget set is missing "item grid"** (the one spec-named widget type
+    not implemented) — deferred because it needs a real item system
+    (5.1). Everything else (label/panel/button/textbox/list) is done.
+  - **Asset-sync reconnect fast-path is in-session-only by explicit user
+    choice** (not persisted across process restarts) — the on-disk
+    content-addressed cache (`ClientAssetCache`, `<cache_dir>/<2-hex>/<32-hex>`)
+    does still make repeat-connect data transfer zero-byte even across
+    restarts (verified by test: "second connection transfers nothing"), but
+    the manifest round-trip (listing what's needed) always happens fresh
+    each connect — no skip-if-already-synced shortcut before that. If a
+    future phase wants to skip the manifest listing too, that's new scope,
+    not a bug.
+  - `PackRuntime`'s Lua-visible player object is one merged usertype
+    (player + would-be-entity) since no EnTT registry exists yet (Phase
+    3.1 still open) — `vb.register_entity`'s `on_spawn`/`on_tick`/etc.
+    callbacks are captured but **nothing ever calls them**.
+    `vb.worldgen.set_pipeline` is bound but errors as a nil call — not
+    implemented at all, out of scope for 4.x.
+  - Test-design trick worth remembering: there's no event that hands a Lua
+    script a `PlayerHandle` right at `player_join` time with a live net_id
+    (join fires from inside `authenticate`, before a session exists) — both
+    `pack_runtime_integration_test.cpp` and the UI round-trip test trigger
+    `player:open_ui()`/inventory-style flows from inside a `block_break`
+    handler instead, which does have a real handle. Reuse this pattern for
+    any future test that needs a Lua-side player object outside of tick.
+  - Full verification each phase: `ctest` green in `build-lua`
+    (`VB_WITH_LUA=ON` + `VB_WITH_COMPRESSION=ON`, all cases) and
+    `build-release` (`VB_WITH_LUA=OFF`/`VB_WITH_COMPRESSION=OFF`, confirms
+    every disabled-stub class compiles/links and both binaries still run).
+    The one recurring failure across both configs is the same
+    pre-existing `gns_transport_test.cpp` real-UDP-socket sandbox
+    limitation documented elsewhere in this file — not a regression from
+    this work.
+  - **Not done, deliberately out of scope for 4.x:** no real content pack
+    (5.1); `require`-over-synced-virtual-pack-FS (the client's
+    `virtual_pack_fs()` exists but nothing consumes it — no module loader
+    wired to the synced asset cache yet); per-callback wall-clock budget
+    enforcement (only instruction-count budget exists); a visually-verified
+    live UI render (no GL context available in this environment — rests on
+    `ui_runtime_test.cpp`/`pack_runtime_integration_test.cpp` + code
+    review, same caveat as the rendering-related entries above).
 
 ### Gotchas learned this pass
 - Heavy deps (GNS, librg, Lua/sol2, FastNoise2, LZ4/xxHash, Cellulose) are

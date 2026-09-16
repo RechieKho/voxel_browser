@@ -7,6 +7,7 @@ add_library(vb_core STATIC
   cli.cpp
   config.cpp
   log.cpp
+  paths.cpp
 )
 add_library(vb::core ALIAS vb_core)
 
@@ -57,20 +58,26 @@ if(VB_WITH_WORLDGEN)
 endif()
 
 if(VB_WITH_COMPRESSION)
-  if(TARGET LZ4::lz4)
-    target_link_libraries(vb_core PUBLIC LZ4::lz4)
-  elseif(TARGET lz4_static)
-    target_link_libraries(vb_core PUBLIC lz4_static)
-  endif()
+  # xxHash linked BEFORE lz4, deliberately: lz4's own lib/ directory (which
+  # its CMake target publicly exposes for lz4.h) also vendors a private,
+  # older xxhash.h/.c (used internally for lz4 frame checksums) with no XXH3
+  # API at all. `#include <xxhash.h>` (Phase 4.4's manifest hashing) resolves
+  # against whichever -I entry appears first, so xxHash's real header must be
+  # added to the include path ahead of lz4's.
   if(TARGET xxHash::xxhash)
     target_link_libraries(vb_core PUBLIC xxHash::xxhash)
   elseif(TARGET xxhash)
     target_link_libraries(vb_core PUBLIC xxhash)
   endif()
+  if(TARGET LZ4::lz4)
+    target_link_libraries(vb_core PUBLIC LZ4::lz4)
+  elseif(TARGET lz4_static)
+    target_link_libraries(vb_core PUBLIC lz4_static)
+  endif()
   target_compile_definitions(vb_core PUBLIC VB_WITH_COMPRESSION=1)
 endif()
 
 if(VB_WITH_LUA)
-  target_link_libraries(vb_core PUBLIC lua::lua sol2::sol2)
+  target_link_libraries(vb_core PUBLIC lua::lua sol2::sol2 nlohmann_json::nlohmann_json)
   target_compile_definitions(vb_core PUBLIC VB_WITH_LUA=1)
 endif()

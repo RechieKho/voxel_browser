@@ -7,12 +7,11 @@
 // `--headless` does no GL work so CI and integration tests share this path.
 
 #include <chrono>
-#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
-#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -20,9 +19,11 @@
 
 #include <raylib.h>
 
+#include "vb/assetsync/cache.hpp"
 #include "vb/core/build_info.hpp"
 #include "vb/core/cli.hpp"
 #include "vb/core/config.hpp"
+#include "vb/core/paths.hpp"
 #include "vb/net/gns_transport.hpp"
 #include "vb/net/integrated.hpp"
 #include "vb/net/world_replicator.hpp"
@@ -32,8 +33,11 @@
 #include "vb/render/camera.hpp"
 #include "vb/render/chunk_renderer.hpp"
 #include "vb/render/entity_renderer.hpp"
+#include "vb/render/ui_renderer.hpp"
 #include "vb/render/window.hpp"
+#include "vb/script/ui_runtime.hpp"
 #include "vb/world/block.hpp"
+#include "vb/world/raycast.hpp"
 #include "vb/world/world.hpp"
 #include "vb/worldgen/generator.hpp"
 #include "vb/worldgen/worker_pool.hpp"
@@ -49,6 +53,7 @@ void print_usage() {
 				 "  --name <name>     player name override\n"
 				 "  --fov <deg>       vertical field of view override\n"
 				 "  --render-distance <n>  view distance override (chunks)\n"
+				 "  --asset-cache-dir <path>  asset cache directory override\n"
 				 "  --singleplayer    run an in-process server and join it\n"
 				 "  --headless        run without a window (no rendering)\n"
 				 "  --frames <n>      headless: run n frames then exit (default 3)\n"
@@ -113,10 +118,15 @@ struct Singleplayer {
 // client->failed() once the join-wait loop runs.
 struct RemoteConnection {
 	vb::net::GnsTransport transport;
+	vb::assetsync::ClientAssetCache asset_cache;
 	std::optional<vb::net::ClientSession> session;
 
 	RemoteConnection(const std::string &host, std::uint16_t port,
-			const std::string &name) {
+			const std::string &name, const vb::core::ClientConfig &config)
+			: asset_cache(config.asset_cache_dir.empty()
+							  ? vb::core::user_cache_dir() / "assets"
+							  : std::filesystem::path(config.asset_cache_dir),
+					  static_cast<std::uint64_t>(config.asset_cache_mb) * 1024ull * 1024ull) {
 		auto conn = transport.connect(host, port);
 		if (!conn) {
 			return;
@@ -124,7 +134,7 @@ struct RemoteConnection {
 		vb::net::HandshakeClientConfig c;
 		c.player_name = name;
 		c.client_version = vb::kVersionString;
-		session.emplace(transport, *conn, std::move(c));
+		session.emplace(transport, *conn, std::move(c), &asset_cache);
 	}
 };
 
@@ -156,62 +166,6 @@ vb::protocol::InputCmd sample_input_cmd(std::uint32_t seq, double dt, double yaw
 		}
 	}
 	return cmd;
-}
-
-struct VoxelRayHit {
-	bool hit = false;
-	vb::core::IVec3 voxel{};
-	vb::core::IVec3 normal{};
-};
-
-// Amanatides & Woo voxel grid traversal from `origin` along `dir` (unit).
-VoxelRayHit raycast_voxel(const vb::world::BlockSolidQuery &world,
-		vb::core::Vec3d origin, vb::core::Vec3d dir, double max_dist) {
-	const double inf = std::numeric_limits<double>::infinity();
-	auto fl = [](double v) { return static_cast<int>(std::floor(v)); };
-	auto step_of = [](double v) { return v > 0.0 ? 1 : (v < 0.0 ? -1 : 0); };
-
-	int x = fl(origin.x), y = fl(origin.y), z = fl(origin.z);
-	const int sx = step_of(dir.x), sy = step_of(dir.y), sz = step_of(dir.z);
-
-	auto t_first = [&](double o, double d, int s) {
-		if (s == 0) {
-			return inf;
-		}
-		const double edge = s > 0 ? std::floor(o) + 1.0 - o : o - std::floor(o);
-		return edge / std::fabs(d);
-	};
-	double t_max_x = t_first(origin.x, dir.x, sx);
-	double t_max_y = t_first(origin.y, dir.y, sy);
-	double t_max_z = t_first(origin.z, dir.z, sz);
-	const double t_dx = sx == 0 ? inf : 1.0 / std::fabs(dir.x);
-	const double t_dy = sy == 0 ? inf : 1.0 / std::fabs(dir.y);
-	const double t_dz = sz == 0 ? inf : 1.0 / std::fabs(dir.z);
-
-	vb::core::IVec3 normal{};
-	double t = 0.0;
-	for (int i = 0; i < 512 && t <= max_dist; ++i) {
-		if (world.solid_at({ x, y, z })) {
-			return { true, { x, y, z }, normal };
-		}
-		if (t_max_x < t_max_y && t_max_x < t_max_z) {
-			x += sx;
-			t = t_max_x;
-			t_max_x += t_dx;
-			normal = { -sx, 0, 0 };
-		} else if (t_max_y < t_max_z) {
-			y += sy;
-			t = t_max_y;
-			t_max_y += t_dy;
-			normal = { 0, -sy, 0 };
-		} else {
-			z += sz;
-			t = t_max_z;
-			t_max_z += t_dz;
-			normal = { 0, 0, -sz };
-		}
-	}
-	return {};
 }
 
 Camera3D to_camera(const vb::render::FirstPersonController &c, float fovy) {
@@ -299,7 +253,7 @@ int main(int argc, char **argv) {
 	} else {
 		std::cout << "client: connecting to " << server << ':' << port << "...\n";
 		remote = std::make_unique<RemoteConnection>(
-				server, static_cast<std::uint16_t>(port), config.player_name);
+				server, static_cast<std::uint16_t>(port), config.player_name, config);
 		if (!remote->session) {
 			std::cout << "client: could not connect to " << server << ':' << port
 					  << " (bad address, or built without VB_WITH_NET)\n";
@@ -335,6 +289,15 @@ int main(int argc, char **argv) {
 		std::cout << "client: joined " << status << '\n';
 	}
 
+	// Client UI VM (spec §10.4, Phase 4.5): a second, restricted Lua VM,
+	// separate from PackRuntime's server-side one. No base pack exists yet
+	// (5.1), so nothing calls ui.define() at real runtime today -- the
+	// mechanism is exercised by tests; this wiring makes it live the moment
+	// content lands.
+	vb::script::UiRuntime ui_runtime;
+	vb::render::UiRenderer ui_renderer;
+	ui_runtime.attach_session(*client);
+
 	vb::render::WindowConfig wcfg;
 	wcfg.headless = headless;
 	wcfg.width = static_cast<int>(config.window_width);
@@ -369,8 +332,16 @@ int main(int argc, char **argv) {
 		const double dt = window.headless() ? 1.0 / 60.0
 											: static_cast<double>(GetFrameTime());
 
+		if (auto opened = client->take_open_ui()) {
+			ui_runtime.open(opened->ui_name, opened->ctx_json);
+		}
+
 		if (!window.headless()) {
-			if (IsKeyPressed(KEY_TAB) || IsKeyPressed(KEY_ESCAPE)) {
+			if (ui_runtime.is_open()) {
+				// A UI screen wants raygui to see clicks, not the camera.
+				mouse_captured = false;
+				EnableCursor();
+			} else if (IsKeyPressed(KEY_TAB) || IsKeyPressed(KEY_ESCAPE)) {
 				mouse_captured = false;
 				EnableCursor();
 			} else if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && !mouse_captured) {
@@ -407,10 +378,10 @@ int main(int argc, char **argv) {
 		}
 
 		// Block break / place: raycast from the eye, act on click (spec §5.2).
-		VoxelRayHit look_hit;
+		vb::world::VoxelRayHit look_hit;
 		if (mouse_captured && !window.headless()) {
-			look_hit = raycast_voxel(client->chunk_store(), controller.position(),
-					controller.forward(), 5.0);
+			look_hit = vb::world::raycast_voxel(client->chunk_store(),
+					controller.position(), controller.forward(), 5.0);
 			if (look_hit.hit && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
 				vb::protocol::C2SBlockEdit e;
 				e.predicted_seq = ++edit_seq;
@@ -463,6 +434,20 @@ int main(int argc, char **argv) {
 			EndMode3D();
 			draw_overlay(controller, status, chunk_count, entity_count,
 					mouse_captured);
+
+			if (ui_runtime.is_open()) {
+				const auto ui_result =
+						ui_renderer.draw(ui_runtime.current_name(), ui_runtime.widgets());
+				for (const auto &id : ui_result.clicked) {
+					ui_runtime.report_click(id);
+				}
+				for (const auto &[id, text] : ui_result.changed_text) {
+					ui_runtime.report_change(id, text);
+				}
+				for (const auto &[id, idx] : ui_result.changed_list) {
+					ui_runtime.report_list_change(id, idx);
+				}
+			}
 		}
 		window.end_frame();
 	}

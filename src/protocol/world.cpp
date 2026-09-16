@@ -9,6 +9,7 @@ using core::Err;
 namespace {
 
 inline constexpr std::uint64_t kMaxChunkBytes = 8u * 1024u * 1024u;
+inline constexpr std::uint64_t kMaxBlockRegistryRecords = 4096u;
 
 constexpr std::uint64_t chunk_volume() {
 	return static_cast<std::uint64_t>(core::kChunkDim) *
@@ -40,6 +41,39 @@ Decoded<T> finish(ByteReader &r, T value) {
 }
 
 } // namespace
+
+// --- S2CBlockRegistry ------------------------------------------------------
+void S2CBlockRegistry::encode(std::vector<std::byte> &out) const {
+	ByteWriter w(out);
+	w.varint(blocks.size());
+	for (const auto &b : blocks) {
+		w.string(b.name);
+		w.boolean(b.solid);
+		w.boolean(b.opaque);
+		w.boolean(b.liquid);
+		w.u8(b.light_emission);
+	}
+}
+
+Decoded<S2CBlockRegistry> S2CBlockRegistry::decode(std::span<const std::byte> in) {
+	ByteReader r(in);
+	S2CBlockRegistry m;
+	const std::uint64_t n = r.varint();
+	if (n > kMaxBlockRegistryRecords) {
+		return Err{ core::ProtocolError::kLengthExceeded };
+	}
+	m.blocks.reserve(static_cast<std::size_t>(n));
+	for (std::uint64_t i = 0; i < n && !r.failed(); ++i) {
+		BlockRegistryRecord b;
+		b.name = r.string();
+		b.solid = r.boolean();
+		b.opaque = r.boolean();
+		b.liquid = r.boolean();
+		b.light_emission = r.u8();
+		m.blocks.push_back(std::move(b));
+	}
+	return finish(r, std::move(m));
+}
 
 // --- S2CChunkAdd ----------------------------------------------------------
 void S2CChunkAdd::encode(std::vector<std::byte> &out) const {

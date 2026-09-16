@@ -1,5 +1,6 @@
 #include "vb/net/handshake.hpp"
 
+#include <algorithm>
 #include <utility>
 
 #include "vb/core/log.hpp"
@@ -19,6 +20,8 @@ OutgoingFrame disconnect_frame(DisconnectReason reason, std::string message) {
 	msg.message = std::move(message);
 	return frame_message(msg);
 }
+
+constexpr std::size_t kAssetChunkBytes = 48u * 1024u;
 
 } // namespace
 
@@ -47,6 +50,58 @@ ServerHandshakeStep ServerHandshake::on_timeout() {
 		return {};
 	}
 	return fail(DisconnectReason::kTimeout, "handshake timed out");
+}
+
+ServerHandshakeStep ServerHandshake::pump_assets(int max_chunks) {
+	ServerHandshakeStep step;
+	if (state_ != ServerHandshakeState::kStreamingAssets) {
+		return step;
+	}
+
+	for (int sent = 0; sent < max_chunks; ++sent) {
+		if (asset_stream_.pending_idx >= asset_stream_.pending.size()) {
+			state_ = ServerHandshakeState::kAwaitingReady;
+			return step;
+		}
+		const core::AssetHash hash = asset_stream_.pending[asset_stream_.pending_idx];
+
+		if (!asset_stream_.current_loaded) {
+			auto bytes = host_.asset_file_bytes(hash);
+			if (!bytes) {
+				// Client asked for a hash outside the manifest we sent it --
+				// misbehavior or corruption, not recoverable.
+				return fail(DisconnectReason::kProtocolError,
+						"requested asset hash not found");
+			}
+			asset_stream_.current_bytes = std::move(*bytes);
+			asset_stream_.current_chunk_idx = 0;
+			const std::size_t size = asset_stream_.current_bytes.size();
+			asset_stream_.current_total_chunks = static_cast<std::uint32_t>(
+					size == 0 ? 1 : (size + kAssetChunkBytes - 1) / kAssetChunkBytes);
+			asset_stream_.current_loaded = true;
+		}
+
+		const std::size_t offset =
+				static_cast<std::size_t>(asset_stream_.current_chunk_idx) * kAssetChunkBytes;
+		const std::size_t remaining = asset_stream_.current_bytes.size() - offset;
+		const std::size_t chunk_len = std::min(remaining, kAssetChunkBytes);
+
+		protocol::S2CAssetData data;
+		data.hash = hash;
+		data.seq = asset_stream_.current_chunk_idx;
+		data.total_chunks = asset_stream_.current_total_chunks;
+		data.bytes.assign(asset_stream_.current_bytes.begin() + static_cast<std::ptrdiff_t>(offset),
+				asset_stream_.current_bytes.begin() + static_cast<std::ptrdiff_t>(offset + chunk_len));
+		step.send.push_back(frame_message(data));
+
+		++asset_stream_.current_chunk_idx;
+		if (asset_stream_.current_chunk_idx >= asset_stream_.current_total_chunks) {
+			++asset_stream_.pending_idx;
+			asset_stream_.current_bytes.clear();
+			asset_stream_.current_loaded = false;
+		}
+	}
+	return step;
 }
 
 ServerHandshakeStep ServerHandshake::on_frame(const Frame &frame) {
@@ -110,9 +165,68 @@ ServerHandshakeStep ServerHandshake::on_frame(const Frame &frame) {
 			}
 
 			player_name_ = auth->player_name;
-			state_ = ServerHandshakeState::kAwaitingReady;
+			state_ = ServerHandshakeState::kAwaitingAssetManifestRequest;
 			return step;
 		}
+
+		case ServerHandshakeState::kAwaitingAssetManifestRequest: {
+			if (type != MessageType::kC2SAssetManifestRequest) {
+				return fail(DisconnectReason::kBadHandshake,
+						"expected AssetManifestRequest");
+			}
+			auto req = protocol::C2SAssetManifestRequest::decode(frame.payload);
+			if (!req) {
+				return fail(DisconnectReason::kProtocolError,
+						"malformed AssetManifestRequest");
+			}
+
+			manifest_ = host_.asset_manifest(); // may be null (opt-out / disabled)
+			protocol::S2CAssetManifest reply;
+			if (manifest_) {
+				reply.manifest_hash = manifest_->manifest_hash;
+				reply.total_bytes = manifest_->total_bytes;
+				if (req->known_manifest_hash != manifest_->manifest_hash) {
+					reply.entries.reserve(manifest_->entries.size());
+					for (const auto &e : manifest_->entries) {
+						reply.entries.push_back({ e.path, e.hash, e.size,
+								static_cast<protocol::AssetKind>(e.kind) });
+					}
+				}
+				// else: reconnect fast path -- entries stay empty, client
+				// already has everything for this manifest_hash.
+			}
+
+			state_ = ServerHandshakeState::kAwaitingAssetRequest;
+			ServerHandshakeStep step;
+			step.send.push_back(frame_message(reply));
+			return step;
+		}
+
+		case ServerHandshakeState::kAwaitingAssetRequest: {
+			if (type != MessageType::kC2SAssetRequest) {
+				return fail(DisconnectReason::kBadHandshake, "expected AssetRequest");
+			}
+			auto req = protocol::C2SAssetRequest::decode(frame.payload);
+			if (!req) {
+				return fail(DisconnectReason::kProtocolError, "malformed AssetRequest");
+			}
+
+			asset_stream_ = AssetStreamState{};
+			asset_stream_.pending = std::move(req->missing);
+			if (asset_stream_.pending.empty()) {
+				state_ = ServerHandshakeState::kAwaitingReady;
+				return {};
+			}
+			state_ = ServerHandshakeState::kStreamingAssets;
+			return {}; // first bytes go out from the next pump_assets() tick
+		}
+
+		case ServerHandshakeState::kStreamingAssets:
+			// No client message is expected while streaming; the server
+			// paces itself via pump_assets(), called from ServerSession's
+			// tick loop, not in response to a frame.
+			return fail(DisconnectReason::kBadHandshake,
+					"unexpected message while streaming assets");
 
 		case ServerHandshakeState::kAwaitingReady: {
 			if (type != MessageType::kC2SReady) {
@@ -123,14 +237,19 @@ ServerHandshakeStep ServerHandshake::on_frame(const Frame &frame) {
 			}
 
 			grant_ = host_.on_ready(player_name_);
+
+			state_ = ServerHandshakeState::kPlaying;
+			ServerHandshakeStep step;
+			if (auto records = host_.block_registry()) {
+				step.send.push_back(
+						frame_message(protocol::S2CBlockRegistry{ std::move(*records) }));
+			}
+
 			protocol::S2CJoinAccept accept;
 			accept.your_net_id = grant_.net_id;
 			accept.spawn_pos = grant_.spawn_pos;
 			accept.world_seed = grant_.world_seed;
 			accept.time_of_day = grant_.time_of_day;
-
-			state_ = ServerHandshakeState::kPlaying;
-			ServerHandshakeStep step;
 			step.send.push_back(frame_message(accept));
 			step.completed = true;
 			step.player_name = player_name_;
@@ -149,7 +268,9 @@ ServerHandshakeStep ServerHandshake::on_frame(const Frame &frame) {
 // ClientHandshake
 // ===========================================================================
 
-ClientHandshake::ClientHandshake(HandshakeClientConfig config) : config_(std::move(config)) {}
+ClientHandshake::ClientHandshake(HandshakeClientConfig config,
+		HandshakeClientHost host) : config_(std::move(config)),
+									host_(std::move(host)) {}
 
 ClientHandshakeStep ClientHandshake::fail(std::string reason) {
 	status_ = ClientHandshakeStatus::kFailed;
@@ -216,6 +337,51 @@ ClientHandshakeStep ClientHandshake::on_frame(const Frame &frame) {
 												   : result->reason);
 			}
 
+			status_ = ClientHandshakeStatus::kAwaitingAssetManifest;
+			ClientHandshakeStep step;
+			protocol::C2SAssetManifestRequest req;
+			req.known_manifest_hash = host_.last_known_manifest_hash();
+			step.send.push_back(frame_message(req));
+			return step;
+		}
+
+		case ClientHandshakeStatus::kAwaitingAssetManifest: {
+			if (type != MessageType::kS2CAssetManifest) {
+				return fail("expected AssetManifest");
+			}
+			auto m = protocol::S2CAssetManifest::decode(frame.payload);
+			if (!m) {
+				return fail("malformed AssetManifest");
+			}
+			std::vector<core::AssetHash> missing = host_.assets_missing(m->entries);
+
+			ClientHandshakeStep step;
+			step.send.push_back(frame_message(protocol::C2SAssetRequest{ missing }));
+			if (missing.empty()) {
+				// Nothing to receive (reconnect fast path or an empty pack) --
+				// proceed straight to Ready, mirroring the server's shortcut.
+				status_ = ClientHandshakeStatus::kSyncing;
+				step.send.push_back(frame_message(protocol::C2SReady{}));
+			} else {
+				status_ = ClientHandshakeStatus::kSyncingAssets;
+			}
+			return step;
+		}
+
+		case ClientHandshakeStatus::kSyncingAssets: {
+			if (type != MessageType::kS2CAssetData) {
+				return fail("expected AssetData");
+			}
+			auto d = protocol::S2CAssetData::decode(frame.payload);
+			if (!d) {
+				return fail("malformed AssetData");
+			}
+			if (!host_.on_asset_chunk(*d)) {
+				return fail("asset transfer failed (hash mismatch or size cap)");
+			}
+			if (!host_.assets_all_received()) {
+				return {}; // more chunks still expected
+			}
 			status_ = ClientHandshakeStatus::kSyncing;
 			ClientHandshakeStep step;
 			step.send.push_back(frame_message(protocol::C2SReady{}));

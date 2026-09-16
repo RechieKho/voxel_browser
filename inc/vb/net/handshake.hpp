@@ -2,15 +2,19 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
 #include <vector>
 
+#include "vb/assetsync/manifest.hpp" // assetsync::Manifest
 #include "vb/core/ids.hpp"
 #include "vb/core/math.hpp"
+#include "vb/protocol/assetsync.hpp" // AssetEntryRecord, S2CAssetData
 #include "vb/protocol/handshake.hpp"
 #include "vb/protocol/message.hpp"
+#include "vb/protocol/world.hpp" // BlockRegistryRecord
 
 // Connection handshake state machines (spec §8.3), transport-agnostic: feed them
 // decoded frames, get back frames to send plus a terminal outcome. The server
@@ -35,6 +39,9 @@ struct OutgoingFrame {
 enum class ServerHandshakeState : std::uint8_t {
 	kAwaitingHello,
 	kAwaitingAuth,
+	kAwaitingAssetManifestRequest, // spec §9: sent AuthResult(ok), awaiting C2S_AssetManifestRequest
+	kAwaitingAssetRequest, // sent S2C_AssetManifest, awaiting C2S_AssetRequest
+	kStreamingAssets, // sending S2C_AssetData across ticks; no frame expected here
 	kAwaitingReady,
 	kPlaying,
 	kClosed,
@@ -76,6 +83,32 @@ struct HandshakeServerHost {
 	};
 	std::function<JoinGrant(std::string_view name)> on_ready =
 			[](std::string_view) { return JoinGrant{}; };
+
+	// Snapshot of the world's current block registry, sent as
+	// S2C_BlockRegistry between C2S_Ready and S2C_JoinAccept (spec §8.3,
+	// Phase 4.3). `nullopt` (default) sends no frame at all -- the client
+	// already assumes vb::world::BlockRegistry::base() until told otherwise,
+	// so hosts/tests that don't care about this get zero behavior change.
+	std::function<std::optional<std::vector<protocol::BlockRegistryRecord>>()>
+			block_registry = [] {
+		return std::optional<std::vector<protocol::BlockRegistryRecord>>{};
+	};
+
+	// Built once at server startup (assetsync::build_manifest over the
+	// content pack) and handed to every connection by reference -- never
+	// rebuilt per connection. `nullptr` (default) skips asset sync entirely
+	// (also what a VB_WITH_COMPRESSION-disabled build gets): the server
+	// replies with an empty S2C_AssetManifest and moves straight on.
+	std::function<std::shared_ptr<const assetsync::Manifest>()> asset_manifest =
+			[] { return std::shared_ptr<const assetsync::Manifest>{}; };
+
+	// Raw bytes of one pack file by hash, called lazily once per hash a
+	// client actually requests (the common reconnect case -- nothing
+	// missing -- never touches disk). `nullopt` should only happen for a
+	// hash outside the manifest we just sent (client misbehavior/corruption)
+	// and is treated as a hard disconnect.
+	std::function<std::optional<std::vector<std::byte>>(core::AssetHash)>
+			asset_file_bytes = [](core::AssetHash) { return std::nullopt; };
 };
 
 struct ServerHandshakeStep {
@@ -102,6 +135,13 @@ public:
 	// Call when `elapsed_seconds` since connect exceeds the timeout.
 	ServerHandshakeStep on_timeout();
 
+	// Call once per tick (not just when a frame arrives) while
+	// state() == kStreamingAssets: sends up to `max_chunks` more
+	// S2C_AssetData frames (spec §9.3's per-tick pacing), transitioning to
+	// kAwaitingReady once every requested hash has been fully sent. A no-op
+	// step in any other state.
+	ServerHandshakeStep pump_assets(int max_chunks);
+
 private:
 	ServerHandshakeStep fail(protocol::DisconnectReason reason,
 			const std::string &human_message);
@@ -111,6 +151,17 @@ private:
 	ServerHandshakeState state_ = ServerHandshakeState::kAwaitingHello;
 	std::string player_name_;
 	JoinGrant grant_;
+
+	std::shared_ptr<const assetsync::Manifest> manifest_;
+	struct AssetStreamState {
+		std::vector<core::AssetHash> pending;
+		std::size_t pending_idx = 0;
+		std::vector<std::byte> current_bytes; // fetched lazily via host_.asset_file_bytes
+		std::uint32_t current_chunk_idx = 0;
+		std::uint32_t current_total_chunks = 0;
+		bool current_loaded = false;
+	};
+	AssetStreamState asset_stream_;
 };
 
 // ---------------------------------------------------------------------------
@@ -120,9 +171,31 @@ private:
 enum class ClientHandshakeStatus : std::uint8_t {
 	kConnecting, // sent Hello, awaiting ServerInfo
 	kAuthenticating, // sent Auth, awaiting AuthResult
+	kAwaitingAssetManifest, // sent C2S_AssetManifestRequest, awaiting S2C_AssetManifest
+	kSyncingAssets, // sent C2S_AssetRequest, receiving S2C_AssetData frames
 	kSyncing, // sent Ready, awaiting JoinAccept
 	kJoined,
 	kFailed,
+};
+
+// Asset-sync side of the client handshake (parallel to HandshakeServerHost).
+// ClientHandshake has no filesystem access itself -- these hooks push the
+// actual cache mechanics (compute-missing / verify / assemble) out to
+// ClientSession's ClientAssetCache. Defaults behave as "I already have
+// everything" (asset sync is skipped), so every existing
+// ClientHandshake(config) call site keeps compiling unchanged.
+struct HandshakeClientHost {
+	std::function<core::AssetHash()> last_known_manifest_hash = [] {
+		return core::AssetHash{};
+	};
+	std::function<std::vector<core::AssetHash>(
+			const std::vector<protocol::AssetEntryRecord> &)>
+			assets_missing = [](const std::vector<protocol::AssetEntryRecord> &) {
+		return std::vector<core::AssetHash>{};
+	};
+	std::function<bool(const protocol::S2CAssetData &)> on_asset_chunk =
+			[](const protocol::S2CAssetData &) { return true; };
+	std::function<bool()> assets_all_received = [] { return true; };
 };
 
 struct HandshakeClientConfig {
@@ -141,7 +214,8 @@ struct ClientHandshakeStep {
 
 class ClientHandshake {
 public:
-	explicit ClientHandshake(HandshakeClientConfig config);
+	explicit ClientHandshake(HandshakeClientConfig config,
+			HandshakeClientHost host = {});
 
 	ClientHandshakeStatus status() const { return status_; }
 
@@ -161,6 +235,7 @@ private:
 	ClientHandshakeStep fail(std::string reason);
 
 	HandshakeClientConfig config_;
+	HandshakeClientHost host_;
 	ClientHandshakeStatus status_ = ClientHandshakeStatus::kConnecting;
 	std::optional<protocol::S2CServerInfo> server_info_;
 	std::optional<protocol::S2CJoinAccept> join_accept_;

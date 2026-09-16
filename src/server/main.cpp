@@ -10,12 +10,15 @@
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <random>
 #include <string>
 #include <thread>
 
+#include "vb/assetsync/manifest.hpp"
 #include "vb/core/build_info.hpp"
 #include "vb/core/cli.hpp"
 #include "vb/core/config.hpp"
@@ -24,6 +27,7 @@
 #include "vb/net/session.hpp"
 #include "vb/net/world_replicator.hpp"
 #include "vb/physics/movement.hpp"
+#include "vb/script/pack_runtime.hpp"
 #include "vb/world/block.hpp"
 #include "vb/world/world.hpp"
 #include "vb/worldgen/generator.hpp"
@@ -85,13 +89,6 @@ int main(int argc, char **argv) {
 	const long long max_ticks = args.int_or("ticks", 0);
 	const std::uint64_t seed = config.world_seed != 0 ? config.world_seed : random_seed();
 
-	vb::world::World world(vb::world::BlockRegistry::base());
-	vb::worldgen::WorldGenParams gen_params;
-	gen_params.seed = seed;
-	const vb::worldgen::WorldGenerator generator(gen_params,
-			vb::world::BlockRegistry::base());
-	vb::worldgen::WorldGenWorkerPool pool(generator); // copies into the pool
-
 	vb::net::GnsTransport transport;
 	auto listen_status = transport.listen(config.port);
 	if (!listen_status) {
@@ -109,6 +106,40 @@ int main(int argc, char **argv) {
 			return EXIT_FAILURE;
 		}
 	}
+
+	// One shared, mutable registry: PackRuntime may extend it with
+	// vb.register_block before it's frozen and copied into World/WorldGenerator
+	// (Phase 4.2). No base pack exists yet (waits on 5.1), so this currently
+	// just freezes the Phase 2 base() set unchanged.
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime pack_runtime(transport, registry,
+			std::filesystem::path(config.content_pack) / "storage.json");
+	pack_runtime.freeze();
+
+	// Asset manifest (Phase 4.4): built once at startup from the content
+	// pack, handed to every connection by reference. A build without
+	// VB_WITH_COMPRESSION (kDisabled) just skips asset sync entirely for
+	// every client, same graceful degrade as VB_WITH_NET off above; any
+	// other failure means the pack itself is broken/hostile and is fatal.
+	auto manifest_result = vb::assetsync::build_manifest(config.content_pack,
+			{ static_cast<std::uint64_t>(config.asset_max_file_mb) * 1024ull * 1024ull,
+				static_cast<std::uint64_t>(config.asset_max_total_mb) * 1024ull * 1024ull });
+	std::shared_ptr<const vb::assetsync::Manifest> manifest_ptr;
+	if (manifest_result) {
+		manifest_ptr = std::make_shared<const vb::assetsync::Manifest>(
+				std::move(*manifest_result));
+	} else if (manifest_result.error() != vb::core::AssetSyncError::kDisabled) {
+		std::cerr << "server: failed to build asset manifest for "
+				  << config.content_pack << ": "
+				  << vb::core::message(manifest_result.error()) << '\n';
+		return EXIT_FAILURE;
+	}
+
+	vb::world::World world(registry);
+	vb::worldgen::WorldGenParams gen_params;
+	gen_params.seed = seed;
+	const vb::worldgen::WorldGenerator generator(gen_params, registry);
+	vb::worldgen::WorldGenWorkerPool pool(generator); // copies into the pool
 
 	vb::net::HandshakeServerConfig hs_config;
 	hs_config.pack_name = "base";
@@ -128,11 +159,47 @@ int main(int argc, char **argv) {
 		grant.spawn_pos = vb::worldgen::default_spawn_position(generator);
 		return grant;
 	};
+	// Phase 4.3: advertise the (possibly Lua-extended) registry to every
+	// joining client so custom blocks aren't invisible client-side.
+	host.block_registry =
+			[&registry]() -> std::optional<std::vector<vb::protocol::BlockRegistryRecord>> {
+		std::vector<vb::protocol::BlockRegistryRecord> out;
+		out.reserve(registry.size());
+		for (std::size_t i = 0; i < registry.size(); ++i) {
+			const auto &t = registry.get(static_cast<vb::core::BlockId>(i));
+			out.push_back({ t.name, t.solid, t.opaque, t.liquid, t.light_emission });
+		}
+		return out;
+	};
+	host.asset_manifest = [manifest_ptr] { return manifest_ptr; };
+	host.asset_file_bytes = [manifest_ptr, content_pack = config.content_pack](
+			vb::core::AssetHash h) -> std::optional<std::vector<std::byte>> {
+		if (!manifest_ptr) {
+			return std::nullopt;
+		}
+		const auto *e = manifest_ptr->find(h);
+		if (e == nullptr) {
+			return std::nullopt;
+		}
+		std::ifstream f(std::filesystem::path(content_pack) / e->path, std::ios::binary);
+		if (!f) {
+			return std::nullopt;
+		}
+		std::vector<std::byte> buf(static_cast<std::size_t>(e->size));
+		if (e->size > 0) {
+			f.read(reinterpret_cast<char *>(buf.data()),
+					static_cast<std::streamsize>(e->size));
+		}
+		return buf;
+	};
+	pack_runtime.install_join_veto(host); // before ServerSession copies `host` in
 
 	vb::net::ServerSession session(transport, hs_config, host);
-	session.set_world_replicator(std::make_unique<vb::net::WorldReplicator>(world,
-			pool, vb::world::BlockRegistry::base(),
-			static_cast<int>(config.view_distance), 3));
+	auto replicator = std::make_unique<vb::net::WorldReplicator>(world, pool,
+			registry, static_cast<int>(config.view_distance), 3);
+	pack_runtime.attach_world(*replicator);
+	session.set_world_replicator(std::move(replicator));
+	pack_runtime.attach_session(session);
 
 	vb::physics::MoveParams move_params;
 	move_params.gravity = config.gravity;
@@ -158,12 +225,15 @@ int main(int argc, char **argv) {
 		session.tick(tick_dt_seconds);
 
 		for (const auto &joined : session.take_joins()) {
+			pack_runtime.dispatch_player_join_completed(joined);
 			std::cout << "server: '" << joined.name << "' joined (net id "
 					  << static_cast<std::uint32_t>(joined.net_id) << ")\n";
 		}
 		for (const auto &left : session.take_leaves()) {
+			pack_runtime.dispatch_player_leave(left);
 			std::cout << "server: a player left (" << left.reason << ")\n";
 		}
+		pack_runtime.dispatch_tick(tick_dt_seconds);
 
 		if (max_ticks > 0 && tick >= max_ticks) {
 			break;

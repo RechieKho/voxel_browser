@@ -3,6 +3,8 @@
 # bumps kEngineProtocolVersion + docs/protocol.md when its layout changes.
 
 target_sources(vb_core PRIVATE
+  assetsync.cpp
+  chat.cpp
   handshake.cpp
   input.cpp
   snapshot.cpp

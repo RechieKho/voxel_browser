@@ -42,6 +42,13 @@ public:
 
 	const BlockRegistry &registry() const { return registry_; }
 
+	// Replaces the registry (Phase 4.3: S2C_BlockRegistry). Safe to call any
+	// time; a chunk already meshed under the old registry simply doesn't
+	// re-mesh until its revision next changes, so callers should apply this
+	// before real chunk data arrives (the handshake ordering already
+	// guarantees that in practice).
+	void set_registry(BlockRegistry registry) { registry_ = std::move(registry); }
+
 	// BlockSolidQuery
 	core::BlockId block_at(core::IVec3 world_voxel) const override;
 	bool solid_at(core::IVec3 world_voxel) const override {

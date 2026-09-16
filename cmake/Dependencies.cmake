@@ -240,6 +240,13 @@ if(VB_WITH_LUA)
     # (no member 'construct' in optional<T&>); v3.5.0 fixes it.
     vb_fetch(sol2 TAG v3.5.0 REPO https://github.com/ThePhD/sol2.git)
   endif()
+
+  # nlohmann/json — vb.storage persistence + player:open_ui ctx serialization
+  # (Phase 4.2). Header-only.
+  find_package(nlohmann_json QUIET)
+  if(NOT nlohmann_json_FOUND AND NOT TARGET nlohmann_json::nlohmann_json)
+    vb_fetch(nlohmann_json TAG v3.11.3 REPO https://github.com/nlohmann/json.git)
+  endif()
 endif()
 
 # ===========================================================================

@@ -153,4 +153,32 @@ constexpr std::string_view message(NetError e) {
 	return "unknown network error";
 }
 
+// Asset manifest / cache failures — see inc/vb/assetsync/.
+enum class AssetSyncError : std::uint8_t {
+	kNone = 0,
+	kDisabled, // built without VB_WITH_COMPRESSION
+	kIoError,
+	kPathEscape, // '..', absolute path, or a symlink resolving outside the pack root
+	kFileTooLarge, // exceeds ServerConfig::asset_max_file_mb
+	kPackTooLarge, // total exceeds ServerConfig::asset_max_total_mb
+};
+
+constexpr std::string_view message(AssetSyncError e) {
+	switch (e) {
+		case AssetSyncError::kNone:
+			return "no error";
+		case AssetSyncError::kDisabled:
+			return "asset sync disabled (built without VB_WITH_COMPRESSION)";
+		case AssetSyncError::kIoError:
+			return "I/O error";
+		case AssetSyncError::kPathEscape:
+			return "path escapes the pack root";
+		case AssetSyncError::kFileTooLarge:
+			return "file exceeds the per-file size cap";
+		case AssetSyncError::kPackTooLarge:
+			return "pack exceeds the total size cap";
+	}
+	return "unknown asset sync error";
+}
+
 } // namespace vb::core

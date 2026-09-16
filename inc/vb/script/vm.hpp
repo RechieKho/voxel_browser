@@ -58,6 +58,11 @@ public:
 
 	struct Impl;
 
+	// Escape hatch for Phase 4 binding code (pack_runtime.cpp) that needs the
+	// raw sol::state. Only usable by TUs that also include vm_internal.hpp,
+	// which defines the real Impl; this header never includes sol2.
+	Impl &native_impl();
+
 private:
 	std::unique_ptr<Impl> impl_;
 };

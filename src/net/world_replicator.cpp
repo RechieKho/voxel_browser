@@ -201,9 +201,17 @@ std::vector<WorldReplicator::PlayerFrames> WorldReplicator::apply_block_edit(
 		}
 		new_block = edit.block;
 	}
-	// [Phase 4.2] a Lua "block_break"/"block_place" handler may veto here.
+	const bool is_break = edit.action == protocol::BlockEditAction::kBreak;
+	if (hooks_.before_edit &&
+			!hooks_.before_edit(editor, p, existing, new_block, is_break)) {
+		return {};
+	}
 
 	world_.set_block(p, new_block); // bumps revision + dirty flags
+
+	if (hooks_.after_edit) {
+		hooks_.after_edit(editor, p, existing, new_block, is_break);
+	}
 
 	// Relight cc and cascade downward (lighting::relight_column, see
 	// lighting.hpp) instead of a plain single-chunk relight_chunk: an edit at

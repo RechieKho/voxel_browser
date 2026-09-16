@@ -8,10 +8,13 @@
 #include <vector>
 
 #include "vb/core/version.hpp"
+#include "vb/protocol/assetsync.hpp"
 #include "vb/protocol/byte_buffer.hpp"
+#include "vb/protocol/chat.hpp"
 #include "vb/protocol/handshake.hpp"
 #include "vb/protocol/message.hpp"
 #include "vb/protocol/snapshot.hpp"
+#include "vb/protocol/world.hpp"
 
 using namespace vb::protocol;
 
@@ -144,6 +147,89 @@ TEST_CASE("entity snapshot round-trips") {
 	CHECK(s2.updated[0].pos.y == doctest::Approx(64.0));
 	REQUIRE(s2.removed.size() == 1);
 	CHECK(s2.removed[0] == vb::core::NetId{ 9 });
+}
+
+TEST_CASE("chat / open_ui round-trip") {
+	auto c2 = round_trip(S2CChat{ "hello world" });
+	CHECK(c2.text == "hello world");
+
+	auto u2 = round_trip(S2COpenUi{ "inventory", R"({"slots":3})" });
+	CHECK(u2.ui_name == "inventory");
+	CHECK(u2.ctx_json == R"({"slots":3})");
+
+	// Empty ctx_json (no ctx table passed) round-trips too.
+	auto u3 = round_trip(S2COpenUi{ "pause", "" });
+	CHECK(u3.ui_name == "pause");
+	CHECK(u3.ctx_json.empty());
+
+	auto e2 = round_trip(C2SUiEvent{ "inventory", "close_btn", "click", "null" });
+	CHECK(e2.ui_name == "inventory");
+	CHECK(e2.widget_id == "close_btn");
+	CHECK(e2.event_kind == "click");
+	CHECK(e2.value_json == "null");
+}
+
+TEST_CASE("block registry round-trips, including an empty list") {
+	auto empty = round_trip(S2CBlockRegistry{});
+	CHECK(empty.blocks.empty());
+
+	S2CBlockRegistry reg;
+	reg.blocks.push_back({ "base:air", false, false, false, 0 });
+	reg.blocks.push_back({ "base:stone", true, true, false, 0 });
+	reg.blocks.push_back({ "test:glow", true, true, false, 15 });
+	auto r2 = round_trip(reg);
+	REQUIRE(r2.blocks.size() == 3);
+	CHECK(r2.blocks[0].name == "base:air");
+	CHECK_FALSE(r2.blocks[0].solid);
+	CHECK(r2.blocks[2].name == "test:glow");
+	CHECK(r2.blocks[2].light_emission == 15);
+	CHECK(r2.blocks == reg.blocks);
+}
+
+TEST_CASE("asset sync messages round-trip") {
+	const vb::core::AssetHash h1{ 0x1122334455667788ull, 0x99AABBCCDDEEFF00ull };
+	const vb::core::AssetHash h2{ 0xDEADBEEFDEADBEEFull, 0x1ull };
+
+	auto req = round_trip(C2SAssetManifestRequest{ h1 });
+	CHECK(req.known_manifest_hash.lo == h1.lo);
+	CHECK(req.known_manifest_hash.hi == h1.hi);
+
+	S2CAssetManifest manifest;
+	manifest.manifest_hash = h1;
+	manifest.total_bytes = 4096;
+	manifest.entries.push_back({ "scripts/init.lua", h1, 128, AssetKind::kScript });
+	manifest.entries.push_back({ "textures/stone.png", h2, 2048, AssetKind::kTexture });
+	auto m2 = round_trip(manifest);
+	CHECK(m2.manifest_hash.lo == h1.lo);
+	CHECK(m2.total_bytes == 4096);
+	REQUIRE(m2.entries.size() == 2);
+	CHECK(m2.entries[0] == manifest.entries[0]);
+	CHECK(m2.entries[1].kind == AssetKind::kTexture);
+
+	auto empty_manifest = round_trip(S2CAssetManifest{ h1, 0, {} });
+	CHECK(empty_manifest.entries.empty());
+
+	auto empty_req = round_trip(C2SAssetRequest{});
+	CHECK(empty_req.missing.empty());
+	auto req2 = round_trip(C2SAssetRequest{ { h1, h2 } });
+	REQUIRE(req2.missing.size() == 2);
+	CHECK(req2.missing[1].lo == h2.lo);
+
+	S2CAssetData data;
+	data.hash = h2;
+	data.seq = 3;
+	data.total_chunks = 7;
+	data.bytes = { std::byte{ 1 }, std::byte{ 2 }, std::byte{ 3 } };
+	auto d2 = round_trip(data);
+	CHECK(d2.hash.hi == h2.hi);
+	CHECK(d2.seq == 3);
+	CHECK(d2.total_chunks == 7);
+	REQUIRE(d2.bytes.size() == 3);
+	CHECK(d2.bytes[2] == std::byte{ 3 });
+
+	// Zero-length chunk (a 0-byte file's single terminating chunk).
+	auto d3 = round_trip(S2CAssetData{ h1, 0, 1, {} });
+	CHECK(d3.bytes.empty());
 }
 
 TEST_CASE("decode rejects a bad enum and trailing bytes") {

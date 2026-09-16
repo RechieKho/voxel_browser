@@ -17,6 +17,10 @@ std::span<const std::byte> span_of(const std::vector<std::byte> &v) {
 	return { v.data(), v.size() };
 }
 
+// Per-tick S2C_AssetData send budget (spec §9.3's pacing, simple per-tick
+// cap rather than literal byte-in-flight windowing).
+constexpr int kAssetSendBudgetPerTick = 4;
+
 // Fallback voxel query when no world replicator is attached (entity-only
 // sessions and early tests): everything is open air.
 struct EmptyBlockQuery final : world::BlockSolidQuery {
@@ -170,6 +174,35 @@ const physics::MoveState *ServerSession::player_move_state(core::NetId id) const
 	return nullptr;
 }
 
+void ServerSession::set_player_velocity(core::NetId id, core::Vec3d vel) {
+	for (auto &[conn, state] : conns_) {
+		(void)conn;
+		if (state.playing && state.net_id == id) {
+			state.move.velocity = vel;
+			return;
+		}
+	}
+}
+
+ConnId ServerSession::conn_for_player(core::NetId id) const {
+	for (const auto &[conn, state] : conns_) {
+		if (state.playing && state.net_id == id) {
+			return conn;
+		}
+	}
+	return ConnId::kInvalid;
+}
+
+std::string_view ServerSession::player_name(core::NetId id) const {
+	for (const auto &[conn, state] : conns_) {
+		(void)conn;
+		if (state.playing && state.net_id == id) {
+			return state.name;
+		}
+	}
+	return {};
+}
+
 void ServerSession::tick(double dt_seconds) {
 	scratch_.clear();
 	transport_.poll(scratch_);
@@ -205,8 +238,16 @@ void ServerSession::tick(double dt_seconds) {
 						handle_block_edit(ev.conn, it->second, *frame);
 						break;
 					}
-					// Other post-join C2S messages (chat / UI events) land in
-					// later phases; ignore unknown types rather than dropping.
+					if (frame->header.type == protocol::MessageType::kC2SUiEvent) {
+						if (auto e = protocol::C2SUiEvent::decode(frame->payload)) {
+							if (on_ui_event_) {
+								on_ui_event_(it->second.net_id, *e);
+							}
+						}
+						break;
+					}
+					// Other post-join C2S messages (chat) land in later
+					// phases; ignore unknown types rather than dropping.
 					break;
 				}
 				auto step = it->second.handshake.on_frame(*frame);
@@ -218,6 +259,7 @@ void ServerSession::tick(double dt_seconds) {
 					it->second.net_id = g.net_id;
 					it->second.move = physics::MoveState{};
 					it->second.move.position = g.spawn_pos;
+					it->second.name = step.player_name;
 					interest_.upsert(replication::EntityState{
 							g.net_id, core::EntityKindId::kInvalid, g.spawn_pos,
 							{}, {} });
@@ -241,7 +283,7 @@ void ServerSession::tick(double dt_seconds) {
 					if (replicator_) {
 						replicator_->forget_player(it->second.net_id);
 					}
-					leaves_.push_back({ ev.conn, ev.reason });
+					leaves_.push_back({ ev.conn, it->second.net_id, ev.reason });
 				}
 				conns_.erase(it);
 				break;
@@ -249,21 +291,29 @@ void ServerSession::tick(double dt_seconds) {
 		}
 	}
 
-	// Handshake timeouts.
-	std::vector<ConnId> timed_out;
+	// Handshake timeouts + asset-stream pacing.
+	std::vector<std::pair<ConnId, std::string>> to_drop;
 	for (auto &[conn, state] : conns_) {
 		if (state.playing) {
 			continue;
+		}
+		if (state.handshake.state() == ServerHandshakeState::kStreamingAssets) {
+			auto step = state.handshake.pump_assets(kAssetSendBudgetPerTick);
+			send_frames(transport_, conn, step.send);
+			if (step.disconnect) {
+				to_drop.emplace_back(conn, "asset streaming protocol error");
+				continue;
+			}
 		}
 		state.age += dt_seconds;
 		if (state.age > config_.handshake_timeout_seconds) {
 			auto step = state.handshake.on_timeout();
 			send_frames(transport_, conn, step.send);
-			timed_out.push_back(conn);
+			to_drop.emplace_back(conn, "handshake timeout");
 		}
 	}
-	for (ConnId conn : timed_out) {
-		drop(conn, "handshake timeout");
+	for (const auto &[conn, reason] : to_drop) {
+		drop(conn, reason);
 	}
 
 	++server_tick_;
@@ -388,10 +438,36 @@ std::vector<SessionPlayerLeft> ServerSession::take_leaves() {
 // ClientSession
 // ===========================================================================
 
+namespace {
+
+HandshakeClientHost make_asset_host(assetsync::ClientAssetCache *cache) {
+	if (cache == nullptr) {
+		return {};
+	}
+	HandshakeClientHost host;
+	host.assets_missing = [cache](const std::vector<protocol::AssetEntryRecord> &entries) {
+		return cache->compute_missing(entries);
+	};
+	host.on_asset_chunk = [cache](const protocol::S2CAssetData &chunk) {
+		return cache->ingest_chunk(chunk);
+	};
+	host.assets_all_received = [cache] { return cache->all_received(); };
+	return host;
+}
+
+} // namespace
+
 ClientSession::ClientSession(Transport &transport, ConnId conn,
-		HandshakeClientConfig config) : transport_(transport),
-										conn_(conn),
-										handshake_(std::move(config)) {}
+		HandshakeClientConfig config, assetsync::ClientAssetCache *cache)
+		: transport_(transport), conn_(conn),
+		  handshake_(std::move(config), make_asset_host(cache)),
+		  asset_cache_(cache) {}
+
+const std::unordered_map<std::string, std::vector<std::byte>> &
+ClientSession::virtual_pack_fs() const {
+	static const std::unordered_map<std::string, std::vector<std::byte>> kEmpty;
+	return asset_cache_ != nullptr ? asset_cache_->virtual_fs() : kEmpty;
+}
 
 void ClientSession::tick(double) {
 	scratch_.clear();
@@ -415,6 +491,20 @@ void ClientSession::tick(double) {
 				if (!frame) {
 					failure_reason_ = "malformed frame from server";
 					return;
+				}
+				// Handled unconditionally (not through the handshake FSM's
+				// strict per-state type checks nor gated on kJoined): on a
+				// real transport this travels on a different lane than
+				// JoinAccept with no cross-lane ordering guarantee, so it may
+				// arrive just before or just after it.
+				if (frame->header.type == protocol::MessageType::kS2CBlockRegistry) {
+					if (auto m = protocol::S2CBlockRegistry::decode(frame->payload)) {
+						apply_block_registry(*m);
+					} else {
+						VB_ERROR("net", "malformed S2C_BlockRegistry: ",
+								core::message(m.error()));
+					}
+					break;
 				}
 				if (handshake_.status() == ClientHandshakeStatus::kJoined &&
 						apply_gameplay_frame(*frame)) {
@@ -490,9 +580,32 @@ bool ClientSession::apply_gameplay_frame(const protocol::Frame &frame) {
 			}
 			return true;
 		}
+		case MessageType::kS2COpenUi: {
+			if (auto m = protocol::S2COpenUi::decode(frame.payload)) {
+				pending_open_ui_ = std::move(*m);
+			} else {
+				VB_ERROR("net", "malformed S2C_OpenUi: ", core::message(m.error()));
+			}
+			return true;
+		}
 		default:
 			return false;
 	}
+}
+
+std::optional<protocol::S2COpenUi> ClientSession::take_open_ui() {
+	std::optional<protocol::S2COpenUi> out = std::move(pending_open_ui_);
+	pending_open_ui_.reset();
+	return out;
+}
+
+void ClientSession::apply_block_registry(const protocol::S2CBlockRegistry &msg) {
+	world::BlockRegistry reg;
+	for (const auto &b : msg.blocks) {
+		reg.add({ b.name, b.solid, b.opaque, b.liquid, b.light_emission });
+	}
+	VB_INFO("net", "received block registry (", msg.blocks.size(), " blocks)");
+	chunks_.set_registry(std::move(reg));
 }
 
 void ClientSession::apply_snapshot(const protocol::S2CEntitySnapshot &snap) {

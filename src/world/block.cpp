@@ -26,6 +26,16 @@ core::BlockId BlockRegistry::add(BlockType type) {
 	return id;
 }
 
+core::BlockId BlockRegistry::add_or_get(std::string_view name, BlockType type) {
+	for (std::size_t i = 0; i < types_.size(); ++i) {
+		if (types_[i].name == name) {
+			return static_cast<core::BlockId>(i);
+		}
+	}
+	type.name = std::string(name);
+	return add(std::move(type));
+}
+
 const BlockType &BlockRegistry::get(core::BlockId id) const { return prop(id); }
 
 const BlockType &BlockRegistry::prop(core::BlockId id) const {

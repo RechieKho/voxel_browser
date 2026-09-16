@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <span>
+#include <string>
 #include <vector>
 
 #include "vb/core/ids.hpp"
@@ -14,6 +15,31 @@
 // stays independent of the voxel data model.
 
 namespace vb::protocol {
+
+// --- block registry (spec §8.3 / §9) ------------------------------------
+// Sent between C2S_Ready and S2C_JoinAccept (Phase 4.3) so the client can
+// mirror the server's (possibly Lua-extended) block table. No model/texture/
+// collision-shape fields exist here -- BlockType doesn't have them yet
+// (waits on 4.4 asset sync + 5.1 base pack).
+
+struct BlockRegistryRecord {
+	std::string name;
+	bool solid = true;
+	bool opaque = true;
+	bool liquid = false;
+	std::uint8_t light_emission = 0;
+
+	bool operator==(const BlockRegistryRecord &) const = default;
+};
+
+struct S2CBlockRegistry {
+	static constexpr MessageType kType = MessageType::kS2CBlockRegistry;
+
+	std::vector<BlockRegistryRecord> blocks; // index == BlockId
+
+	void encode(std::vector<std::byte> &out) const;
+	static Decoded<S2CBlockRegistry> decode(std::span<const std::byte> in);
+};
 
 struct S2CChunkAdd {
 	static constexpr MessageType kType = MessageType::kS2CChunkAdd;

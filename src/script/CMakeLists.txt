@@ -3,5 +3,7 @@
 # are linked from src/core/CMakeLists.txt under that flag).
 
 target_sources(vb_core PRIVATE
+  pack_runtime.cpp
+  ui_runtime.cpp
   vm.cpp
 )

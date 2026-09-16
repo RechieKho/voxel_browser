@@ -1,21 +1,25 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <memory>
 #include <unordered_map>
 #include <utility>
 
+#include "vb/assetsync/cache.hpp"
 #include "vb/core/ids.hpp"
 #include "vb/core/math.hpp"
 #include "vb/net/handshake.hpp"
 #include "vb/net/transport.hpp"
 #include "vb/net/world_replicator.hpp"
 #include "vb/physics/movement.hpp"
+#include "vb/protocol/chat.hpp"
 #include "vb/protocol/handshake.hpp"
 #include "vb/protocol/input.hpp"
 #include "vb/protocol/snapshot.hpp"
@@ -42,6 +46,7 @@ struct SessionPlayerJoined {
 
 struct SessionPlayerLeft {
 	ConnId conn = ConnId::kInvalid;
+	core::NetId net_id = core::NetId::kInvalid;
 	std::string reason;
 };
 
@@ -74,12 +79,33 @@ public:
 	// batches are the normal drive path.
 	const physics::MoveState *player_move_state(core::NetId id) const;
 
+	// Phase 4.2 (Lua entity/player API): directly set a connected player's
+	// authoritative velocity. No-op if `id` isn't a playing connection.
+	void set_player_velocity(core::NetId id, core::Vec3d vel);
+
+	// Transport-level connection for a playing net id (kInvalid if not
+	// found/not playing) — lets a script host send arbitrary framed messages
+	// (chat / open_ui) without ServerSession knowing their contents.
+	ConnId conn_for_player(core::NetId id) const;
+
+	// Display name of a playing net id ("" if not found/not playing).
+	std::string_view player_name(core::NetId id) const;
+
 	// Optional: attach world replication (chunk streaming). Without it the
 	// session only replicates entities.
 	void set_world_replicator(std::unique_ptr<WorldReplicator> replicator) {
 		replicator_ = std::move(replicator);
 	}
 	WorldReplicator *world_replicator() { return replicator_.get(); }
+
+	// Phase 4.5: routes a playing connection's C2S_UiEvent up to a script
+	// host, without ServerSession knowing anything about Lua. Unset (the
+	// default) leaves UI events silently ignored, same posture as the
+	// "unknown post-join message" comment this replaces for kC2SUiEvent.
+	void set_ui_event_handler(
+			std::function<void(core::NetId, const protocol::C2SUiEvent &)> handler) {
+		on_ui_event_ = std::move(handler);
+	}
 
 private:
 	struct Conn {
@@ -89,6 +115,7 @@ private:
 		bool playing = false;
 		bool input_driven = false;
 		core::NetId net_id = core::NetId::kInvalid;
+		std::string name;
 		std::vector<core::NetId> last_visible;
 		physics::MoveState move;
 		core::Vec2f look;
@@ -109,6 +136,7 @@ private:
 	std::map<ConnId, Conn> conns_;
 	replication::InterestGrid interest_;
 	std::unique_ptr<WorldReplicator> replicator_;
+	std::function<void(core::NetId, const protocol::C2SUiEvent &)> on_ui_event_;
 	physics::MoveParams move_params_;
 	int interest_radius_cells_ = 2;
 	std::uint32_t server_tick_ = 0;
@@ -123,9 +151,12 @@ private:
 
 class ClientSession {
 public:
-	// `conn` is the ConnId returned by Transport::connect().
-	ClientSession(Transport &transport, ConnId conn,
-			HandshakeClientConfig config);
+	// `conn` is the ConnId returned by Transport::connect(). `cache` is
+	// optional (default nullptr): when supplied, ClientHandshake's asset-sync
+	// hooks are wired to it for real (Phase 4.4); when null, asset sync
+	// behaves as already-synced (ClientHandshake's own no-op defaults).
+	ClientSession(Transport &transport, ConnId conn, HandshakeClientConfig config,
+			assetsync::ClientAssetCache *cache = nullptr);
 
 	void tick(double dt_seconds);
 
@@ -186,10 +217,29 @@ public:
 	const world::ClientChunkStore &chunk_store() const { return chunks_; }
 	world::ClientChunkStore &chunk_store() { return chunks_; }
 
+	// Virtual pack filesystem assembled by the asset-sync cache (Phase 4.4),
+	// path -> bytes. Empty if no cache was supplied or sync hasn't finished.
+	// Nothing consumes this yet (Lua require / texture loader land later).
+	const std::unordered_map<std::string, std::vector<std::byte>> &
+	virtual_pack_fs() const;
+
+	// --- client UI VM (spec §10.4, Phase 4.5) ---------------------------
+
+	// Drains a pending S2C_OpenUi, if one arrived since the last call.
+	std::optional<protocol::S2COpenUi> take_open_ui();
+
+	// Sends one C2S_UiEvent (a UiRuntime widget callback calling
+	// ui.send_event/ui.close). No optimistic local state, unlike block
+	// edits -- just a pass-through RPC to the server's Lua VM.
+	void send_ui_event(const protocol::C2SUiEvent &event) {
+		send_message(transport_, conn_, event);
+	}
+
 private:
 	// Handle a post-join gameplay message (snapshot / chunk). Returns true if
 	// consumed.
 	bool apply_gameplay_frame(const protocol::Frame &frame);
+	void apply_block_registry(const protocol::S2CBlockRegistry &msg);
 	void apply_snapshot(const protocol::S2CEntitySnapshot &snap);
 	void reconcile(const protocol::EntityRecord &authoritative,
 			std::uint32_t acked_seq);
@@ -220,6 +270,8 @@ private:
 	std::unordered_map<core::NetId, RemoteSample> remote_samples_;
 	world::ClientChunkStore chunks_{ world::BlockRegistry::base() };
 	std::uint32_t last_server_tick_ = 0;
+	assetsync::ClientAssetCache *asset_cache_ = nullptr; // not owned; may be null
+	std::optional<protocol::S2COpenUi> pending_open_ui_;
 
 	physics::MoveState predicted_;
 	physics::MoveParams move_params_;

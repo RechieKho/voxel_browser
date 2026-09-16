@@ -1,0 +1,768 @@
+#include "vb/script/pack_runtime.hpp"
+
+#if !VB_WITH_LUA
+
+// Stub build: scripting compiled out. Every entry point is a no-op / reports
+// kDisabled, mirroring vm.cpp's disabled-build pattern.
+
+namespace vb::script {
+
+struct PackRuntime::Impl {};
+
+PackRuntime::PackRuntime(net::Transport &, world::BlockRegistry &,
+		std::filesystem::path, VmLimits)
+		: impl_(nullptr) {}
+PackRuntime::~PackRuntime() = default;
+PackRuntime::PackRuntime(PackRuntime &&) noexcept = default;
+PackRuntime &PackRuntime::operator=(PackRuntime &&) noexcept = default;
+
+ScriptResult PackRuntime::load_pack_file(std::string_view, std::string_view) {
+	return { false, core::ScriptError::kDisabled,
+		"scripting disabled (built without VB_WITH_LUA)" };
+}
+void PackRuntime::freeze() {}
+void PackRuntime::install_join_veto(net::HandshakeServerHost &) {}
+void PackRuntime::attach_world(net::WorldReplicator &) {}
+void PackRuntime::attach_session(net::ServerSession &) {}
+void PackRuntime::dispatch_player_join_completed(const net::SessionPlayerJoined &) {}
+void PackRuntime::dispatch_player_leave(const net::SessionPlayerLeft &) {}
+void PackRuntime::dispatch_tick(double) {}
+bool PackRuntime::dispatch_chat(core::NetId, std::string_view) { return true; }
+bool PackRuntime::dispatch_player_interact(core::NetId, core::IVec3) {
+	return true;
+}
+void PackRuntime::dispatch_ui_event(core::NetId, const protocol::C2SUiEvent &) {}
+bool PackRuntime::storage_dirty() const { return false; }
+void PackRuntime::flush_storage() {}
+
+} // namespace vb::script
+
+#else
+
+#include <algorithm>
+#include <fstream>
+#include <set>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+#include <nlohmann/json.hpp>
+
+#include "vb/core/log.hpp"
+#include "vb/ecs/components.hpp"
+#include "vb/protocol/chat.hpp"
+#include "vb/script/vm_internal.hpp"
+#include "vb/world/raycast.hpp"
+
+namespace vb::script {
+
+namespace {
+
+sol::object json_to_lua(sol::state_view lua, const nlohmann::json &j) {
+	switch (j.type()) {
+		case nlohmann::json::value_t::null:
+			return sol::make_object(lua, sol::lua_nil);
+		case nlohmann::json::value_t::boolean:
+			return sol::make_object(lua, j.get<bool>());
+		case nlohmann::json::value_t::number_integer:
+		case nlohmann::json::value_t::number_unsigned:
+		case nlohmann::json::value_t::number_float:
+			return sol::make_object(lua, j.get<double>());
+		case nlohmann::json::value_t::string:
+			return sol::make_object(lua, j.get<std::string>());
+		case nlohmann::json::value_t::array: {
+			sol::table t = lua.create_table();
+			int i = 1;
+			for (const auto &e : j) {
+				t[i++] = json_to_lua(lua, e);
+			}
+			return t;
+		}
+		case nlohmann::json::value_t::object: {
+			sol::table t = lua.create_table();
+			for (const auto &[k, v] : j.items()) {
+				t[k] = json_to_lua(lua, v);
+			}
+			return t;
+		}
+		default:
+			return sol::make_object(lua, sol::lua_nil);
+	}
+}
+
+nlohmann::json lua_to_json(const sol::object &obj) {
+	switch (obj.get_type()) {
+		case sol::type::lua_nil:
+		case sol::type::none:
+			return nullptr;
+		case sol::type::boolean:
+			return obj.as<bool>();
+		case sol::type::number:
+			return obj.as<double>();
+		case sol::type::string:
+			return obj.as<std::string>();
+		case sol::type::table: {
+			sol::table t = obj.as<sol::table>();
+			std::size_t count = 0;
+			for (const auto &kv : t) {
+				(void)kv;
+				++count;
+			}
+			bool is_array = count > 0;
+			for (std::size_t i = 1; i <= count && is_array; ++i) {
+				if (!t[i].valid()) {
+					is_array = false;
+				}
+			}
+			if (is_array) {
+				nlohmann::json arr = nlohmann::json::array();
+				for (std::size_t i = 1; i <= count; ++i) {
+					arr.push_back(lua_to_json(t[i]));
+				}
+				return arr;
+			}
+			nlohmann::json j = nlohmann::json::object();
+			for (const auto &kv : t) {
+				if (kv.first.is<std::string>()) {
+					j[kv.first.as<std::string>()] = lua_to_json(kv.second);
+				}
+			}
+			return j;
+		}
+		default:
+			return nullptr;
+	}
+}
+
+constexpr int kMaxTimerCatchUpFires = 8; // anti-stall guard for vb.every after a stall
+
+} // namespace
+
+struct BlockDef {
+	std::string name;
+	core::BlockId id = core::BlockId::kAir;
+	sol::protected_function on_break;
+	sol::protected_function on_place;
+};
+
+struct ItemDef {
+	std::string name;
+	sol::table raw;
+};
+
+struct EntityKindDef {
+	std::string name;
+	core::EntityKindId id = core::EntityKindId::kInvalid;
+	sol::protected_function on_spawn;
+	sol::protected_function on_tick;
+	sol::protected_function on_hit;
+	sol::protected_function on_death;
+};
+
+struct BiomeDef {
+	std::string name;
+	sol::table raw;
+};
+
+struct CraftDef {
+	sol::table raw;
+};
+
+struct PackRuntime::Impl {
+	net::Transport &transport;
+	world::BlockRegistry &registry;
+	std::filesystem::path storage_path;
+	Vm vm;
+	bool frozen = false;
+	net::WorldReplicator *replicator = nullptr;
+	net::ServerSession *session = nullptr;
+
+	nlohmann::json storage;
+	bool storage_dirty_flag = false;
+
+	std::vector<BlockDef> blocks;
+	std::vector<ItemDef> items;
+	std::vector<EntityKindDef> entity_kinds;
+	std::vector<BiomeDef> biomes;
+	std::vector<CraftDef> crafts;
+
+	std::unordered_map<std::string, std::vector<sol::protected_function>> handlers;
+
+	struct Timer {
+		double remaining;
+		double period;
+		bool repeating;
+		sol::protected_function fn;
+		bool cancelled = false;
+	};
+	std::vector<Timer> timers;
+
+	std::unordered_map<core::NetId, ecs::Inventory> inventories;
+	std::unordered_map<core::NetId, std::string> player_names;
+
+	Impl(net::Transport &t, world::BlockRegistry &reg,
+			std::filesystem::path path, VmLimits limits);
+
+	sol::state &lua_state() { return vm.native_impl().lua; }
+
+	void install_bindings();
+	void dispatch_tick(double dt);
+	void flush_storage();
+	bool on_block_edit_before(core::NetId editor, core::IVec3 pos,
+			core::BlockId existing, core::BlockId new_block, bool is_break);
+	void on_block_edit_after(core::NetId editor, core::IVec3 pos,
+			core::BlockId removed, core::BlockId placed, bool is_break);
+
+	template <typename... Args>
+	void fire(const std::string &event, Args &&...args) {
+		auto it = handlers.find(event);
+		if (it == handlers.end()) {
+			return;
+		}
+		for (auto &fn : it->second) {
+			if (!fn.valid()) {
+				continue;
+			}
+			vm.begin_call_budget();
+			sol::protected_function_result r = fn(args...);
+			if (!r.valid()) {
+				const sol::error e = r;
+				VB_WARN("script", "vb.on('", event, "') handler error: ", e.what());
+			}
+		}
+	}
+
+	template <typename... Args>
+	bool run_veto(const std::string &event, Args &&...args) {
+		auto it = handlers.find(event);
+		if (it == handlers.end()) {
+			return true;
+		}
+		for (auto &fn : it->second) {
+			if (!fn.valid()) {
+				continue;
+			}
+			vm.begin_call_budget();
+			sol::protected_function_result r = fn(args...);
+			if (!r.valid()) {
+				const sol::error e = r;
+				VB_WARN("script", "vb.on('", event, "') handler error: ", e.what());
+				continue;
+			}
+			const sol::object ret = r;
+			if (ret.valid() && ret.get_type() == sol::type::boolean &&
+					!ret.as<bool>()) {
+				return false;
+			}
+		}
+		return true;
+	}
+};
+
+// Lightweight Lua-visible handle for a connected player. Not a persistent
+// object -- constructed fresh per dispatch call, so it can never dangle
+// (Impl outlives every dispatch call). No generic non-player "entity"
+// concept exists yet (Phase 3.1 defers the EnTT registry), so this one type
+// covers both the spec's `entity:` and `player:` method surfaces.
+struct PlayerHandle {
+	core::NetId net_id = core::NetId::kInvalid;
+	PackRuntime::Impl *rt = nullptr;
+
+	sol::object get_pos(sol::this_state ts) const {
+		sol::state_view lua(ts);
+		if (rt->session == nullptr) {
+			throw sol::error("entity:get_pos(): session not attached yet");
+		}
+		const physics::MoveState *st = rt->session->player_move_state(net_id);
+		if (st == nullptr) {
+			throw sol::error("entity:get_pos(): entity is gone");
+		}
+		sol::table t = lua.create_table();
+		t["x"] = st->position.x;
+		t["y"] = st->position.y;
+		t["z"] = st->position.z;
+		return t;
+	}
+
+	void set_velocity(double x, double y, double z) const {
+		if (rt->session == nullptr) {
+			throw sol::error("entity:set_velocity(): session not attached yet");
+		}
+		rt->session->set_player_velocity(net_id, { x, y, z });
+	}
+
+	void remove() const {
+		VB_WARN("script", "entity:remove() is a no-op for player-backed "
+				"handles -- no generic entity registry exists yet "
+				"(Phase 3.1)");
+	}
+
+	sol::object get_inventory(sol::this_state ts) const {
+		sol::state_view lua(ts);
+		const ecs::Inventory &inv = rt->inventories[net_id];
+		sol::table t = lua.create_table();
+		int i = 1;
+		for (const auto &stack : inv.slots) {
+			sol::table s = lua.create_table();
+			s["item"] = static_cast<std::uint16_t>(stack.item);
+			s["count"] = stack.count;
+			t[i++] = s;
+		}
+		return t;
+	}
+
+	void send_message(std::string_view text) const {
+		if (rt->session == nullptr) {
+			return;
+		}
+		const net::ConnId conn = rt->session->conn_for_player(net_id);
+		if (conn == net::ConnId::kInvalid) {
+			return;
+		}
+		net::send_message(rt->transport, conn, protocol::S2CChat{ std::string(text) });
+	}
+
+	void open_ui(std::string_view name, sol::optional<sol::table> ctx) const {
+		if (rt->session == nullptr) {
+			return;
+		}
+		const net::ConnId conn = rt->session->conn_for_player(net_id);
+		if (conn == net::ConnId::kInvalid) {
+			return;
+		}
+		std::string ctx_json = "{}";
+		if (ctx) {
+			ctx_json = lua_to_json(*ctx).dump();
+		}
+		net::send_message(rt->transport, conn,
+				protocol::S2COpenUi{ std::string(name), std::move(ctx_json) });
+	}
+
+	void give(sol::table itemstack) const {
+		const auto item = itemstack.get_or("item", static_cast<std::uint16_t>(0));
+		const auto count = itemstack.get_or("count", static_cast<std::uint16_t>(0));
+		rt->inventories[net_id].slots.push_back(
+				{ static_cast<core::BlockId>(item), count });
+	}
+
+	std::string get_name() const {
+		if (rt->session == nullptr) {
+			return {};
+		}
+		return std::string(rt->session->player_name(net_id));
+	}
+};
+
+PackRuntime::Impl::Impl(net::Transport &t, world::BlockRegistry &reg,
+		std::filesystem::path path, VmLimits limits)
+		: transport(t), registry(reg), storage_path(std::move(path)), vm(limits) {
+	std::ifstream in(storage_path);
+	if (in) {
+		try {
+			in >> storage;
+		} catch (const std::exception &e) {
+			VB_WARN("script", "vb.storage: '", storage_path.string(),
+					"' is malformed JSON (", e.what(), "), starting empty");
+			storage = nlohmann::json::object();
+		}
+	} else {
+		storage = nlohmann::json::object();
+	}
+	install_bindings();
+}
+
+void PackRuntime::Impl::install_bindings() {
+	sol::state &lua = lua_state();
+
+	lua.new_usertype<PlayerHandle>("Player", "get_pos", &PlayerHandle::get_pos,
+			"set_velocity", &PlayerHandle::set_velocity, "remove",
+			&PlayerHandle::remove, "get_inventory", &PlayerHandle::get_inventory,
+			"send_message", &PlayerHandle::send_message, "open_ui",
+			&PlayerHandle::open_ui, "give", &PlayerHandle::give, "get_name",
+			&PlayerHandle::get_name);
+
+	sol::table vb = lua.create_named_table("vb");
+
+	vb["register_block"] = [this](sol::table def) -> std::uint16_t {
+		if (frozen) {
+			throw sol::error("vb.register_block: registry already frozen");
+		}
+		const std::string name = def.get_or("name", std::string{});
+		if (name.empty()) {
+			throw sol::error("vb.register_block: 'name' is required");
+		}
+		world::BlockType type;
+		type.solid = def.get_or("solid", true);
+		type.opaque = def.get_or("opaque", true);
+		type.liquid = def.get_or("liquid", false);
+		type.light_emission =
+				static_cast<std::uint8_t>(def.get_or("light", 0));
+		const core::BlockId id = registry.add_or_get(name, type);
+		auto it = std::find_if(blocks.begin(), blocks.end(),
+				[&](const BlockDef &b) { return b.name == name; });
+		if (it == blocks.end()) {
+			blocks.push_back({ name, id, {}, {} });
+			it = blocks.end() - 1;
+		}
+		it->id = id;
+		it->on_break = def.get_or("on_break", sol::protected_function{});
+		it->on_place = def.get_or("on_place", sol::protected_function{});
+		return static_cast<std::uint16_t>(id);
+	};
+
+	vb["register_item"] = [this](sol::table def) {
+		if (frozen) {
+			throw sol::error("vb.register_item: registry already frozen");
+		}
+		items.push_back({ def.get_or("name", std::string{}), def });
+	};
+
+	vb["register_entity"] = [this](sol::table def) -> std::uint16_t {
+		if (frozen) {
+			throw sol::error("vb.register_entity: registry already frozen");
+		}
+		const std::string name = def.get_or("name", std::string{});
+		if (name.empty()) {
+			throw sol::error("vb.register_entity: 'name' is required");
+		}
+		for (const auto &e : entity_kinds) {
+			if (e.name == name) {
+				return static_cast<std::uint16_t>(e.id);
+			}
+		}
+		EntityKindDef e;
+		e.name = name;
+		e.id = static_cast<core::EntityKindId>(entity_kinds.size() + 1);
+		e.on_spawn = def.get_or("on_spawn", sol::protected_function{});
+		e.on_tick = def.get_or("on_tick", sol::protected_function{});
+		e.on_hit = def.get_or("on_hit", sol::protected_function{});
+		e.on_death = def.get_or("on_death", sol::protected_function{});
+		entity_kinds.push_back(std::move(e));
+		return static_cast<std::uint16_t>(entity_kinds.back().id);
+	};
+
+	vb["register_biome"] = [this](sol::table def) {
+		if (frozen) {
+			throw sol::error("vb.register_biome: registry already frozen");
+		}
+		biomes.push_back({ def.get_or("name", std::string{}), def });
+	};
+
+	vb["register_craft"] = [this](sol::table def) {
+		if (frozen) {
+			throw sol::error("vb.register_craft: registry already frozen");
+		}
+		crafts.push_back({ def });
+	};
+
+	sol::table world_tbl = lua.create_table();
+	vb["world"] = world_tbl;
+
+	world_tbl["get_block"] = [this](int x, int y, int z) -> std::uint16_t {
+		if (replicator == nullptr) {
+			throw sol::error("vb.world.get_block: world not attached yet");
+		}
+		return static_cast<std::uint16_t>(
+				replicator->world().get_block({ x, y, z }));
+	};
+
+	// Known limitation: doesn't run apply_block_edit's relight cascade, so a
+	// scripted edit can desync lighting until something else touches the
+	// chunk. No consumer exists this phase.
+	world_tbl["set_block"] = [this](int x, int y, int z, std::uint16_t id) {
+		if (replicator == nullptr) {
+			throw sol::error("vb.world.set_block: world not attached yet");
+		}
+		const auto bid = static_cast<core::BlockId>(id);
+		if (!registry.contains(bid)) {
+			throw sol::error("vb.world.set_block: unknown block id");
+		}
+		replicator->world().set_block({ x, y, z }, bid);
+	};
+
+	world_tbl["raycast"] = [this](sol::table origin, sol::table dir,
+									   double max_dist,
+									   sol::this_state ts) -> sol::object {
+		sol::state_view sv(ts);
+		if (replicator == nullptr) {
+			throw sol::error("vb.world.raycast: world not attached yet");
+		}
+		const core::Vec3d o{ origin.get_or("x", 0.0), origin.get_or("y", 0.0),
+			origin.get_or("z", 0.0) };
+		const core::Vec3d d{ dir.get_or("x", 0.0), dir.get_or("y", 0.0),
+			dir.get_or("z", 0.0) };
+		const world::VoxelRayHit hit =
+				world::raycast_voxel(replicator->world(), o, d, max_dist);
+		if (!hit.hit) {
+			return sol::make_object(sv, sol::lua_nil);
+		}
+		sol::table t = sv.create_table();
+		t["hit"] = true;
+		t["x"] = hit.voxel.x;
+		t["y"] = hit.voxel.y;
+		t["z"] = hit.voxel.z;
+		t["nx"] = hit.normal.x;
+		t["ny"] = hit.normal.y;
+		t["nz"] = hit.normal.z;
+		return t;
+	};
+
+	world_tbl["spawn"] = [this](const std::string &kind, sol::table pos) {
+		(void)pos;
+		const bool found = std::any_of(entity_kinds.begin(), entity_kinds.end(),
+				[&](const EntityKindDef &e) { return e.name == kind; });
+		(void)found;
+		VB_INFO("script", "vb.world.spawn: kind '", kind,
+				"' recorded (no entity system yet -- Phase 3.1)");
+	};
+
+	static const std::set<std::string> kValidEvents = { "player_join",
+		"player_leave", "block_break", "block_place", "player_interact",
+		"chat", "tick", "ui_event" };
+	vb["on"] = [this](const std::string &event, sol::protected_function fn) {
+		if (kValidEvents.find(event) == kValidEvents.end()) {
+			throw sol::error("vb.on: unknown event '" + event + "'");
+		}
+		handlers[event].push_back(std::move(fn));
+	};
+
+	vb["after"] = [this](double seconds, sol::protected_function fn) {
+		timers.push_back({ seconds, seconds, false, std::move(fn), false });
+	};
+	vb["every"] = [this](double seconds, sol::protected_function fn) {
+		timers.push_back({ seconds, seconds, true, std::move(fn), false });
+	};
+
+	sol::table storage_proxy = lua.create_table();
+	sol::table storage_meta = lua.create_table();
+	storage_meta[sol::meta_function::index] =
+			[this](sol::table, const std::string &key,
+					sol::this_state ts) -> sol::object {
+		sol::state_view sv(ts);
+		if (!storage.contains(key)) {
+			return sol::make_object(sv, sol::lua_nil);
+		}
+		return json_to_lua(sv, storage.at(key));
+	};
+	storage_meta[sol::meta_function::new_index] =
+			[this](sol::table, const std::string &key, sol::object value) {
+		storage[key] = lua_to_json(value);
+		storage_dirty_flag = true;
+	};
+	storage_proxy[sol::metatable_key] = storage_meta;
+	vb["storage"] = storage_proxy;
+}
+
+void PackRuntime::Impl::dispatch_tick(double dt) {
+	fire("tick", dt);
+
+	for (auto &t : timers) {
+		if (t.cancelled) {
+			continue;
+		}
+		t.remaining -= dt;
+		int fires = 0;
+		while (t.remaining <= 0.0) {
+			vm.begin_call_budget();
+			sol::protected_function_result r = t.fn();
+			if (!r.valid()) {
+				const sol::error e = r;
+				VB_WARN("script", "timer handler error: ", e.what());
+			}
+			++fires;
+			if (!t.repeating) {
+				t.cancelled = true;
+				break;
+			}
+			t.remaining += t.period;
+			if (fires >= kMaxTimerCatchUpFires) {
+				break;
+			}
+		}
+	}
+	timers.erase(std::remove_if(timers.begin(), timers.end(),
+						 [](const Timer &t) { return t.cancelled; }),
+			timers.end());
+
+	if (storage_dirty_flag) {
+		flush_storage();
+	}
+}
+
+void PackRuntime::Impl::flush_storage() {
+	std::ofstream out(storage_path, std::ios::trunc);
+	if (!out) {
+		VB_WARN("script", "vb.storage: failed to open '", storage_path.string(),
+				"' for writing");
+		return;
+	}
+	out << storage.dump();
+	storage_dirty_flag = false;
+}
+
+bool PackRuntime::Impl::on_block_edit_before(core::NetId editor,
+		core::IVec3 pos, core::BlockId existing, core::BlockId new_block,
+		bool is_break) {
+	(void)existing;
+	(void)new_block;
+	sol::table pos_tbl = lua_state().create_table();
+	pos_tbl["x"] = pos.x;
+	pos_tbl["y"] = pos.y;
+	pos_tbl["z"] = pos.z;
+	PlayerHandle p{ editor, this };
+	return run_veto(is_break ? "block_break" : "block_place", p, pos_tbl);
+}
+
+void PackRuntime::Impl::on_block_edit_after(core::NetId editor,
+		core::IVec3 pos, core::BlockId removed, core::BlockId placed,
+		bool is_break) {
+	const core::BlockId affected = is_break ? removed : placed;
+	for (auto &bd : blocks) {
+		if (bd.id != affected) {
+			continue;
+		}
+		sol::protected_function &cb = is_break ? bd.on_break : bd.on_place;
+		if (!cb.valid()) {
+			break;
+		}
+		sol::table pos_tbl = lua_state().create_table();
+		pos_tbl["x"] = pos.x;
+		pos_tbl["y"] = pos.y;
+		pos_tbl["z"] = pos.z;
+		sol::table ctx = lua_state().create_table();
+		ctx["pos"] = pos_tbl;
+		ctx["player"] = PlayerHandle{ editor, this };
+		vm.begin_call_budget();
+		sol::protected_function_result r = cb(ctx);
+		if (!r.valid()) {
+			const sol::error e = r;
+			VB_WARN("script", "block on_break/on_place handler error: ", e.what());
+		} else {
+			const sol::object ret = r;
+			if (ret.valid() && ret.get_type() != sol::type::lua_nil) {
+				VB_DEBUG("script", "block callback returned a value (drop) "
+						"-- not materialized yet, Phase 5.1 items");
+			}
+		}
+		break;
+	}
+}
+
+PackRuntime::PackRuntime(net::Transport &transport,
+		world::BlockRegistry &registry, std::filesystem::path storage_path,
+		VmLimits limits)
+		: impl_(std::make_unique<Impl>(transport, registry,
+				  std::move(storage_path), limits)) {}
+PackRuntime::~PackRuntime() = default;
+PackRuntime::PackRuntime(PackRuntime &&) noexcept = default;
+PackRuntime &PackRuntime::operator=(PackRuntime &&) noexcept = default;
+
+ScriptResult PackRuntime::load_pack_file(std::string_view code,
+		std::string_view chunk_name) {
+	return impl_->vm.do_string(code, chunk_name);
+}
+
+void PackRuntime::freeze() {
+	impl_->frozen = true;
+	if (impl_->registry.size() > world::BlockRegistry::base().size()) {
+		VB_INFO("script", "pack registered ", impl_->registry.size(),
+				" blocks beyond the base set -- reaches clients only if the "
+				"host wires HandshakeServerHost::block_registry from this "
+				"registry (Phase 4.3; src/server/main.cpp does)");
+	}
+}
+
+void PackRuntime::install_join_veto(net::HandshakeServerHost &host) {
+	Impl *self = impl_.get();
+	auto user_auth = host.authenticate;
+	host.authenticate = [self, user_auth](std::string_view name,
+										  std::string_view token) -> net::AuthOutcome {
+		net::AuthOutcome outcome = user_auth(name, token);
+		if (!outcome.ok) {
+			return outcome;
+		}
+		if (!self->run_veto("player_join", std::string(name))) {
+			return { false, "denied by pack" };
+		}
+		return outcome;
+	};
+}
+
+void PackRuntime::attach_world(net::WorldReplicator &replicator) {
+	impl_->replicator = &replicator;
+	Impl *self = impl_.get();
+	net::BlockEditHooks hooks;
+	hooks.before_edit = [self](core::NetId editor, core::IVec3 pos,
+									core::BlockId existing,
+									core::BlockId new_block, bool is_break) {
+		return self->on_block_edit_before(editor, pos, existing, new_block,
+				is_break);
+	};
+	hooks.after_edit = [self](core::NetId editor, core::IVec3 pos,
+									core::BlockId removed, core::BlockId placed,
+									bool is_break) {
+		self->on_block_edit_after(editor, pos, removed, placed, is_break);
+	};
+	replicator.set_block_edit_hooks(std::move(hooks));
+}
+
+void PackRuntime::attach_session(net::ServerSession &session) {
+	impl_->session = &session;
+	session.set_ui_event_handler(
+			[this](core::NetId player, const protocol::C2SUiEvent &e) {
+		dispatch_ui_event(player, e);
+	});
+}
+
+void PackRuntime::dispatch_player_join_completed(
+		const net::SessionPlayerJoined &j) {
+	impl_->player_names[j.net_id] = j.name;
+}
+
+void PackRuntime::dispatch_player_leave(const net::SessionPlayerLeft &l) {
+	PlayerHandle p{ l.net_id, impl_.get() };
+	impl_->fire("player_leave", p);
+	impl_->player_names.erase(l.net_id);
+	impl_->inventories.erase(l.net_id);
+}
+
+void PackRuntime::dispatch_tick(double dt_seconds) {
+	impl_->dispatch_tick(dt_seconds);
+}
+
+bool PackRuntime::dispatch_chat(core::NetId sender, std::string_view text) {
+	PlayerHandle p{ sender, impl_.get() };
+	return impl_->run_veto("chat", p, std::string(text));
+}
+
+void PackRuntime::dispatch_ui_event(core::NetId player,
+		const protocol::C2SUiEvent &event) {
+	PlayerHandle p{ player, impl_.get() };
+	nlohmann::json parsed;
+	try {
+		parsed = nlohmann::json::parse(event.value_json);
+	} catch (const nlohmann::json::parse_error &) {
+		parsed = nullptr;
+	}
+	sol::object value = json_to_lua(impl_->lua_state(), parsed);
+	impl_->fire("ui_event", p, event.ui_name, event.widget_id, event.event_kind,
+			value);
+}
+
+bool PackRuntime::dispatch_player_interact(core::NetId player,
+		core::IVec3 target) {
+	PlayerHandle p{ player, impl_.get() };
+	sol::table t = impl_->lua_state().create_table();
+	t["x"] = target.x;
+	t["y"] = target.y;
+	t["z"] = target.z;
+	return impl_->run_veto("player_interact", p, t);
+}
+
+bool PackRuntime::storage_dirty() const { return impl_->storage_dirty_flag; }
+
+void PackRuntime::flush_storage() { impl_->flush_storage(); }
+
+} // namespace vb::script
+
+#endif // VB_WITH_LUA

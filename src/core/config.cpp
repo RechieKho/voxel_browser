@@ -100,6 +100,7 @@ ClientConfig client_from_table(const toml::table &tbl) {
 	read_uint(tbl, "render_distance", c.render_distance);
 	read_double(tbl, "mouse_sensitivity", c.mouse_sensitivity);
 	read_uint(tbl, "asset_cache_mb", c.asset_cache_mb);
+	read_string(tbl, "asset_cache_dir", c.asset_cache_dir);
 	read_string(tbl, "player_name", c.player_name);
 	if (auto arr = tbl["recent_servers"].as_array()) {
 		c.recent_servers.clear();
@@ -186,6 +187,7 @@ void apply_cli_overrides(ClientConfig &config, const Args &args) {
 			"render-distance", static_cast<int>(config.render_distance)));
 	config.fov = static_cast<double>(as_int(args.value("fov"),
 			static_cast<int>(config.fov)));
+	config.asset_cache_dir = args.value_or("asset-cache-dir", config.asset_cache_dir);
 }
 
 } // namespace vb::core

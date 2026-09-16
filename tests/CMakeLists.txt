@@ -3,7 +3,10 @@
 
 add_executable(vb_tests
   main.cpp
+  unit/assetsync_cache_test.cpp
+  unit/assetsync_manifest_test.cpp
   unit/blockedit_test.cpp
+  unit/block_registry_test.cpp
   unit/chunk_codec_test.cpp
   unit/cli_test.cpp
   unit/config_test.cpp
@@ -13,12 +16,15 @@ add_executable(vb_tests
   unit/lighting_test.cpp
   unit/mesher_test.cpp
   unit/netcode_test.cpp
+  unit/pack_runtime_integration_test.cpp
+  unit/pack_runtime_test.cpp
   unit/physics_test.cpp
   unit/protocol_test.cpp
   unit/net_test.cpp
   unit/script_test.cpp
   unit/replication_test.cpp
   unit/render_test.cpp
+  unit/ui_runtime_test.cpp
   unit/world_replication_test.cpp
   unit/world_test.cpp
   unit/worldgen_test.cpp

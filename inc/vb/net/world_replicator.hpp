@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -20,6 +21,20 @@
 // the server session; driven once per tick.
 
 namespace vb::net {
+
+// Phase 4.2 seam: a script host may veto/observe block edits without
+// WorldReplicator depending on script types (pure std::function, no sol2).
+struct BlockEditHooks {
+	// Fires before the edit is applied; return false to veto it (the edit is
+	// then rejected exactly like a reach/target-validity failure).
+	std::function<bool(core::NetId editor, core::IVec3 pos,
+			core::BlockId existing, core::BlockId new_block, bool is_break)>
+			before_edit;
+	// Fires after the edit is applied (chunk mutated), before delta fan-out.
+	std::function<void(core::NetId editor, core::IVec3 pos,
+			core::BlockId removed, core::BlockId placed, bool is_break)>
+			after_edit;
+};
 
 class WorldReplicator {
 public:
@@ -53,11 +68,16 @@ public:
 	bool player_has_chunk(core::NetId id, core::ChunkCoord c) const;
 
 	const world::World &world() const { return world_; }
+	world::World &world() { return world_; }
 	std::size_t requested_chunk_count() const {
 		return lifecycle_.requested_count();
 	}
 
+	// Phase 4.2: install a script host's block-edit veto/observer hooks.
+	void set_block_edit_hooks(BlockEditHooks hooks) { hooks_ = std::move(hooks); }
+
 private:
+	BlockEditHooks hooks_;
 	world::World &world_;
 	world::ChunkLifecycleSystem lifecycle_;
 	int view_distance_;

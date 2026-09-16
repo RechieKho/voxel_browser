@@ -4,8 +4,29 @@
 > as any change to a struct in `inc/vb/protocol/`, and bump
 > `kEngineProtocolVersion` in `cmake/version.hpp.in`.
 
-Current `ENGINE_PROTOCOL_VERSION`: **3**.
+Current `ENGINE_PROTOCOL_VERSION`: **7**.
 
+- **7** — `C2S_UiEvent` (102) payload defined (Phase 4.5, client UI VM):
+  `ui_name`, `widget_id`, `event_kind`, `value_json`. Sent when a widget's
+  `on_click`/`on_change`/`on_close` Lua callback calls
+  `ui.send_event(...)`/`ui.close()`; routed server-side to
+  `vb.on("ui_event", handler)`.
+- **6** — Asset sync (Phase 4.4, spec §9): `C2S_AssetManifestRequest` (20),
+  `S2C_AssetManifest` (21), `C2S_AssetRequest` (22), `S2C_AssetData` (23)
+  payloads defined, AND the handshake sequence itself changes — three new
+  states (`kAwaitingAssetManifestRequest`/`kAwaitingAssetRequest`/
+  `kStreamingAssets` server-side; `kAwaitingAssetManifest`/`kSyncingAssets`
+  client-side) sit between `S2C_AuthResult` and `C2S_Ready` unconditionally,
+  not just an optional extra message — a structural, breaking change to the
+  handshake, hence the version bump (not merely additive like 4/5).
+- **5** — `S2C_BlockRegistry` (40) payload defined (Phase 4.3): sent between
+  `C2S_Ready` and `S2C_JoinAccept` when the host opts in
+  (`HandshakeServerHost::block_registry`); the dedicated server always opts
+  in with its live (possibly Lua-extended) registry, `nullopt` (no frame)
+  otherwise.
+- **4** — `S2C_Chat` (101) + `S2C_OpenUi` (103) payloads defined (Phase 4.2,
+  `player:send_message`/`player:open_ui`); no client handles them yet, but the
+  wire format is real.
 - **3** — `C2S_BlockEdit` (44) + `S2C_BlockEditResult` (45) payloads defined.
 - **2** — `S2C_EntitySnapshot` gains `bool has_local` + trailing `EntityRecord local`
   (the recipient's own authoritative state, for client reconciliation);
@@ -90,6 +111,45 @@ bit3 secondary, bit4 fly-up, bit5 fly-down). Sent every client frame; each batch
 resends recent unacked commands. The server simulates any `seq` above the last it
 has run and acks the highest via `S2C_EntitySnapshot.last_acked_input_seq`.
 
+### Asset sync — `inc/vb/protocol/assetsync.hpp` (implemented)
+
+| Type (id)                     | Fields                                                        |
+| ------------------------------ | ------------------------------------------------------------ |
+| `C2S_AssetManifestRequest` (20) | `hash known_manifest_hash` ({0,0} = nothing cached)          |
+| `S2C_AssetManifest` (21)        | `hash manifest_hash`, `u64 total_bytes`, `varint n` + `n×AssetEntryRecord entries` (empty if `known_manifest_hash` matched) |
+| `C2S_AssetRequest` (22)         | `varint n` + `n×hash missing` (empty = "I have it all")     |
+| `S2C_AssetData` (23)            | `hash hash`, `u32 seq`, `u32 total_chunks`, `varint len` + `len` bytes (≤ ~48 KiB target, decode caps at 1 MiB) |
+
+`AssetEntryRecord` = `string path`, `hash hash`, `u64 size`, `u8 kind` (0
+script / 1 texture / 2 model / 3 ui / 4 sound / 5 data). `hash` = two raw
+`u64`s (`lo`, `hi` — xxHash3-128 of the file's bytes).
+
+Sent between `S2C_AuthResult` and `C2S_Ready` (spec §9, see the handshake
+sequence below): the server always sends exactly one `S2C_AssetManifest`
+reply; if it has no manifest at all (opted out, or built without
+`VB_WITH_COMPRESSION`), `manifest_hash` is `{0,0}` and `entries` is empty.
+The client always replies with exactly one `C2S_AssetRequest`; an empty
+`missing` list (nothing to fetch) skips straight past `kSyncingAssets`.
+`S2C_AssetData` chunks are paced by the server (a small per-tick send budget,
+not real flow-control windowing) and verified by hash on the client before
+being committed to its content-addressed cache — a mismatch aborts the
+connection (spec §9.4). No model/texture/asset-kind-specific handling exists
+downstream of the cache yet (no Lua `require`, no texture loader) — the
+assembled virtual pack filesystem (`path -> bytes`) is exposed but unread.
+
+### Block registry — `inc/vb/protocol/world.hpp` (implemented)
+
+| Type (id)              | Fields                                                        |
+| ----------------------- | ----------------------------------------------------------- |
+| `S2C_BlockRegistry` (40) | `varint n` + `n × {string name, bool solid, bool opaque, bool liquid, u8 light_emission}` (index == `BlockId`) |
+
+Sent between `C2S_Ready` and `S2C_JoinAccept` (Phase 4.3) only if
+`HandshakeServerHost::block_registry` returns a value; `nullopt` (default)
+sends nothing, so a host/test that never opts in is unaffected. The client
+rebuilds a `world::BlockRegistry` from the records (in order, so ids match)
+and swaps it into its `ClientChunkStore`. No model/texture/collision-shape
+fields exist yet — those wait on asset sync (4.4) + the base pack (5.1).
+
 ### World editing — `inc/vb/protocol/world.hpp` (implemented)
 
 | Type (id)               | Fields                                                        |
@@ -104,28 +164,57 @@ server validates reach (≤ 5.5 blocks from the eye), target validity, and
 non-floating placement (a Lua `block_break`/`block_place` veto slots in at
 Phase 4.2).
 
+### Chat / UI RPC — `inc/vb/protocol/chat.hpp` (implemented)
+
+| Type (id)           | Fields                                                        |
+| -------------------- | ------------------------------------------------------------ |
+| `S2C_Chat` (101)     | `string text`                                                 |
+| `S2C_OpenUi` (103)   | `string ui_name`, `string ctx_json`                           |
+| `C2S_UiEvent` (102)  | `string ui_name`, `string widget_id`, `string event_kind` ("click"\|"change"\|"close"), `string value_json` |
+
+`S2C_Chat`/`S2C_OpenUi` sent by the server Lua runtime
+(`player:send_message`/`player:open_ui`, Phase 4.2); `ctx_json` is the
+pre-serialized JSON of the Lua `ctx` table. `C2S_UiEvent` (Phase 4.5) is sent
+by the client's separate UI VM (`vb::script::UiRuntime`) when a widget's
+`on_click`/`on_change`/`on_close` callback calls
+`ui.send_event(...)`/`ui.close()`; the server routes it to
+`vb.on("ui_event", handler)` (non-vetoable). `C2S_Chat` (100) is still
+reserved-only — chat UI is Phase 5.4.
+
 ### Not yet implemented
 
-Asset sync (20–23), block registry (40), chat/UI (100–103) — types are reserved
-in `MessageType`; payloads land in Phases 4–5.
+`C2S_Chat` (100) — reserved in `MessageType`; lands in Phase 5.4.
 
 ## Handshake sequence
 
 See `ARCHITECTURE_SPEC.md` §8.3 for the full diagram. Order:
-`Hello → ServerInfo → Auth → AuthResult → (asset manifest/data) → Ready →
-BlockRegistry → JoinAccept → initial ChunkAdd + EntitySnapshot`.
+`Hello → ServerInfo → Auth → AuthResult → AssetManifestRequest →
+AssetManifest → AssetRequest → AssetData×N → Ready → BlockRegistry →
+JoinAccept → initial ChunkAdd + EntitySnapshot`.
 
 Implemented, transport-agnostic, in `inc/vb/net/handshake.hpp`:
 
 - `ServerHandshake` — per-connection FSM: `AwaitingHello → AwaitingAuth →
-  AwaitingReady → Playing` (or `Closed`). Rejects out-of-order messages
-  (`kBadHandshake`), protocol-version mismatch (`kProtocolMismatch`), a full
-  server (`kServerFull`), and failed auth (`kAuthFailed`); `on_timeout()` →
+  AwaitingAssetManifestRequest → AwaitingAssetRequest → StreamingAssets →
+  AwaitingReady → Playing` (or `Closed`). `StreamingAssets` is unusual: it
+  expects no incoming frame at all, paced instead by `pump_assets()` called
+  once per tick from `ServerSession::tick()` (a small per-tick send budget,
+  not literal byte-in-flight flow control) — every other state is purely
+  reactive to `on_frame()`. Rejects out-of-order messages (`kBadHandshake`),
+  protocol-version mismatch (`kProtocolMismatch`), a full server
+  (`kServerFull`), and failed auth (`kAuthFailed`); `on_timeout()` →
   `kTimeout`.
-- `ClientHandshake` — drives `Hello → Auth → Ready` and exposes
-  `ClientHandshakeStatus { Connecting, Authenticating, Syncing, Joined, Failed }`
-  for the connect UI. Any `S2C_Disconnect` fails the handshake with the
-  server-provided message.
+- `ClientHandshake` — drives `Hello → Auth → AssetManifestRequest →
+  AssetRequest → Ready` and exposes `ClientHandshakeStatus { Connecting,
+  Authenticating, AwaitingAssetManifest, SyncingAssets, Syncing, Joined,
+  Failed }` for the connect UI. Asset-sync mechanics (which hashes are
+  missing, verifying + committing streamed chunks) are pushed out to a new
+  `HandshakeClientHost` hook struct — `ClientHandshake` itself has no
+  filesystem access; `ClientSession` wires it to a
+  `vb::assetsync::ClientAssetCache` when one is supplied (optional 4th
+  constructor parameter, `nullptr` by default — every pre-4.4 call site is
+  unaffected and behaves as "already fully synced"). Any `S2C_Disconnect`
+  fails the handshake with the server-provided message.
 
 The `Transport` interface (`inc/vb/net/transport.hpp`) delivers whole framed
 messages per lane. Backends: `LoopbackTransport` (in-process, tests +
@@ -147,6 +236,6 @@ one ordered stream (a latency nuance, not a correctness issue — see
 | GameNetworkingSockets | `v1.6.0`   | Phase 1.2; needs a real protobuf install (vcpkg/apt/brew — not FetchContent-able, see `cmake/Dependencies.cmake`) + BCrypt (Windows) or OpenSSL (Linux/macOS) |
 | zpl / librg           | `v18.1.4` / `v7.2.2` | Phase 1.4 spike — confirm API |
 | FastNoise2            | `v0.10.0`  | Phase 2                                 |
-| lz4 / xxHash          | `v1.9.4` / `v0.8.2` | Phase 2/4 codecs                |
+| lz4 / xxHash          | `v1.9.4` / `v0.8.2` | Phase 4.4 manifest hashing (`XXH3_128bits`) is the first real consumer; both fetched under `VB_WITH_COMPRESSION`. xxHash is linked **before** lz4 in `src/core/CMakeLists.txt` on purpose — lz4 vendors its own private, older `xxhash.h` with no XXH3 API, and `#include <xxhash.h>` resolves against whichever `-I` entry comes first |
 | Lua / sol2            | `v5.4.6` / `v3.3.0` | Phase 4                          |
 | Cellulose             | `main`     | Phase 2.5 spike — pin a commit then     |

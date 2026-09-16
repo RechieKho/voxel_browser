@@ -21,6 +21,7 @@ bool Vm::sandbox_intact() const { return true; }
 std::size_t Vm::memory_used() const { return 0; }
 std::size_t Vm::memory_limit() const { return 0; }
 void Vm::begin_call_budget() {}
+Vm::Impl &Vm::native_impl() { return *impl_; }
 
 } // namespace vb::script
 
@@ -30,19 +31,9 @@ void Vm::begin_call_budget() {}
 #include <string>
 #include <vector>
 
-#include <sol/sol.hpp>
+#include "vb/script/vm_internal.hpp"
 
 namespace vb::script {
-
-namespace {
-
-// Lua allocator with a hard ceiling. Allocation failure returns nullptr, which
-// Lua turns into a catchable "not enough memory" error (spec §10.2).
-struct AllocState {
-	std::size_t used = 0;
-	std::size_t limit;
-	explicit AllocState(std::size_t l) : limit(l) {}
-};
 
 void *vm_alloc(void *ud, void *ptr, std::size_t osize, std::size_t nsize) {
 	auto *st = static_cast<AllocState *>(ud);
@@ -65,6 +56,8 @@ void *vm_alloc(void *ud, void *ptr, std::size_t osize, std::size_t nsize) {
 	st->used = projected;
 	return np;
 }
+
+namespace {
 
 // Fires once the per-call instruction count is reached; raising here longjmps
 // back into the protected call.
@@ -113,20 +106,14 @@ void strip_sandbox(sol::state &L) {
 
 } // namespace
 
-struct Vm::Impl {
-	AllocState alloc;
-	int instruction_budget;
-	sol::state lua;
-
-	explicit Impl(VmLimits lim) : alloc(lim.memory_bytes),
-								  instruction_budget(lim.instruction_budget),
-								  lua(sol::default_at_panic, &vm_alloc, &alloc) {
-		lua.open_libraries(sol::lib::base, sol::lib::string, sol::lib::table,
-				sol::lib::math, sol::lib::coroutine, sol::lib::utf8,
-				sol::lib::debug);
-		strip_sandbox(lua);
-	}
-};
+Vm::Impl::Impl(VmLimits lim) : alloc(lim.memory_bytes),
+							   instruction_budget(lim.instruction_budget),
+							   lua(sol::default_at_panic, &vm_alloc, &alloc) {
+	lua.open_libraries(sol::lib::base, sol::lib::string, sol::lib::table,
+			sol::lib::math, sol::lib::coroutine, sol::lib::utf8,
+			sol::lib::debug);
+	strip_sandbox(lua);
+}
 
 Vm::Vm(VmLimits limits) : impl_(std::make_unique<Impl>(limits)) {}
 Vm::~Vm() = default;
@@ -178,6 +165,8 @@ bool Vm::sandbox_intact() const {
 
 std::size_t Vm::memory_used() const { return impl_->alloc.used; }
 std::size_t Vm::memory_limit() const { return impl_->alloc.limit; }
+
+Vm::Impl &Vm::native_impl() { return *impl_; }
 
 } // namespace vb::script
 

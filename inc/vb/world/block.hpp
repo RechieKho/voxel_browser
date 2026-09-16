@@ -44,6 +44,12 @@ public:
 
 	core::BlockId add(BlockType type);
 
+	// Idempotent registration for Phase 4 `vb.register_block`: returns the
+	// existing id if `name` is already registered (re-running a pack's
+	// init.lua must not create duplicate ids), otherwise adds it. Only
+	// meaningful before the registry is frozen by the caller.
+	core::BlockId add_or_get(std::string_view name, BlockType type);
+
 	std::size_t size() const { return types_.size(); }
 	bool contains(core::BlockId id) const {
 		return static_cast<std::size_t>(id) < types_.size();
