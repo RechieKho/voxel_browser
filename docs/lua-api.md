@@ -132,6 +132,36 @@ back which widgets fired an interaction — no sol2 in the render half.
   end-to-end `player:open_ui` → click → `vb.on("ui_event", ...)` round trip
   in `tests/unit/pack_runtime_integration_test.cpp`.
 
+## Audio / sfx — not implemented (v0 has no audio subsystem)
+
+There is no sound/music API, client-side or server-side, and no engine code
+plays audio anywhere. This is a deliberate v0 scope cut, not an oversight:
+
+- `cmake/Dependencies.cmake` builds raylib with
+  `SUPPORT_MODULE_RAUDIO OFF` — raylib's audio module (`InitAudioDevice`,
+  `PlaySound`, `LoadMusicStream`, ...) is compiled out entirely, so it isn't
+  even linkable from `vb_render` today, let alone exposed to Lua.
+- `ARCHITECTURE_SPEC.md` §10.5's block-break event-flow diagram mentions
+  "sfx trigger" as an example of what a pack's `on_break` callback might
+  *eventually* do (illustrative, alongside "drops") — it was never a real
+  hook and nothing dispatches it. `register_block`'s `on_break`/`on_place`
+  callbacks (Phase 4.2, `PackRuntime`) exist and fire for real, but a pack
+  has no `vb.`/`ui.` call it could make from inside one to actually produce
+  a sound.
+- There is no `S2C_PlaySound`-shaped wire message, and no client-side sound
+  cache/loader analogous to `ClientAssetCache` for textures/scripts (Phase
+  4.4) — packaging sound assets for asset sync would need one.
+- Tracked as a first-class deferred item, not folded into any phase's
+  backlog: `REMAINING_TASKS.md`'s "Deferred (post first-playable)" list has
+  "Audio subsystem + Lua sfx/music API" as its own line.
+
+When this lands, the natural shape (unconfirmed, not designed) would mirror
+`player:send_message`/`open_ui`: a server-authoritative
+`entity:play_sound(name, opts?)` / `vb.world.play_sound_at(pos, name)` call
+that sends a small S2C message, with sound files traveling over the existing
+Asset Sync pipeline (Phase 4.4) like any other pack asset — but none of that
+exists yet.
+
 ## Sandbox
 
 Implemented in `Vm` construction (`strip_sandbox`): opens only `base`, `string`,

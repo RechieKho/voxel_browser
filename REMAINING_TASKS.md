@@ -949,7 +949,7 @@ hold-to-break progress, cross-chunk relight.
       limitation, not a sign of an app bug) — worth a manual pass before
       calling 5.3 fully verified.
 
-### 5.4 Play polish
+### 5.4 Play polish  ✅ done (2026-09-16)
 
 - [x] Day/night `time_of_day` from `JoinAccept`, advanced server-side, simple sky
       gradient client-side: `S2C_TimeOfDay` (46) — `inc/vb/protocol/world.hpp`
@@ -1079,7 +1079,26 @@ hold-to-break progress, cross-chunk relight.
       `set_void_kill_y` explicitly so it just gets `ServerSession`'s
       built-in -64.0 default, untested that this is a sensible number for
       every worldgen seed's actual terrain floor.
-- [ ] Basic sfx hooks are stubbed (no audio subsystem in v0) — document.
+- [x] Basic sfx hooks are stubbed (no audio subsystem in v0) — documented in
+      `docs/lua-api.md`'s new "Audio / sfx — not implemented" section: no
+      `vb.`/`ui.` sound API exists, raylib is built with
+      `SUPPORT_MODULE_RAUDIO OFF` (`cmake/Dependencies.cmake`), and
+      `ARCHITECTURE_SPEC.md` §10.5's "sfx trigger" mention in the
+      block-break event-flow diagram was always illustrative, not a real
+      hook. Cross-referenced to this doc's own "Deferred" §'s "Audio
+      subsystem + Lua sfx/music API" line, which was already tracking this
+      — no code changed, documentation only.
+
+**5.4 status (2026-09-16): all four items landed.** Chat, player list/
+join-leave, day/night, and death/respawn — one focused commit each, in that
+order, over a single session. None needed cross-cutting changes to the
+others; chat's send-to-one-connection pattern got reused as-is by
+death/respawn's private notice, and player list's "reuse the chat log for
+system messages" precedent is exactly what death/respawn's notice does too.
+Everything is verified by unit/integration tests over `LoopbackTransport`
+plus a clean full build; none of the four had a live two-window manual
+playtest this session (see each entry's own "not re-verified" note) — worth
+one before calling Phase 5 itself done.
 
 ### 5.5 Documentation
 

@@ -7,7 +7,9 @@
 > Companion docs: `ARCHITECTURE_SPEC.md` (target design) · `REMAINING_TASKS.md`
 > (implementation backlog). This file is for *traps and context*, not the plan.
 
-Last updated: 2026-09-16 (Phase 5.4 — death/respawn: void-kill Y threshold +
+Last updated: 2026-09-16 (Phase 5.4 complete — sfx hooks documented as not
+implemented, `docs/lua-api.md`; see §8's eighth 2026-09-16 entry. Phase 5.4 —
+death/respawn: void-kill Y threshold +
 generic `health <= 0` respawn path, no new wire message (reuses `S2C_Chat`
 privately); see §8's seventh 2026-09-16 entry. Phase 5.4 — day/night: `S2C_TimeOfDay`,
 `vb::world::daynight.hpp` (pure tick/color math), sky-gradient `ClearBackground`
@@ -1885,3 +1887,20 @@ _(Move items here with a date + commit when fixed, so the history is visible.)_
   (20 here is a bare literal matching `ecs::Health::max`'s default, not
   read from that component or anywhere configurable) — a pack wanting a
   different max HP has no lever to pull yet.
+
+- **2026-09-16 (8th): Phase 5.4 sfx hooks — documented as not implemented,
+  closing out Phase 5.4.** Pure documentation, no code: added an "Audio /
+  sfx — not implemented" section to `docs/lua-api.md` (right before its
+  existing "Sandbox" section). Confirmed, rather than assumed, three facts
+  before writing it: `cmake/Dependencies.cmake` really does build raylib
+  with `SUPPORT_MODULE_RAUDIO OFF`; `ARCHITECTURE_SPEC.md` §10.5's
+  block-break event-flow diagram really does say "sfx trigger" (in the
+  `on_break` step) with nothing else in the spec backing it up as a real
+  API; and `REMAINING_TASKS.md`'s existing "Deferred (post first-playable)"
+  list already had "Audio subsystem + Lua sfx/music API" as its own line —
+  this was tracked, just not documented anywhere a Lua-API reader would
+  see it. All three now cross-reference each other. This was the last open
+  item in Phase 5.4 — see the `### 5.4 Play polish  ✅ done (2026-09-16)`
+  status line and paragraph in `REMAINING_TASKS.md` for the four-item
+  session summary (chat, player list/join-leave, day/night, death/respawn,
+  sfx docs).
