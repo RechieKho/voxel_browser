@@ -867,15 +867,87 @@ can break and place blocks; a second client sees the change via `S2C_ChunkDelta`
 out-of-reach edits roll back. Remaining: Lua veto (4.2), drops/tools/items (5.1),
 hold-to-break progress, cross-chunk relight.
 
-### 5.3 Main menu (raygui, engine-level, not pack)
+### 5.3 Main menu (raygui, engine-level, not pack)  ✅ (keybindings screen deferred)
 
-- [ ] Server address + port input, player name, Connect button.
-- [ ] Connection progress screen (handshake state + asset download bar).
-- [ ] Error/disconnect screen with server-provided reason.
-- [ ] Recent servers list (local `client.toml`).
-- [ ] Settings screen: resolution, vsync, FOV, render distance, sensitivity,
-      keybindings, cache size.
-- [ ] Integrated-server path for singleplayer (in-process server on localhost).
+- [x] `vb::render::MainMenu` (`inc/vb/render/main_menu.hpp` +
+      `src/render/main_menu.cpp`, new `vb_render` sibling to `ChunkRenderer`/
+      `UiRenderer` — plain raygui calls, no sol2/Lua, no `ClientSession`
+      dependency of its own) draws four screens; `src/client/main.cpp` was
+      restructured around an explicit `AppState{kMenu, kSettings,
+      kConnecting, kPlaying, kError}` state machine that owns which of
+      `Singleplayer`/`RemoteConnection` is alive. The window now opens
+      *before* any connection attempt in windowed mode (previously
+      `main.cpp` blocked on a full connect+handshake before ever creating a
+      `Window`).
+- [x] Main screen: player name + server address/port text fields (raygui
+      `GuiTextBox`/`GuiValueBox`, same edit-mode-toggle pattern
+      `UiRenderer::draw`'s `kTextBox` case already used), **Connect**,
+      **Play Singleplayer**, **Settings**, **Quit**.
+- [x] Connecting/progress screen: shows the live `ClientHandshakeStatus`
+      as text (`connecting_status_text()` in `main.cpp` — Connecting /
+      Authenticating / Requesting content manifest / Downloading content
+      pack / Syncing world) + a **Cancel** button that tears down the
+      in-flight `Singleplayer`/`RemoteConnection` and returns to the menu.
+      **No byte-progress bar** — `ClientHandshake`/asset-sync (4.4) never
+      grew progress-fraction accounting (4.4's own known gap: "no
+      connect-screen UI exists yet" — now one does, but the underlying
+      counter still doesn't), so this is status-text-only, not a filled bar.
+      Real multiplayer connects are pumped one `tick(dt)` per frame with a
+      10 s wall-clock deadline (was a blocking `sleep`-based loop before the
+      window existed); singleplayer's loopback join is ticked in small
+      batches per frame (was a single blocking up-to-128-tick loop) since
+      it's synchronous/in-process and finishes in a handful of frames
+      regardless.
+- [x] Error screen: shows `ClientSession::failure_reason()` (or "connection
+      timed out" / a pre-handshake connect failure), **Back to menu** button
+      — connect failures no longer exit the process in windowed mode (they
+      used to: the old code `return EXIT_FAILURE`d straight out of `main`).
+- [x] Recent servers list: `ClientConfig::recent_servers` (already existed
+      as an unused field, `client.toml`'s documented `recent_servers = []`)
+      is now actually read/written — a `GuiListView` on the main screen
+      fills the address/port fields on click; a successful non-singleplayer
+      join pushes `"host:port"` to the front (dedup, capped at 8) and
+      persists via a new `vb::core::save_client_config()`
+      (`inc/vb/core/config.hpp` + `src/core/config.cpp`, toml++ serializer —
+      regenerates the file from scratch, doesn't preserve
+      `client.toml.example`-style comments in a real `client.toml`).
+- [x] Settings screen: window width/height (persisted for next launch, not
+      live-resized — labelled "applies on restart"), vsync (same), FOV /
+      render distance / mouse sensitivity (`GuiSlider`), asset cache MB
+      (`GuiValueBox`); **Save** writes through `save_client_config` and
+      returns to the menu, **Back** discards edits.
+      **Keybindings: not attempted** — WASD/jump/sprint/break/place are
+      still hardcoded in `sample_input_cmd()`/the block-edit block in
+      `main.cpp`; out of scope for this pass, no rebinding storage or UI
+      exists.
+- [x] Integrated-server singleplayer path: unchanged mechanism from Phase 1
+      (`Singleplayer` struct, in-process `IntegratedGame` over
+      `LoopbackTransport`) — now reachable from the **Play Singleplayer**
+      button instead of only `--singleplayer` on the CLI.
+- [x] `--headless` deliberately untouched: `run_headless()` in `main.cpp` is
+      the pre-5.3 blocking connect-then-run body, byte-for-byte behaviourally
+      unchanged, so `server_smoke`/`client_smoke`/`singleplayer_smoke` (CI's
+      only coverage of this file) keep passing without modification — the
+      new menu code is only reachable in windowed mode. `--singleplayer` or
+      an explicit `--server` on the CLI in *windowed* mode skips the menu
+      and calls the same `begin_connect()` the Connect/Play Singleplayer
+      buttons use, landing on the Connecting/Error screens instead of
+      exiting the process on failure (a behavior change from before, judged
+      strictly better: a bad `--server` used to hard-exit).
+- [ ] Not covered by an automated test (no windowed GL context in CI/tests,
+      same limitation as `ChunkRenderer`) — verified by: a clean
+      `-DVB_WARNINGS_AS_ERRORS=ON` build across `voxel_browser`/
+      `voxel_browser_server`/`vb_tests`, the full `ctest` suite green
+      (`vb_tests` unaffected — nothing in `vb_core`/`vb_render`'s public
+      surface changed shape besides the additive `MainMenu`/
+      `save_client_config`), and a real windowed launch + screenshot showing
+      the main menu laid out correctly (player name / address / port /
+      Connect / Play Singleplayer / Settings / Quit). Clicking through
+      Settings/Connecting/Error wasn't exercised interactively this session
+      (an automated-input attempt via a background PowerShell couldn't
+      reliably focus the raylib window to deliver clicks — a host/tooling
+      limitation, not a sign of an app bug) — worth a manual pass before
+      calling 5.3 fully verified.
 
 ### 5.4 Play polish
 

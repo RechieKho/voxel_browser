@@ -57,6 +57,11 @@ Result<ClientConfig, CoreError> parse_client_config(std::string_view toml_text);
 Result<ServerConfig, CoreError> load_server_config(const std::string &path);
 Result<ClientConfig, CoreError> load_client_config(const std::string &path);
 
+// Overwrite `path` with `config` serialized as TOML (used by the client
+// Settings screen + recent-servers list, spec §5.3). Comments in an existing
+// file are not preserved -- this regenerates the file from scratch.
+Result<void, CoreError> save_client_config(const std::string &path, const ClientConfig &config);
+
 // Apply recognised CLI flags on top of a config (mutates in place).
 //   server: --bind --port --content-pack --tick-rate --max-players --seed --motd
 //   client: --name --width --height --fov --render-distance --asset-cache-dir

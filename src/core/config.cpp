@@ -158,6 +158,37 @@ Result<ClientConfig, CoreError> load_client_config(const std::string &path) {
 	return load_file<ClientConfig>(path, parse_client_config);
 }
 
+Result<void, CoreError> save_client_config(const std::string &path, const ClientConfig &config) {
+	toml::table tbl;
+	tbl.insert_or_assign("window_width", static_cast<std::int64_t>(config.window_width));
+	tbl.insert_or_assign("window_height", static_cast<std::int64_t>(config.window_height));
+	tbl.insert_or_assign("vsync", config.vsync);
+	tbl.insert_or_assign("fov", config.fov);
+	tbl.insert_or_assign("render_distance", static_cast<std::int64_t>(config.render_distance));
+	tbl.insert_or_assign("mouse_sensitivity", config.mouse_sensitivity);
+	tbl.insert_or_assign("asset_cache_mb", static_cast<std::int64_t>(config.asset_cache_mb));
+	if (!config.asset_cache_dir.empty()) {
+		tbl.insert_or_assign("asset_cache_dir", config.asset_cache_dir);
+	}
+	tbl.insert_or_assign("player_name", config.player_name);
+	toml::array recent;
+	for (const auto &s : config.recent_servers) {
+		recent.push_back(s);
+	}
+	tbl.insert_or_assign("recent_servers", std::move(recent));
+
+	std::ofstream out(path, std::ios::binary | std::ios::trunc);
+	if (!out) {
+		VB_ERROR("config", "could not open '", path, "' for writing");
+		return Err{ CoreError::kIoError };
+	}
+	out << tbl;
+	if (!out) {
+		return Err{ CoreError::kIoError };
+	}
+	return {};
+}
+
 void apply_cli_overrides(ServerConfig &config, const Args &args) {
 	config.bind_address = args.value_or("bind", config.bind_address);
 	config.content_pack = args.value_or("content-pack", config.content_pack);

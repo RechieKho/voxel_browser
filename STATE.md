@@ -7,9 +7,9 @@
 > Companion docs: `ARCHITECTURE_SPEC.md` (target design) · `REMAINING_TASKS.md`
 > (implementation backlog). This file is for *traps and context*, not the plan.
 
-Last updated: 2026-09-16 (Phase 5.1 — content/base pack: registration content +
-the load_content_pack wiring that was missing from both binaries; see §8's
-second 2026-09-16 entry)
+Last updated: 2026-09-16 (Phase 5.3 — main menu: `vb::render::MainMenu` +
+an `AppState` machine in `src/client/main.cpp` so the window opens before any
+connection attempt in windowed mode; see §8's third 2026-09-16 entry)
 
 ---
 
@@ -1560,3 +1560,56 @@ _(Move items here with a date + commit when fixed, so the history is visible.)_
   produces a noisy diff of its own) — if it's ever worth cleaning up,
   `git add --renormalize <path>` after adding a `.gitattributes` rule is
   the low-noise way, not a manual line-ending find/replace.
+
+- **2026-09-16 — Phase 5.3 main menu landed (uncommitted).** New
+  `vb::render::MainMenu` (`inc/vb/render/main_menu.hpp` +
+  `src/render/main_menu.cpp`) draws menu/settings/connecting/error screens
+  with plain raygui calls (no Lua — engine-level per spec §5.3, distinct from
+  `UiRuntime`/`UiRenderer` which draw *pack* screens post-join). See
+  `REMAINING_TASKS.md` 5.3 for the full feature list.
+  **The real structural change** is in `src/client/main.cpp`: it used to
+  block on a full connect-then-handshake loop *before* ever constructing a
+  `Window` — no way to show a menu, a connecting screen, or recover from a
+  failed connect without the process exiting. Windowed mode now creates the
+  `Window` first and runs an explicit `AppState{kMenu, kSettings,
+  kConnecting, kPlaying, kError}` machine in the frame loop; `--headless` was
+  deliberately left as a byte-for-byte-unchanged `run_headless()` function
+  (the old blocking body, verbatim) since CI's only coverage of this file is
+  the 3 headless smoke tests and none of them should need to change for a
+  windowed-only feature.
+  **New `vb::core::save_client_config()`** (`config.hpp`/`.cpp`) — toml++
+  serializes a fresh `toml::table` from `ClientConfig` and overwrites the
+  file; regenerates from scratch, doesn't preserve comments in a hand-edited
+  `client.toml` (acceptable for a Settings-screen save, not attempted to fix
+  by e.g. re-parsing-and-patching the existing file in place).
+  `ClientConfig::recent_servers` already existed as a parsed-but-never-used
+  field since Phase 1.1's config loader — this is the first thing to
+  actually read and write it.
+  **Verified:** clean `-DVB_WARNINGS_AS_ERRORS=ON` build of
+  `voxel_browser`/`voxel_browser_server`/`vb_tests` on `build-asan-nonet`
+  (MSVC + ASan), full `ctest` green (4/4, same one N/A here since this is the
+  non-net build — no GNS UDP-bind test to hit the sandbox limitation at
+  all), and a real windowed launch + full-screen screenshot confirming the
+  main menu lays out correctly (title panel, player name / address / port
+  fields, Connect / Play Singleplayer / Settings / Quit buttons all where
+  the layout math says they should be, no overlap). **Not verified:**
+  clicking through to Settings/Connecting/Error — a scripted-input attempt
+  (PowerShell `SetForegroundWindow` + synthetic `mouse_event` clicks at the
+  Settings button's screen coordinates) took a second screenshot still
+  showing the main menu, i.e. the click didn't land. Most likely
+  `SetForegroundWindow` silently failing (a well-known Windows restriction:
+  a background process generally can't steal foreground focus from another
+  process without the target's cooperation) rather than an app bug — raygui
+  buttons here use the exact same `GuiButton`-returns-true-on-click pattern
+  already exercised by `UiRenderer`/`pack_runtime_integration_test.cpp`, and
+  the state-machine wiring around each button (`begin_connect`,
+  `menu.open_settings(config)`, etc.) was code-reviewed, not just
+  typed-and-hoped. Worth an actual manual click-through before trusting the
+  non-main screens blind; if it's ever automated again, try
+  `AllowSetForegroundWindow`/attaching input queues (`AttachThreadInput`)
+  instead of a bare `SetForegroundWindow` call from an unrelated process.
+  **Known gaps, not attempted (see REMAINING_TASKS.md 5.3 for the full
+  list):** no byte-progress bar on the connecting screen (asset-sync never
+  grew progress-fraction accounting, 4.4's pre-existing gap); window
+  width/height/vsync changes apply on restart only, not live-resized;
+  keybindings are still hardcoded, no rebind UI.

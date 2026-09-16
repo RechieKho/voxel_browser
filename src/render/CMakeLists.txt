@@ -9,6 +9,7 @@ set_target_properties(vb_raygui_impl PROPERTIES C_STANDARD 99)
 add_library(vb_render STATIC
   chunk_renderer.cpp
   entity_renderer.cpp
+  main_menu.cpp
   ui_renderer.cpp
   window.cpp
 )
