@@ -105,6 +105,52 @@ TEST_CASE("vb.register_biome / vb.register_craft accept arbitrary def tables") {
 	REQUIRE(r);
 }
 
+TEST_CASE("player:take() removes items across slots, all-or-nothing") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("take"));
+
+	// dispatch_chat() fires vb.on("chat", ...) directly, no ServerSession/
+	// attach_session() needed -- give()/take()/get_inventory() only touch
+	// PackRuntime::Impl's own inventory map, not the network layer (only
+	// send_message/open_ui/get_name need a real session). The handler
+	// returns the outcome directly (rather than `assert`ing internally and
+	// always returning true) so a wrong result fails the CHECK below instead
+	// of being swallowed as a warned Lua error by run_veto's error handling.
+	REQUIRE(rt.load_pack_file(R"(
+		vb.on("chat", function(player, text)
+			if text == "setup" then
+				-- Two separate slots holding the same item, like give()
+				-- naturally produces when called more than once.
+				player:give({ item = 5, count = 3 })
+				player:give({ item = 5, count = 4 })
+				return true
+			elseif text == "take-too-many" then
+				return player:take({ item = 5, count = 100 })
+			elseif text == "take-other-item" then
+				return player:take({ item = 9, count = 1 })
+			elseif text == "take-some" then
+				return player:take({ item = 5, count = 5 })
+			elseif text == "check-remaining" then
+				local total = 0
+				for _, s in ipairs(player:get_inventory()) do
+					if s.item == 5 then total = total + s.count end
+				end
+				return total == 2
+			end
+			return true
+		end)
+	)"));
+	rt.freeze();
+
+	const vb::core::NetId id{ 1 };
+	CHECK(rt.dispatch_chat(id, "setup"));
+	CHECK_FALSE(rt.dispatch_chat(id, "take-too-many")); // over-request: false, no change
+	CHECK_FALSE(rt.dispatch_chat(id, "take-other-item")); // wrong item: false, no change
+	CHECK(rt.dispatch_chat(id, "take-some")); // 5 of 7 total across 2 slots
+	CHECK(rt.dispatch_chat(id, "check-remaining")); // 2 left
+}
+
 TEST_CASE("vb.world.get_block/set_block operate on the attached world") {
 	Fixture f(temp_storage("world_blocks"));
 

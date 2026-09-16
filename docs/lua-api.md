@@ -1,9 +1,14 @@
 # Voxel Browser — Lua Content API Reference
 
-> **Status: partial (Phase 4.2 landed the server API mechanism; no base pack
-> content exists yet — waits on Phase 5.1).** Complete, example-driven
-> reference for the server content API (`ARCHITECTURE_SPEC.md` §10.3) and the
-> client UI API (§10.4) still lands with `content/base` as the worked example.
+> **Status: implemented and demonstrated.** The server content API
+> (`ARCHITECTURE_SPEC.md` §10.3) and the client UI API (§10.4) are both real,
+> and `content/base` (`content/base/`) is the worked, runnable example this
+> doc keeps referring back to — it's the pack `voxel_browser_server` loads by
+> default (`server.toml`'s `content_pack = "content/base"`), not sample code
+> that lives only here. A few registration calls remain write-only until a
+> later phase gives them a consumer (`vb.register_biome`, and parts of
+> `vb.register_entity`) — each is called out below, in place, rather than
+> implied by a blanket disclaimer at the top of this file.
 
 ## Binding layer
 
@@ -57,8 +62,10 @@ rt.dispatch_tick(dt);
   fields are accepted but not stored — no wire-visible model/texture fields
   exist on `BlockType` yet), `vb.register_item(def)`, `vb.register_entity(def)`
   (captures `on_spawn`/`on_tick`/`on_hit`/`on_death` but nothing dispatches
-  them yet — no EnTT registry exists, Phase 3.1), `vb.register_biome(def)` /
-  `vb.register_craft(def)` (captured, no consumer this phase).
+  them yet — no EnTT registry exists, Phase 3.1), `vb.register_biome(def)`
+  (captured, no consumer this phase) / `vb.register_craft(def)` (captured;
+  the engine itself doesn't read it back, but `content/base/crafting.lua`
+  is a real, working example built on top of it — see below).
   `vb.worldgen.set_pipeline` is **not implemented** — the worldgen pipeline
   swap is out of this phase's scope; calling it errors as a nil call.
   A pack registering blocks beyond the Phase 2 `base()` set logs an info
@@ -72,26 +79,49 @@ rt.dispatch_tick(dt);
   cascade `C2S_BlockEdit` does — can desync lighting until something else
   touches the chunk), `vb.world.raycast(origin, dir, max) -> {hit,x,y,z,nx,ny,nz}|nil`,
   `vb.world.spawn(kind, pos)` (logs and returns `nil` — no entity system to
-  spawn into yet, Phase 3.1).
+  spawn into yet, Phase 3.1). `vb.world.spawn_item_drop(pos, item, count)`
+  (needs `attach_session()`, not just `attach_world()`) is a separate,
+  hardcoded-but-real path: spawns a dropped-item entity backed by
+  `vb::world::ItemDropSystem` (`src/net/session.cpp`), replicated through the
+  same interest-grid/`S2C_EntitySnapshot` machinery a player uses, no new
+  wire message — a nearby player auto-collects it into their inventory. Not
+  routed through `vb.register_entity`/`vb.world.spawn` at all; see
+  `content/base/blocks/*.lua`'s `on_break` handlers for the intended usage.
 - Entity / player Lua object (needs `attach_session()`; one merged usertype
   today since no non-player entity exists): `:get_pos() -> {x,y,z}`,
   `:set_velocity(x,y,z)`, `:remove()` (no-op, logged — nothing to remove
   from), `:get_inventory() -> {{item,count}, ...}`, `:give({item,count})`,
-  `:send_message(text)`, `:open_ui(name, ctx?)`, `:get_name()`.
+  `:take({item,count}) -> bool` (removes up to `count` of `item` across
+  however many slots hold it; `false` and no change at all if the player
+  doesn't have enough — all-or-nothing, not partial), `:send_message(text)`,
+  `:open_ui(name, ctx?)`, `:get_name()`.
   `send_message`/`open_ui` are real, framed messages (`S2C_Chat`/`S2C_OpenUi`,
-  see `docs/protocol.md`) — no client handles them yet (Phase 4.5), so they're
-  inert but correct on the wire.
+  see `docs/protocol.md`) that a real client actually handles: `send_message`
+  lands in the HUD chat log (`src/client/main.cpp`, Phase 5.4) exactly like a
+  normal chat line, and `open_ui` is drawn by `UiRenderer` (Phase 4.5/5.1).
+  **`vb.register_item` never allocates its own id space** — a held item and a
+  placeable block still share one `BlockId`, so every `item` field above
+  (`give`/`take`/`get_inventory`) is really a `BlockId`; anything a pack
+  wants a player to be able to hold has to go through `vb.register_block`
+  today, crafted-only materials included (see `content/base/blocks/
+  planks.lua`/`sticks.lua`).
 - Events: `vb.on("player_join"|"player_leave"|"block_break"|"block_place"|
-  "player_interact"|"chat"|"tick", handler)`, vetoable via `return false`.
+  "player_interact"|"chat"|"tick"|"ui_event", handler)`, vetoable via
+  `return false` (except `tick`/`ui_event`, which have no veto semantics).
   `player_join` fires from `install_join_veto`'s `authenticate` wrapper (a
-  real pre-join veto); `block_break`/`block_place` fire from
-  `WorldReplicator::apply_block_edit`'s new `BlockEditHooks` seam, and a
-  block's own `on_break`/`on_place` callback (from `register_block`) fires
-  separately, after the edit is applied — its return value (a would-be drop)
-  is logged only, not materialized (waits on 5.1 items).  `chat` /
-  `player_interact` are wired generically (`PackRuntime::dispatch_chat` /
-  `dispatch_player_interact`) but nothing calls them yet — no `C2S_Chat` /
-  interact message exists.
+  real pre-join veto — note it hands the handler a plain player *name*
+  string, not a `Player` handle, since no session/connection exists yet at
+  that point). `block_break`/`block_place` fire from `WorldReplicator::
+  apply_block_edit`'s `BlockEditHooks` seam with a real `Player` handle +
+  position, and a block's own `on_break`/`on_place` callback (from
+  `register_block`) fires separately, after the edit is applied. `chat`
+  fires from a real `C2S_Chat` (Phase 5.4) as a veto before `ServerSession`
+  broadcasts `S2C_Chat`; `content/base/crafting.lua` is the reference
+  example of building a whole feature (recipe parsing, ingredient checks)
+  entirely on top of this one event. `ui_event` fires from `C2S_UiEvent`
+  (Phase 4.5). `player_interact` is still wired generically
+  (`PackRuntime::dispatch_player_interact`) with nothing calling it — no
+  interact wire message exists yet.
 - Scheduling: `vb.after(seconds, fn)` (one-shot), `vb.every(seconds, fn)`
   (repeating; catches up on a stalled tick, capped at 8 fires/dispatch).
   Storage: `vb.storage.key = value` — a metatable-backed proxy over a
@@ -122,15 +152,50 @@ back which widgets fired an interaction — no sol2 in the render half.
   in automatically). `ui.close()` — always sends one `"close"` event, then
   runs the layout's own `on_close` (if any) for local cosmetic cleanup, then
   clears state.
-- Client wiring (`src/client/main.cpp`): `ClientSession::take_open_ui()`
-  drains a pending `S2C_OpenUi`; `UiRuntime::open()` evaluates it;
+- Client wiring (`src/client/main.cpp`): every synced `ui/*.lua` file
+  (`ClientSession::virtual_pack_fs()`, Asset Sync/Phase 4.4) is loaded into
+  `UiRuntime` right after join; `ClientSession::take_open_ui()` then drains a
+  pending `S2C_OpenUi`, `UiRuntime::open()` evaluates the named layout, and
   `UiRenderer::draw()` runs once per frame while open, between the 3D pass
   and `window.end_frame()`; interactions route back through
-  `report_click`/`report_change`/`report_list_change`. No base pack (5.1)
-  exists yet, so nothing calls `ui.define` at real runtime today — the
-  mechanism is exercised by `tests/unit/ui_runtime_test.cpp` and an
+  `report_click`/`report_change`/`report_list_change`. `content/base/ui/
+  pause.lua` (`base:pause`) and `ui/inventory.lua` (`base:inventory`) are
+  real, loadable screens — **known gap:** nothing in real gameplay currently
+  *opens* either one (no client gesture or `C2S` message requesting "open my
+  inventory"/"pause" exists; `player:open_ui` is server-push-only), and
+  `ui/inventory.lua` renders raw numeric item ids (a `list` widget, not the
+  spec's item-grid, §10.4's own still-missing widget type) rather than
+  names, for the same `BlockId`-as-item-space reason noted above. The
+  mechanism itself is exercised by `tests/unit/ui_runtime_test.cpp` and an
   end-to-end `player:open_ui` → click → `vb.on("ui_event", ...)` round trip
   in `tests/unit/pack_runtime_integration_test.cpp`.
+
+## Worked example — `content/base`
+
+`content/base` is the pack `voxel_browser_server` loads by default and the
+target of `tests/unit/content_pack_test.cpp`'s regression coverage (it loads
+the real files, not inline Lua strings). Read it alongside this doc rather
+than as a black box — every file is commented explaining *why*, not just
+*what*. Load order (`src/script/pack_loader.cpp`): `blocks/*.lua` →
+`entities/*.lua` → `biomes/*.lua` → any other root-level `*.lua` file
+(sorted) → `init.lua` last.
+
+| File(s)                              | Demonstrates                                            |
+| ------------------------------------- | -------------------------------------------------------- |
+| `blocks/dirt.lua`, `grass.lua`, etc.  | `vb.register_block`, idempotent re-declaration of the Phase 2 base set, `on_break` calling `vb.world.spawn_item_drop` |
+| `blocks/planks.lua`, `sticks.lua`     | Registering genuinely new, crafted-only blocks (not a re-declaration) |
+| `crafting.lua`                        | A full, working game system (recipes, ingredient checks, a `/craft` chat command) built entirely in content on top of `vb.register_craft` + `player:give`/`take` — **the reference example of "game rules belong in a pack, not the engine"** |
+| `entities/dropped_item.lua`           | `vb.register_entity`'s current limit: declarative only, nothing dispatches `on_spawn`/`on_tick` yet (waits on Phase 3.1) — contrast with `vb.world.spawn_item_drop` above, a separate, already-working hardcoded path |
+| `biomes/plains.lua`, `forest.lua`     | `vb.register_biome`: also declarative-only today, no worldgen pipeline reads it back |
+| `ui/inventory.lua`, `ui/pause.lua`    | `ui.define`, real screens loaded by every connecting client |
+| `init.lua`                            | Pack-wide setup that isn't a single registration — `vb.storage` persisting a boot counter across restarts |
+
+If you're writing a new pack: copy `content/base`'s directory layout, keep
+`pack.toml`'s `entry = "init.lua"` (not yet read — `load_content_pack` is the
+real entry point until `require` exists, §10.2), and remember the loader
+only auto-loads `blocks/`, `entities/`, `biomes/`, and root-level `*.lua`
+files — anything under `ui/`/`textures/` is loaded client-side over Asset
+Sync instead, never by the server's `load_content_pack`.
 
 ## Audio / sfx — not implemented (v0 has no audio subsystem)
 

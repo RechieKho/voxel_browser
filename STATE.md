@@ -7,7 +7,35 @@
 > Companion docs: `ARCHITECTURE_SPEC.md` (target design) · `REMAINING_TASKS.md`
 > (implementation backlog). This file is for *traps and context*, not the plan.
 
-Last updated: 2026-09-16 (Phase 5.4 complete — sfx hooks documented as not
+Last updated: 2026-09-16 (Phase 5.5 documentation pass complete —
+`CONTRIBUTING.md` added (module map, build/test workflow, wire-message
+checklist, Lua-binding guidelines); `docs/lua-api.md`/README's stale claims
+fixed; see §8's fourteenth 2026-09-16 entry. Phase 5.1/4.3 — `--singleplayer` now runs the real
+content pack: `Singleplayer` (`src/client/main.cpp`) rebuilt around a
+directly-owned `LoopbackNetwork`/`ServerSession`/`ClientSession` instead of
+`IntegratedGame`, so a real `PackRuntime` (scripting, chat, crafting, item
+drops) and `HandshakeServerHost::block_registry` are both wired the same way
+the dedicated server does them; see §8's thirteenth 2026-09-16 entry —
+also documents a pre-existing, out-of-scope `server_smoke` failure mode
+discovered along the way (`VB_WITH_COMPRESSION=ON` + a cwd with no
+`content/base`). Phase 5.1 — simple crafting recipes, implemented
+entirely as content per explicit user direction: `player:take()` is the only
+new engine primitive, `content/base/crafting.lua` (a new generic top-level
+pack module `load_content_pack` now knows to load) holds every actual game
+rule; see §8's twelfth 2026-09-16 entry. Phase 5.1 — dropped-item entity: a real, working
+`vb::world::ItemDropSystem` replicated through the existing interest-grid/
+S2C_EntitySnapshot path (no new wire message), `vb.world.spawn_item_drop`,
+`content/base/blocks/*.lua` on_break now drops into the world instead of
+straight to inventory; see §8's eleventh 2026-09-16 entry. Phase 5.2 —
+hold-to-break progress: LMB must be
+held on the same voxel for a flat 0.35s before the edit is sent, plus a
+screen-space progress bar; see §8's tenth 2026-09-16 entry. Phase 5.1 — real
+inventory sync + basic hotbar:
+`S2C_Inventory` (107), `PackRuntime::sync_inventory` pushed after
+`player:give()`, `ClientSession::inventory()`, text-only HUD hotbar; see §8's
+ninth 2026-09-16 entry — also corrected a stale 5.2 checklist entry claiming
+the Lua block-edit veto was unwired, when it was actually already implemented.
+Phase 5.4 complete — sfx hooks documented as not
 implemented, `docs/lua-api.md`; see §8's eighth 2026-09-16 entry. Phase 5.4 —
 death/respawn: void-kill Y threshold +
 generic `health <= 0` respawn path, no new wire message (reuses `S2C_Chat`
@@ -1904,3 +1932,437 @@ _(Move items here with a date + commit when fixed, so the history is visible.)_
   status line and paragraph in `REMAINING_TASKS.md` for the four-item
   session summary (chat, player list/join-leave, day/night, death/respawn,
   sfx docs).
+
+- **2026-09-16 (9th): Phase 5.1 real inventory sync + basic hotbar, plus a
+  stale-checklist correction for Phase 5.2's Lua veto.** Picked up
+  `REMAINING_TASKS.md` 5.1's "no wire message syncing inventory contents to
+  the client at all" gap.
+  **Correction made along the way, worth flagging so it doesn't get
+  re-"discovered" as a task later:** `REMAINING_TASKS.md` 5.2 still read "Lua
+  veto + region protection: seam left, waits on Phase 4.2" as an open item.
+  Checked the actual code before starting new work on it (per this file's own
+  "verify before recommending" discipline) and found it was **already fully
+  wired** — `BlockEditHooks` (`inc/vb/net/world_replicator.hpp`),
+  `PackRuntime::attach_world`/`on_block_edit_before` (`src/script/
+  pack_runtime.cpp`), and `src/server/main.cpp` calling `attach_world`, with
+  an existing passing integration test
+  (`pack_runtime_integration_test.cpp`'s "pack script vetoes a block break
+  and observes on_break"). This was presumably wired during Phase 4.2 itself
+  and the 5.2 checklist entry was simply never updated after. No dedicated
+  "region protection API" exists (`ARCHITECTURE_SPEC.md §14`'s one mention of
+  the phrase) and none was added — a pack veto handler already receives the
+  player + block position, so a claims/region check is just Lua reading
+  `vb.storage` inside the same `vb.on("block_break"/"block_place")` handler;
+  judged not worth a dedicated C++ API unless a real pack needs one.
+  Corrected the checklist text and status paragraph in `REMAINING_TASKS.md`
+  to match reality; no code changed for this half.
+  **New work — real inventory:** `S2C_Inventory` (107) —
+  `inc/vb/protocol/inventory.hpp` + `src/protocol/inventory.cpp`
+  (`InventorySlot{item, count}`, `varint n` + `n × {u16, u16}`), round-trip
+  tested. `kEngineProtocolVersion` bumped 10 → 11 (`cmake/version.hpp.in`,
+  `docs/protocol.md`). `PackRuntime::Impl::sync_inventory(NetId)`
+  (`src/script/pack_runtime.cpp`) builds a full snapshot from
+  `inventories[id]` and sends it via the same `conn_for_player` +
+  `net::send_message` pattern `send_message`/`open_ui` already used; called
+  from `PlayerHandle::give()` right after mutating the slot vector — the only
+  inventory mutator that exists, so "sync after give" covers every current
+  write path. Client side: `ClientSession::inventory_` (new member,
+  `inc/vb/net/session.hpp`) + a new `kS2CInventory` case in
+  `apply_gameplay_frame` (`src/net/session.cpp`), exposed read-only via
+  `ClientSession::inventory()`. Deliberately a full-resend snapshot on every
+  change, not a delta — same posture `S2C_PlayerList` already established,
+  and inventories are small (a handful of slots) so there's no real cost to
+  resending the whole thing.
+  **New work — hotbar:** `src/client/main.cpp`, drawn right before the
+  `ui_runtime.is_open()` block (same place the player list / chat HUD blocks
+  already live): one box per `client->inventory()` slot, bottom-center,
+  block name (`chunk_store().registry().get(item).name`, falls back to "?"
+  for an id the client's current registry doesn't recognize) + count as
+  plain `DrawText` — no slot-select input, no icons (every block is still
+  textureless per 4.3/5.1's own long-standing gap, so there's nothing to draw
+  an icon *from* yet), matching `ui/inventory.lua`'s existing text-only
+  posture rather than inventing new visual language ahead of real art.
+  **Tests:** `tests/unit/protocol_test.cpp` ("inventory round-trips,
+  including an empty snapshot") and a new
+  `tests/unit/pack_runtime_integration_test.cpp` case ("player:give() pushes
+  a live S2C_Inventory to the client") — drives a real
+  `ServerSession`/`ClientSession` pair over `LoopbackTransport`, triggers
+  `give()` from a `vb.on("chat", ...)` handler (chosen because it's the one
+  existing veto callback that already hands a real `PlayerHandle` — 4.2's own
+  noted gap is that `player_join` only hands a name, not a handle, so that
+  seam couldn't be reused here), and asserts `client.inventory()` matches
+  after a tick pump.
+  **Verification, three separate build trees (this repo has several
+  pre-configured, see the top of §3):** `build-lua` (`VB_WITH_LUA=ON`,
+  `VB_BUILD_CLIENT=OFF`) — full `vb_tests` green, 196/196 cases, including
+  both new ones; `build-asan-nonet` (`VB_WITH_LUA=OFF`, `VB_BUILD_CLIENT=ON`,
+  ASan) — confirms `voxel_browser`/`voxel_browser_server` compile clean with
+  the new `ClientSession::inventory()` member and hotbar drawing code (this
+  is the tree that actually has a client target; `build-lua` here doesn't),
+  full `ctest` green (`vb_tests` 162/162 + all three smokes). Not yet done:
+  no live windowed screenshot of the hotbar (no GL context available in this
+  environment, same limitation noted throughout 5.3/5.4) — rests on the
+  clean build + the fact its drawing code follows the exact same
+  `DrawText`/`DrawRectangle` pattern the already-verified player-list HUD
+  block uses right above it.
+
+- **2026-09-16 (10th): Phase 5.2 hold-to-break progress.** Picked up
+  `REMAINING_TASKS.md` 5.2's last remaining checklist line, "Break progress
+  (hold-to-break): not yet."
+  **Change, entirely in `src/client/main.cpp`, no protocol/server change:**
+  the block-break click handler swapped `IsMouseButtonPressed` for
+  `IsMouseButtonDown` and gates sending `C2S_BlockEdit` behind a new
+  `breaking`/`break_target`/`break_progress` trio of locals — LMB must stay
+  held on the *same* `look_hit.voxel` for a flat `kBreakSeconds` (0.35,
+  chosen to feel roughly like the old instant-break but give the new
+  progress bar something to visibly fill) before the edit actually goes out;
+  switching to a different voxel or releasing the button resets progress to
+  0, and losing mouse capture (menu/chat open) resets it too. Server-side
+  validation/veto (already done, this session's 9th-adjacent correction
+  above) is completely unaffected: the wire message this sends is byte-for-
+  byte the same `C2SBlockEdit`, just deferred until the hold completes, so
+  nothing downstream needed touching. Placing (RMB) stays instant, untouched.
+  A small filled progress bar (plain `DrawRectangle`, no raygui) is drawn
+  screen-space below the would-be crosshair position while `breaking` is
+  true — there's still no actual crosshair sprite/reticle anywhere in the
+  client; deliberately didn't add one here to keep this change scoped to
+  just the one checklist item, though a future pass adding a reticle should
+  probably anchor the bar to it instead of a bare screen-center offset.
+  **Deliberately NOT attempted (separately tracked, not this item):**
+  per-block hardness or tool-dependent break time — every block takes the
+  same 0.35s regardless of type; `REMAINING_TASKS.md`'s own "Tool/hardness
+  times: not yet" line (right above this one in the same section) already
+  covers that as a distinct, larger follow-up (would need a `BlockType`
+  field, `S2C_BlockRegistry` wire changes, and a tool/item concept that
+  doesn't exist yet — out of scope for a hold-to-break pass).
+  **Verification:** `build-asan-nonet` (the tree with `VB_BUILD_CLIENT=ON`)
+  — a clean recompile of `voxel_browser` at `/W4` produced no new warnings
+  (checked with `-clp:WarningsOnly`, only the pre-existing unrelated ASan
+  `/INCREMENTAL`-ignored linker warning appeared); full `ctest` green (all
+  four cases, including the three smokes) on the same tree. No windowed
+  screenshot of the progress bar itself (no GL context here, same limitation
+  as every other HUD element added this session) — rests on the clean build
+  plus the fact the drawing code is the same `DrawRectangle`/
+  `DrawRectangleLines` shapes the hotbar (9th entry, same session) already
+  used successfully.
+
+- **2026-09-16 (11th): Phase 5.1 dropped-item entity.** Picked up
+  `REMAINING_TASKS.md` 5.1's last remaining item: `entities/dropped_item.lua`
+  registered `base:dropped_item` declaratively but nothing ever spawned one —
+  block drops went straight into the breaking player's inventory
+  (`ctx.player:give()`), never through a world entity.
+  **Key design decision, made before writing any code:** does this need
+  Phase 3.1's EnTT registry? No. Re-read `vb::replication::InterestGrid`
+  (`inc/vb/replication/interest.hpp`) and `ServerSession::broadcast_
+  snapshots()` (`src/net/session.cpp`) closely and confirmed both are
+  already fully generic over `NetId` + `EntityKindId` — nothing in the
+  interest grid, the snapshot builder, or the client's `EntityRenderer`
+  (Phase 3.5) assumes an entity is a player. The "no generic entity system"
+  gap `register_entity`/`vb.world.spawn` keep citing is specifically about
+  nothing calling a *pack's* `on_spawn`/`on_tick` Lua callbacks — the
+  replication/rendering plumbing underneath was already entity-kind-agnostic
+  from Phase 1.4/3.5. This meant a hardcoded, non-Lua-driven drop system
+  could piggyback on that plumbing for free, with zero protocol changes.
+  **New pure module:** `vb::world::ItemDropSystem`
+  (`inc/vb/world/item_drops.hpp` + `src/world/item_drops.cpp`) — no net/
+  script dependency, so unit-testable standalone
+  (`tests/unit/item_drops_test.cpp`, 4 cases: id-space separation, pickup
+  radius, lifetime expiry, independent multi-drop tracking). `spawn()`
+  allocates ids from `0x8000'0000` upward specifically so they can never
+  collide with `ServerSession::next_net_id_`'s player ids (which start at 1
+  and count up by one per join) — the two counters never need to
+  coordinate. `tick(dt, players)` is a pure function: ages every drop,
+  checks position against every given player, returns `{pickups, removed}`
+  for the caller to apply; it doesn't touch replication or inventories
+  itself.
+  **ServerSession wiring:** `spawn_item_drop(pos, item, count)` (new public
+  method, `inc/vb/net/session.hpp`) upserts the new drop straight into
+  `interest_` with a reserved `world::kItemDropKind` sentinel
+  (`EntityKindId{0xFFFF}`, chosen to sit above any pack-registered kind,
+  which count up from 1) — from that point on it's indistinguishable from a
+  player to the replication/broadcast code, so **no new S2C message was
+  needed at all**, and the client's existing `EntityRenderer` draws it as a
+  tinted billboard with zero client-side changes. `update_item_drops()`
+  (called once per tick, right after `check_respawns()`) builds the
+  players-for-pickup-check list from `interest_.get(state.net_id)->pos`
+  rather than `Conn::move.position` directly -- deliberate, so pickup
+  detection works identically whether a player's position came from real
+  input-driven movement (`handle_input_batch`, which upserts both) or the
+  test/script-facing `set_player_state()` (which only upserts `interest_`,
+  never touches `Conn::move`) — caught this distinction while writing the
+  integration test below, before it became a real bug: an early draft read
+  `state.move.position` and pickups silently never fired when a test moved
+  a player via `set_player_state`. New `set_item_pickup_handler` callback
+  (same `std::function`-based, no-Lua-dependency shape as
+  `set_chat_handler`/`set_ui_event_handler`) — unset means picked-up items
+  just vanish, matching "no handler, no side effect" everywhere else.
+  **PackRuntime wiring:** `world_tbl["spawn_item_drop"]` (new Lua binding,
+  `src/script/pack_runtime.cpp`) calls `session->spawn_item_drop` directly —
+  deliberately a *separate* binding from `world_tbl["spawn"]`, which stays
+  the inert `vb.register_entity`-kind path waiting on 3.1; conflating the two
+  would have implied item drops are pack-entity-kind-driven, which they
+  aren't. `PackRuntime::attach_session` gained a `set_item_pickup_handler`
+  wire that pushes straight into `inventories[player]` +
+  `sync_inventory(player)` — the exact same two calls `PlayerHandle::give()`
+  makes, so a pickup is indistinguishable from a script handing the item to
+  you directly (this session's 9th-entry inventory-sync work, reused as-is).
+  **Content pack:** all six `content/base/blocks/*.lua` on_break handlers
+  (`dirt`/`grass`/`leaves`/`sand`/`stone`/`wood`) swapped `ctx.player:give()`
+  for `vb.world.spawn_item_drop({...ctx.pos + 0.5...}, id, 1)` — breaking a
+  block now drops a real, visible item at that position instead of an
+  instant inventory credit. `entities/dropped_item.lua`'s comment rewritten
+  to explain the two systems don't share any code (the registration is
+  kept purely as a placeholder for whenever a pack might want custom
+  per-drop `on_tick` behavior through the real future EnTT path).
+  **Tests:** `item_drops_test.cpp` (pure, 4 cases, see above) plus a new
+  `pack_runtime_integration_test.cpp` case ("vb.world.spawn_item_drop
+  replicates to a client and is picked up on approach") driving a real
+  `ServerSession`/`ClientSession` pair over `LoopbackTransport` through all
+  three states: too far to be visible, visible but out of pickup range, and
+  collected (entity gone from `remote_entities()`, item credited to
+  `client.inventory()`). `content_pack_test.cpp`'s existing "content/base
+  loads cleanly" case (unmodified) confirms the six edited Lua files still
+  parse/register without needing any change to that test, since it never
+  exercised `on_break`'s body, only registration.
+  **Verification, both build trees again (see the 9th entry for why two are
+  needed):** `build-lua` — full `vb_tests` green, 201/201 (196 baseline + 4
+  new `ItemDropSystem` cases + 1 new integration case), including a
+  `content/base` re-parse. `build-asan-nonet` (`VB_WITH_LUA=OFF`) — confirms
+  `ItemDropSystem`/`ServerSession`'s new non-Lua-gated code (the class
+  itself, `spawn_item_drop`, `update_item_drops`, the pickup-handler
+  plumbing) compiles clean with the Lua binding code compiled out entirely;
+  clean build of `voxel_browser`/`voxel_browser_server`/`vb_tests`, full
+  `ctest` green (all 4 cases). Not yet done: no live two-window playtest
+  actually watching an item drop render and get picked up (no GL context
+  here, same limitation as every other visual feature this session).
+
+- **2026-09-16 (12th): Phase 5.1 simple crafting recipes — deliberately
+  engine-agnostic, per explicit user direction.** The user asked for
+  crafting but was explicit up front: "it should be in content as example
+  since voxel browser is a generic voxel game browser." That framing decided
+  the whole design before any code was written — this project's engine is
+  meant to stay a generic host, with every actual game rule living in a
+  content pack (`content/base` is documented, `ARCHITECTURE_SPEC.md` §16, as
+  "the reference implementation of the Lua API," not a hardcoded ruleset).
+  **What's engine-side, and why each piece earns that:**
+  1. `PlayerHandle::take(itemstack) -> bool` (`src/script/pack_runtime.cpp`)
+     — the symmetric counterpart to the already-existing `give()`. Removes
+     up to `count` of `item` across however many inventory slots hold it,
+     all-or-nothing (no partial consumption on an under-supply — sums
+     availability across slots first, only mutates if the full amount is
+     confirmed available). This is a generic inventory primitive exactly
+     like `give()` already was; the engine has no idea it's being used for
+     "crafting" specifically, the same way it has no idea `give()` is used
+     for "picking up a mined block."
+  2. `src/script/pack_loader.cpp`'s `load_content_pack` now also loads any
+     other `*.lua` file sitting directly at a pack's root (sorted,
+     `init.lua` excluded and always handled last) — after `blocks/`/
+     `entities/`/`biomes/`, before `init.lua`. This is what let
+     `crafting.lua` exist as a real, loadable file at all, without engine
+     code special-casing "crafting" as a known content category the way
+     `blocks`/`entities`/`biomes` already are. A pack could just as easily
+     drop `weather.lua` or `economy.lua` there. Purely additive — no
+     existing pack had a loose root-level `.lua` file besides `init.lua`,
+     so no other pack's load order changes.
+  **Everything else — actual game rules — is content, in
+  `content/base/crafting.lua`:** the recipe list (a plain local Lua table,
+  not read back from the engine's write-only `vb.register_craft` capture —
+  `register_craft` is still called per recipe purely so the engine-side
+  record exists for a hypothetical future consumer, e.g. a crafting-table
+  UI's item grid), the matching logic (sum each required item across
+  `player:get_inventory()`, an already-existing primitive), and the trigger
+  (`/craft <name>` over chat, vetoing the raw command text so it never
+  broadcasts, whether or not the craft actually succeeds). Two new
+  craftable-only blocks back the wood → planks → sticks chain this session
+  chose as the example (matching `REMAINING_TASKS.md`'s own suggested
+  example verbatim): `content/base/blocks/planks.lua` (solid) and
+  `blocks/sticks.lua` (`solid = false` — the closest available
+  approximation to "not really a wall," since held items and placeable
+  blocks still share one `BlockId` space; a separate item-id space is a
+  bigger, still-open 5.1 gap this didn't touch).
+  **A subtlety worth remembering if this needs revisiting:** `run_veto`
+  (`src/script/pack_runtime.cpp`) calls each registered handler for an event
+  in registration order and returns `false` **immediately** on the first
+  handler that returns `false` — it does not call every handler
+  unconditionally. This meant the test-only "give me some wood" chat handler
+  added in `content_pack_test.cpp`'s new integration test had to be written
+  so it only reacts to its own exact trigger text and returns `true`
+  (pass-through) otherwise — if it had returned `false` unconditionally, or
+  been registered *before* `crafting.lua`'s handler while both cared about
+  overlapping text, one could have silently starved the other. Not a new
+  finding (existing chat-veto tests already relied on the same behavior),
+  but easy to trip over when stacking a second handler onto a pack that
+  already has one, as this test does.
+  **Tests:** `tests/unit/pack_runtime_test.cpp` — "player:take() removes
+  items across slots, all-or-nothing" exercises the engine primitive in
+  isolation via `PackRuntime::dispatch_chat()` directly (no `ServerSession`
+  needed at all: `give`/`take`/`get_inventory` never touch the network
+  layer). Written so a wrong Lua-side result actually fails the C++ `CHECK`
+  — an earlier draft had the Lua handler `assert()` internally and always
+  `return true`, which would have silently passed even on a wrong `take()`
+  result, since a Lua error inside a veto handler is caught and warned by
+  `run_veto`, not treated as a veto itself; rewritten so the handler returns
+  the real outcome and the C++ side asserts on that. `tests/unit/
+  content_pack_test.cpp` — a new "content/base crafting: wood -> planks ->
+  sticks via /craft chat" case loads the *real* `content/base` files through
+  a real `ServerSession`/`ClientSession` pair over `LoopbackTransport` and
+  drives the full example end-to-end: missing-ingredients rejection (no
+  inventory change), a successful two-recipe chain with exact before/after
+  counts at each step, an unknown-recipe rejection, and confirms an ordinary
+  chat message still broadcasts normally alongside the command handling.
+  Also had to update that file's pre-existing "content/base loads cleanly"
+  registry-size assertion (`base_size + 2`, was `base_size`) since planks/
+  sticks are genuinely new blocks, not `add_or_get` re-declarations of the
+  Phase 2 base set the way every other `blocks/*.lua` file's registration
+  is.
+  **Verification, both build trees again:** `build-lua` — full `vb_tests`
+  green, 203/203 (201 baseline + 1 new `take()` unit case + 1 new crafting
+  integration case). `build-asan-nonet` (`VB_WITH_LUA=OFF`) — confirms both
+  engine changes compile clean: `PlayerHandle::take` is inside the
+  Lua-gated half of `pack_runtime.cpp` and compiles out with the rest of it,
+  while the `pack_loader.cpp` change is plain `std::filesystem` code with no
+  Lua dependency at all and is exercised either way; clean build of all
+  three targets, full `ctest` green (all 4 cases). Not yet done: no live
+  two-window playtest of `/craft` actually being typed into the real HUD
+  chat box (no GL context here, same limitation as every other
+  content/gameplay feature this session) — rests on the integration test
+  driving the identical `ServerSession`/`ClientSession` code path a live
+  client's chat box would.
+
+- **2026-09-16 (13th): `--singleplayer` now runs the real content pack —
+  found while writing this session's README update, not asked for
+  directly.** Drafting a "try crafting in `--singleplayer`" quick-start line
+  for `README.md` prompted actually checking whether that claim was true
+  before writing it down (per this file's own "verify before recommending"
+  discipline) — it wasn't. `src/client/main.cpp`'s `Singleplayer` struct
+  wrapped `vb::net::IntegratedGame` with no `PackRuntime` anywhere in
+  sight, meaning `--singleplayer` had *always* run on the hardcoded
+  `BlockRegistry::base()` set with zero Lua scripting, going all the way
+  back to whichever session first wrote `Singleplayer` — chat, crafting,
+  item drops, everything this session and the two before it built, only
+  ever worked for real multiplayer (`--server`), never singleplayer,
+  despite `--singleplayer` being the easiest way for a first-time user (or
+  agent) to try any of it.
+  **Root blocker, and why `IntegratedGame` couldn't just grow a
+  `PackRuntime` parameter:** a `PackRuntime` needs the raw server-side
+  `net::Transport&` (to send chat/give/item-drop messages), which
+  `IntegratedGame` never exposes (its `LoopbackNetwork net_` member is
+  private, only `server()`/`client()` accessors exist) — and separately,
+  `PackRuntime::install_join_veto(host)` must run **before**
+  `ServerSession` is constructed (it wraps `host.authenticate`, and
+  `ServerSession` copies `host` by value at construction), which
+  `IntegratedGame`'s single all-in-one constructor gives no hook for: by
+  the time a caller could reach in, `ServerSession` already exists.
+  **Fix:** rebuilt `Singleplayer` to construct `LoopbackNetwork`/
+  `ServerSession`/`ClientSession` directly — the exact same pieces
+  `IntegratedGame` wraps, just not through it — mirroring exactly how
+  `tests/unit/pack_runtime_integration_test.cpp` already does this for
+  every PackRuntime-involving test (that's *why* those tests don't use
+  `IntegratedGame` either, in hindsight — worth remembering next time
+  something here reaches for `IntegratedGame` and also wants scripting).
+  Member declaration order (which decides C++ initializer-list *execution*
+  order, not the order written) had to be gotten right: `net` →
+  `registry` → `pack_runtime` (loads + freezes `content/base` into
+  `registry` before anything else touches it) → `world`/`pool` (built from
+  the now pack-extended `registry`) → `server` (built from a host that
+  `make_singleplayer_host` has already run `install_join_veto` +
+  `block_registry` on, using the same `pack_runtime`/`registry`). Two new
+  free-function factories (`make_singleplayer_pack_runtime`,
+  `make_singleplayer_host`) exist specifically so this ordering could
+  happen entirely inside a member-initializer list rather than needing a
+  two-phase-construction workaround.
+  **A second, smaller gap fixed at the same time:** `host.block_registry`
+  (`HandshakeServerHost`, Phase 4.3) was never wired for singleplayer
+  either — without it, a joining client stays on its own `base()` registry
+  regardless of what the server-side one grew to, so `crafting.lua`'s
+  `planks`/`sticks` blocks would exist server-side (inventory give/take
+  works fine, since that's just numeric ids) but resolve to nothing
+  client-side — the hotbar (this session's earlier work) would have shown
+  "?" for them. Mirrors `src/server/main.cpp`'s own `host.block_registry`
+  callback line-for-line.
+  **New `Singleplayer::tick(dt)`** centralizes what used to be scattered
+  `sp->game.tick(dt)` calls across `main.cpp` (`run_headless`, the
+  windowed connecting-loop, and the main playing loop — 6 call sites) —
+  now also drains `take_joins()`/`take_leaves()` into
+  `dispatch_player_join_completed`/`dispatch_player_leave` and calls
+  `pack_runtime.dispatch_tick(dt)` every tick, exactly mirroring
+  `src/server/main.cpp`'s own loop body so a pack behaves identically
+  whether a real dedicated server or this in-process one drives it. Every
+  `sp->game.tick(dt)`/`sp->game.client()` call site became
+  `sp->tick(dt)`/`sp->client()` (mechanical, via `sed`, then verified by
+  full rebuild — no behavior change intended or found at any site).
+  **Degrades gracefully, not fatally**, if `content/base` isn't found
+  relative to the working directory (logs a warning, keeps running with
+  the hardcoded base block set) — deliberately different from the
+  dedicated server's fatal-on-broken-pack posture (`src/server/main.cpp`
+  exits on a bad content pack), since a first `--singleplayer` run
+  shouldn't hard-fail just because of where it happened to be launched
+  from.
+  **Verified with an actual headless run, not just "it compiles":**
+  `voxel_browser --headless --frames 5 --singleplayer --name CiBot` now
+  prints `[base] content pack loaded (boot #1)` and `received block
+  registry (10 blocks)` (10 = the base 8 + `planks`/`sticks`) — neither
+  line appeared at all before this fix, confirming the pack genuinely
+  loads and the client genuinely receives the extended registry, not just
+  that construction succeeds. Full build + `ctest` (all 4 cases) green on
+  `build-asan-nonet` (`VB_BUILD_CLIENT=ON`, `VB_WITH_LUA=OFF` — confirms
+  the no-Lua stub path, where `PackRuntime`/`load_content_pack` degrade to
+  no-ops, still works); `build-lua` reconfigured with
+  `-DVB_BUILD_CLIENT=ON` (it previously had the client off) to get a real
+  `voxel_browser` binary with `VB_WITH_LUA=ON` — clean build, full
+  `vb_tests` green (203/203).
+  **Found along the way, confirmed pre-existing and out of scope, left
+  alone:** running `ctest` in the freshly-client-enabled `build-lua` tree
+  for the first time (previous sessions only ever ran `./vb_tests.exe`
+  directly there) turned up `server_smoke` failing —
+  `voxel_browser_server`'s asset-manifest builder hits a real I/O error
+  because `build-lua` also happens to have `VB_WITH_COMPRESSION=ON` (every
+  *other* tree in this repo has it `OFF`) and ctest's working directory
+  (the build dir) has no `content/base` at all (`content_pack` is a plain
+  relative path, resolved from whatever the process's cwd happens to be).
+  Confirmed unrelated to this session's changes: `src/server/main.cpp`
+  itself is untouched, the failure reproduces identically regardless of
+  any content-pack edit, and no CI workflow currently sets
+  `VB_WITH_COMPRESSION=ON` at all, so this exact combination has just never
+  been exercised via `ctest` before now. Not fixed here (would mean making
+  `content_pack` path resolution cwd-independent, or making the dedicated
+  server's manifest-build failure non-fatal like singleplayer's pack-load
+  failure now deliberately is — either is a real, separate, small
+  follow-up if `VB_WITH_COMPRESSION` ever gets CI coverage).
+
+- **2026-09-16 (14th): Phase 5.5 documentation pass — `CONTRIBUTING.md`
+  added, `docs/lua-api.md`/README's remaining staleness fixed.** Closes
+  out the last checkbox in `REMAINING_TASKS.md` 5.5 (the section is now
+  `✅`) — `CONTRIBUTING.md` didn't exist at all before this. New file
+  covers: a module map (every `src/`/`inc/vb/` subdirectory → its target →
+  one-line purpose, pulled from each subdirectory's own `CMakeLists.txt`
+  header comment rather than invented from scratch); build/test workflow
+  tips not already in the README (running more than one build tree side by
+  side for `VB_WITH_LUA` on/off rather than reconfiguring back and forth —
+  this project's own sessions already do exactly this, see the 13th
+  entry's `build-lua`/`build-asan-nonet` pairing; doctest's `--test-case`
+  glob-not-substring gotcha, already documented in §4 above, cross-
+  referenced rather than duplicated); code style (`.clang-format`, no
+  exceptions on engine hot paths, `vb::<module>` namespacing); a concrete
+  step-by-step for adding a new wire message (struct → `MessageType` →
+  round-trip test → version bump → `docs/protocol.md` entry → integration
+  test) synthesized from this backlog's own repeated pattern rather than
+  invented; and a "generic primitive, not a game-specific one" guideline
+  for new Lua bindings, using the same-session crafting work
+  (`player:take()` + a generic `load_content_pack` root-module loader,
+  vs. game rules living entirely in `content/base/crafting.lua`) as the
+  worked example.
+  Also fixed the last checkbox text staleness: `docs/lua-api.md` and
+  `README.md` had *already* been substantially rewritten earlier this
+  session (see the 12th-adjacent work), but `REMAINING_TASKS.md` 5.5's own
+  checkboxes still read `[ ]` for both — updated to `[x]` with notes
+  explaining what was actually done and when, so a future session doesn't
+  re-do work that already happened. `docs/protocol.md` was checked for
+  drift and found already current (confirmed `kEngineProtocolVersion` 11
+  matches `cmake/version.hpp.in`) — every prior session in this backlog
+  updated it in the same commit as its wire change, so there was nothing
+  to fix there, just confirm.
+  No code changes this entry — documentation only. Not verified by any
+  automated check (`CONTRIBUTING.md` isn't parsed by anything); read
+  through once for internal consistency against the actual current
+  `CMakeLists.txt`/`tests/CMakeLists.txt` contents before publishing.

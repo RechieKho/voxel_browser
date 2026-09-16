@@ -12,6 +12,7 @@
 #include "vb/protocol/byte_buffer.hpp"
 #include "vb/protocol/chat.hpp"
 #include "vb/protocol/handshake.hpp"
+#include "vb/protocol/inventory.hpp"
 #include "vb/protocol/message.hpp"
 #include "vb/protocol/snapshot.hpp"
 #include "vb/protocol/world.hpp"
@@ -192,6 +193,21 @@ TEST_CASE("player join / leave / list round-trip") {
 	CHECK(list2.players[0].name == "Alice");
 	CHECK(list2.players[1].net_id == vb::core::NetId{ 2 });
 	CHECK(list2.players[1].name == "Bob");
+}
+
+TEST_CASE("inventory round-trips, including an empty snapshot") {
+	auto empty = round_trip(S2CInventory{});
+	CHECK(empty.slots.empty());
+
+	S2CInventory inv;
+	inv.slots.push_back({ vb::core::BlockId{ 3 }, 5 });
+	inv.slots.push_back({ vb::core::BlockId{ 7 }, 64 });
+	auto inv2 = round_trip(inv);
+	REQUIRE(inv2.slots.size() == 2);
+	CHECK(inv2.slots[0].item == vb::core::BlockId{ 3 });
+	CHECK(inv2.slots[0].count == 5);
+	CHECK(inv2.slots[1].item == vb::core::BlockId{ 7 });
+	CHECK(inv2.slots[1].count == 64);
 }
 
 TEST_CASE("block registry round-trips, including an empty list") {

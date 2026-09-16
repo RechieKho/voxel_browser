@@ -9,6 +9,7 @@ target_sources(vb_core PRIVATE
   chunk_mesh_worker_pool.cpp
   client_chunk_store.cpp
   daynight.cpp
+  item_drops.cpp
   lighting.cpp
   paletted_chunk_store.cpp
   raycast.cpp

@@ -69,6 +69,23 @@ bool load_content_pack(PackRuntime &rt, const std::filesystem::path &content_pac
 		}
 	}
 
+	// Any other *.lua file directly at the pack root (e.g. crafting.lua) --
+	// sorted, loaded after the above (so block/entity/biome globals already
+	// exist) but before init.lua. Deliberately generic: the engine has no
+	// concept of "crafting" or any other game system, it just loads whatever
+	// loose top-level modules a pack drops here, same posture as the
+	// directories above. init.lua itself is excluded since it's handled
+	// separately below (it's always loaded last, even if a future pack adds
+	// other root-level files that sort after "init.lua" alphabetically).
+	for (const auto &file : sorted_lua_files(content_pack)) {
+		if (file.filename() == "init.lua") {
+			continue;
+		}
+		if (!load_one(rt, content_pack, file, scripting_disabled_logged)) {
+			return false;
+		}
+	}
+
 	const std::filesystem::path entry = content_pack / "init.lua";
 	std::error_code ec;
 	if (std::filesystem::is_regular_file(entry, ec)) {

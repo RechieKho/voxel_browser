@@ -375,4 +375,112 @@ TEST_CASE("pack script vetoes chat from a specific player") {
 	CHECK(blocked.take_chat_messages() == seen); // same broadcast, both see it
 }
 
+TEST_CASE("player:give() pushes a live S2C_Inventory to the client") {
+	LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("inventory"));
+	// No player-handle-bearing event fires at join time (spec §4.2's own gap
+	// note: player_join only hands a name), so drive give() from the chat
+	// veto seam instead -- it already hands a real PlayerHandle.
+	REQUIRE(rt.load_pack_file(R"(
+		vb.on("chat", function(player, text)
+			player:give({ item = 2, count = 5 })
+			return true
+		end)
+	)"));
+	rt.freeze();
+
+	HandshakeServerConfig cfg;
+	cfg.world_seed = 7;
+	ServerSession server(net.server(), cfg);
+	rt.attach_session(server);
+	REQUIRE(net.server().listen(0));
+
+	Transport &ta = net.create_client();
+	auto ida = ta.connect("x", 0);
+	REQUIRE(ida);
+	ClientSession client(ta, *ida, HandshakeClientConfig{ "A", "", "v", 1 });
+
+	auto pump = [&](int n) {
+		for (int i = 0; i < n; ++i) {
+			server.tick(0.05);
+			client.tick(0.05);
+			rt.dispatch_tick(0.05);
+		}
+	};
+	pump(16);
+	REQUIRE(client.joined());
+	CHECK(client.inventory().empty()); // nothing given yet
+
+	client.send_chat("give me stone");
+	pump(6);
+
+	const auto &inv = client.inventory();
+	REQUIRE(inv.size() == 1);
+	CHECK(static_cast<int>(inv[0].item) == 2);
+	CHECK(inv[0].count == 5);
+}
+
+TEST_CASE("vb.world.spawn_item_drop replicates to a client and is picked up on approach") {
+	LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("item_drop"));
+	REQUIRE(rt.load_pack_file(R"(
+		vb.on("chat", function(player, text)
+			vb.world.spawn_item_drop({ x = 5, y = 5, z = 5 }, 3, 2)
+			return true
+		end)
+	)"));
+	rt.freeze();
+
+	HandshakeServerConfig cfg;
+	cfg.world_seed = 7;
+	ServerSession server(net.server(), cfg);
+	rt.attach_session(server);
+	REQUIRE(net.server().listen(0));
+
+	Transport &ta = net.create_client();
+	auto ida = ta.connect("x", 0);
+	REQUIRE(ida);
+	ClientSession client(ta, *ida, HandshakeClientConfig{ "A", "", "v", 1 });
+
+	auto pump = [&](int n) {
+		for (int i = 0; i < n; ++i) {
+			server.tick(0.05);
+			client.tick(0.05);
+			rt.dispatch_tick(0.05);
+		}
+	};
+	pump(16);
+	REQUIRE(client.joined());
+	const NetId a_id = client.join_accept()->your_net_id;
+
+	// Far from the drop's spawn position: no interest yet.
+	server.set_player_state(a_id, Vec3d{ 100, 100, 100 });
+	client.send_chat("drop it");
+	pump(6);
+	CHECK(client.remote_entities().empty());
+	CHECK(client.inventory().empty());
+
+	// Move within interest range (default radius) and the drop should now
+	// replicate as a remote entity -- but not be picked up yet (still 2m
+	// away from its exact position).
+	server.set_player_state(a_id, Vec3d{ 5, 5, 7 });
+	pump(6);
+	CHECK_FALSE(client.remote_entities().empty());
+	CHECK(client.inventory().empty());
+
+	// Walk directly onto it: picked up, credited to inventory, and removed
+	// from replication.
+	server.set_player_state(a_id, Vec3d{ 5, 5, 5 });
+	pump(6);
+	CHECK(client.remote_entities().empty());
+	const auto &inv = client.inventory();
+	REQUIRE(inv.size() == 1);
+	CHECK(static_cast<int>(inv[0].item) == 3);
+	CHECK(inv[0].count == 2);
+}
+
 #endif // VB_WITH_LUA

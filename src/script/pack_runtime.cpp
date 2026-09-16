@@ -51,6 +51,7 @@ void PackRuntime::flush_storage() {}
 #include "vb/core/log.hpp"
 #include "vb/ecs/components.hpp"
 #include "vb/protocol/chat.hpp"
+#include "vb/protocol/inventory.hpp"
 #include "vb/script/vm_internal.hpp"
 #include "vb/world/raycast.hpp"
 
@@ -212,6 +213,10 @@ struct PackRuntime::Impl {
 			core::BlockId existing, core::BlockId new_block, bool is_break);
 	void on_block_edit_after(core::NetId editor, core::IVec3 pos,
 			core::BlockId removed, core::BlockId placed, bool is_break);
+	// Phase 5.1: push a full S2C_Inventory snapshot to `id`'s connection, if
+	// one exists. No-op (not an error) if the session/connection isn't ready
+	// yet -- same posture as send_message/open_ui below.
+	void sync_inventory(core::NetId id);
 
 	template <typename... Args>
 	void fire(const std::string &event, Args &&...args) {
@@ -343,6 +348,47 @@ struct PlayerHandle {
 		const auto count = itemstack.get_or("count", static_cast<std::uint16_t>(0));
 		rt->inventories[net_id].slots.push_back(
 				{ static_cast<core::BlockId>(item), count });
+		rt->sync_inventory(net_id);
+	}
+
+	// The generic counterpart to give() -- removes up to `count` of `item`
+	// across however many slots hold it, only if the player has enough in
+	// total (all-or-nothing, no partial consumption). Not in the original
+	// spec (§10.3 lists only `give`), added because content-side systems
+	// like crafting (content/base/crafting.lua) need a way to spend
+	// ingredients; this stays a generic inventory primitive, not anything
+	// crafting-specific -- the engine has no idea what a "recipe" is.
+	bool take(sol::table itemstack) const {
+		const auto item =
+				static_cast<core::BlockId>(itemstack.get_or("item", static_cast<std::uint16_t>(0)));
+		const auto count = itemstack.get_or("count", static_cast<std::uint16_t>(0));
+		std::vector<ecs::ItemStack> &slots = rt->inventories[net_id].slots;
+		std::uint32_t available = 0;
+		for (const auto &s : slots) {
+			if (s.item == item) {
+				available += s.count;
+			}
+		}
+		if (available < count) {
+			return false;
+		}
+		std::uint16_t remaining = count;
+		for (auto it = slots.begin(); it != slots.end() && remaining > 0;) {
+			if (it->item != item) {
+				++it;
+				continue;
+			}
+			const std::uint16_t taken = std::min(remaining, it->count);
+			it->count -= taken;
+			remaining -= taken;
+			if (it->count == 0) {
+				it = slots.erase(it);
+			} else {
+				++it;
+			}
+		}
+		rt->sync_inventory(net_id);
+		return true;
 	}
 
 	std::string get_name() const {
@@ -378,8 +424,8 @@ void PackRuntime::Impl::install_bindings() {
 			"set_velocity", &PlayerHandle::set_velocity, "remove",
 			&PlayerHandle::remove, "get_inventory", &PlayerHandle::get_inventory,
 			"send_message", &PlayerHandle::send_message, "open_ui",
-			&PlayerHandle::open_ui, "give", &PlayerHandle::give, "get_name",
-			&PlayerHandle::get_name);
+			&PlayerHandle::open_ui, "give", &PlayerHandle::give, "take",
+			&PlayerHandle::take, "get_name", &PlayerHandle::get_name);
 
 	sol::table vb = lua.create_named_table("vb");
 
@@ -505,6 +551,21 @@ void PackRuntime::Impl::install_bindings() {
 		t["ny"] = hit.normal.y;
 		t["nz"] = hit.normal.z;
 		return t;
+	};
+
+	// Phase 5.1 dropped-item entity: a real, working world spawn ahead of the
+	// generic EnTT-backed `vb.world.spawn` above (still a no-op -- waits on
+	// Phase 3.1). Deliberately its own binding, not routed through `spawn`,
+	// since it isn't a `vb.register_entity` kind at all -- just a hardcoded
+	// ItemDropSystem entry (vb::world::ItemDropSystem, src/net/session.cpp).
+	world_tbl["spawn_item_drop"] = [this](sol::table pos, std::uint16_t item,
+											   std::uint16_t count) {
+		if (session == nullptr) {
+			throw sol::error("vb.world.spawn_item_drop: session not attached yet");
+		}
+		const core::Vec3d p{ pos.get_or("x", 0.0), pos.get_or("y", 0.0),
+			pos.get_or("z", 0.0) };
+		session->spawn_item_drop(p, static_cast<core::BlockId>(item), count);
 	};
 
 	world_tbl["spawn"] = [this](const std::string &kind, sol::table pos) {
@@ -648,6 +709,21 @@ void PackRuntime::Impl::on_block_edit_after(core::NetId editor,
 	}
 }
 
+void PackRuntime::Impl::sync_inventory(core::NetId id) {
+	if (session == nullptr) {
+		return;
+	}
+	const net::ConnId conn = session->conn_for_player(id);
+	if (conn == net::ConnId::kInvalid) {
+		return;
+	}
+	protocol::S2CInventory msg;
+	for (const auto &stack : inventories[id].slots) {
+		msg.slots.push_back({ stack.item, stack.count });
+	}
+	net::send_message(transport, conn, msg);
+}
+
 PackRuntime::PackRuntime(net::Transport &transport,
 		world::BlockRegistry &registry, std::filesystem::path storage_path,
 		VmLimits limits)
@@ -714,6 +790,17 @@ void PackRuntime::attach_session(net::ServerSession &session) {
 	});
 	session.set_chat_handler([this](core::NetId sender, std::string_view text) {
 		return dispatch_chat(sender, text);
+	});
+	// Phase 5.1: a player walking over a dropped item (ItemDropSystem,
+	// ServerSession::update_item_drops) credits their inventory exactly like
+	// player:give() does, including the same live S2C_Inventory push --
+	// picking something up should look identical to a script handing it to
+	// you directly.
+	Impl *self = impl_.get();
+	session.set_item_pickup_handler(
+			[self](core::NetId player, core::BlockId item, std::uint16_t count) {
+		self->inventories[player].slots.push_back({ item, count });
+		self->sync_inventory(player);
 	});
 }
 

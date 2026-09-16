@@ -20,17 +20,21 @@ True to its name, the client acts as a "browser." When a player connects to a se
 
 ## 🛠️ Tech Stack
 
-Voxel Browser leverages a carefully curated stack of modern, high-performance C/C++ libraries:
+Voxel Browser leverages a carefully curated stack of modern, high-performance C/C++ libraries. A few started as the intended long-term backend for a subsystem but are still gated behind a `VB_WITH_*` build flag (default `OFF`) while a smaller hand-rolled version does the same job today — the column below says which is actually driving the game right now.
 
-| Component             | Technology / Library                                                            | Description                                                                      |
-| --------------------- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| **Voxel Engine**      | [Cellulose](https://github.com/RechieKho/cellulose)                             | Core voxel meshing, rendering, and block management.                             |
-| **Networking Core**   | [GameNetworkingSockets](https://github.com/ValveSoftware/GameNetworkingSockets) | Valve's robust transport layer for reliable/unreliable UDP connection handling.  |
-| **Network Topology**  | [librg](https://github.com/zpl-c/librg)                                         | Entity replication and chunk-based spatial network filtering.                    |
-| **Entity Management** | [EnTT](https://github.com/skypjack/entt)                                        | Header-only, lightning-fast ECS for managing players, mobs, and dynamic objects. |
-| **World Generation**  | [FastNoise2](https://github.com/Auburn/FastNoise2)                              | High-performance SIMD noise generation for terrain and biomes.                   |
-| **User Interface**    | [raygui](https://github.com/raysan5/raygui)                                     | Immediate-mode GUI for menus, inventories, and HUDs.                             |
-| **Scripting**         | [Lua](https://www.lua.org/)                                                     | Embedded scripting language for server-side logic and modding.                   |
+| Component             | Technology / Library                                                            | Status today                                                                     |
+| --------------------- | ------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| **Voxel Meshing**     | Hand-rolled face-culled mesher (`vb::world::chunk_mesher`)                       | **Active.** [Cellulose](https://github.com/RechieKho/cellulose) is the intended `VB_WITH_MESHING` backend, not yet wired in. |
+| **Networking Core**   | [GameNetworkingSockets](https://github.com/ValveSoftware/GameNetworkingSockets) | **Active** (`VB_WITH_NET`) — real UDP handshake, chunk/entity/chat replication.    |
+| **Entity Replication**| Hand-rolled `vb::replication::InterestGrid`                                     | **Active.** [librg](https://github.com/zpl-c/librg) is the intended `VB_WITH_REPLICATION` backend for interest culling at scale, not yet wired in. |
+| **Entity Management** | `ServerSession` drives players directly, no registry yet                        | [EnTT](https://github.com/skypjack/entt) is linked and ready, but nothing routes through it yet — see `REMAINING_TASKS.md` Phase 3.1. |
+| **World Generation**  | Hand-rolled deterministic noise (`vb::core::noise`)                             | **Active** for the base heightmap pipeline. [FastNoise2](https://github.com/Auburn/FastNoise2) is the intended `VB_WITH_WORLDGEN` backend for a future Lua-driven pipeline. |
+| **User Interface**    | [raygui](https://github.com/raysan5/raygui)                                     | **Active** — main menu, HUD, and Lua-defined pack UI screens.                      |
+| **Scripting**         | [Lua](https://www.lua.org/) 5.4 + [sol2](https://github.com/ThePhD/sol2)         | **Active** (`VB_WITH_LUA`) — server + client-UI sandboxed VMs, the full `content/base` pack. |
+| **Rendering / Window**| [raylib](https://github.com/raysan5/raylib)                                     | **Active** — window, GL context, 3D draw calls, billboarded entities.             |
+
+See `STATE.md` for the specifics of each still-gated dependency (API shape,
+pin, what's blocking the swap).
 
 ---
 
@@ -40,63 +44,46 @@ Voxel Browser leverages a carefully curated stack of modern, high-performance C/
 
 The server is the source of truth. It is responsible for:
 
-1. **World Generation:** Utilizing `FastNoise` to generate chunk data based on server-defined seeds and Lua-defined biome rules.
-2. **Game State & ECS:** Maintaining the master state of all entities using `EnTT`.
-3. **Modding & Asset Management:** Loading Lua scripts and assets from the host's project directory.
-4. **Network Replication:** Pushing chunk data, entity updates (via `librg`), and required assets to connected clients.
+1. **World Generation:** Deterministic heightmap terrain today (`vb::worldgen`), driven by a server-defined seed; a Lua-driven pipeline with real biomes/carvers/decoration is planned (`REMAINING_TASKS.md` Phase 4.2).
+2. **Game State:** Player movement, physics, and block edits are simulated directly by `ServerSession` — an EnTT-backed registry for generic (non-player) entities is planned but not required for anything shipped so far.
+3. **Modding & Asset Management:** Loading Lua scripts (`content/base` by default) and hashing/serving assets from the host's project directory over the Asset Sync protocol.
+4. **Network Replication:** Pushing chunk data, entity snapshots, chat, and required assets to connected clients over `GameNetworkingSockets`.
 
 ### The Client (The "Browser")
 
 The client is a thin, rendering-focused application. It is responsible for:
 
-1. **Asset Synchronization:** Shaking hands with the server (via `GameNetworkingSockets`) and downloading missing textures, models, and UI definitions on connect.
-2. **Rendering:** Generating chunk meshes via `Cellulose` and rendering the game world.
-3. **Input Handling:** Capturing user keyboard/mouse input and passing immediate-mode UI interactions (`raygui`) back to the server.
-4. **Interpolation:** Smoothly rendering entity movements between server tick updates.
+1. **Asset Synchronization:** Shaking hands with the server and downloading missing scripts/assets on connect, cached content-addressed on disk.
+2. **Rendering:** Meshing and rendering streamed chunks, plus billboarded remote entities and dropped items.
+3. **Input Handling:** Capturing keyboard/mouse input (movement, block break/place, chat, crafting commands) and driving Lua-defined `raygui` UI screens the server pushes.
+4. **Prediction & Interpolation:** Predicting local movement against the server's authority and smoothly interpolating remote entities between snapshots.
 
 ---
 
-## 🚀 Implementation Strategy
+## 📌 Project Status
 
-The development of Voxel Browser will follow a phased approach to ensure stability and modularity.
+Voxel Browser has gone through its originally-planned Phase 0–5 and is a
+playable (if visually minimal) multiplayer sandbox today: connect to a
+server, walk around generated terrain, mine and place blocks, chat, see
+other players, and craft (`content/base/crafting.lua`'s wood → planks →
+sticks example). `REMAINING_TASKS.md` is the authoritative, continuously
+updated backlog — the phase list below is a high-level summary, not a
+substitute for it.
 
-### Phase 1: Core Foundation & Networking
+| Phase                                          | Status |
+| ----------------------------------------------- | ------ |
+| 0 — Project restructure & build system          | ✅ Done |
+| 1 — Core foundation & networking (handshake, transport, interest/replication bootstrap) | ✅ Done |
+| 2 — World state & terrain generation (chunks, lighting, meshing, streaming) | ✅ Done |
+| 3 — ECS & physics (movement, prediction, remote entity billboards) | ✅ Substantially done — no EnTT registry yet (3.1), not required so far |
+| 4 — The "Browser" engine (Lua scripting, Asset Sync, client UI VM) | ✅ Done (mechanism); a real Lua-driven worldgen pipeline is the main open item |
+| 5 — Minimum playable base (content pack, block editing, main menu, chat/day-night/respawn, crafting) | ✅ Substantially done — see `REMAINING_TASKS.md` 5.5 for remaining docs/polish |
 
-- Initialize the CMake project with all submodules/dependencies.
-- Setup **GameNetworkingSockets** to establish a reliable client-server handshake.
-- Integrate **librg** to handle basic spatial tracking (e.g., connecting two dummy clients and verifying they can "see" each other in network space).
-- Initialize the **Cellulose** window and basic rendering loop on the client.
-
-### Phase 2: World State & Terrain Generation
-
-- Implement chunk data structures on the server.
-- Integrate **FastNoise** to generate basic heightmaps (dirt, stone, air).
-- Serialize chunk data and transmit it to the client via reliable network packets.
-- Feed received chunk data into **Cellulose** for mesh generation and rendering.
-
-### Phase 3: Entity Component System & Physics
-
-- Integrate **EnTT** on the server. Create basic components: `Position`, `Velocity`, `Collider`, `PlayerInput`.
-- Implement basic AABB (Axis-Aligned Bounding Box) voxel collision detection on the server.
-- Map **EnTT** entities to **librg** network entities to synchronize player movement to clients.
-
-### Phase 4: The "Browser" Engine (Scripting & Assets)
-
-- Embed the **Lua** runtime into the server.
-- Create C++ bindings for Lua so scripts can register new block types, listen to player click events, and spawn entities.
-- Implement the **Asset Sync Protocol**:
-- Server hashes all project files (textures, scripts).
-- Client sends a list of locally cached hashes on connect.
-- Server pushes missing files over the network.
-
-- Bind **raygui** to allow the server to define basic client-side menus via Lua (e.g., inventory screens).
-
-### Phase 5: Minimum Playable Base
-
-- Finalize the minimal content pack (Dirt, Grass, Wood, Leaves, Stone, Sand).
-- Create a basic main menu using `raygui` (Server IP input, Connect button).
-- Implement block breaking/placing logic over the network.
-- Write comprehensive documentation for the Lua API.
+Known gaps worth knowing about before diving in (full detail in
+`REMAINING_TASKS.md` and `STATE.md`): no world persistence (everything is
+regenerated from the seed on restart), held items and placeable blocks still
+share one id space, and macOS CI doesn't build the real networking backend
+yet (works locally, just not wired into that platform's workflow).
 
 ---
 
@@ -148,6 +135,23 @@ optional and CLI flags override the file. Real remote connections
 `voxel_browser_server`) need `-DVB_WITH_NET=ON`, which links
 GameNetworkingSockets — see the next section for its one extra system
 dependency (protobuf).
+
+`voxel_browser --singleplayer` runs a real in-process server + client over a
+loopback transport, so it works with the plain build above — no `VB_WITH_NET`
+needed to try it. To also get the `content/base` pack's chat/crafting/
+inventory scripting (rather than just the hardcoded terrain/physics/menu),
+configure with `-DVB_WITH_LUA=ON` too:
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DVB_WITH_LUA=ON
+cmake --build build
+./build/voxel_browser --singleplayer --name Me
+```
+
+Once in, WASD + mouse to move, left-click (held) to break a block,
+right-click to place one, Enter to open the chat box — type `/craft
+base:planks` after mining some wood to see the base pack's example crafting
+system in action.
 
 ### Build options
 

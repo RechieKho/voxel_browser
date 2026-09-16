@@ -22,9 +22,11 @@
 #include "vb/protocol/chat.hpp"
 #include "vb/protocol/handshake.hpp"
 #include "vb/protocol/input.hpp"
+#include "vb/protocol/inventory.hpp"
 #include "vb/protocol/snapshot.hpp"
 #include "vb/replication/interest.hpp"
 #include "vb/world/client_chunk_store.hpp"
+#include "vb/world/item_drops.hpp"
 
 // Sessions glue a Transport to the handshake FSMs and present a small
 // game-facing API: the server loop pulls join/leave events, the client loop
@@ -131,6 +133,24 @@ public:
 	// is shared so a future damage source gets respawn for free.
 	void set_void_kill_y(double y) { void_kill_y_ = y; }
 
+	// Dropped-item entities (spec §5.1). Spawns one at `pos`, replicated
+	// generically through the interest grid like any other entity -- no
+	// dedicated wire message. Auto-collected when a player's feet come
+	// within the system's pickup radius (see ItemDropSystem); the pickup
+	// handler below is how that reaches a player's actual inventory.
+	core::NetId spawn_item_drop(
+			core::Vec3d pos, core::BlockId item, std::uint16_t count);
+
+	// Phase 5.1: routes a player walking over a dropped item up to a script
+	// host's inventory, without ServerSession knowing anything about Lua.
+	// Unset (the default -- e.g. `--singleplayer`, which has no PackRuntime)
+	// means picked-up items vanish with no effect, same "no handler, no
+	// side effect" posture as set_chat_handler/set_ui_event_handler.
+	void set_item_pickup_handler(
+			std::function<void(core::NetId, core::BlockId, std::uint16_t)> handler) {
+		on_item_pickup_ = std::move(handler);
+	}
+
 private:
 	struct Conn {
 		explicit Conn(ServerHandshake hs) : handshake(std::move(hs)) {}
@@ -155,6 +175,7 @@ private:
 			const protocol::Frame &frame);
 	void handle_chat(Conn &state, const protocol::Frame &frame);
 	void check_respawns();
+	void update_item_drops(double dt_seconds);
 	void broadcast_snapshots();
 	void broadcast_world();
 	void broadcast_time_of_day();
@@ -167,6 +188,8 @@ private:
 	std::unique_ptr<WorldReplicator> replicator_;
 	std::function<void(core::NetId, const protocol::C2SUiEvent &)> on_ui_event_;
 	std::function<bool(core::NetId, std::string_view)> on_chat_;
+	world::ItemDropSystem item_drops_;
+	std::function<void(core::NetId, core::BlockId, std::uint16_t)> on_item_pickup_;
 	physics::MoveParams move_params_;
 	int interest_radius_cells_ = 2;
 	double time_of_day_ticks_ = 0.0;
@@ -289,6 +312,12 @@ public:
 		return players_;
 	}
 
+	// This player's inventory (spec §5.1), kept in sync by S2C_Inventory.
+	// Empty until the first snapshot arrives (e.g. before any player:give()).
+	const std::vector<protocol::InventorySlot> &inventory() const {
+		return inventory_;
+	}
+
 	// Day/night cycle (spec §5.4): S2C_JoinAccept's value until the first
 	// periodic S2C_TimeOfDay update arrives, then the latest of those. Ticks
 	// into the day cycle -- see vb::world::daynight.hpp for the convention.
@@ -342,6 +371,7 @@ private:
 	std::vector<std::string> pending_chat_;
 	std::unordered_map<core::NetId, std::string> players_;
 	std::optional<std::uint32_t> time_of_day_override_;
+	std::vector<protocol::InventorySlot> inventory_;
 
 	physics::MoveState predicted_;
 	physics::MoveParams move_params_;

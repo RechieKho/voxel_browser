@@ -7,6 +7,7 @@ target_sources(vb_core PRIVATE
   chat.cpp
   handshake.cpp
   input.cpp
+  inventory.cpp
   snapshot.cpp
   world.cpp
 )

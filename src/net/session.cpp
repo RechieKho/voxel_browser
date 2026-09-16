@@ -380,10 +380,38 @@ void ServerSession::tick(double dt_seconds) {
 	}
 
 	check_respawns();
+	update_item_drops(dt_seconds);
 
 	++server_tick_;
 	broadcast_snapshots();
 	broadcast_world();
+}
+
+void ServerSession::update_item_drops(double dt_seconds) {
+	// Reads positions from the interest grid rather than Conn::move.position
+	// directly: it's the same single source of truth broadcast_snapshots()
+	// already uses for "where is this net id right now", kept current by
+	// both real input-driven movement (handle_input_batch) and the
+	// test/script-facing set_player_state() -- picking up an item works the
+	// same way regardless of which path moved the player.
+	std::vector<std::pair<core::NetId, core::Vec3d>> players;
+	for (auto &[conn, state] : conns_) {
+		if (!state.playing) {
+			continue;
+		}
+		if (const auto *e = interest_.get(state.net_id)) {
+			players.emplace_back(state.net_id, e->pos);
+		}
+	}
+	const world::ItemDropTickResult result = item_drops_.tick(dt_seconds, players);
+	for (core::NetId id : result.removed) {
+		interest_.remove(id);
+	}
+	for (const world::ItemPickup &p : result.pickups) {
+		if (on_item_pickup_) {
+			on_item_pickup_(p.player, p.item, p.count);
+		}
+	}
 }
 
 void ServerSession::check_respawns() {
@@ -411,6 +439,14 @@ void ServerSession::check_respawns() {
 		send_message(
 				transport_, conn, protocol::S2CChat{ "* you died and respawned" });
 	}
+}
+
+core::NetId ServerSession::spawn_item_drop(
+		core::Vec3d pos, core::BlockId item, std::uint16_t count) {
+	const core::NetId id = item_drops_.spawn(pos, item, count);
+	interest_.upsert(replication::EntityState{
+			id, world::kItemDropKind, pos, {}, {} });
+	return id;
 }
 
 void ServerSession::broadcast_time_of_day() {
@@ -724,6 +760,15 @@ bool ClientSession::apply_gameplay_frame(const protocol::Frame &frame) {
 				players_[m->net_id] = std::move(m->name);
 			} else {
 				VB_ERROR("net", "malformed S2C_PlayerJoin: ",
+						core::message(m.error()));
+			}
+			return true;
+		}
+		case MessageType::kS2CInventory: {
+			if (auto m = protocol::S2CInventory::decode(frame.payload)) {
+				inventory_ = std::move(m->slots);
+			} else {
+				VB_ERROR("net", "malformed S2C_Inventory: ",
 						core::message(m.error()));
 			}
 			return true;

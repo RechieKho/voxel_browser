@@ -4,8 +4,15 @@
 > as any change to a struct in `inc/vb/protocol/`, and bump
 > `kEngineProtocolVersion` in `cmake/version.hpp.in`.
 
-Current `ENGINE_PROTOCOL_VERSION`: **10**.
+Current `ENGINE_PROTOCOL_VERSION`: **11**.
 
+- **11** — `S2C_Inventory` (107) payload defined (Phase 5.1, real inventory
+  sync): `varint n`, `n × {u16 item, u16 count}`. Sent to one player whenever
+  their inventory changes (currently: after `player:give()`); always a full
+  snapshot, not a delta. `ClientSession::inventory()` keeps the latest copy.
+  Closes the "no wire message syncing inventory contents to the client at
+  all" gap `REMAINING_TASKS.md` 5.1 tracked — `player:get_inventory()`/
+  `player:give()` (Phase 4.2) were server-Lua-only state until now.
 - **10** — `S2C_TimeOfDay` (46) payload defined (Phase 5.4, day/night cycle):
   `u32 time_of_day`. The server advances a `time_of_day` clock every tick
   (`vb::world::advance_time_of_day`, `ServerSession::set_day_length_seconds`,
@@ -212,6 +219,18 @@ overlay.
 | `S2C_PlayerJoin` (104) | `u32 net_id`, `string name`                                 |
 | `S2C_PlayerLeave` (105) | `u32 net_id`                                               |
 | `S2C_PlayerList` (106) | `varint n`, `n × {u32 net_id, string name}`                 |
+
+### Inventory sync — `inc/vb/protocol/inventory.hpp` (implemented)
+
+| Type (id)             | Fields                                                     |
+| ---------------------- | ---------------------------------------------------------- |
+| `S2C_Inventory` (107)  | `varint n`, `n × {u16 item, u16 count}`                     |
+
+Sent to one player whenever their inventory changes (currently only
+`player:give()`, Phase 4.2). Always a full snapshot of every slot, not a
+delta — mirrors `S2C_PlayerList`'s "just resend the whole thing" posture.
+`ClientSession::inventory()` holds the latest copy client-side; the HUD
+hotbar (`src/client/main.cpp`) reads it directly.
 
 `S2C_Chat`/`S2C_OpenUi` sent by the server Lua runtime
 (`player:send_message`/`player:open_ui`, Phase 4.2); `ctx_json` is the

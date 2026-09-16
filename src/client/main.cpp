@@ -32,7 +32,8 @@
 #include "vb/core/config.hpp"
 #include "vb/core/paths.hpp"
 #include "vb/net/gns_transport.hpp"
-#include "vb/net/integrated.hpp"
+#include "vb/net/loopback.hpp"
+#include "vb/net/session.hpp"
 #include "vb/net/world_replicator.hpp"
 #include "vb/physics/movement.hpp"
 #include "vb/protocol/input.hpp"
@@ -43,6 +44,8 @@
 #include "vb/render/main_menu.hpp"
 #include "vb/render/ui_renderer.hpp"
 #include "vb/render/window.hpp"
+#include "vb/script/pack_loader.hpp"
+#include "vb/script/pack_runtime.hpp"
 #include "vb/script/ui_runtime.hpp"
 #include "vb/world/block.hpp"
 #include "vb/world/daynight.hpp"
@@ -74,10 +77,19 @@ void print_usage() {
 				 "(dropping back to the menu on failure instead of exiting).\n";
 }
 
-vb::worldgen::WorldGenerator make_generator(std::uint64_t seed) {
+vb::worldgen::WorldGenerator make_generator(
+		std::uint64_t seed, const vb::world::BlockRegistry &registry) {
 	vb::worldgen::WorldGenParams p;
 	p.seed = seed;
-	return vb::worldgen::WorldGenerator(p, vb::world::BlockRegistry::base());
+	return vb::worldgen::WorldGenerator(p, registry);
+}
+
+// The spawn-position calculation only needs the well-known base block ids
+// (air/stone/dirt/.../water), which a pack re-declaring those names by
+// `add_or_get` never changes -- safe to always use the fixed base() registry
+// here even when the real world uses a pack-extended one.
+vb::worldgen::WorldGenerator make_generator(std::uint64_t seed) {
+	return make_generator(seed, vb::world::BlockRegistry::base());
 }
 
 vb::net::HandshakeServerConfig sp_server_config(std::uint64_t seed) {
@@ -110,18 +122,113 @@ vb::net::HandshakeServerHost sp_server_host(std::uint64_t seed) {
 	return host;
 }
 
-// Owns the in-process world for --singleplayer, kept alive for the whole
-// session (spec §3: the integrated server is a library, not a child process).
-struct Singleplayer {
-	vb::world::World world{ vb::world::BlockRegistry::base() };
-	vb::worldgen::WorldGenWorkerPool pool;
-	vb::net::IntegratedGame game;
+// Default content pack --singleplayer loads (matches server.toml.example's
+// own default) -- there's no client-side config for this yet, so it's fixed.
+constexpr const char *kSingleplayerContentPack = "content/base";
 
-	Singleplayer(std::uint64_t seed, const std::string &name, int view_distance) : pool(make_generator(seed)),
-																				   game(sp_server_config(seed), sp_client_config(name), sp_server_host(seed)) {
-		game.server().set_world_replicator(
-				std::make_unique<vb::net::WorldReplicator>(world, pool,
-						vb::world::BlockRegistry::base(), view_distance, 3));
+vb::script::PackRuntime make_singleplayer_pack_runtime(
+		vb::net::Transport &transport, vb::world::BlockRegistry &registry) {
+	vb::script::PackRuntime rt(transport, registry,
+			std::filesystem::path(kSingleplayerContentPack) / "storage.json");
+	if (!vb::script::load_content_pack(rt, kSingleplayerContentPack)) {
+		std::cerr << "client: singleplayer content pack '"
+				  << kSingleplayerContentPack << "' failed to load -- "
+				  << "running with the hardcoded base block set only\n";
+	}
+	rt.freeze();
+	return rt;
+}
+
+vb::net::HandshakeServerHost make_singleplayer_host(std::uint64_t seed,
+		vb::script::PackRuntime &pack_runtime,
+		const vb::world::BlockRegistry &registry) {
+	vb::net::HandshakeServerHost host = sp_server_host(seed);
+	pack_runtime.install_join_veto(host); // before ServerSession copies `host`
+	// Phase 4.3: without this, a joining client stays on its own base()
+	// registry and any pack-added block (planks/sticks from crafting.lua)
+	// resolves to nothing client-side -- name lookups fall back to "?" in
+	// the hotbar even though give()/take() work fine either way (inventory
+	// slots are just numeric ids). Mirrors src/server/main.cpp's own
+	// host.block_registry callback exactly.
+	host.block_registry =
+			[&registry]() -> std::optional<std::vector<vb::protocol::BlockRegistryRecord>> {
+		std::vector<vb::protocol::BlockRegistryRecord> out;
+		out.reserve(registry.size());
+		for (std::size_t i = 0; i < registry.size(); ++i) {
+			const auto &t = registry.get(static_cast<vb::core::BlockId>(i));
+			out.push_back({ t.name, t.solid, t.opaque, t.liquid, t.light_emission });
+		}
+		return out;
+	};
+	return host;
+}
+
+// Owns the in-process world for --singleplayer, kept alive for the whole
+// session (spec §3: the integrated server is a library, not a child
+// process). Built directly from LoopbackNetwork/ServerSession/ClientSession
+// -- the same pieces `vb::net::IntegratedGame` wraps -- rather than through
+// IntegratedGame itself: a `PackRuntime` needs the raw server-side
+// `Transport&` (to send chat/give/etc. messages) and needs
+// `install_join_veto()` to run *before* `ServerSession` is constructed,
+// neither of which IntegratedGame's all-in-one constructor exposes a hook
+// for. This closes the "`--singleplayer` doesn't asset-sync/run the content
+// pack's Lua at all" gap `REMAINING_TASKS.md` had tracked since Phase 5.1 --
+// singleplayer now loads and runs `content/base` exactly like a real
+// dedicated server does (chat, crafting, item drops, custom blocks), just
+// over a loopback transport instead of real UDP.
+struct Singleplayer {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime pack_runtime;
+	vb::world::World world;
+	vb::worldgen::WorldGenWorkerPool pool;
+	vb::net::ServerSession server;
+	std::optional<vb::net::ClientSession> client_session;
+
+	Singleplayer(std::uint64_t seed, const std::string &name, int view_distance)
+			: pack_runtime(make_singleplayer_pack_runtime(net.server(), registry)),
+			  world(registry),
+			  pool(make_generator(seed, registry)),
+			  server(net.server(), sp_server_config(seed),
+					  make_singleplayer_host(seed, pack_runtime, registry)) {
+		auto listening = net.server().listen(0);
+		(void)listening; // loopback listen never fails on a fresh network
+
+		auto replicator = std::make_unique<vb::net::WorldReplicator>(
+				world, pool, registry, view_distance, 3);
+		pack_runtime.attach_world(*replicator);
+		server.set_world_replicator(std::move(replicator));
+		pack_runtime.attach_session(server);
+
+		vb::net::Transport &client_transport = net.create_client();
+		auto conn = client_transport.connect("integrated", 0);
+		if (conn) {
+			client_session.emplace(
+					client_transport, *conn, sp_client_config(name));
+		} else {
+			std::cerr << "client: singleplayer failed to connect to its own "
+						 "loopback server\n";
+		}
+	}
+
+	vb::net::ClientSession &client() { return *client_session; }
+
+	// Advances the server, the client, and the pack runtime's join/leave/tick
+	// dispatch together -- mirrors src/server/main.cpp's own tick loop so a
+	// pack behaves identically whether it's driven by a real dedicated server
+	// or this in-process one.
+	void tick(double dt) {
+		server.tick(dt);
+		if (client_session) {
+			client_session->tick(dt);
+		}
+		for (auto &j : server.take_joins()) {
+			pack_runtime.dispatch_player_join_completed(j);
+		}
+		for (auto &l : server.take_leaves()) {
+			pack_runtime.dispatch_player_leave(l);
+		}
+		pack_runtime.dispatch_tick(dt);
 	}
 };
 
@@ -255,9 +362,9 @@ int run_headless(const vb::core::ClientConfig &config, const vb::core::Args &arg
 
 	if (singleplayer) {
 		sp = std::make_unique<Singleplayer>(7, config.player_name, view_distance);
-		client = &sp->game.client();
+		client = &sp->client();
 		for (int i = 0; i < 128 && !client->joined() && !client->failed(); ++i) {
-			sp->game.tick(0.05);
+			sp->tick(0.05);
 		}
 	} else {
 		std::cout << "client: connecting to " << server << ':' << port << "...\n";
@@ -350,7 +457,7 @@ int run_headless(const vb::core::ClientConfig &config, const vb::core::Args &arg
 					controller.yaw(), controller.pitch(), false);
 			client->push_input(cmd);
 			if (sp) {
-				sp->game.tick(dt);
+				sp->tick(dt);
 			} else {
 				client->tick(dt);
 			}
@@ -448,6 +555,16 @@ int main(int argc, char **argv) {
 	std::unique_ptr<vb::render::EntityRenderer> entity_renderer;
 	bool mouse_captured = false;
 
+	// Hold-to-break (spec §5.2, "Break progress (hold-to-break): not yet"):
+	// LMB must be held on the same voxel for kBreakSeconds before the edit is
+	// actually sent. No per-block hardness/tool system exists yet (still a
+	// separately-tracked REMAINING_TASKS.md gap) -- one flat duration for
+	// every block is the whole feature this pass adds.
+	constexpr double kBreakSeconds = 0.35;
+	bool breaking = false;
+	vb::core::IVec3 break_target{};
+	double break_progress = 0.0;
+
 	// HUD chat (spec §5.4): a small scrolling log + an Enter-to-open text
 	// box, plain raygui like MainMenu -- no Lua, no dependency on the pack's
 	// UiRuntime chat concept (there isn't one).
@@ -489,7 +606,7 @@ int main(int argc, char **argv) {
 	}
 
 	auto enter_playing = [&] {
-		client = connecting_singleplayer ? &sp->game.client() : &*remote->session;
+		client = connecting_singleplayer ? &sp->client() : &*remote->session;
 		const auto &accept = *client->join_accept();
 		const vb::core::NetId net_id = accept.your_net_id;
 		spawn = accept.spawn_pos;
@@ -594,11 +711,11 @@ int main(int argc, char **argv) {
 			case AppState::kConnecting: {
 				bool timed_out = false;
 				if (connecting_singleplayer) {
-					vb::net::ClientSession &sp_client = sp->game.client();
+					vb::net::ClientSession &sp_client = sp->client();
 					for (int i = 0; i < 8 && !sp_client.joined() && !sp_client.failed() &&
 							connect_ticks < 128;
 							++i, ++connect_ticks) {
-						sp->game.tick(0.05);
+						sp->tick(0.05);
 					}
 					if (connect_ticks >= 128 && !sp_client.joined() && !sp_client.failed()) {
 						timed_out = true;
@@ -697,7 +814,7 @@ int main(int argc, char **argv) {
 					// over loopback); a real connection just pumps this client's
 					// GnsTransport -- the dedicated server ticks itself.
 					if (connecting_singleplayer) {
-						sp->game.tick(dt);
+						sp->tick(dt);
 					} else {
 						client->tick(dt);
 					}
@@ -707,18 +824,33 @@ int main(int argc, char **argv) {
 				}
 
 				// Block break / place: raycast from the eye, act on click
-				// (spec §5.2).
+				// (spec §5.2). Breaking requires holding LMB on the same
+				// voxel for kBreakSeconds; placing stays an instant click.
 				vb::world::VoxelRayHit look_hit;
 				if (mouse_captured) {
 					look_hit = vb::world::raycast_voxel(client->chunk_store(),
 							controller.position(), controller.forward(), 5.0);
-					if (look_hit.hit && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-						vb::protocol::C2SBlockEdit e;
-						e.predicted_seq = ++edit_seq;
-						e.action = vb::protocol::BlockEditAction::kBreak;
-						e.pos = look_hit.voxel;
-						client->push_block_edit(e);
-					} else if (look_hit.hit && IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) {
+					if (look_hit.hit && IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+						if (!breaking || break_target != look_hit.voxel) {
+							breaking = true;
+							break_target = look_hit.voxel;
+							break_progress = 0.0;
+						}
+						break_progress += dt;
+						if (break_progress >= kBreakSeconds) {
+							vb::protocol::C2SBlockEdit e;
+							e.predicted_seq = ++edit_seq;
+							e.action = vb::protocol::BlockEditAction::kBreak;
+							e.pos = look_hit.voxel;
+							client->push_block_edit(e);
+							breaking = false;
+							break_progress = 0.0;
+						}
+					} else {
+						breaking = false;
+						break_progress = 0.0;
+					}
+					if (look_hit.hit && IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) {
 						vb::protocol::C2SBlockEdit e;
 						e.predicted_seq = ++edit_seq;
 						e.action = vb::protocol::BlockEditAction::kPlace;
@@ -728,6 +860,9 @@ int main(int argc, char **argv) {
 						e.block = vb::world::base_block::stone;
 						client->push_block_edit(e);
 					}
+				} else {
+					breaking = false;
+					break_progress = 0.0;
 				}
 
 				std::size_t chunk_count = 0;
@@ -772,6 +907,22 @@ int main(int argc, char **argv) {
 				EndMode3D();
 				draw_overlay(controller, status, chunk_count, entity_count,
 						mouse_captured, client->time_of_day());
+
+				// Hold-to-break progress bar: small, centered just below the
+				// crosshair position (screen center) -- only drawn while
+				// actively breaking something.
+				if (breaking) {
+					constexpr int kBarW = 120;
+					constexpr int kBarH = 8;
+					const int x = (GetScreenWidth() - kBarW) / 2;
+					const int y = GetScreenHeight() / 2 + 24;
+					const float frac = static_cast<float>(
+							std::min(break_progress / kBreakSeconds, 1.0));
+					DrawRectangle(x, y, kBarW, kBarH, Color{ 30, 30, 34, 200 });
+					DrawRectangle(x, y, static_cast<int>(kBarW * frac), kBarH,
+							Color{ 220, 220, 220, 230 });
+					DrawRectangleLines(x, y, kBarW, kBarH, Color{ 90, 90, 100, 230 });
+				}
 
 				// Player list (spec §5.4): top-right, this client's name plus
 				// everyone S2C_PlayerList/S2C_PlayerJoin/S2C_PlayerLeave says
@@ -824,6 +975,37 @@ int main(int argc, char **argv) {
 											 360.0f, static_cast<float>(line_h + 4) },
 								chat_buf.data(), kChatBufferSize, true);
 						chat_buf.resize(std::strlen(chat_buf.c_str()));
+					}
+				}
+
+				// Hotbar (spec §5.1): a real inventory sync now exists
+				// (S2C_Inventory) even though there's no dedicated slot-select
+				// input yet -- just render every slot the server last sent,
+				// bottom-center, block name + count. Textures/atlas (5.1's own
+				// deferred item) aren't wired to anything client-side yet, so
+				// this is text-only like ui/inventory.lua's own known gap.
+				{
+					const auto &inv = client->inventory();
+					if (!inv.empty()) {
+						const auto &registry = client->chunk_store().registry();
+						constexpr int kSlotW = 96;
+						constexpr int kSlotH = 40;
+						constexpr int kGap = 6;
+						const int total_w = static_cast<int>(inv.size()) * (kSlotW + kGap) - kGap;
+						int x = (GetScreenWidth() - total_w) / 2;
+						const int y = GetScreenHeight() - kSlotH - 16;
+						for (const auto &slot : inv) {
+							DrawRectangle(x, y, kSlotW, kSlotH, Color{ 30, 30, 34, 200 });
+							DrawRectangleLines(x, y, kSlotW, kSlotH, Color{ 90, 90, 100, 230 });
+							std::string name = registry.contains(slot.item)
+									? registry.get(slot.item).name
+									: "?";
+							char line[64];
+							std::snprintf(line, sizeof(line), "%s x%u", name.c_str(),
+									static_cast<unsigned>(slot.count));
+							DrawText(line, x + 6, y + 12, 14, Color{ 220, 220, 220, 230 });
+							x += kSlotW + kGap;
+						}
 					}
 				}
 
