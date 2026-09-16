@@ -757,6 +757,38 @@ int main(int argc, char **argv) {
 				draw_overlay(controller, status, chunk_count, entity_count,
 						mouse_captured);
 
+				// Player list (spec §5.4): top-right, this client's name plus
+				// everyone S2C_PlayerList/S2C_PlayerJoin/S2C_PlayerLeave says
+				// is currently playing. Always visible (no toggle key --
+				// keeping it simple and avoiding a clash with Tab, already
+				// bound to mouse-capture release).
+				{
+					const auto &players = client->players();
+					const int line_h = 18;
+					int y = 12;
+					char header[64];
+					std::snprintf(header, sizeof(header), "players (%zu)",
+							players.size() + 1);
+					const int text_w = MeasureText(header, 16);
+					DrawText(header, GetScreenWidth() - text_w - 12, y, 16,
+							Color{ 200, 200, 210, 230 });
+					y += line_h;
+					if (!config.player_name.empty()) {
+						const int name_w = MeasureText(config.player_name.c_str(), 16);
+						DrawText(config.player_name.c_str(),
+								GetScreenWidth() - name_w - 12, y, 16,
+								Color{ 170, 220, 170, 230 });
+						y += line_h;
+					}
+					for (const auto &[id, name] : players) {
+						(void)id;
+						const int name_w = MeasureText(name.c_str(), 16);
+						DrawText(name.c_str(), GetScreenWidth() - name_w - 12, y, 16,
+								Color{ 200, 200, 210, 230 });
+						y += line_h;
+					}
+				}
+
 				// Chat HUD (spec §5.4): a bottom-left scrolling log, plus an
 				// Enter-to-open input box (plain raygui, no Lua -- same
 				// posture as MainMenu, not a UiRuntime widget).

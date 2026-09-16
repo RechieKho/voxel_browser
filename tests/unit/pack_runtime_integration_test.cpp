@@ -360,6 +360,10 @@ TEST_CASE("pack script vetoes chat from a specific player") {
 	pump(16);
 	REQUIRE(allowed.joined());
 	REQUIRE(blocked.joined());
+	// Drain the join system line(s) both clients may have picked up while
+	// joining near-simultaneously -- not what this test asserts on.
+	allowed.take_chat_messages();
+	blocked.take_chat_messages();
 
 	allowed.send_chat("hi everyone");
 	blocked.send_chat("i should not be heard");

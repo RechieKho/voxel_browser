@@ -978,7 +978,32 @@ hold-to-break progress, cross-chunk relight.
       chat from a specific player" — end-to-end over `LoopbackTransport`).
       Not attempted: rate limiting / flood guard, `/`-prefixed commands,
       per-message timestamps, chat history persisted across a reconnect.
-- [ ] Player list / join-leave messages.
+- [x] Player list / join-leave messages: `S2C_PlayerJoin` (104) /
+      `S2C_PlayerLeave` (105) / `S2C_PlayerList` (106) —
+      `inc/vb/protocol/chat.hpp` + `src/protocol/chat.cpp`, round-trip tested.
+      `kEngineProtocolVersion` bumped 8 → 9. `ServerSession` generates these
+      itself (no Lua involvement, same posture as chat's server-side
+      formatting): a freshly-joined connection gets one `S2CPlayerList` of
+      everyone else already playing, then every other playing connection
+      gets `S2CPlayerJoin`; a disconnect broadcasts `S2CPlayerLeave` to
+      everyone remaining. `ClientSession::players()` keeps a live
+      `net_id -> name` map from these; join/leave also land as
+      `"* <name> joined/left the game"` lines through the existing
+      `take_chat_messages()` seam (5.4's chat log), so no second HUD widget
+      was needed for that half. `src/client/main.cpp` draws a small
+      always-visible player list, top-right (own name highlighted, no toggle
+      key -- avoids clashing with Tab, already bound to mouse-capture
+      release). Tests: `tests/unit/protocol_test.cpp` (round-trip) and a new
+      `tests/unit/netcode_test.cpp` case asserting a newcomer's player list
+      contains the existing player, the existing player gets the join
+      broadcast + system chat line, and both clear on disconnect. Also fixed
+      two pre-existing chat tests that joined two clients simultaneously and
+      didn't drain the now-also-arriving join system line before asserting
+      on `take_chat_messages()`.
+      Not attempted: player list persists no extra metadata (ping, idle
+      time); no distinct "system message" channel from real chat (join/leave
+      share the same log/take_chat_messages() stream, colour-coded only by
+      the "* " prefix).
 - [ ] Death/respawn (fall out of world, `Health` at 0) with spawn point.
 - [ ] Basic sfx hooks are stubbed (no audio subsystem in v0) — document.
 

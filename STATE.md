@@ -7,11 +7,13 @@
 > Companion docs: `ARCHITECTURE_SPEC.md` (target design) · `REMAINING_TASKS.md`
 > (implementation backlog). This file is for *traps and context*, not the plan.
 
-Last updated: 2026-09-16 (Phase 5.4 — chat: `C2S_Chat`/`S2C_Chat` wired
-end-to-end, `vb.on("chat")` veto, HUD chat box; see §8's fourth 2026-09-16
-entry. Phase 5.3 — main menu: `vb::render::MainMenu` + an `AppState` machine
-in `src/client/main.cpp` so the window opens before any connection attempt in
-windowed mode; see §8's third 2026-09-16 entry)
+Last updated: 2026-09-16 (Phase 5.4 — player list / join-leave messages:
+`S2C_PlayerJoin`/`S2C_PlayerLeave`/`S2C_PlayerList`, `ClientSession::players()`,
+top-right HUD list; see §8's fifth 2026-09-16 entry. Phase 5.4 — chat:
+`C2S_Chat`/`S2C_Chat` wired end-to-end, `vb.on("chat")` veto, HUD chat box;
+see §8's fourth 2026-09-16 entry. Phase 5.3 — main menu: `vb::render::MainMenu`
++ an `AppState` machine in `src/client/main.cpp` so the window opens before
+any connection attempt in windowed mode; see §8's third 2026-09-16 entry)
 
 ---
 
@@ -1667,3 +1669,62 @@ _(Move items here with a date + commit when fixed, so the history is visible.)_
   "belongs with `GnsTransport`" notes); `/`-prefixed commands; timestamps;
   chat history isn't part of `S2C_JoinAccept` so a late joiner sees nothing
   said before they connected.
+
+- **2026-09-16 (5th): Phase 5.4 player list / join-leave messages** — three
+  new server-generated (no Lua involvement) message types:
+  `S2C_PlayerJoin` (104), `S2C_PlayerLeave` (105), `S2C_PlayerList` (106);
+  `kEngineProtocolVersion` bumped 8 → 9. Landed in `chat.hpp`/`chat.cpp`
+  alongside chat rather than a new file — same "social RPC" grouping those
+  files already used. `ServerSession` sends `S2CPlayerList` (everyone else
+  already playing) to a connection the instant it finishes joining, then
+  `S2CPlayerJoin` to everyone *else* already playing; a disconnect broadcasts
+  `S2CPlayerLeave` to whoever's left. Both new broadcast loops sit right next
+  to the existing `joins_`/`leaves_.push_back(...)` bookkeeping in
+  `ServerSession::tick` (that vector was always server-internal only, for
+  `take_joins()`/`take_leaves()` callers like the dedicated server's log
+  lines — this is the first time join/leave became a real wire event).
+  `ClientSession` keeps a `unordered_map<NetId, string> players_` synced from
+  all three message types, exposed as `players()`. Join/leave **share the
+  chat log**, not a separate channel: `apply_gameplay_frame`'s new
+  `kS2CPlayerJoin`/`kS2CPlayerLeave` cases both push a
+  `"* <name> joined/left the game"` line into the same `pending_chat_` that
+  backs `take_chat_messages()` — no second HUD widget needed for that half,
+  since 5.4's chat log (landed a few hours earlier, same day) already
+  existed and a join/leave notice is conceptually the same kind of
+  transient line. **Design trap this caused, fixed:** two pre-existing chat
+  tests (`netcode_test.cpp`'s broadcast test, `pack_runtime_integration_test
+  .cpp`'s veto test) join two clients back-to-back without draining chat in
+  between, then assert `take_chat_messages().size() == 1` right after
+  sending — the new "* Bob joined the game" line (Bob joins moments after
+  Alice, both still mid-`pump()`) was silently included, failing both with
+  an off-by-one. Fixed by draining `take_chat_messages()` once right after
+  both `REQUIRE(...joined())` and before the real assertions in both tests —
+  the correct fix, not a workaround: a real client would already have
+  rendered/cleared that system line before the player goes on to type
+  anything, so draining it first matches actual usage.
+  `src/client/main.cpp`: a small always-visible player list, top-right
+  corner (own name highlighted, everyone from `client->players()` below it).
+  Deliberately **not** gated behind a hold key — Tab is already bound to
+  mouse-capture release (see 5.3's HUD/menu bindings), and there's no
+  spare key doing nothing else right now; always-on is simpler than adding
+  a new binding for one pass.
+  **Verified:** `tests/unit/protocol_test.cpp` new round-trip case for all
+  three structs (including an empty `S2CPlayerList`, mirroring
+  `S2CBlockRegistry`'s empty-list case); a new `tests/unit/netcode_test.cpp`
+  case joins Alice alone first (drains her empty player list), then joins
+  Bob and asserts Bob's list already contains Alice, Alice got the join
+  broadcast + `"* Bob joined the game"` chat line, and disconnecting Bob
+  (`tb.close(*idb, "left")`, the same trigger-the-server's-kDisconnected-
+  event pattern `pack_runtime_integration_test.cpp` already used) removes
+  him from Alice's `players()` and produces `"* Bob left the game"`. Full
+  `ctest` green (4/4) on `build-asan-nonet` after fixing the two pre-existing
+  tests above; clean `-DVB_WARNINGS_AS_ERRORS=ON` build of all three targets.
+  Not re-verified with a live windowed launch this pass (the HUD list is a
+  straightforward `DrawText` loop over an already-tested data source,
+  `client->players()` — same judgment call as not re-clicking through
+  5.3's menu screens every session).
+  **Not attempted:** no distinct "system message" visual styling beyond the
+  `"* "` prefix (still the same log/`take_chat_messages()` stream as real
+  chat, no separate colour or channel); player list carries no extra
+  per-player metadata (ping, idle time, `net_id` itself isn't shown in the
+  HUD even though it's in the map).

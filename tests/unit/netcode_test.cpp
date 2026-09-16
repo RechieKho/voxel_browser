@@ -185,6 +185,11 @@ TEST_CASE("chat: a broadcast reaches every playing client, including the sender"
 	pump(16);
 	REQUIRE(a->joined());
 	REQUIRE(b->joined());
+	// Drain the "* Bob joined the game" system line both clients may have
+	// picked up while joining near-simultaneously -- not what this test
+	// asserts on.
+	a->take_chat_messages();
+	b->take_chat_messages();
 
 	a->send_chat("hello there");
 	pump(2);
@@ -201,6 +206,72 @@ TEST_CASE("chat: a broadcast reaches every playing client, including the sender"
 	pump(2);
 	CHECK(a->take_chat_messages().empty());
 	CHECK(b->take_chat_messages().empty());
+}
+
+TEST_CASE(
+		"player join/leave: existing players are listed to a newcomer and "
+		"told when they arrive/leave") {
+	LoopbackNetwork net;
+	ServerSession server(net.server(), [] {
+		HandshakeServerConfig c;
+		c.world_seed = 1;
+		return c;
+	}());
+	REQUIRE(net.server().listen(0));
+
+	vb::net::Transport &ta = net.create_client();
+	auto ida = ta.connect("x", 0);
+	REQUIRE(ida);
+	std::optional<ClientSession> a;
+	a.emplace(ta, *ida, HandshakeClientConfig{ "Alice", "", "v", 1 });
+
+	auto pump_a = [&](int n) {
+		for (int i = 0; i < n; ++i) {
+			server.tick(0.05);
+			a->tick(0.05);
+		}
+	};
+	pump_a(16);
+	REQUIRE(a->joined());
+	CHECK(a->players().empty());
+
+	vb::net::Transport &tb = net.create_client();
+	auto idb = tb.connect("x", 0);
+	REQUIRE(idb);
+	std::optional<ClientSession> b;
+	b.emplace(tb, *idb, HandshakeClientConfig{ "Bob", "", "v", 2 });
+
+	auto pump_both = [&](int n) {
+		for (int i = 0; i < n; ++i) {
+			server.tick(0.05);
+			a->tick(0.05);
+			b->tick(0.05);
+		}
+	};
+	pump_both(16);
+	REQUIRE(b->joined());
+
+	const NetId a_id = a->join_accept()->your_net_id;
+	const NetId b_id = b->join_accept()->your_net_id;
+
+	// Bob's S2C_PlayerList told him Alice was already playing.
+	REQUIRE(b->players().count(a_id) == 1);
+	CHECK(b->players().at(a_id) == "Alice");
+
+	// Alice got an S2C_PlayerJoin for Bob, plus a system chat line.
+	REQUIRE(a->players().count(b_id) == 1);
+	CHECK(a->players().at(b_id) == "Bob");
+	const auto a_join_msgs = a->take_chat_messages();
+	REQUIRE(a_join_msgs.size() == 1);
+	CHECK(a_join_msgs[0] == "* Bob joined the game");
+
+	// Bob disconnects; Alice is told, both via the player list and chat.
+	tb.close(*idb, "left");
+	pump_a(4);
+	CHECK(a->players().count(b_id) == 0);
+	const auto a_leave_msgs = a->take_chat_messages();
+	REQUIRE(a_leave_msgs.size() == 1);
+	CHECK(a_leave_msgs[0] == "* Bob left the game");
 }
 
 #if VB_WITH_COMPRESSION

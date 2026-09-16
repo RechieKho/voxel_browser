@@ -254,8 +254,17 @@ public:
 	}
 
 	// Drains chat lines (already server-formatted "<name>: <text>") received
-	// since the last call, oldest first.
+	// since the last call, oldest first. Join/leave notices also land here as
+	// "* <name> joined/left the game" lines (spec §5.4's "join-leave
+	// messages"), interleaved with real chat in receipt order.
 	std::vector<std::string> take_chat_messages();
+
+	// Everyone else currently known to be playing (net id -> display name),
+	// kept in sync by S2C_PlayerList/S2C_PlayerJoin/S2C_PlayerLeave. Does not
+	// include this client's own name.
+	const std::unordered_map<core::NetId, std::string> &players() const {
+		return players_;
+	}
 
 private:
 	// Handle a post-join gameplay message (snapshot / chunk). Returns true if
@@ -295,6 +304,7 @@ private:
 	assetsync::ClientAssetCache *asset_cache_ = nullptr; // not owned; may be null
 	std::optional<protocol::S2COpenUi> pending_open_ui_;
 	std::vector<std::string> pending_chat_;
+	std::unordered_map<core::NetId, std::string> players_;
 
 	physics::MoveState predicted_;
 	physics::MoveParams move_params_;

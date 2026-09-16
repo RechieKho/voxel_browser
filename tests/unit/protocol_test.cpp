@@ -172,6 +172,28 @@ TEST_CASE("chat / open_ui round-trip") {
 	CHECK(e2.value_json == "null");
 }
 
+TEST_CASE("player join / leave / list round-trip") {
+	auto j = round_trip(S2CPlayerJoin{ vb::core::NetId{ 3 }, "Alice" });
+	CHECK(j.net_id == vb::core::NetId{ 3 });
+	CHECK(j.name == "Alice");
+
+	auto l = round_trip(S2CPlayerLeave{ vb::core::NetId{ 3 } });
+	CHECK(l.net_id == vb::core::NetId{ 3 });
+
+	auto empty = round_trip(S2CPlayerList{});
+	CHECK(empty.players.empty());
+
+	S2CPlayerList list;
+	list.players.push_back({ vb::core::NetId{ 1 }, "Alice" });
+	list.players.push_back({ vb::core::NetId{ 2 }, "Bob" });
+	auto list2 = round_trip(list);
+	REQUIRE(list2.players.size() == 2);
+	CHECK(list2.players[0].net_id == vb::core::NetId{ 1 });
+	CHECK(list2.players[0].name == "Alice");
+	CHECK(list2.players[1].net_id == vb::core::NetId{ 2 });
+	CHECK(list2.players[1].name == "Bob");
+}
+
 TEST_CASE("block registry round-trips, including an empty list") {
 	auto empty = round_trip(S2CBlockRegistry{});
 	CHECK(empty.blocks.empty());

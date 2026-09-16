@@ -4,13 +4,15 @@
 #include <string>
 #include <vector>
 
+#include "vb/core/ids.hpp"
 #include "vb/protocol/handshake.hpp" // Decoded<>
 #include "vb/protocol/message.hpp"
 
 // Chat / UI RPC messages (spec §10.3 player:send_message / player:open_ui).
 // Phase 4.2 gave S2CChat/S2COpenUi/C2SUiEvent real codecs so the Lua runtime
-// could send them; Phase 5.4 adds C2SChat (client -> server) and wires both
-// directions into a HUD chat box.
+// could send them; Phase 5.4 adds C2SChat (client -> server), wires both
+// directions into a HUD chat box, and adds S2CPlayerJoin/S2CPlayerLeave/
+// S2CPlayerList so clients can show who else is connected.
 
 namespace vb::protocol {
 
@@ -61,6 +63,45 @@ struct C2SUiEvent {
 
 	void encode(std::vector<std::byte> &out) const;
 	static Decoded<C2SUiEvent> decode(std::span<const std::byte> in);
+};
+
+// One entry in an S2CPlayerList snapshot.
+struct PlayerListEntry {
+	core::NetId net_id = core::NetId::kInvalid;
+	std::string name;
+};
+
+// Broadcast to every other already-playing connection when a new player
+// finishes the join handshake (spec §5.4).
+struct S2CPlayerJoin {
+	static constexpr MessageType kType = MessageType::kS2CPlayerJoin;
+
+	core::NetId net_id = core::NetId::kInvalid;
+	std::string name;
+
+	void encode(std::vector<std::byte> &out) const;
+	static Decoded<S2CPlayerJoin> decode(std::span<const std::byte> in);
+};
+
+// Broadcast to every remaining playing connection when a player disconnects.
+struct S2CPlayerLeave {
+	static constexpr MessageType kType = MessageType::kS2CPlayerLeave;
+
+	core::NetId net_id = core::NetId::kInvalid;
+
+	void encode(std::vector<std::byte> &out) const;
+	static Decoded<S2CPlayerLeave> decode(std::span<const std::byte> in);
+};
+
+// Sent once to a newly-joined client, listing everyone already playing (the
+// recipient is not included -- their own join is implicit).
+struct S2CPlayerList {
+	static constexpr MessageType kType = MessageType::kS2CPlayerList;
+
+	std::vector<PlayerListEntry> players;
+
+	void encode(std::vector<std::byte> &out) const;
+	static Decoded<S2CPlayerList> decode(std::span<const std::byte> in);
 };
 
 } // namespace vb::protocol

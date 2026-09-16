@@ -52,6 +52,9 @@ enum class MessageType : std::uint16_t {
 	kS2CChat = 101,
 	kC2SUiEvent = 102,
 	kS2COpenUi = 103,
+	kS2CPlayerJoin = 104,
+	kS2CPlayerLeave = 105,
+	kS2CPlayerList = 106,
 };
 
 enum class Lane : std::uint8_t {

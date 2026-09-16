@@ -289,6 +289,23 @@ void ServerSession::tick(double dt_seconds) {
 					joins_.push_back({ ev.conn, g.net_id, step.player_name });
 					VB_INFO("net", "player '", step.player_name, "' joined as net id ",
 							static_cast<std::uint32_t>(g.net_id));
+
+					// Phase 5.4: tell the newcomer who's already here, and
+					// tell everyone already here that they joined.
+					protocol::S2CPlayerList list_msg;
+					for (auto &[other_conn, other] : conns_) {
+						if (other.playing && other_conn != ev.conn) {
+							list_msg.players.push_back({ other.net_id, other.name });
+						}
+					}
+					send_message(transport_, ev.conn, list_msg);
+					const protocol::S2CPlayerJoin join_msg{ g.net_id,
+						step.player_name };
+					for (auto &[other_conn, other] : conns_) {
+						if (other.playing && other_conn != ev.conn) {
+							send_message(transport_, other_conn, join_msg);
+						}
+					}
 				}
 				if (step.disconnect) {
 					drop(ev.conn, "handshake rejected");
@@ -307,6 +324,12 @@ void ServerSession::tick(double dt_seconds) {
 						replicator_->forget_player(it->second.net_id);
 					}
 					leaves_.push_back({ ev.conn, it->second.net_id, ev.reason });
+					const protocol::S2CPlayerLeave leave_msg{ it->second.net_id };
+					for (auto &[other_conn, other] : conns_) {
+						if (other_conn != ev.conn && other.playing) {
+							send_message(transport_, other_conn, leave_msg);
+						}
+					}
 				}
 				conns_.erase(it);
 				break;
@@ -616,6 +639,42 @@ bool ClientSession::apply_gameplay_frame(const protocol::Frame &frame) {
 				pending_chat_.push_back(std::move(m->text));
 			} else {
 				VB_ERROR("net", "malformed S2C_Chat: ", core::message(m.error()));
+			}
+			return true;
+		}
+		case MessageType::kS2CPlayerList: {
+			if (auto m = protocol::S2CPlayerList::decode(frame.payload)) {
+				players_.clear();
+				for (auto &p : m->players) {
+					players_[p.net_id] = std::move(p.name);
+				}
+			} else {
+				VB_ERROR("net", "malformed S2C_PlayerList: ",
+						core::message(m.error()));
+			}
+			return true;
+		}
+		case MessageType::kS2CPlayerJoin: {
+			if (auto m = protocol::S2CPlayerJoin::decode(frame.payload)) {
+				pending_chat_.push_back("* " + m->name + " joined the game");
+				players_[m->net_id] = std::move(m->name);
+			} else {
+				VB_ERROR("net", "malformed S2C_PlayerJoin: ",
+						core::message(m.error()));
+			}
+			return true;
+		}
+		case MessageType::kS2CPlayerLeave: {
+			if (auto m = protocol::S2CPlayerLeave::decode(frame.payload)) {
+				auto it = players_.find(m->net_id);
+				const std::string name = it != players_.end() ? it->second : "player";
+				if (it != players_.end()) {
+					players_.erase(it);
+				}
+				pending_chat_.push_back("* " + name + " left the game");
+			} else {
+				VB_ERROR("net", "malformed S2C_PlayerLeave: ",
+						core::message(m.error()));
 			}
 			return true;
 		}

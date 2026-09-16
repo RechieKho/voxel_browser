@@ -4,8 +4,13 @@
 > as any change to a struct in `inc/vb/protocol/`, and bump
 > `kEngineProtocolVersion` in `cmake/version.hpp.in`.
 
-Current `ENGINE_PROTOCOL_VERSION`: **8**.
+Current `ENGINE_PROTOCOL_VERSION`: **9**.
 
+- **9** — `S2C_PlayerJoin` (104), `S2C_PlayerLeave` (105), `S2C_PlayerList`
+  (106) payloads defined (Phase 5.4, player list / join-leave messages).
+  Broadcast to already-playing connections when a new player finishes the
+  join handshake / disconnects; `S2C_PlayerList` is sent once to a newcomer
+  listing everyone else already playing.
 - **8** — `C2S_Chat` (100) payload defined (Phase 5.4, HUD chat box):
   `string text`, sent by a playing client. Routed server-side through
   `vb.on("chat", handler)` (veto); if allowed, broadcast to every playing
@@ -174,8 +179,11 @@ Phase 4.2).
 | -------------------- | ------------------------------------------------------------ |
 | `C2S_Chat` (100)     | `string text`                                                 |
 | `S2C_Chat` (101)     | `string text`                                                 |
-| `S2C_OpenUi` (103)   | `string ui_name`, `string ctx_json`                           |
 | `C2S_UiEvent` (102)  | `string ui_name`, `string widget_id`, `string event_kind` ("click"\|"change"\|"close"), `string value_json` |
+| `S2C_OpenUi` (103)   | `string ui_name`, `string ctx_json`                           |
+| `S2C_PlayerJoin` (104) | `u32 net_id`, `string name`                                 |
+| `S2C_PlayerLeave` (105) | `u32 net_id`                                               |
+| `S2C_PlayerList` (106) | `varint n`, `n × {u32 net_id, string name}`                 |
 
 `S2C_Chat`/`S2C_OpenUi` sent by the server Lua runtime
 (`player:send_message`/`player:open_ui`, Phase 4.2); `ctx_json` is the
@@ -189,6 +197,15 @@ the client's HUD chat box; the server runs `vb.on("chat", handler)` as a veto
 which has no `PackRuntime`) and, if not vetoed, broadcasts
 `S2C_Chat{"<name>: <text>"}` (server-formatted, not the raw client `text`) to
 every playing connection, sender included.
+
+`S2C_PlayerJoin`/`S2C_PlayerLeave`/`S2C_PlayerList` (Phase 5.4) are
+`ServerSession`-generated (no Lua involvement, same posture as chat's
+server-side formatting): `S2C_PlayerList` is sent once to a client right when
+it finishes joining, listing every other already-playing connection;
+`S2C_PlayerJoin`/`S2C_PlayerLeave` are then broadcast to every other playing
+connection as players come and go. The client folds join/leave into its chat
+log as `"* <name> joined/left the game"` lines and keeps a live
+`net_id -> name` map (`ClientSession::players()`) for a HUD player list.
 
 ## Handshake sequence
 
