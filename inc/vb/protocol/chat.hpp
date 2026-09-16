@@ -8,11 +8,23 @@
 #include "vb/protocol/message.hpp"
 
 // Chat / UI RPC messages (spec §10.3 player:send_message / player:open_ui).
-// Phase 4.2 gives these real codecs so the Lua runtime can send them; no
-// client handles them yet (4.5 UI VM) -- unknown post-join types are already
-// ignored by ClientSession, so this is an inert-but-correct wire seam.
+// Phase 4.2 gave S2CChat/S2COpenUi/C2SUiEvent real codecs so the Lua runtime
+// could send them; Phase 5.4 adds C2SChat (client -> server) and wires both
+// directions into a HUD chat box.
 
 namespace vb::protocol {
+
+// Sent by a playing client when the player submits a chat line (spec §5.4).
+// The server runs `vb.on("chat")` (veto) then, if allowed, broadcasts
+// S2CChat{"<name>: <text>"} to every playing connection.
+struct C2SChat {
+	static constexpr MessageType kType = MessageType::kC2SChat;
+
+	std::string text;
+
+	void encode(std::vector<std::byte> &out) const;
+	static Decoded<C2SChat> decode(std::span<const std::byte> in);
+};
 
 struct S2CChat {
 	static constexpr MessageType kType = MessageType::kS2CChat;

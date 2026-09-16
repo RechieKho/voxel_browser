@@ -154,6 +154,55 @@ TEST_CASE("integrated: a second client sees the first move (interpolated)") {
 	CHECK(seen.x > first.x); // it kept moving as B watched
 }
 
+TEST_CASE("chat: a broadcast reaches every playing client, including the sender") {
+	LoopbackNetwork net;
+	ServerSession server(net.server(), [] {
+		HandshakeServerConfig c;
+		c.world_seed = 1;
+		return c;
+	}());
+	REQUIRE(net.server().listen(0));
+
+	vb::net::Transport &ta = net.create_client();
+	auto ida = ta.connect("x", 0);
+	REQUIRE(ida);
+	std::optional<ClientSession> a;
+	a.emplace(ta, *ida, HandshakeClientConfig{ "Alice", "", "v", 1 });
+
+	vb::net::Transport &tb = net.create_client();
+	auto idb = tb.connect("x", 0);
+	REQUIRE(idb);
+	std::optional<ClientSession> b;
+	b.emplace(tb, *idb, HandshakeClientConfig{ "Bob", "", "v", 2 });
+
+	auto pump = [&](int n) {
+		for (int i = 0; i < n; ++i) {
+			server.tick(0.05);
+			a->tick(0.05);
+			b->tick(0.05);
+		}
+	};
+	pump(16);
+	REQUIRE(a->joined());
+	REQUIRE(b->joined());
+
+	a->send_chat("hello there");
+	pump(2);
+
+	const auto a_msgs = a->take_chat_messages();
+	const auto b_msgs = b->take_chat_messages();
+	REQUIRE(a_msgs.size() == 1);
+	REQUIRE(b_msgs.size() == 1);
+	CHECK(a_msgs[0] == "Alice: hello there");
+	CHECK(b_msgs[0] == "Alice: hello there");
+
+	// An empty line is dropped server-side, not broadcast.
+	a->send_chat("");
+	pump(2);
+	CHECK(a->take_chat_messages().empty());
+	CHECK(b->take_chat_messages().empty());
+}
+
 #if VB_WITH_COMPRESSION
 
 namespace {

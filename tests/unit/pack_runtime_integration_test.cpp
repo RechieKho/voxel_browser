@@ -325,4 +325,50 @@ TEST_CASE("client UI round trip: server open_ui -> click -> server ui_event") {
 	)"));
 }
 
+TEST_CASE("pack script vetoes chat from a specific player") {
+	LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("chat_veto"));
+	REQUIRE(rt.load_pack_file(
+			R"(vb.on("chat", function(player, text) return player:get_name() ~= "Blocked" end))"));
+	rt.freeze();
+
+	HandshakeServerConfig cfg;
+	cfg.world_seed = 7;
+	ServerSession server(net.server(), cfg);
+	rt.attach_session(server);
+	REQUIRE(net.server().listen(0));
+
+	Transport &ta = net.create_client();
+	auto ida = ta.connect("x", 0);
+	REQUIRE(ida);
+	ClientSession allowed(ta, *ida, HandshakeClientConfig{ "Allowed", "", "v", 1 });
+
+	Transport &tb = net.create_client();
+	auto idb = tb.connect("x", 0);
+	REQUIRE(idb);
+	ClientSession blocked(tb, *idb, HandshakeClientConfig{ "Blocked", "", "v", 2 });
+
+	auto pump = [&](int n) {
+		for (int i = 0; i < n; ++i) {
+			server.tick(0.05);
+			allowed.tick(0.05);
+			blocked.tick(0.05);
+		}
+	};
+	pump(16);
+	REQUIRE(allowed.joined());
+	REQUIRE(blocked.joined());
+
+	allowed.send_chat("hi everyone");
+	blocked.send_chat("i should not be heard");
+	pump(4);
+
+	const auto seen = allowed.take_chat_messages();
+	REQUIRE(seen.size() == 1);
+	CHECK(seen[0] == "Allowed: hi everyone");
+	CHECK(blocked.take_chat_messages() == seen); // same broadcast, both see it
+}
+
 #endif // VB_WITH_LUA

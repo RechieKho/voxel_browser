@@ -4,8 +4,12 @@
 > as any change to a struct in `inc/vb/protocol/`, and bump
 > `kEngineProtocolVersion` in `cmake/version.hpp.in`.
 
-Current `ENGINE_PROTOCOL_VERSION`: **7**.
+Current `ENGINE_PROTOCOL_VERSION`: **8**.
 
+- **8** — `C2S_Chat` (100) payload defined (Phase 5.4, HUD chat box):
+  `string text`, sent by a playing client. Routed server-side through
+  `vb.on("chat", handler)` (veto); if allowed, broadcast to every playing
+  connection as `S2C_Chat{"<name>: <text>"}`.
 - **7** — `C2S_UiEvent` (102) payload defined (Phase 4.5, client UI VM):
   `ui_name`, `widget_id`, `event_kind`, `value_json`. Sent when a widget's
   `on_click`/`on_change`/`on_close` Lua callback calls
@@ -168,6 +172,7 @@ Phase 4.2).
 
 | Type (id)           | Fields                                                        |
 | -------------------- | ------------------------------------------------------------ |
+| `C2S_Chat` (100)     | `string text`                                                 |
 | `S2C_Chat` (101)     | `string text`                                                 |
 | `S2C_OpenUi` (103)   | `string ui_name`, `string ctx_json`                           |
 | `C2S_UiEvent` (102)  | `string ui_name`, `string widget_id`, `string event_kind` ("click"\|"change"\|"close"), `string value_json` |
@@ -178,12 +183,12 @@ pre-serialized JSON of the Lua `ctx` table. `C2S_UiEvent` (Phase 4.5) is sent
 by the client's separate UI VM (`vb::script::UiRuntime`) when a widget's
 `on_click`/`on_change`/`on_close` callback calls
 `ui.send_event(...)`/`ui.close()`; the server routes it to
-`vb.on("ui_event", handler)` (non-vetoable). `C2S_Chat` (100) is still
-reserved-only — chat UI is Phase 5.4.
-
-### Not yet implemented
-
-`C2S_Chat` (100) — reserved in `MessageType`; lands in Phase 5.4.
+`vb.on("ui_event", handler)` (non-vetoable). `C2S_Chat` (Phase 5.4) is sent by
+the client's HUD chat box; the server runs `vb.on("chat", handler)` as a veto
+(default-allow when no pack/handler is attached — e.g. `--singleplayer`,
+which has no `PackRuntime`) and, if not vetoed, broadcasts
+`S2C_Chat{"<name>: <text>"}` (server-formatted, not the raw client `text`) to
+every playing connection, sender included.
 
 ## Handshake sequence
 

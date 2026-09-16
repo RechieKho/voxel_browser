@@ -14,6 +14,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <deque>
 #include <filesystem>
 #include <iostream>
 #include <memory>
@@ -21,6 +23,7 @@
 #include <string>
 #include <thread>
 
+#include <raygui.h>
 #include <raylib.h>
 
 #include "vb/assetsync/cache.hpp"
@@ -439,6 +442,15 @@ int main(int argc, char **argv) {
 	std::unique_ptr<vb::render::EntityRenderer> entity_renderer;
 	bool mouse_captured = false;
 
+	// HUD chat (spec §5.4): a small scrolling log + an Enter-to-open text
+	// box, plain raygui like MainMenu -- no Lua, no dependency on the pack's
+	// UiRuntime chat concept (there isn't one).
+	constexpr std::size_t kChatLogLimit = 8;
+	constexpr int kChatBufferSize = 256;
+	std::deque<std::string> chat_log;
+	std::string chat_buf;
+	bool chat_open = false;
+
 	auto begin_connect = [&](bool as_singleplayer) {
 		connecting_singleplayer = as_singleplayer;
 		connect_ticks = 0;
@@ -519,6 +531,9 @@ int main(int argc, char **argv) {
 		chunk_renderer = std::make_unique<vb::render::ChunkRenderer>();
 		entity_renderer = std::make_unique<vb::render::EntityRenderer>();
 		mouse_captured = false;
+		chat_log.clear();
+		chat_buf.clear();
+		chat_open = false;
 
 		if (!connecting_singleplayer) {
 			auto &recents = config.recent_servers;
@@ -623,7 +638,30 @@ int main(int argc, char **argv) {
 					ui_runtime.open(opened->ui_name, opened->ctx_json);
 				}
 
-				if (ui_runtime.is_open()) {
+				for (std::string &line : client->take_chat_messages()) {
+					chat_log.push_back(std::move(line));
+				}
+				while (chat_log.size() > kChatLogLimit) {
+					chat_log.pop_front();
+				}
+
+				if (chat_open) {
+					if (IsKeyPressed(KEY_ESCAPE)) {
+						chat_open = false;
+						chat_buf.clear();
+					} else if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER)) {
+						if (!chat_buf.empty()) {
+							client->send_chat(chat_buf);
+						}
+						chat_buf.clear();
+						chat_open = false;
+					}
+				} else if (!ui_runtime.is_open() &&
+						(IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER))) {
+					chat_open = true;
+				}
+
+				if (ui_runtime.is_open() || chat_open) {
 					mouse_captured = false;
 					EnableCursor();
 				} else if (IsKeyPressed(KEY_TAB) || IsKeyPressed(KEY_ESCAPE)) {
@@ -718,6 +756,28 @@ int main(int argc, char **argv) {
 				EndMode3D();
 				draw_overlay(controller, status, chunk_count, entity_count,
 						mouse_captured);
+
+				// Chat HUD (spec §5.4): a bottom-left scrolling log, plus an
+				// Enter-to-open input box (plain raygui, no Lua -- same
+				// posture as MainMenu, not a UiRuntime widget).
+				{
+					const int line_h = 18;
+					const int box_bottom = GetScreenHeight() - 16;
+					int y = box_bottom -
+							(chat_open ? (line_h + 8) : 0) -
+							static_cast<int>(chat_log.size()) * line_h;
+					for (const std::string &line : chat_log) {
+						DrawText(line.c_str(), 12, y, 16, Color{ 220, 220, 220, 230 });
+						y += line_h;
+					}
+					if (chat_open) {
+						chat_buf.resize(kChatBufferSize, '\0');
+						GuiTextBox(Rectangle{ 12.0f, static_cast<float>(box_bottom - line_h),
+											 360.0f, static_cast<float>(line_h + 4) },
+								chat_buf.data(), kChatBufferSize, true);
+						chat_buf.resize(std::strlen(chat_buf.c_str()));
+					}
+				}
 
 				if (ui_runtime.is_open()) {
 					const auto ui_result =

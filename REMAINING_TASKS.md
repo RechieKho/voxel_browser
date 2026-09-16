@@ -953,7 +953,31 @@ hold-to-break progress, cross-chunk relight.
 
 - [ ] Day/night `time_of_day` from `JoinAccept`, advanced server-side, simple sky
       gradient client-side.
-- [ ] Chat: `C2S_Chat` / `S2C_Chat`, `vb.on("chat")` veto/route, HUD chat box.
+- [x] Chat: `C2S_Chat` (100) + `S2C_Chat` (101) — `inc/vb/protocol/chat.hpp` +
+      `src/protocol/chat.cpp`, round-trip tested. `kEngineProtocolVersion`
+      bumped 7 → 8. `ServerSession::set_chat_handler` (mirrors
+      `set_ui_event_handler`'s shape) routes a playing connection's
+      `C2S_Chat` to an optional `bool(NetId, string_view)` veto before
+      `ServerSession` itself formats `"<name>: <text>"` and broadcasts
+      `S2C_Chat` to every playing connection (sender included) —
+      `PackRuntime::attach_session` wires it to the already-existing
+      `dispatch_chat`/`vb.on("chat", ...)` seam (was captured but never
+      reachable — `C2S_Chat` didn't exist yet). No handler set (e.g.
+      `--singleplayer`, no `PackRuntime`) = default-allow, chat still works
+      without a pack. `ClientSession::send_chat`/`take_chat_messages()`.
+      `src/client/main.cpp`: a small HUD chat box (`kPlaying` state only) —
+      Enter opens a `GuiTextBox` (plain raygui, no Lua, same posture as
+      `MainMenu`) and releases mouse capture like an open pack UI does,
+      Enter again sends + closes, Escape cancels; a bottom-left scrolling
+      log (last 8 lines) shows incoming `S2C_Chat`. Tests:
+      `tests/unit/protocol_test.cpp` (round-trip),
+      `tests/unit/netcode_test.cpp` ("chat: a broadcast reaches every
+      playing client, including the sender" — also asserts an empty line
+      is dropped server-side, not broadcast), and
+      `tests/unit/pack_runtime_integration_test.cpp` ("pack script vetoes
+      chat from a specific player" — end-to-end over `LoopbackTransport`).
+      Not attempted: rate limiting / flood guard, `/`-prefixed commands,
+      per-message timestamps, chat history persisted across a reconnect.
 - [ ] Player list / join-leave messages.
 - [ ] Death/respawn (fall out of world, `Health` at 0) with spawn point.
 - [ ] Basic sfx hooks are stubbed (no audio subsystem in v0) — document.

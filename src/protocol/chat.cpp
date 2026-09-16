@@ -19,6 +19,18 @@ Decoded<T> finish(ByteReader &r, T value) {
 
 } // namespace
 
+void C2SChat::encode(std::vector<std::byte> &out) const {
+	ByteWriter w(out);
+	w.string(text);
+}
+
+Decoded<C2SChat> C2SChat::decode(std::span<const std::byte> in) {
+	ByteReader r(in);
+	C2SChat m;
+	m.text = r.string();
+	return finish(r, std::move(m));
+}
+
 void S2CChat::encode(std::vector<std::byte> &out) const {
 	ByteWriter w(out);
 	w.string(text);

@@ -150,6 +150,9 @@ TEST_CASE("entity snapshot round-trips") {
 }
 
 TEST_CASE("chat / open_ui round-trip") {
+	auto c1 = round_trip(C2SChat{ "hi there" });
+	CHECK(c1.text == "hi there");
+
 	auto c2 = round_trip(S2CChat{ "hello world" });
 	CHECK(c2.text == "hello world");
 

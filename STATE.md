@@ -7,9 +7,11 @@
 > Companion docs: `ARCHITECTURE_SPEC.md` (target design) · `REMAINING_TASKS.md`
 > (implementation backlog). This file is for *traps and context*, not the plan.
 
-Last updated: 2026-09-16 (Phase 5.3 — main menu: `vb::render::MainMenu` +
-an `AppState` machine in `src/client/main.cpp` so the window opens before any
-connection attempt in windowed mode; see §8's third 2026-09-16 entry)
+Last updated: 2026-09-16 (Phase 5.4 — chat: `C2S_Chat`/`S2C_Chat` wired
+end-to-end, `vb.on("chat")` veto, HUD chat box; see §8's fourth 2026-09-16
+entry. Phase 5.3 — main menu: `vb::render::MainMenu` + an `AppState` machine
+in `src/client/main.cpp` so the window opens before any connection attempt in
+windowed mode; see §8's third 2026-09-16 entry)
 
 ---
 
@@ -1613,3 +1615,55 @@ _(Move items here with a date + commit when fixed, so the history is visible.)_
   grew progress-fraction accounting, 4.4's pre-existing gap); window
   width/height/vsync changes apply on restart only, not live-resized;
   keybindings are still hardcoded, no rebind UI.
+
+- **2026-09-16 (4th): Phase 5.4 chat** — `C2S_Chat` (100) landed (it was
+  reserved in `MessageType` since Phase 4.2 but never given a struct);
+  `kEngineProtocolVersion` bumped 7 → 8. The interesting part wasn't the
+  codec, it was that `PackRuntime::dispatch_chat`/`vb.on("chat", handler)`
+  already existed (Phase 4.2) with **nothing to call it** — same
+  shipped-mechanism-ahead-of-content pattern as most of Phase 4/5.1. Closed
+  it the same way 4.5's `C2S_UiEvent`/`set_ui_event_handler` did:
+  `ServerSession::set_chat_handler(function<bool(NetId, string_view)>)`
+  mirrors `set_ui_event_handler`'s shape (optional callback, unset = default
+  behavior) but returns a veto bool instead of firing a one-way event —
+  `ServerSession::handle_chat` calls it, and only if it returns true (or
+  isn't set at all) does `ServerSession` itself format `"<name>: <text>"`
+  and broadcast `S2C_Chat` to every playing connection. Formatting the
+  "name: text" line server-side (not client-side, not left to Lua) was a
+  deliberate small choice: it means `--singleplayer` (no `PackRuntime`, no
+  handler ever set) gets working chat for free instead of needing its own
+  formatting path — "unset = allow" was picked specifically so chat isn't a
+  pack-gated feature.
+  `ClientSession` gained `send_chat(text)` (thin wrapper, same shape as
+  `send_ui_event`) and `take_chat_messages()` (drains a `vector<string>`,
+  same drain-on-call convention as `take_open_ui()`).
+  **Client HUD** (`src/client/main.cpp`, `kPlaying` state only): Enter opens
+  a `GuiTextBox` in permanent edit mode (not the click-to-toggle pattern
+  `UiRenderer`/`MainMenu` use elsewhere, since there's nothing else to click
+  — chat only has one field) and releases mouse capture the same way an
+  open pack UI already does (`ui_runtime.is_open() || chat_open` now both
+  gate it); Enter again sends + closes, Escape cancels without sending. A
+  plain `std::deque<std::string>` caps the visible log at 8 lines,
+  bottom-left, above the input box when open. No raygui state (edit-mode
+  bool, buffer) needed persisting across frames beyond `chat_buf` itself,
+  unlike `UiRenderer`'s per-widget-id maps — there's exactly one field.
+  **Verified:** `tests/unit/protocol_test.cpp` round-trip;
+  `tests/unit/netcode_test.cpp` new case proves a real broadcast over
+  `LoopbackTransport` reaches both clients including the sender, and that an
+  empty line is silently dropped server-side (not broadcast, not even to
+  the sender) rather than sent as a blank `S2C_Chat`;
+  `tests/unit/pack_runtime_integration_test.cpp` new case proves the Lua
+  veto path end-to-end (a `vb.on("chat", ...)` that checks `player:get_name()`
+  actually suppresses one player's line while the other's still gets
+  through). Full `ctest` green (4/4) on `build-asan-nonet`; clean
+  `-DVB_WARNINGS_AS_ERRORS=ON` build of all three targets; a real windowed
+  `--singleplayer` launch ran a few seconds without crashing or an ASan
+  report (not a full manual click-through of the chat box itself — same
+  `SetForegroundWindow` automation limitation noted in the Phase 5.3 entry
+  above applied here too, not re-attempted).
+  **Not attempted:** rate limiting / flood guard (`ServerSession` has none —
+  a malicious client can spam `C2S_Chat` freely, same unaddressed gap
+  `handle_input_batch` has for input flooding, tracked in Phase 1.3/3.2's
+  "belongs with `GnsTransport`" notes); `/`-prefixed commands; timestamps;
+  chat history isn't part of `S2C_JoinAccept` so a late joiner sees nothing
+  said before they connected.

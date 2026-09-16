@@ -107,6 +107,15 @@ public:
 		on_ui_event_ = std::move(handler);
 	}
 
+	// Phase 5.4: routes a playing connection's C2S_Chat up to a script host as
+	// a veto (return false to suppress) before ServerSession broadcasts it.
+	// Unset (the default -- e.g. `--singleplayer`, which has no PackRuntime)
+	// means every chat line is allowed.
+	void set_chat_handler(
+			std::function<bool(core::NetId, std::string_view)> handler) {
+		on_chat_ = std::move(handler);
+	}
+
 private:
 	struct Conn {
 		explicit Conn(ServerHandshake hs) : handshake(std::move(hs)) {}
@@ -127,6 +136,7 @@ private:
 	void handle_input_batch(Conn &conn, const protocol::C2SInputBatch &batch);
 	void handle_block_edit(ConnId conn, Conn &state,
 			const protocol::Frame &frame);
+	void handle_chat(Conn &state, const protocol::Frame &frame);
 	void broadcast_snapshots();
 	void broadcast_world();
 
@@ -137,6 +147,7 @@ private:
 	replication::InterestGrid interest_;
 	std::unique_ptr<WorldReplicator> replicator_;
 	std::function<void(core::NetId, const protocol::C2SUiEvent &)> on_ui_event_;
+	std::function<bool(core::NetId, std::string_view)> on_chat_;
 	physics::MoveParams move_params_;
 	int interest_radius_cells_ = 2;
 	std::uint32_t server_tick_ = 0;
@@ -235,6 +246,17 @@ public:
 		send_message(transport_, conn_, event);
 	}
 
+	// --- chat (spec §5.4) -------------------------------------------------
+
+	// Sends one C2S_Chat line typed into the HUD chat box.
+	void send_chat(std::string_view text) {
+		send_message(transport_, conn_, protocol::C2SChat{ std::string(text) });
+	}
+
+	// Drains chat lines (already server-formatted "<name>: <text>") received
+	// since the last call, oldest first.
+	std::vector<std::string> take_chat_messages();
+
 private:
 	// Handle a post-join gameplay message (snapshot / chunk). Returns true if
 	// consumed.
@@ -272,6 +294,7 @@ private:
 	std::uint32_t last_server_tick_ = 0;
 	assetsync::ClientAssetCache *asset_cache_ = nullptr; // not owned; may be null
 	std::optional<protocol::S2COpenUi> pending_open_ui_;
+	std::vector<std::string> pending_chat_;
 
 	physics::MoveState predicted_;
 	physics::MoveParams move_params_;

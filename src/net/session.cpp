@@ -164,6 +164,25 @@ void ServerSession::handle_block_edit(ConnId conn, Conn &state,
 	}
 }
 
+void ServerSession::handle_chat(Conn &state, const protocol::Frame &frame) {
+	auto msg = protocol::C2SChat::decode(frame.payload);
+	if (!msg) {
+		return;
+	}
+	if (msg->text.empty()) {
+		return;
+	}
+	if (on_chat_ && !on_chat_(state.net_id, msg->text)) {
+		return; // vetoed by the pack (vb.on("chat"))
+	}
+	const protocol::S2CChat out{ state.name + ": " + msg->text };
+	for (auto &[other_conn, other] : conns_) {
+		if (other.playing) {
+			send_message(transport_, other_conn, out);
+		}
+	}
+}
+
 const physics::MoveState *ServerSession::player_move_state(core::NetId id) const {
 	for (const auto &[conn, state] : conns_) {
 		(void)conn;
@@ -246,8 +265,12 @@ void ServerSession::tick(double dt_seconds) {
 						}
 						break;
 					}
-					// Other post-join C2S messages (chat) land in later
-					// phases; ignore unknown types rather than dropping.
+					if (frame->header.type == protocol::MessageType::kC2SChat) {
+						handle_chat(it->second, *frame);
+						break;
+					}
+					// Other post-join C2S messages land in later phases;
+					// ignore unknown types rather than dropping.
 					break;
 				}
 				auto step = it->second.handshake.on_frame(*frame);
@@ -588,6 +611,14 @@ bool ClientSession::apply_gameplay_frame(const protocol::Frame &frame) {
 			}
 			return true;
 		}
+		case MessageType::kS2CChat: {
+			if (auto m = protocol::S2CChat::decode(frame.payload)) {
+				pending_chat_.push_back(std::move(m->text));
+			} else {
+				VB_ERROR("net", "malformed S2C_Chat: ", core::message(m.error()));
+			}
+			return true;
+		}
 		default:
 			return false;
 	}
@@ -596,6 +627,12 @@ bool ClientSession::apply_gameplay_frame(const protocol::Frame &frame) {
 std::optional<protocol::S2COpenUi> ClientSession::take_open_ui() {
 	std::optional<protocol::S2COpenUi> out = std::move(pending_open_ui_);
 	pending_open_ui_.reset();
+	return out;
+}
+
+std::vector<std::string> ClientSession::take_chat_messages() {
+	std::vector<std::string> out = std::move(pending_chat_);
+	pending_chat_.clear();
 	return out;
 }
 

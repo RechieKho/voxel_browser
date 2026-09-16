@@ -712,6 +712,9 @@ void PackRuntime::attach_session(net::ServerSession &session) {
 			[this](core::NetId player, const protocol::C2SUiEvent &e) {
 		dispatch_ui_event(player, e);
 	});
+	session.set_chat_handler([this](core::NetId sender, std::string_view text) {
+		return dispatch_chat(sender, text);
+	});
 }
 
 void PackRuntime::dispatch_player_join_completed(
