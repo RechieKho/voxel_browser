@@ -7,7 +7,9 @@
 > Companion docs: `ARCHITECTURE_SPEC.md` (target design) · `REMAINING_TASKS.md`
 > (implementation backlog). This file is for *traps and context*, not the plan.
 
-Last updated: 2026-09-16 (Phase 5.4 — day/night: `S2C_TimeOfDay`,
+Last updated: 2026-09-16 (Phase 5.4 — death/respawn: void-kill Y threshold +
+generic `health <= 0` respawn path, no new wire message (reuses `S2C_Chat`
+privately); see §8's seventh 2026-09-16 entry. Phase 5.4 — day/night: `S2C_TimeOfDay`,
 `vb::world::daynight.hpp` (pure tick/color math), sky-gradient `ClearBackground`
 + HH:MM overlay readout; see §8's sixth 2026-09-16 entry. Phase 5.4 — player
 list / join-leave messages: `S2C_PlayerJoin`/`S2C_PlayerLeave`/`S2C_PlayerList`,
@@ -1804,3 +1806,82 @@ _(Move items here with a date + commit when fixed, so the history is visible.)_
   starting time_of_day (`set_day_length_seconds` is C++-only,
   `PackRuntime`/`vb.` has nothing for it); the sky is a flat
   `ClearBackground` fill, not a skybox/sun/moon/star render.
+
+- **2026-09-16 (7th): Phase 5.4 death/respawn** — no new `MessageType`, no
+  `kEngineProtocolVersion` bump (the only wire traffic is an existing
+  `S2C_Chat` sent to one connection instead of broadcast, which the codec
+  already supported — `send_message` has always taken a single `ConnId`,
+  broadcasting is just something callers choose to loop over, see
+  `handle_chat`'s loop vs. this feature's single `send_message` call).
+  `ServerSession::Conn` gained two new fields: `spawn_pos` (captured once,
+  at the same point `move.position` is already seeded from `JoinGrant` at
+  join) and `health` (plain `float`, default 20 to match `ecs::Health`'s
+  default — but this is *not* wired to that component; Phase 3.1's EnTT
+  registry is still deferred, `ServerSession` still drives players directly,
+  so `health` here is just more ad-hoc `Conn` state next to `move`/`look`,
+  same category as everything else in that struct).
+  **Design choice, and why:** the respawn trigger is `health <= 0`, checked
+  generically every tick in a new `check_respawns()` — not a narrower
+  `position.y < void_kill_y` branch that respawns directly. The actual only
+  producer of damage this pass *is* the void check (`if (position.y <
+  void_kill_y) health = 0`), but routing it through the generic health path
+  means a future combat/fall-damage system gets a working respawn for free
+  by just decrementing `health` — no `check_respawns()` change needed. This
+  mirrors the "mechanism ahead of content" pattern the rest of Phase 4/5
+  keeps repeating, but inverted: here the *content* (void-kill) arrived
+  with a slightly wider *mechanism* (generic low-health respawn) than the
+  content alone needed, deliberately, because the wider version was barely
+  more code.
+  `void_kill_y` is configurable (`ServerConfig::void_kill_y` /
+  `server.toml`'s new `void_kill_y` key / `ServerSession::set_void_kill_y`),
+  default -64.0 — an arbitrary "comfortably below any sane terrain" guess,
+  **not validated against every worldgen seed's actual floor**; wired into
+  `src/server/main.cpp` next to the existing `gravity` config wiring.
+  `--singleplayer`'s `IntegratedGame`/`ServerSession` never calls
+  `set_void_kill_y`, so singleplayer just gets the same -64.0 built-in
+  default — untested whether that's ever reachable by falling through
+  unloaded terrain (Phase 3.3's ground-load freeze should prevent that
+  specific case, per its own entry above).
+  On respawn: `health` reset to 20, `move` reset to a fresh `MoveState{}`
+  with `position = spawn_pos` (velocity zeroed too, not just position —
+  otherwise a player who died mid-fall would respawn still carrying
+  terminal-velocity downward momentum and immediately re-trigger the void
+  check next tick), `interest_.upsert(...)` updated so *other* players see
+  the teleport on their very next snapshot rather than waiting for the
+  respawned player's next input batch to refresh `interest_` (input batches
+  are the normal path that keeps `interest_` current, per `handle_input_batch`
+  — respawn needed its own explicit update since it happens independent of
+  any input arriving), and a `S2C_Chat{"* you died and respawned"}` sent
+  with a plain single-`ConnId` `send_message` call (not the broadcast loop
+  chat/join/leave all use) so only the dying player sees it — deliberately
+  no killfeed/broadcast-to-everyone this pass, spec line just says "with
+  spawn point", nothing about visibility to others.
+  **Client needed zero new code.** `S2C_EntitySnapshot.local` already carries
+  whatever `state.move.position` is server-side each tick (Phase 3.4's
+  reconciliation, `broadcast_snapshots` in `session.cpp`), and the client
+  already unconditionally snaps its predicted position to `local` on every
+  snapshot and replays only its *unacked* inputs on top. A respawn is just
+  an unusually large position jump through a pipeline that already existed
+  for ordinary lag-compensation corrections — confirmed this by not touching
+  `src/client/main.cpp` or `ClientSession` at all for this feature, only
+  `ServerSession`/`ServerConfig`.
+  **Verified:** new `tests/unit/netcode_test.cpp` case — sets
+  `void_kill_y` to `spawn.y - 5.0` (not a hardcoded absolute number, so the
+  test doesn't depend on whatever height worldgen happened to pick for its
+  fixed seed), flies the player straight down past it via `kInputFlyDown`,
+  asserts `server.player_move_state(id)->position.y` snapped back to
+  spawn height (`Approx(spawn.y)`, not still sitting below the void
+  threshold), and asserts `"* you died and respawned"` shows up via
+  `take_chat_messages()`. `tests/unit/config_test.cpp` gained a
+  `void_kill_y` TOML-parsing assertion in its existing values test. Full
+  `ctest` green (4/4) on `build-asan-nonet` (first attempt, no failures to
+  fix this time — day/night's two 2026-09-16 entries above both needed a
+  fix-up round, this one didn't); clean `-DVB_WARNINGS_AS_ERRORS=ON` build
+  of all three targets. Not re-verified with a live windowed launch (same
+  judgment call as the three 2026-09-16 entries above it).
+  **Not attempted:** no fall damage for a survivable fall (binary
+  instant-kill-or-nothing at the void threshold, no damage curve); no
+  broadcast/killfeed of someone else's death; `Health`'s `max` field
+  (20 here is a bare literal matching `ecs::Health::max`'s default, not
+  read from that component or anywhere configurable) — a pack wanting a
+  different max HP has no lever to pull yet.

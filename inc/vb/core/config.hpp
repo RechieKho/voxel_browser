@@ -28,6 +28,7 @@ struct ServerConfig {
 	std::uint32_t tick_rate = 20;
 	std::uint64_t world_seed = 0; // 0 = random at startup
 	double gravity = 24.0;
+	double void_kill_y = -64.0; // fall below this Y -> instant death, respawn at spawn
 	std::uint32_t asset_max_file_mb = 32;
 	std::uint32_t asset_max_total_mb = 512;
 	ConfigAuthMode auth_mode = ConfigAuthMode::kNone;

@@ -265,6 +265,71 @@ TEST_CASE("day/night: time_of_day advances server-side and syncs to clients") {
 }
 
 TEST_CASE(
+		"death/respawn: falling below void_kill_y respawns at spawn with a "
+		"chat notice") {
+	LoopbackNetwork net;
+	ServerSession server(net.server(), [] {
+		HandshakeServerConfig c;
+		c.world_seed = 1;
+		return c;
+	}());
+	vb::physics::MoveParams fly;
+	fly.fly = true;
+	server.set_move_params(fly);
+	REQUIRE(net.server().listen(0));
+
+	vb::net::Transport &ta = net.create_client();
+	auto ida = ta.connect("x", 0);
+	REQUIRE(ida);
+	std::optional<ClientSession> a;
+	a.emplace(ta, *ida, HandshakeClientConfig{ "Alice", "", "v", 1 });
+
+	auto pump = [&](int n) {
+		for (int i = 0; i < n; ++i) {
+			server.tick(0.05);
+			a->tick(0.05);
+		}
+	};
+	pump(16);
+	REQUIRE(a->joined());
+	a->take_chat_messages(); // drain any join system line, not asserted here
+
+	const Vec3d spawn = a->join_accept()->spawn_pos;
+	const NetId a_id = a->join_accept()->your_net_id;
+	// A void 5m below spawn -- independent of whatever height worldgen
+	// picked for this seed.
+	server.set_void_kill_y(spawn.y - 5.0);
+	a->set_move_params(fly);
+	a->set_local_feet(spawn);
+
+	// Fly straight down (12 m/s * 0.05s * 40 ticks = 24m of descent) --
+	// comfortably crosses 5m below spawn.
+	InputCmd down;
+	down.dt = 0.05f;
+	down.buttons = vb::protocol::kInputFlyDown;
+	for (std::uint32_t seq = 1; seq <= 40; ++seq) {
+		down.seq = seq;
+		a->push_input(down);
+		pump(1);
+	}
+	pump(4);
+
+	const auto *srv = server.player_move_state(a_id);
+	REQUIRE(srv != nullptr);
+	// Respawned back at spawn height, not left sitting in the void.
+	CHECK(srv->position.y == doctest::Approx(spawn.y).epsilon(0.05));
+	CHECK(srv->position.y > spawn.y - 5.0);
+
+	bool saw_death_msg = false;
+	for (const auto &m : a->take_chat_messages()) {
+		if (m == "* you died and respawned") {
+			saw_death_msg = true;
+		}
+	}
+	CHECK(saw_death_msg);
+}
+
+TEST_CASE(
 		"player join/leave: existing players are listed to a newcomer and "
 		"told when they arrive/leave") {
 	LoopbackNetwork net;

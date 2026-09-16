@@ -289,6 +289,8 @@ void ServerSession::tick(double dt_seconds) {
 					it->second.net_id = g.net_id;
 					it->second.move = physics::MoveState{};
 					it->second.move.position = g.spawn_pos;
+					it->second.spawn_pos = g.spawn_pos;
+					it->second.health = 20.0f;
 					it->second.name = step.player_name;
 					interest_.upsert(replication::EntityState{
 							g.net_id, core::EntityKindId::kInvalid, g.spawn_pos,
@@ -377,9 +379,38 @@ void ServerSession::tick(double dt_seconds) {
 		broadcast_time_of_day();
 	}
 
+	check_respawns();
+
 	++server_tick_;
 	broadcast_snapshots();
 	broadcast_world();
+}
+
+void ServerSession::check_respawns() {
+	for (auto &[conn, state] : conns_) {
+		if (!state.playing) {
+			continue;
+		}
+		if (state.move.position.y < void_kill_y_) {
+			state.health = 0.0f; // fell out of the world -- instant kill
+		}
+		if (state.health > 0.0f) {
+			continue;
+		}
+		state.health = 20.0f;
+		state.move = physics::MoveState{};
+		state.move.position = state.spawn_pos;
+		replication::EntityState s;
+		if (const auto *e = interest_.get(state.net_id)) {
+			s = *e;
+		}
+		s.net_id = state.net_id;
+		s.pos = state.spawn_pos;
+		s.vel = {};
+		interest_.upsert(s);
+		send_message(
+				transport_, conn, protocol::S2CChat{ "* you died and respawned" });
+	}
 }
 
 void ServerSession::broadcast_time_of_day() {

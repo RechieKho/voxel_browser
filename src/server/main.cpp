@@ -211,6 +211,7 @@ int main(int argc, char **argv) {
 	vb::physics::MoveParams move_params;
 	move_params.gravity = config.gravity;
 	session.set_move_params(move_params);
+	session.set_void_kill_y(config.void_kill_y);
 
 	std::signal(SIGINT, handle_signal);
 	std::signal(SIGTERM, handle_signal);

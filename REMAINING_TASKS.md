@@ -1035,7 +1035,50 @@ hold-to-break progress, cross-chunk relight.
       time); no distinct "system message" channel from real chat (join/leave
       share the same log/take_chat_messages() stream, colour-coded only by
       the "* " prefix).
-- [ ] Death/respawn (fall out of world, `Health` at 0) with spawn point.
+- [x] Death/respawn (fall out of world, `Health` at 0) with spawn point:
+      no new wire message — reuses `S2C_Chat` (no protocol version bump).
+      `ServerSession::Conn` gained `spawn_pos` (captured once at join, from
+      the same `JoinGrant` that already seeded `move.position`) and `health`
+      (`float`, default 20 — matches `ecs::Health`'s default, though the ECS
+      component itself remains unused per Phase 3.1's "session drives
+      movement directly" deferral; this is plain `ServerSession` state, not
+      an EnTT component). New `ServerSession::check_respawns()`, called once
+      per tick before `broadcast_snapshots()`: if a player's feet are below
+      a configurable `void_kill_y` (`set_void_kill_y`, `ServerConfig::
+      void_kill_y` in `server.toml`, default -64.0), `health` is forced to
+      0 (instant kill, no partial fall damage this pass); whenever `health
+      <= 0` for *any* reason, the player is teleported back to `spawn_pos`,
+      `health` reset to 20, their `physics::MoveState` reset (velocity
+      zeroed, not just position), `interest_` updated so other players see
+      the teleport immediately (not just next input tick), and a private
+      `S2C_Chat{"* you died and respawned"}` sent only to that connection
+      (not broadcast — reuses the existing chat pipeline/HUD log, same
+      "system message via chat" pattern 5.4's join/leave notices already
+      established). The `health <= 0` check (not just a direct
+      `position.y < void_kill_y` branch) is deliberately generic: nothing
+      else decrements health yet (no combat system exists), but any future
+      damage source gets working respawn for free by just setting `health`
+      to 0. Client-side position correction needs **no new code**: the
+      existing prediction/reconciliation pipeline (Phase 3.4) already snaps
+      a client to whatever `S2C_EntitySnapshot.local` says next tick, and a
+      respawn is just an unusually large snap.
+      Tests: a new `tests/unit/netcode_test.cpp` case flies a client
+      downward past a `void_kill_y` set 5m below its actual spawn height
+      (not a hardcoded absolute Y, so it doesn't depend on what worldgen
+      picked for the test seed), asserts the server's authoritative position
+      snapped back to spawn height, and asserts the client's chat log
+      received `"* you died and respawned"`. `tests/unit/config_test.cpp`
+      gained a `void_kill_y` case in its existing TOML-values test. Full
+      `ctest` green (4/4) on `build-asan-nonet`; clean
+      `-DVB_WARNINGS_AS_ERRORS=ON` build of all three targets.
+      Not attempted: no fall damage for a *survivable* fall (only the void
+      threshold kills — no minimum-safe-fall-height/damage curve); no death
+      message broadcast to *other* players (only the dying player sees the
+      notice, matching how the feature is scoped as "with spawn point", not
+      a killfeed); `--singleplayer`'s `IntegratedGame` doesn't call
+      `set_void_kill_y` explicitly so it just gets `ServerSession`'s
+      built-in -64.0 default, untested that this is a sensible number for
+      every worldgen seed's actual terrain floor.
 - [ ] Basic sfx hooks are stubbed (no audio subsystem in v0) — document.
 
 ### 5.5 Documentation

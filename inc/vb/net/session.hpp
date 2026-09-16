@@ -124,6 +124,13 @@ public:
 		on_chat_ = std::move(handler);
 	}
 
+	// Death/respawn (spec §5.4): a player whose feet fall below this world Y
+	// (the "void") is killed instantly and respawned at their spawn point.
+	// Health also generically triggers a respawn at 0 -- nothing decrements
+	// it yet besides the void check (no combat system exists), but the path
+	// is shared so a future damage source gets respawn for free.
+	void set_void_kill_y(double y) { void_kill_y_ = y; }
+
 private:
 	struct Conn {
 		explicit Conn(ServerHandshake hs) : handshake(std::move(hs)) {}
@@ -137,6 +144,8 @@ private:
 		physics::MoveState move;
 		core::Vec2f look;
 		std::uint32_t last_input_seq = 0;
+		core::Vec3d spawn_pos{};
+		float health = 20.0f;
 	};
 
 	void drop(ConnId conn, const std::string &reason);
@@ -145,6 +154,7 @@ private:
 	void handle_block_edit(ConnId conn, Conn &state,
 			const protocol::Frame &frame);
 	void handle_chat(Conn &state, const protocol::Frame &frame);
+	void check_respawns();
 	void broadcast_snapshots();
 	void broadcast_world();
 	void broadcast_time_of_day();
@@ -162,6 +172,7 @@ private:
 	double time_of_day_ticks_ = 0.0;
 	double day_length_seconds_ = 1200.0; // 20 real minutes per in-game day
 	double time_of_day_broadcast_accum_ = 0.0;
+	double void_kill_y_ = -64.0;
 	std::uint32_t server_tick_ = 0;
 	std::size_t playing_ = 0;
 	std::uint32_t next_net_id_ = 1;
