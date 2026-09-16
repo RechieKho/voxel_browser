@@ -1535,3 +1535,28 @@ _(Move items here with a date + commit when fixed, so the history is visible.)_
   works) separately, not both at once. If content ever adds a genuinely
   new block (not just a re-declaration), that combination is worth a real
   live check before trusting it blind.
+  **This local box's build-dir matrix** (useful to know before picking one
+  instead of rediscovering it via CMakeCache.txt greps): `build/` — Ninja,
+  RelWithDebInfo, everything off (headless-only, no Lua/net). `build-lua/` —
+  Ninja, Debug, `VB_WITH_LUA=ON`, **no client target** (raylib not fetched,
+  `VB_BUILD_CLIENT` off) — only `voxel_browser_server`/`vb_core`/`vb_tests`
+  exist here. `build-net/`, `build-release/`, `build-asan-nonet/` — Visual
+  Studio 18 2026 generator (multi-config, pass `--config Debug`/`Release`),
+  `VB_WITH_LUA=OFF`; `build-net` has `VB_WITH_NET=ON` + a real client
+  target, the other two don't (check `CMakeCache.txt` before assuming).
+  None of these combine `VB_WITH_LUA=ON` with a real client — see above.
+
+  **Small, separate finding while staging this commit:** `.gitignore` and
+  `tests/CMakeLists.txt` are checked in with CRLF line endings (`file`
+  confirms it; every other text file checked, including every new file this
+  session, is LF-only) even though `core.autocrlf=input` is set locally —
+  `git add` prints "CRLF will be replaced by LF the next time Git touches
+  it" for both on every `git add`, harmlessly for a content-only edit but
+  worth knowing before a real edit to either file: the first edit through a
+  CRLF-preserving tool will silently flip the whole file's line endings in
+  that diff, burying the actual change under a wall of noise. No
+  `.gitattributes` exists to force this repo-wide either way. Not fixed
+  here (out of scope for a content-pack pass, and normalizing either file
+  produces a noisy diff of its own) — if it's ever worth cleaning up,
+  `git add --renormalize <path>` after adding a `.gitattributes` rule is
+  the low-noise way, not a manual line-ending find/replace.
