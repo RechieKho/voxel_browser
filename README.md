@@ -27,7 +27,7 @@ Voxel Browser leverages a carefully curated stack of modern, high-performance C/
 | **Voxel Meshing**     | Hand-rolled face-culled mesher (`vb::world::chunk_mesher`)                       | **Active.** [Cellulose](https://github.com/RechieKho/cellulose) is the intended `VB_WITH_MESHING` backend, not yet wired in. |
 | **Networking Core**   | [GameNetworkingSockets](https://github.com/ValveSoftware/GameNetworkingSockets) | **Active** (`VB_WITH_NET`) — real UDP handshake, chunk/entity/chat replication.    |
 | **Entity Replication**| `vb::replication::InterestGrid`                                                 | **Active.** [librg](https://github.com/zpl-c/librg) is now wired in as the `VB_WITH_REPLICATION` interest-culling backend (default OFF; hand-rolled linear scan otherwise), behind the same interface either way. |
-| **Entity Management** | `ServerSession` drives players directly, no registry yet                        | [EnTT](https://github.com/skypjack/entt) is linked and ready, but nothing routes through it yet — see `REMAINING_TASKS.md` Phase 3.1. |
+| **Entity Management** | `ServerSession` drives players through an [EnTT](https://github.com/skypjack/entt) registry | **Active.** Each playing connection is a real `entt::registry` entity (`Position`/`Velocity`/`Rotation`/`Collider`/`PlayerInput`/`Health`/`PlayerTag`/`NetReplicated`), the actual source of truth. No generic system runner iterates it yet — see `REMAINING_TASKS.md` Phase 3.1. |
 | **World Generation**  | Hand-rolled deterministic noise (`vb::core::noise`)                             | **Active** for the base heightmap pipeline. [FastNoise2](https://github.com/Auburn/FastNoise2) is the intended `VB_WITH_WORLDGEN` backend for a future Lua-driven pipeline. |
 | **User Interface**    | [raygui](https://github.com/raysan5/raygui)                                     | **Active** — main menu, HUD, and Lua-defined pack UI screens.                      |
 | **Scripting**         | [Lua](https://www.lua.org/) 5.4 + [sol2](https://github.com/ThePhD/sol2)         | **Active** (`VB_WITH_LUA`) — server + client-UI sandboxed VMs, the full `content/base` pack. |
@@ -45,7 +45,7 @@ pin, what's blocking the swap).
 The server is the source of truth. It is responsible for:
 
 1. **World Generation:** Deterministic heightmap terrain today (`vb::worldgen`), driven by a server-defined seed; a Lua-driven pipeline with real biomes/carvers/decoration is planned (`REMAINING_TASKS.md` Phase 4.2).
-2. **Game State:** Player movement, physics, and block edits are simulated directly by `ServerSession` — an EnTT-backed registry for generic (non-player) entities is planned but not required for anything shipped so far.
+2. **Game State:** Player movement, physics, and block edits are simulated by `ServerSession` through a per-connection EnTT registry entity; a generic system runner for non-player entities is planned but not required for anything shipped so far.
 3. **Modding & Asset Management:** Loading Lua scripts (`content/base` by default) and hashing/serving assets from the host's project directory over the Asset Sync protocol.
 4. **Network Replication:** Pushing chunk data, entity snapshots, chat, and required assets to connected clients over `GameNetworkingSockets`.
 
@@ -75,7 +75,7 @@ substitute for it.
 | 0 — Project restructure & build system          | ✅ Done |
 | 1 — Core foundation & networking (handshake, transport, interest/replication bootstrap) | ✅ Done |
 | 2 — World state & terrain generation (chunks, lighting, meshing, streaming) | ✅ Done |
-| 3 — ECS & physics (movement, prediction, remote entity billboards) | ✅ Substantially done — no EnTT registry yet (3.1), not required so far |
+| 3 — ECS & physics (movement, prediction, remote entity billboards) | ✅ Substantially done — EnTT registry now backs player state (3.1); no generic system runner yet, not required so far |
 | 4 — The "Browser" engine (Lua scripting, Asset Sync, client UI VM) | ✅ Done (mechanism); a real Lua-driven worldgen pipeline is the main open item |
 | 5 — Minimum playable base (content pack, block editing, main menu, chat/day-night/respawn, crafting) | ✅ Substantially done — see `REMAINING_TASKS.md` 5.5 for remaining docs/polish |
 
