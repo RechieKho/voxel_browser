@@ -198,8 +198,11 @@ network space; client window + render loop alive.
       join one server; each sees the other only within interest range, gets a
       `removed` when the other moves out or disconnects. **(README Phase 1
       acceptance — met over the loopback transport.)**
-- [ ] Wire real librg in (`VB_WITH_REPLICATION`) as the interest backend — after
-      players actually move (Phase 3) so scale testing is meaningful.
+- [x] Wire real librg in (`VB_WITH_REPLICATION`) as the interest backend —
+      `InterestGrid::visible_from` now dispatches to a librg-backed
+      implementation (`src/replication/interest.cpp`) at compile time; same
+      public interface, same diff semantics, no caller changes. CI now
+      builds with `-DVB_WITH_REPLICATION=ON` on all three OSes.
 - [ ] The two-client test currently runs over `LoopbackTransport`; re-run it over
       `GnsTransport` once that lands.
 
@@ -443,7 +446,9 @@ with prediction/interpolation.
       sees the first move.
 - [ ] Wall-clock `server_time_est` + smoothing on the client (needs `GnsTransport`
       RTT; the loopback path has no latency to estimate).
-- [ ] Map players ↔ librg network entities — with the rest of `VB_WITH_REPLICATION`.
+- [x] Map players ↔ librg network entities — `InterestGrid::upsert`/`remove` track
+      every `NetId` (players and item drops alike) 1:1 as a self-owned librg
+      entity; see `src/replication/interest.cpp`.
 
 ### 3.5 Entity visual presentation — billboard sprites (§11.3)  ✅ (placeholder art)
 
