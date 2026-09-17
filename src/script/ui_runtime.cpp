@@ -26,6 +26,10 @@ const std::string &UiRuntime::current_name() const {
 	static const std::string kEmpty;
 	return kEmpty;
 }
+const std::vector<Widget> &UiRuntime::render_frame() {
+	static const std::vector<Widget> kEmpty;
+	return kEmpty;
+}
 const std::vector<Widget> &UiRuntime::widgets() const {
 	static const std::vector<Widget> kEmpty;
 	return kEmpty;
@@ -152,7 +156,9 @@ struct UiRuntime::Impl {
 	std::unordered_map<std::string, sol::protected_function> layout_fns;
 
 	std::string current_name;
-	sol::table current_layout; // {widgets = {...}, on_close = fn?}
+	sol::protected_function current_render_fn;
+	sol::table current_state; // persists across every frame this screen is open
+	sol::protected_function current_on_close; // refreshed by each evaluate_frame()
 	std::unordered_map<std::string, sol::table> widget_by_id;
 	std::vector<Widget> widgets_vec;
 	std::string current_widget_id; // scratch, valid during a callback
@@ -164,6 +170,7 @@ struct UiRuntime::Impl {
 	void send_event(const std::string &kind, const sol::object &value);
 	void run_callback(const std::string &widget_id, const char *field,
 			const sol::object &arg, bool has_arg);
+	void evaluate_frame();
 	void do_close();
 };
 
@@ -196,25 +203,85 @@ void UiRuntime::Impl::install_bindings() {
 	ui["close"] = [this] { do_close(); };
 }
 
+void UiRuntime::Impl::evaluate_frame() {
+	if (current_name.empty() || !current_render_fn.valid()) {
+		return;
+	}
+	vm.begin_call_budget();
+	sol::protected_function_result r = current_render_fn(current_state);
+	if (!r.valid()) {
+		const sol::error e = r;
+		VB_WARN("script", "ui '", current_name, "' render function error: ", e.what());
+		return; // leave the previous frame's widgets in place, don't flicker
+	}
+	sol::object result = r;
+	if (result.get_type() != sol::type::table) {
+		VB_WARN("script", "ui '", current_name,
+				"' render function did not return a table");
+		return;
+	}
+	sol::table layout = result.as<sol::table>();
+	sol::object widgets_obj = layout["widgets"];
+	if (widgets_obj.get_type() != sol::type::table) {
+		VB_WARN("script", "ui '", current_name, "' render result has no 'widgets' array");
+		return;
+	}
+	sol::table widget_tables = widgets_obj.as<sol::table>();
+
+	sol::object on_close = layout["on_close"];
+	current_on_close = on_close.is<sol::protected_function>()
+			? on_close.as<sol::protected_function>()
+			: sol::protected_function();
+
+	widget_by_id.clear();
+	widgets_vec.clear();
+	for (const auto &kv : widget_tables) {
+		sol::object entry = kv.second;
+		if (entry.get_type() != sol::type::table) {
+			continue;
+		}
+		sol::table wt = entry.as<sol::table>();
+		Widget w;
+		w.id = wt.get_or("id", std::string{});
+		w.type = widget_type_from(wt.get_or("type", std::string("label")));
+		w.x = wt.get_or("x", 0.0f);
+		w.y = wt.get_or("y", 0.0f);
+		w.w = wt.get_or("w", 0.0f);
+		w.h = wt.get_or("h", 0.0f);
+		w.text = wt.get_or("text", std::string{});
+		w.list_index = wt.get_or("list_index", -1);
+		sol::object items_obj = wt["items"];
+		if (items_obj.get_type() == sol::type::table) {
+			for (const auto &ikv : items_obj.as<sol::table>()) {
+				if (ikv.second.is<std::string>()) {
+					w.items.push_back(ikv.second.as<std::string>());
+				}
+			}
+		}
+		if (!w.id.empty()) {
+			widget_by_id[w.id] = wt;
+		}
+		widgets_vec.push_back(std::move(w));
+	}
+}
+
 void UiRuntime::Impl::do_close() {
 	if (current_name.empty()) {
 		return;
 	}
 	send_event("close", sol::lua_nil);
-	if (current_layout.valid()) {
-		sol::object on_close = current_layout["on_close"];
-		if (on_close.is<sol::protected_function>()) {
-			vm.begin_call_budget();
-			sol::protected_function_result r =
-					on_close.as<sol::protected_function>()();
-			if (!r.valid()) {
-				const sol::error e = r;
-				VB_WARN("script", "ui on_close handler error: ", e.what());
-			}
+	if (current_on_close.valid()) {
+		vm.begin_call_budget();
+		sol::protected_function_result r = current_on_close();
+		if (!r.valid()) {
+			const sol::error e = r;
+			VB_WARN("script", "ui on_close handler error: ", e.what());
 		}
 	}
 	current_name.clear();
-	current_layout = sol::lua_nil;
+	current_render_fn = sol::protected_function();
+	current_state = sol::lua_nil;
+	current_on_close = sol::protected_function();
 	widget_by_id.clear();
 	widgets_vec.clear();
 }
@@ -268,67 +335,30 @@ void UiRuntime::open(std::string_view name, std::string_view ctx_json) {
 	} catch (const nlohmann::json::parse_error &) {
 		parsed = nlohmann::json::object();
 	}
-	sol::object ctx = json_to_lua(impl_->lua_state(), parsed);
 
-	impl_->vm.begin_call_budget();
-	sol::protected_function_result r = it->second(ctx);
-	if (!r.valid()) {
-		const sol::error e = r;
-		VB_WARN("script", "ui '", name, "' layout function error: ", e.what());
-		return;
-	}
-	sol::object result = r;
-	if (result.get_type() != sol::type::table) {
-		VB_WARN("script", "ui '", name, "' layout function did not return a table");
-		return;
-	}
-	sol::table layout = result.as<sol::table>();
-	sol::object widgets_obj = layout["widgets"];
-	if (widgets_obj.get_type() != sol::type::table) {
-		VB_WARN("script", "ui '", name, "' layout has no 'widgets' array");
-		return;
-	}
-	sol::table widget_tables = widgets_obj.as<sol::table>();
+	sol::object ctx_obj = json_to_lua(impl_->lua_state(), parsed);
+	sol::table state = ctx_obj.get_type() == sol::type::table
+			? ctx_obj.as<sol::table>()
+			: impl_->lua_state().create_table();
 
 	impl_->current_name = std::string(name);
-	impl_->current_layout = layout;
+	impl_->current_render_fn = it->second;
+	impl_->current_state = state;
+	impl_->current_on_close = sol::protected_function();
 	impl_->widget_by_id.clear();
 	impl_->widgets_vec.clear();
-
-	for (const auto &kv : widget_tables) {
-		sol::object entry = kv.second;
-		if (entry.get_type() != sol::type::table) {
-			continue;
-		}
-		sol::table wt = entry.as<sol::table>();
-		Widget w;
-		w.id = wt.get_or("id", std::string{});
-		w.type = widget_type_from(wt.get_or("type", std::string("label")));
-		w.x = wt.get_or("x", 0.0f);
-		w.y = wt.get_or("y", 0.0f);
-		w.w = wt.get_or("w", 0.0f);
-		w.h = wt.get_or("h", 0.0f);
-		w.text = wt.get_or("text", std::string{});
-		w.list_index = wt.get_or("list_index", -1);
-		sol::object items_obj = wt["items"];
-		if (items_obj.get_type() == sol::type::table) {
-			for (const auto &ikv : items_obj.as<sol::table>()) {
-				if (ikv.second.is<std::string>()) {
-					w.items.push_back(ikv.second.as<std::string>());
-				}
-			}
-		}
-		if (!w.id.empty()) {
-			impl_->widget_by_id[w.id] = wt;
-		}
-		impl_->widgets_vec.push_back(std::move(w));
-	}
 }
 
 void UiRuntime::close() { impl_->do_close(); }
 
 bool UiRuntime::is_open() const { return !impl_->current_name.empty(); }
 const std::string &UiRuntime::current_name() const { return impl_->current_name; }
+
+const std::vector<Widget> &UiRuntime::render_frame() {
+	impl_->evaluate_frame();
+	return impl_->widgets_vec;
+}
+
 const std::vector<Widget> &UiRuntime::widgets() const { return impl_->widgets_vec; }
 
 void UiRuntime::report_click(const std::string &widget_id) {

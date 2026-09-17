@@ -1036,8 +1036,9 @@ int main(int argc, char **argv) {
 				}
 
 				if (ui_runtime.is_open()) {
+					const auto &widgets = ui_runtime.render_frame();
 					const auto ui_result =
-							ui_renderer.draw(ui_runtime.current_name(), ui_runtime.widgets());
+							ui_renderer.draw(ui_runtime.current_name(), widgets);
 					for (const auto &id : ui_result.clicked) {
 						ui_runtime.report_click(id);
 					}

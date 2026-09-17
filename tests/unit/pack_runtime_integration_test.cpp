@@ -272,7 +272,7 @@ TEST_CASE("client UI round trip: server open_ui -> click -> server ui_event") {
 	vb::script::UiRuntime ui_runtime;
 	ui_runtime.attach_session(client);
 	REQUIRE(ui_runtime.load_pack_file(R"(
-		ui.define("test_ui", function(ctx)
+		ui.define("test_ui", function(state)
 			return {
 				widgets = {
 					{ id = "close_btn", type = "button", x = 0, y = 0, w = 10, h = 10,
@@ -289,6 +289,9 @@ TEST_CASE("client UI round trip: server open_ui -> click -> server ui_event") {
 			client.tick(0.05);
 			if (auto opened = client.take_open_ui()) {
 				ui_runtime.open(opened->ui_name, opened->ctx_json);
+			}
+			if (ui_runtime.is_open()) {
+				ui_runtime.render_frame();
 			}
 		}
 	};

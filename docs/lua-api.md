@@ -160,11 +160,17 @@ plain `Widget` list (no raygui), and `vb::render::UiRenderer`
 (`inc/vb/render/ui_renderer.hpp`) draws that list with raygui and reports
 back which widgets fired an interaction — no sol2 in the render half.
 
-- `ui.define(name, layout_fn)` — `layout_fn(ctx)` returns
-  `{ widgets = { ... }, on_close = fn? }`. Widgets are computed once at
-  `open()` time and don't re-layout afterward (known limitation — a callback
-  that wants a different screen should `ui.close()` + have the server
-  `open_ui()` again).
+- `ui.define(name, render_fn)` — `render_fn(state)` returns
+  `{ widgets = { ... }, on_close = fn? }` and is called **once per UI frame**
+  for as long as the screen is open (Phase 6.2; `raygui` is itself
+  immediate-mode, so no diffing is needed). `state` is the *same* Lua table
+  across every one of those frames — seeded once from `open()`'s `ctx_json`
+  — so a widget callback (`on_click`/`on_change`) mutating `state` directly
+  is naturally visible on the next frame with no extra plumbing. Use this
+  for purely cosmetic, client-local state (selection highlight, scroll
+  position); anything server-authoritative still goes over `ui.send_event`.
+  A callback that wants a different screen should still `ui.close()` + have
+  the server `open_ui()` again.
 - Widget types implemented: `label`, `panel`, `button`, `textbox`, `list`
   (spec's named set minus **item grid**, deferred to 5.1 — needs real items).
   Each widget table: `id`, `type`, `x`/`y`/`w`/`h`, `text` (label/panel/

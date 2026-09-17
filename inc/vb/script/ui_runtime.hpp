@@ -9,14 +9,19 @@
 #include "vb/net/session.hpp"
 #include "vb/script/vm.hpp"
 
-// Client-side UI VM (spec §10.4, Phase 4.5): a second, separate Lua VM from
+// Client-side UI VM (spec §10.4, Phase 6.2): a second, separate Lua VM from
 // the server's PackRuntime. A pack declares screens via `ui.define(name,
-// layout_fn)`; the layout function returns a widget list this class exposes
-// as plain data (Widget, no sol2) for vb::render::UiRenderer to draw with
-// raygui. Widget on_click/on_change/on_close callbacks may call
+// render_fn)`; `render_fn(state)` is called once per UI frame (raygui is
+// itself immediate-mode, so no virtual-DOM diffing is needed) and its
+// returned widget list is exposed as plain data (Widget, no sol2) for
+// vb::render::UiRenderer to draw with raygui. `state` is the same Lua table
+// across every frame a screen stays open (seeded once from open()'s
+// ctx_json), so a widget callback mutating `state` is naturally visible on
+// the next render_frame() call -- that's the entire reactivity mechanism.
+// Widget on_click/on_change/on_close callbacks may call
 // ui.send_event(...)/ui.close(), which route straight to the attached
 // ClientSession as a C2S_UiEvent -- game-meaningful logic stays
-// server-authoritative; purely cosmetic state can stay Lua-local.
+// server-authoritative; purely cosmetic state can stay Lua-local on `state`.
 
 namespace vb::script {
 
@@ -54,12 +59,12 @@ public:
 	// session once attached; unattached, they're silently dropped.
 	void attach_session(net::ClientSession &session);
 
-	// Looks up `name` (registered via ui.define) and evaluates its layout
-	// function once against `ctx_json` (parsed JSON -> Lua table). Logs and
-	// leaves the runtime closed if `name` was never defined. Widgets are
-	// computed once here and do not re-layout afterward -- a callback that
-	// wants a different screen should close() and have the server
-	// open_ui() again.
+	// Looks up `name` (registered via ui.define) and initializes `state`
+	// from `ctx_json` (parsed JSON -> Lua table); that same table is passed
+	// to `render_fn` on every subsequent render_frame() call for as long as
+	// this screen stays open. Logs and leaves the runtime closed if `name`
+	// was never defined. Does not evaluate `render_fn` itself -- call
+	// render_frame() to produce the first frame's widgets.
 	void open(std::string_view name, std::string_view ctx_json);
 
 	// Sends exactly one "close" C2S_UiEvent (spec: on_close always reaches
@@ -69,6 +74,14 @@ public:
 
 	bool is_open() const;
 	const std::string &current_name() const;
+
+	// Evaluates render_fn(state) for the current frame (no-op, returning
+	// the last -- likely empty -- list if no screen is open) and returns
+	// the fresh widget list. Call once per UI frame, right before handing
+	// the result to vb::render::UiRenderer::draw.
+	const std::vector<Widget> &render_frame();
+
+	// The widget list from the most recently completed render_frame() call.
 	const std::vector<Widget> &widgets() const;
 
 	// Called by vb::render::UiRenderer once per frame per widget that

@@ -751,10 +751,11 @@ Lua-defined UI.
       second `Vm` distinct from the server's `PackRuntime`, pImpl'd the same
       way, disabled-stub when `VB_WITH_LUA` is off. No world/net access of
       its own; outgoing events route through an attached `ClientSession&`.
-- [x] `ui.define(name, layout_fn)` declarative layout: `label`, `panel`,
+- [x] `ui.define(name, render_fn)` declarative layout: `label`, `panel`,
       `button`, `list`, `text input` (spec's set minus **item grid**,
-      deferred — needs real items, waits on 5.1). Widgets are computed once
-      at `open()` and don't re-layout afterward (documented limitation).
+      deferred — needs real items, waits on 5.1). Originally evaluated once
+      at `open()` and never re-laid-out afterward; superseded by Phase 6.2's
+      per-frame `render(state)` reactive model below.
 - [x] C++ renderer mapping layout → raygui: `vb::render::UiRenderer`
       (`inc/vb/render/ui_renderer.hpp` + `src/render/ui_renderer.cpp`),
       split across the core/render boundary from `UiRuntime` the same way
@@ -1482,19 +1483,40 @@ windows, chatting, crafting, and seeing each other, all at once.
       replication but nothing branches on it, same pre-existing limitation
       `world::kItemDropKind` has).
 
-### 6.2 Fully Lua-defined, immediate-mode reactive UI
+### 6.2 Fully Lua-defined, immediate-mode reactive UI  ✅ (2026-09-17)
 
-- [ ] Reframe `ui.define` from "declare a static screen" to "register a
-      `render(state)` function called every UI frame" (§10.4) — `raygui` is
-      already immediate-mode, so no virtual-DOM diffing is needed: the C++
-      side just walks whatever `render_fn` returns that frame and issues the
-      matching `raygui` calls. State mutation naturally reflows next frame.
-- [ ] Real API break from `content/base/ui/{inventory,pause}.lua`'s current
-      static-declaration style — those need rewriting to the new shape, not
-      just extending, once this lands.
-- [ ] Event handlers keep the existing `C2S_UiEvent` round-trip
-      (server-authoritative for anything that matters); purely cosmetic
-      state (hover, scroll) can stay client-local.
+- [x] Reframed `ui.define(name, render_fn)`: `render_fn(state)` now runs
+      once per UI frame for as long as the screen is open
+      (`UiRuntime::render_frame()`, `src/script/ui_runtime.cpp`), not once at
+      `open()` time. `open()` now only resolves the render function and
+      seeds `state` (a persistent `sol::table`, built once from `ctx_json`)
+      — it no longer evaluates anything itself, so there's exactly one
+      evaluation per frame, not a double-evaluation on the opening frame.
+      `main.cpp`'s existing per-frame UI block calls `render_frame()` right
+      before `UiRenderer::draw(...)`, same call site as before, no new
+      per-frame plumbing needed since `raygui` was already immediate-mode.
+      The per-frame call is wrapped in `vm.begin_call_budget()`, same sandbox
+      guard `report_click`/`report_change` already used for one-shot
+      callbacks, now covering a function invoked continuously.
+      **Client-VM-only change, no protocol/wire changes** — `C2S_UiEvent`/
+      `S2C_OpenUi` are untouched; event handlers still call
+      `ui.send_event`/`ui.close` exactly as before.
+- [x] `content/base/ui/{inventory,pause}.lua` rewritten to the `render(state)`
+      shape (parameter renamed `ctx` → `state`). `inventory.lua` also
+      demonstrates real local reactivity: the list's `on_change` sets
+      `state.selected` (no `ui.send_event`, purely cosmetic per the design),
+      and the title label reads it back — proving a handler-mutated `state`
+      value shows up on the very next frame with no reopen and no server
+      round-trip.
+- [x] Event handlers unchanged: `on_click`/`on_change`/`on_close` still
+      route through `ui.send_event`/`ui.close` → the existing
+      `C2S_UiEvent` path; only purely cosmetic state moved onto the
+      persistent `state` table.
+- [x] Tests (`tests/unit/ui_runtime_test.cpp`) rewritten to the new
+      contract, including a new case that is the actual reactivity claim:
+      a button's `on_click` increments `state.count`, a label renders it;
+      `report_click` + a second `render_frame()` call show the label
+      updated with no `open()`/reopen in between.
 
 ### 6.3 Server-side player-input interception, closed-schema custom keybinds
 

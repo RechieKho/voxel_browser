@@ -1,10 +1,16 @@
--- base:inventory -- a Lua-defined inventory screen (spec §16/§10.4).
+-- base:inventory -- a Lua-defined inventory screen (spec §16/§10.4/§6.2).
 --
--- Reads `ctx.slots` (a list of `{item, count}`), the exact shape
+-- Reads `state.slots` (a list of `{item, count}`), the exact shape
 -- `entity:get_inventory()` (src/script/pack_runtime.cpp's `PlayerHandle::
 -- get_inventory`) already returns server-side -- a script opening this with
 -- `player:open_ui("base:inventory", { slots = player:get_inventory() })`
 -- shows real, if snapshot-only (not live-updating), inventory contents.
+--
+-- `state` is the same Lua table for every frame this screen stays open
+-- (Phase 6.2: `render(state)` is now called once per UI frame, not once at
+-- open time), so `state.selected` set by the list's `on_change` below is
+-- purely local/cosmetic -- no `ui.send_event` -- and just shows up in the
+-- title on the very next frame.
 --
 -- **Known gaps, not attempted here (same category as ui/pause.lua):**
 -- (1) nothing calls `open_ui` for this screen yet -- there's no client
@@ -16,14 +22,19 @@
 -- so this renders numeric ids, not item names, until that's resolved.
 -- (3) the item-grid widget the spec describes for this screen doesn't exist
 -- (`ui_runtime.cpp`'s `WidgetType` has no grid variant) -- a `list` stands in.
-ui.define("base:inventory", function(ctx)
+ui.define("base:inventory", function(state)
 	local items = {}
-	local slots = ctx and ctx.slots or {}
+	local slots = state and state.slots or {}
 	for _, slot in ipairs(slots) do
 		table.insert(items, "item " .. tostring(slot.item) .. " x" .. tostring(slot.count))
 	end
 	if #items == 0 then
 		items = { "(empty)" }
+	end
+
+	local title = "Inventory"
+	if state.selected then
+		title = title .. " (#" .. tostring(state.selected) .. ")"
 	end
 
 	return {
@@ -35,7 +46,7 @@ ui.define("base:inventory", function(ctx)
 				y = 24,
 				w = 200,
 				h = 28,
-				text = "Inventory",
+				text = title,
 			},
 			{
 				id = "slots",
@@ -45,6 +56,9 @@ ui.define("base:inventory", function(ctx)
 				w = 220,
 				h = 160,
 				items = items,
+				on_change = function(idx)
+					state.selected = idx
+				end,
 			},
 			{
 				id = "close",
