@@ -12,6 +12,7 @@
 #include "vb/protocol/byte_buffer.hpp"
 #include "vb/protocol/chat.hpp"
 #include "vb/protocol/handshake.hpp"
+#include "vb/protocol/input.hpp"
 #include "vb/protocol/inventory.hpp"
 #include "vb/protocol/message.hpp"
 #include "vb/protocol/snapshot.hpp"
@@ -99,6 +100,7 @@ TEST_CASE("lane assignment matches the spec") {
 	CHECK(lane_for(MessageType::kS2CEntitySnapshot) == Lane::kSnapshot);
 	CHECK(lane_for(MessageType::kS2CAssetData) == Lane::kAssets);
 	CHECK(lane_for(MessageType::kC2SInputBatch) == Lane::kInput);
+	CHECK(lane_for(MessageType::kS2CKeybindRegistry) == Lane::kWorld);
 }
 
 TEST_CASE("handshake structs round-trip") {
@@ -225,6 +227,31 @@ TEST_CASE("block registry round-trips, including an empty list") {
 	CHECK(r2.blocks[2].name == "test:glow");
 	CHECK(r2.blocks[2].light_emission == 15);
 	CHECK(r2.blocks == reg.blocks);
+}
+
+TEST_CASE("keybind registry round-trips, including an empty list") {
+	auto empty = round_trip(S2CKeybindRegistry{});
+	CHECK(empty.names.empty());
+
+	S2CKeybindRegistry reg;
+	reg.names = { "dash", "interact", "toggle_map" };
+	auto r2 = round_trip(reg);
+	REQUIRE(r2.names.size() == 3);
+	CHECK(r2.names[0] == "dash");
+	CHECK(r2.names[2] == "toggle_map");
+	CHECK(r2.names == reg.names);
+}
+
+TEST_CASE("keybind registry decode rejects more than kMaxKeybinds names") {
+	S2CKeybindRegistry reg;
+	for (std::size_t i = 0; i <= S2CKeybindRegistry::kMaxKeybinds; ++i) {
+		reg.names.push_back("bind_" + std::to_string(i));
+	}
+	std::vector<std::byte> bytes;
+	reg.encode(bytes);
+	auto decoded = S2CKeybindRegistry::decode(as_span(bytes));
+	CHECK_FALSE(decoded);
+	CHECK(decoded.error() == vb::core::ProtocolError::kLengthExceeded);
 }
 
 TEST_CASE("time of day round-trips") {

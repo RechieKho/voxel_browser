@@ -93,6 +93,37 @@ TEST_CASE("vb.register_entity captures its callback table without dispatching") 
 	REQUIRE(r);
 }
 
+TEST_CASE("vb.register_keybind is idempotent, capped, and rejected after freeze") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("keybind"));
+
+	const auto r1 = rt.load_pack_file(R"(
+		id1 = vb.register_keybind("dash")
+		id2 = vb.register_keybind("dash")
+		assert(id1 == id2)
+		id3 = vb.register_keybind("interact")
+		assert(id3 == id1 + 1)
+	)");
+	REQUIRE(r1);
+
+	// 2 registered above (dash, interact) + 30 here = 32 (the cap); the 33rd
+	// registration attempt must be rejected.
+	const auto r_cap = rt.load_pack_file(R"(
+		for i = 1, 30 do
+			vb.register_keybind("bind_" .. i)
+		end
+		local ok, err = pcall(vb.register_keybind, "one_too_many")
+		assert(not ok)
+	)");
+	REQUIRE(r_cap);
+
+	rt.freeze();
+
+	const auto r2 = rt.load_pack_file(R"(vb.register_keybind("too_late"))");
+	CHECK_FALSE(r2);
+}
+
 TEST_CASE("vb.register_biome / vb.register_craft accept arbitrary def tables") {
 	vb::net::LoopbackNetwork net;
 	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();

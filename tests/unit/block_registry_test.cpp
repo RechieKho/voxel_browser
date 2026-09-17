@@ -3,6 +3,7 @@
 #include <ostream>
 
 #include <optional>
+#include <string>
 #include <vector>
 
 #include "vb/net/loopback.hpp"
@@ -70,4 +71,46 @@ TEST_CASE("without a block_registry hook, the client keeps its own base() "
 
 	CHECK(client.chunk_store().registry().size() ==
 			vb::world::BlockRegistry::base().size());
+}
+
+TEST_CASE("server sends a custom keybind registry and the client applies it") {
+	LoopbackNetwork net;
+	HandshakeServerConfig cfg;
+	HandshakeServerHost host;
+	host.keybind_registry = []() -> std::optional<std::vector<std::string>> {
+		return std::vector<std::string>{ "dash", "interact", "toggle_map" };
+	};
+	ServerSession server(net.server(), cfg, host);
+	REQUIRE(net.server().listen(0));
+
+	Transport &t = net.create_client();
+	auto id = t.connect("x", 0);
+	REQUIRE(id);
+	ClientSession client(t, *id, HandshakeClientConfig{ "P", "", "v", 1 });
+
+	pump(server, client, 10);
+	REQUIRE(client.joined());
+
+	const auto &names = client.registered_keybinds();
+	REQUIRE(names.size() == 3);
+	CHECK(names[0] == "dash");
+	CHECK(names[2] == "toggle_map");
+}
+
+TEST_CASE("without a keybind_registry hook, the client has no registered "
+		"keybinds") {
+	LoopbackNetwork net;
+	HandshakeServerConfig cfg;
+	ServerSession server(net.server(), cfg); // default host: no hook set
+	REQUIRE(net.server().listen(0));
+
+	Transport &t = net.create_client();
+	auto id = t.connect("x", 0);
+	REQUIRE(id);
+	ClientSession client(t, *id, HandshakeClientConfig{ "P", "", "v", 1 });
+
+	pump(server, client, 10);
+	REQUIRE(client.joined());
+
+	CHECK(client.registered_keybinds().empty());
 }

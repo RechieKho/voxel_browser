@@ -18,6 +18,7 @@ void C2SInputBatch::encode(std::vector<std::byte> &out) const {
 		w.f32(c.yaw);
 		w.f32(c.pitch);
 		w.u8(c.buttons);
+		w.u32(c.keybinds);
 	}
 }
 
@@ -39,7 +40,38 @@ Decoded<C2SInputBatch> C2SInputBatch::decode(std::span<const std::byte> in) {
 		c.yaw = r.f32();
 		c.pitch = r.f32();
 		c.buttons = r.u8();
+		c.keybinds = r.u32();
 		m.cmds.push_back(c);
+	}
+	r.expect_consumed();
+	if (r.failed()) {
+		return Err{ r.error() };
+	}
+	return m;
+}
+
+namespace {
+inline constexpr std::uint64_t kMaxKeybindNames = S2CKeybindRegistry::kMaxKeybinds;
+} // namespace
+
+void S2CKeybindRegistry::encode(std::vector<std::byte> &out) const {
+	ByteWriter w(out);
+	w.varint(names.size());
+	for (const auto &name : names) {
+		w.string(name);
+	}
+}
+
+Decoded<S2CKeybindRegistry> S2CKeybindRegistry::decode(std::span<const std::byte> in) {
+	ByteReader r(in);
+	S2CKeybindRegistry m;
+	const std::uint64_t n = r.varint();
+	if (n > kMaxKeybindNames) {
+		return Err{ core::ProtocolError::kLengthExceeded };
+	}
+	m.names.reserve(static_cast<std::size_t>(n));
+	for (std::uint64_t i = 0; i < n && !r.failed(); ++i) {
+		m.names.push_back(r.string());
 	}
 	r.expect_consumed();
 	if (r.failed()) {

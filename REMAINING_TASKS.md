@@ -1518,26 +1518,56 @@ windows, chatting, crafting, and seeing each other, all at once.
       `report_click` + a second `render_frame()` call show the label
       updated with no `open()`/reopen in between.
 
-### 6.3 Server-side player-input interception, closed-schema custom keybinds
+### 6.3 Server-side player-input interception, closed-schema custom keybinds  ✅ (2026-09-18, rate limiting still deferred)
 
-- [ ] `vb.register_keybind(name)` at pack load — idempotent registry, frozen
-      at `PackRuntime::freeze()`, same pattern as blocks/entities.
-- [ ] Sync the registered set to the client at handshake (same shape as
-      `S2C_BlockRegistry`, §4.3); the wire only ever encodes a bounded bitset
-      indexed by registration order — an unregistered key cannot be
-      represented on the wire at all. This closed schema is the flood
-      defense, not a post-receipt filter (§17).
-- [ ] Movement input (`PlayerInput`'s existing fields) is untouched — this
-      channel is additive, for pack-defined shortcuts only.
-- [ ] New `vb.on("player_input", handler)` fires in `IngestInputSystem`,
-      before `MovementIntegrationSystem` runs (§7.2). Handler may veto
-      (`return false`) or return a replacement input table before
-      integration — covers both "block movement" and "reinterpret it" (e.g.
-      a dash ability).
+- [x] `vb.register_keybind(name) -> index` at pack load — idempotent by name
+      (same linear-scan-by-name shape as `register_entity`), rejected after
+      `PackRuntime::freeze()`, capped at 32 registrations
+      (`S2CKeybindRegistry::kMaxKeybinds`) so the bitset always fits one
+      `InputCmd.keybinds` `u32` — a deliberate scope cap, same spirit as the
+      existing `kMaxCmds`/`kMaxBlockRegistryRecords` guards.
+- [x] Registered set synced at handshake as `S2C_KeybindRegistry` (47),
+      wire shape mirrors `S2C_BlockRegistry` exactly: sent in the same
+      `kAwaitingReady` step, `HandshakeServerHost::keybind_registry` hook
+      (`nullopt` default = no frame, zero behavior change), wired by the new
+      `PackRuntime::install_keybind_registry(host)` (`src/server/main.cpp`
+      calls it right next to `install_join_veto`). Client applies it
+      unconditionally in `ClientSession::tick()`, same reasoning as block
+      registry (no cross-lane ordering guarantee vs. `JoinAccept`).
+      `kEngineProtocolVersion` bumped 11 → 12.
+- [x] Movement input (`PlayerInput`'s existing fields) untouched — additive
+      `InputCmd.keybinds: u32` field alongside the existing `buttons: u8`.
+- [x] `vb.on("player_input", handler)` fires inside `ServerSession::
+      handle_input_batch`'s existing per-cmd loop (no `IngestInputSystem`/
+      `MovementIntegrationSystem` split exists yet — §7.2's system runner is
+      still `[ ]` — so this hooks the one function that loop already lives
+      in, before its `physics::step_movement` call). `input` is
+      `{move,yaw,pitch,buttons={...},keybinds={[name]=bool,...}}` (only
+      registered names ever appear as `keybinds` keys); `return false`
+      vetoes, a returned table overrides only the fields present (chained
+      across multiple handlers in registration order, first veto wins).
+      **Judgment call on veto semantics** (not spelled out in the spec):
+      a veto drops the cmd's effect on movement/rotation entirely, but
+      `input.last_seq` still advances so the cmd is durably consumed/acked
+      instead of being silently reprocessed every batch forever — a literal
+      "never happened, never acked" veto would desync client-side
+      prediction/reconciliation with no way to converge.
+      Only installed (`ServerSession::set_input_handler`) when a pack
+      actually registers a `player_input` handler, so the hot per-tick input
+      path pays zero extra cost otherwise (same conditional-install pattern
+      6.6 used for `set_respawn_handler`).
+      Tests: `tests/unit/pack_runtime_integration_test.cpp` (veto freezes
+      authoritative position bit-exact; a chained replace reaches a second
+      handler with only the overridden field changed); `tests/unit/
+      pack_runtime_test.cpp` (idempotency/cap/freeze); `tests/unit/
+      block_registry_test.cpp` (registry reaches a joined client / host
+      that never opts in leaves it empty); protocol round-trip + lane tests.
 - [ ] Per-connection rate limiting on custom-keybind events, defense in depth
-      on top of the closed schema — folds into the already-tracked
+      on top of the closed schema — **not implemented this pass**; still
+      folds into the already-tracked, still entirely unimplemented
       "per-player rate limit / flood guard belongs with `GnsTransport`" item
-      (Phase 1.3).
+      (Phase 1.3). The closed-schema bitset itself remains the primary flood
+      defense the spec calls out.
 
 ### 6.4 Generic per-key persistent storage (script-owned identity/auth)
 

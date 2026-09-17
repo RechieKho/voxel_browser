@@ -22,6 +22,7 @@ ScriptResult PackRuntime::load_pack_file(std::string_view, std::string_view) {
 }
 void PackRuntime::freeze() {}
 void PackRuntime::install_join_veto(net::HandshakeServerHost &) {}
+void PackRuntime::install_keybind_registry(net::HandshakeServerHost &) {}
 void PackRuntime::attach_world(net::WorldReplicator &) {}
 void PackRuntime::attach_session(net::ServerSession &) {}
 void PackRuntime::dispatch_player_join_completed(const net::SessionPlayerJoined &) {}
@@ -51,6 +52,7 @@ void PackRuntime::flush_storage() {}
 #include "vb/core/log.hpp"
 #include "vb/ecs/components.hpp"
 #include "vb/protocol/chat.hpp"
+#include "vb/protocol/input.hpp"
 #include "vb/protocol/inventory.hpp"
 #include "vb/script/vm_internal.hpp"
 #include "vb/world/raycast.hpp"
@@ -137,6 +139,88 @@ nlohmann::json lua_to_json(const sol::object &obj) {
 
 constexpr int kMaxTimerCatchUpFires = 8; // anti-stall guard for vb.every after a stall
 
+// Phase 6.3: builds the Lua-facing `input` table vb.on("player_input", ...)
+// receives, from the current working values (not the raw wire bitmask) --
+// only registered keybind names ever appear as `keybinds` keys.
+sol::table build_input_table(sol::state &lua, core::Vec3f move, float yaw,
+		float pitch, std::uint8_t buttons, std::uint32_t keybinds,
+		const std::vector<std::string> &keybind_names) {
+	sol::table t = lua.create_table();
+	sol::table move_t = lua.create_table();
+	move_t["x"] = move.x;
+	move_t["y"] = move.y;
+	move_t["z"] = move.z;
+	t["move"] = move_t;
+	t["yaw"] = yaw;
+	t["pitch"] = pitch;
+
+	sol::table buttons_t = lua.create_table();
+	buttons_t["jump"] = (buttons & protocol::kInputJump) != 0;
+	buttons_t["sprint"] = (buttons & protocol::kInputSprint) != 0;
+	buttons_t["primary"] = (buttons & protocol::kInputPrimary) != 0;
+	buttons_t["secondary"] = (buttons & protocol::kInputSecondary) != 0;
+	buttons_t["fly_up"] = (buttons & protocol::kInputFlyUp) != 0;
+	buttons_t["fly_down"] = (buttons & protocol::kInputFlyDown) != 0;
+	t["buttons"] = buttons_t;
+
+	sol::table keybinds_t = lua.create_table();
+	for (std::size_t i = 0; i < keybind_names.size(); ++i) {
+		keybinds_t[keybind_names[i]] = (keybinds & (1u << i)) != 0;
+	}
+	t["keybinds"] = keybinds_t;
+	return t;
+}
+
+// Reconstructs a buttons bitmask from a handler's returned `buttons` table
+// (if present); any field the pack omits keeps its bit from `fallback`.
+std::uint8_t buttons_from_table(const sol::table &t, std::uint8_t fallback) {
+	sol::object bo = t["buttons"];
+	if (bo.get_type() != sol::type::table) {
+		return fallback;
+	}
+	sol::table bt = bo.as<sol::table>();
+	std::uint8_t out = 0;
+	if (bt.get_or("jump", (fallback & protocol::kInputJump) != 0)) {
+		out |= protocol::kInputJump;
+	}
+	if (bt.get_or("sprint", (fallback & protocol::kInputSprint) != 0)) {
+		out |= protocol::kInputSprint;
+	}
+	if (bt.get_or("primary", (fallback & protocol::kInputPrimary) != 0)) {
+		out |= protocol::kInputPrimary;
+	}
+	if (bt.get_or("secondary", (fallback & protocol::kInputSecondary) != 0)) {
+		out |= protocol::kInputSecondary;
+	}
+	if (bt.get_or("fly_up", (fallback & protocol::kInputFlyUp) != 0)) {
+		out |= protocol::kInputFlyUp;
+	}
+	if (bt.get_or("fly_down", (fallback & protocol::kInputFlyDown) != 0)) {
+		out |= protocol::kInputFlyDown;
+	}
+	return out;
+}
+
+// Same idea for the `keybinds` sub-table, only ever consulting registered
+// names -- an unregistered key can't be represented here any more than on
+// the wire.
+std::uint32_t keybinds_from_table(const sol::table &t, std::uint32_t fallback,
+		const std::vector<std::string> &keybind_names) {
+	sol::object ko = t["keybinds"];
+	if (ko.get_type() != sol::type::table) {
+		return fallback;
+	}
+	sol::table kt = ko.as<sol::table>();
+	std::uint32_t out = 0;
+	for (std::size_t i = 0; i < keybind_names.size(); ++i) {
+		const bool was_set = (fallback & (1u << i)) != 0;
+		if (kt.get_or(keybind_names[i], was_set)) {
+			out |= (1u << i);
+		}
+	}
+	return out;
+}
+
 } // namespace
 
 struct BlockDef {
@@ -208,6 +292,10 @@ struct PackRuntime::Impl {
 	std::vector<EntityKindDef> entity_kinds;
 	std::vector<BiomeDef> biomes;
 	std::vector<CraftDef> crafts;
+	// Phase 6.3: vb.register_keybind names, order == bit index into every
+	// InputCmd::keybinds -- capped at S2CKeybindRegistry::kMaxKeybinds so the
+	// bitset always fits one uint32_t.
+	std::vector<std::string> keybind_names;
 
 	// Phase 6.1: spawned vb.register_entity instances, keyed by the NetId
 	// ServerSession::spawn_script_entity handed back. entity_mt is the shared
@@ -257,6 +345,14 @@ struct PackRuntime::Impl {
 	// spawn point if no handler is registered or none returns a table.
 	net::ServerSession::RespawnDecision run_respawn_handler(
 			core::NetId id, std::string_view cause, float health_before);
+
+	// Phase 6.3: runs every vb.on("player_input", handler) in registration
+	// order, chaining replacements (each handler sees the prior one's
+	// output) and short-circuiting on the first `false` veto. Builds the
+	// Lua-facing input table (move/yaw/pitch/buttons/keybinds-by-name) fresh
+	// per handler call from the current working values.
+	net::ServerSession::InputHookResult run_player_input(
+			core::NetId id, const protocol::InputCmd &cmd);
 
 	// Phase 6.1: vb.world.spawn / self:damage / self:remove dispatch. See
 	// ScriptEntity's comment above for the overall design.
@@ -560,6 +656,30 @@ void PackRuntime::Impl::install_bindings() {
 		crafts.push_back({ def });
 	};
 
+	// Phase 6.3: closed-schema custom keybind. Idempotent by name (like
+	// register_entity), order-assigned index = bit position in every
+	// InputCmd::keybinds -- capped so the bitset always fits one uint32_t.
+	vb["register_keybind"] = [this](const std::string &name) -> std::uint16_t {
+		if (frozen) {
+			throw sol::error("vb.register_keybind: registry already frozen");
+		}
+		if (name.empty()) {
+			throw sol::error("vb.register_keybind: 'name' is required");
+		}
+		for (std::size_t i = 0; i < keybind_names.size(); ++i) {
+			if (keybind_names[i] == name) {
+				return static_cast<std::uint16_t>(i);
+			}
+		}
+		if (keybind_names.size() >= protocol::S2CKeybindRegistry::kMaxKeybinds) {
+			throw sol::error("vb.register_keybind: at most " +
+					std::to_string(protocol::S2CKeybindRegistry::kMaxKeybinds) +
+					" keybinds may be registered");
+		}
+		keybind_names.push_back(name);
+		return static_cast<std::uint16_t>(keybind_names.size() - 1);
+	};
+
 	sol::table world_tbl = lua.create_table();
 	vb["world"] = world_tbl;
 
@@ -708,7 +828,7 @@ void PackRuntime::Impl::install_bindings() {
 
 	static const std::set<std::string> kValidEvents = { "player_join",
 		"player_leave", "block_break", "block_place", "player_interact",
-		"chat", "tick", "ui_event", "player_death" };
+		"chat", "tick", "ui_event", "player_death", "player_input" };
 	vb["on"] = [this](const std::string &event, sol::protected_function fn) {
 		if (kValidEvents.find(event) == kValidEvents.end()) {
 			throw sol::error("vb.on: unknown event '" + event + "'");
@@ -990,6 +1110,76 @@ net::ServerSession::RespawnDecision PackRuntime::Impl::run_respawn_handler(
 	return decision;
 }
 
+net::ServerSession::InputHookResult PackRuntime::Impl::run_player_input(
+		core::NetId id, const protocol::InputCmd &cmd) {
+	net::ServerSession::InputHookResult result;
+	auto it = handlers.find("player_input");
+	if (it == handlers.end()) {
+		return result; // no handlers registered: pass through unchanged
+	}
+
+	core::Vec3f move = cmd.move;
+	float yaw = cmd.yaw;
+	float pitch = cmd.pitch;
+	std::uint8_t buttons = cmd.buttons;
+	std::uint32_t keybinds = cmd.keybinds;
+	bool changed = false;
+
+	PlayerHandle p{ id, this };
+	for (auto &fn : it->second) {
+		if (!fn.valid()) {
+			continue;
+		}
+		sol::table input_t = build_input_table(
+				lua_state(), move, yaw, pitch, buttons, keybinds, keybind_names);
+		vm.begin_call_budget();
+		sol::protected_function_result r = fn(p, input_t);
+		if (!r.valid()) {
+			const sol::error e = r;
+			VB_WARN("script", "vb.on('player_input') handler error: ", e.what());
+			continue;
+		}
+		const sol::object ret = r;
+		if (ret.valid() && ret.get_type() == sol::type::boolean && !ret.as<bool>()) {
+			result.veto = true;
+			return result; // first veto wins, same as run_veto
+		}
+		if (!ret.valid() || ret.get_type() != sol::type::table) {
+			continue; // true/nil/other: pass through unchanged
+		}
+		sol::table t = ret.as<sol::table>();
+		if (sol::optional<sol::table> move_tbl =
+						t.get<sol::optional<sol::table>>("move")) {
+			move.x = move_tbl->get_or("x", move.x);
+			move.y = move_tbl->get_or("y", move.y);
+			move.z = move_tbl->get_or("z", move.z);
+			changed = true;
+		}
+		if (sol::optional<float> y = t.get<sol::optional<float>>("yaw")) {
+			yaw = *y;
+			changed = true;
+		}
+		if (sol::optional<float> pi = t.get<sol::optional<float>>("pitch")) {
+			pitch = *pi;
+			changed = true;
+		}
+		const std::uint8_t new_buttons = buttons_from_table(t, buttons);
+		changed = changed || new_buttons != buttons;
+		buttons = new_buttons;
+		const std::uint32_t new_keybinds =
+				keybinds_from_table(t, keybinds, keybind_names);
+		changed = changed || new_keybinds != keybinds;
+		keybinds = new_keybinds;
+	}
+
+	if (changed) {
+		result.replacement =
+				net::ServerSession::PlayerInputOverride{ move, yaw, pitch, buttons,
+					keybinds };
+	}
+	return result;
+}
+
 PackRuntime::PackRuntime(net::Transport &transport,
 		world::BlockRegistry &registry, std::filesystem::path storage_path,
 		VmLimits limits)
@@ -1027,6 +1217,17 @@ void PackRuntime::install_join_veto(net::HandshakeServerHost &host) {
 			return { false, "denied by pack" };
 		}
 		return outcome;
+	};
+}
+
+void PackRuntime::install_keybind_registry(net::HandshakeServerHost &host) {
+	Impl *self = impl_.get();
+	host.keybind_registry =
+			[self]() -> std::optional<std::vector<std::string>> {
+		if (self->keybind_names.empty()) {
+			return std::nullopt;
+		}
+		return self->keybind_names;
 	};
 }
 
@@ -1077,6 +1278,15 @@ void PackRuntime::attach_session(net::ServerSession &session) {
 		session.set_respawn_handler([self](core::NetId id, std::string_view cause,
 											   float health_before) {
 			return self->run_respawn_handler(id, cause, health_before);
+		});
+	}
+	// Phase 6.3: only installed when a pack actually registered
+	// vb.on("player_input", ...) -- packs that never use this channel pay
+	// zero extra cost in the hot per-tick handle_input_batch loop.
+	if (self->handlers.count("player_input") != 0) {
+		session.set_input_handler(
+				[self](core::NetId id, const protocol::InputCmd &cmd) {
+			return self->run_player_input(id, cmd);
 		});
 	}
 }

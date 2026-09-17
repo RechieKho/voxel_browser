@@ -175,6 +175,32 @@ public:
 		on_respawn_ = std::move(handler);
 	}
 
+	// Phase 6.3 (vb.on("player_input", handler)): a handler-chosen override
+	// for one InputCmd's move/yaw/pitch/buttons, applied before movement
+	// integration. `veto` drops this cmd's effect on movement/rotation
+	// entirely (its seq is still consumed/acked, so it isn't reprocessed
+	// forever); `replacement`, if set, replaces the cmd used for this tick.
+	struct PlayerInputOverride {
+		core::Vec3f move;
+		float yaw = 0.0f;
+		float pitch = 0.0f;
+		std::uint8_t buttons = 0;
+		std::uint32_t keybinds = 0;
+	};
+	struct InputHookResult {
+		bool veto = false;
+		std::optional<PlayerInputOverride> replacement;
+	};
+
+	// Unset (the default -- e.g. `--singleplayer` before a PackRuntime
+	// attaches one) means every InputCmd passes through unchanged, same
+	// "no handler, no side effect" posture as set_chat_handler.
+	void set_input_handler(std::function<InputHookResult(
+					core::NetId, const protocol::InputCmd &)>
+					handler) {
+		on_input_ = std::move(handler);
+	}
+
 	// Dropped-item entities (spec §5.1). Spawns one at `pos`, replicated
 	// generically through the interest grid like any other entity -- no
 	// dedicated wire message. Auto-collected when a player's feet come
@@ -267,6 +293,8 @@ private:
 	double void_kill_y_ = -64.0;
 	std::function<RespawnDecision(core::NetId, std::string_view, float)>
 			on_respawn_;
+	std::function<InputHookResult(core::NetId, const protocol::InputCmd &)>
+			on_input_;
 	std::uint32_t server_tick_ = 0;
 	std::size_t playing_ = 0;
 	std::uint32_t next_net_id_ = 1;
@@ -355,6 +383,15 @@ public:
 	const std::unordered_map<std::string, std::vector<std::byte>> &
 	virtual_pack_fs() const;
 
+	// Pack-registered custom keybind names (spec §10.6, Phase 6.3), in
+	// registration order == bit position for InputCmd::keybinds. Empty until
+	// (and unless) an S2C_KeybindRegistry arrives -- a host that never opts
+	// in leaves this empty forever, same "no frame, no behavior change"
+	// posture as chunk_store()'s block registry.
+	const std::vector<std::string> &registered_keybinds() const {
+		return keybind_names_;
+	}
+
 	// --- client UI VM (spec §10.4, Phase 4.5) ---------------------------
 
 	// Drains a pending S2C_OpenUi, if one arrived since the last call.
@@ -411,6 +448,7 @@ private:
 	// consumed.
 	bool apply_gameplay_frame(const protocol::Frame &frame);
 	void apply_block_registry(const protocol::S2CBlockRegistry &msg);
+	void apply_keybind_registry(const protocol::S2CKeybindRegistry &msg);
 	void apply_snapshot(const protocol::S2CEntitySnapshot &snap);
 	void reconcile(const protocol::EntityRecord &authoritative,
 			std::uint32_t acked_seq);
@@ -447,6 +485,7 @@ private:
 	std::unordered_map<core::NetId, std::string> players_;
 	std::optional<std::uint32_t> time_of_day_override_;
 	std::vector<protocol::InventorySlot> inventory_;
+	std::vector<std::string> keybind_names_;
 
 	physics::MoveState predicted_;
 	physics::MoveParams move_params_;

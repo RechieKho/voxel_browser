@@ -4,8 +4,18 @@
 > as any change to a struct in `inc/vb/protocol/`, and bump
 > `kEngineProtocolVersion` in `cmake/version.hpp.in`.
 
-Current `ENGINE_PROTOCOL_VERSION`: **11**.
+Current `ENGINE_PROTOCOL_VERSION`: **12**.
 
+- **12** — `S2C_KeybindRegistry` (47) payload defined (Phase 6.3, closed-schema
+  custom keybinds): `varint n`, `n × string` (registered keybind names, index
+  == bit position). Sent between `C2S_Ready` and `S2C_JoinAccept` alongside
+  `S2C_BlockRegistry` when the host opts in
+  (`HandshakeServerHost::keybind_registry`, wired by
+  `PackRuntime::install_keybind_registry` from `vb.register_keybind` calls);
+  `nullopt` default = no frame, zero behavior change. `InputCmd` (in
+  `C2S_InputBatch`) also gains a `u32 keybinds` field (bit *i* = the keybind
+  at index *i* held this cmd) — additive, capped at 32 registered names so
+  the bitset always fits one `u32`.
 - **11** — `S2C_Inventory` (107) payload defined (Phase 5.1, real inventory
   sync): `varint n`, `n × {u16 item, u16 count}`. Sent to one player whenever
   their inventory changes (currently: after `player:give()`); always a full

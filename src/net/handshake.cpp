@@ -5,6 +5,7 @@
 
 #include "vb/core/log.hpp"
 #include "vb/core/version.hpp"
+#include "vb/protocol/input.hpp" // S2CKeybindRegistry
 
 namespace vb::net {
 
@@ -243,6 +244,10 @@ ServerHandshakeStep ServerHandshake::on_frame(const Frame &frame) {
 			if (auto records = host_.block_registry()) {
 				step.send.push_back(
 						frame_message(protocol::S2CBlockRegistry{ std::move(*records) }));
+			}
+			if (auto names = host_.keybind_registry()) {
+				step.send.push_back(
+						frame_message(protocol::S2CKeybindRegistry{ std::move(*names) }));
 			}
 
 			protocol::S2CJoinAccept accept;

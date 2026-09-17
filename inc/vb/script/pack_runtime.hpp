@@ -68,6 +68,12 @@ public:
 	// ServerSession that will own `host`.
 	void install_join_veto(net::HandshakeServerHost &host);
 
+	// Wraps host.keybind_registry so every vb.register_keybind name reaches
+	// joining clients as S2C_KeybindRegistry (Phase 6.3). Same calling
+	// convention as install_join_veto: call after freeze(), before
+	// constructing the ServerSession that will copy `host`.
+	void install_keybind_registry(net::HandshakeServerHost &host);
+
 	// Call once each object exists to enable the block-edit veto/on_break/
 	// on_place hooks and the entity/player runtime API respectively.
 	void attach_world(net::WorldReplicator &replicator);

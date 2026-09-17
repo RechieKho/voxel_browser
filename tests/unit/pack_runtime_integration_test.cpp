@@ -169,6 +169,111 @@ TEST_CASE("pack script vetoes a specific player's join") {
 	CHECK(blocked.failed());
 }
 
+TEST_CASE("pack script vetoes and replaces player input via a handler chain") {
+	LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::world::World world(registry);
+	wg::WorldGenWorkerPool pool(
+			wg::WorldGenerator(wg::WorldGenParams{}, registry),
+			wg::WorldGenWorkerPool::kSynchronous);
+
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("input"));
+	REQUIRE(rt.load_pack_file(R"(
+		vb.register_keybind("dash")
+		seen_dash = nil
+		second_saw_move_x = nil
+		second_saw_move_z = nil
+		vb.on("player_input", function(player, input)
+			seen_dash = input.keybinds["dash"]
+			if input.buttons.secondary then
+				return false -- veto
+			end
+			if input.keybinds["dash"] then
+				-- Only override x; y/z (and every other field) must pass
+				-- through unchanged to the next handler in the chain.
+				return { move = { x = 42.0 } }
+			end
+		end)
+		vb.on("player_input", function(player, input)
+			second_saw_move_x = input.move.x
+			second_saw_move_z = input.move.z
+		end)
+	)"));
+	rt.freeze();
+
+	HandshakeServerConfig cfg;
+	cfg.world_seed = 7;
+	HandshakeServerHost host;
+	rt.install_keybind_registry(host);
+	ServerSession server(net.server(), cfg, host);
+	auto replicator = std::make_unique<WorldReplicator>(world, pool, registry,
+			/*view*/ 1, /*vview*/ 2);
+	rt.attach_world(*replicator);
+	server.set_world_replicator(std::move(replicator));
+	rt.attach_session(server);
+	REQUIRE(net.server().listen(0));
+
+	Transport &ta = net.create_client();
+	auto ida = ta.connect("x", 0);
+	REQUIRE(ida);
+	ClientSession client(ta, *ida, HandshakeClientConfig{ "A", "", "v", 1 });
+
+	auto pump = [&](int n) {
+		for (int i = 0; i < n; ++i) {
+			server.tick(0.05);
+			client.tick(0.05);
+			rt.dispatch_tick(0.05);
+		}
+	};
+
+	pump(20);
+	REQUIRE(client.joined());
+	const NetId a_id = client.join_accept()->your_net_id;
+
+	// The registered keybind reached the client as S2C_KeybindRegistry.
+	REQUIRE(client.registered_keybinds().size() == 1);
+	CHECK(client.registered_keybinds()[0] == "dash");
+
+	const Vec3d pos_at_join = server.player_move_state(a_id)->position;
+
+	// Cmd 1: secondary held -> vetoed. Its effect on movement is dropped
+	// entirely (not even gravity), so the authoritative position must be
+	// bit-for-bit unchanged.
+	vb::protocol::InputCmd veto_cmd;
+	veto_cmd.seq = 1;
+	veto_cmd.dt = 0.05f;
+	veto_cmd.buttons = vb::protocol::kInputSecondary;
+	client.push_input(veto_cmd);
+	pump(4);
+
+	REQUIRE(rt.load_pack_file("assert(seen_dash == false)"));
+	const Vec3d pos_after_veto = server.player_move_state(a_id)->position;
+	CHECK(pos_after_veto.x == doctest::Approx(pos_at_join.x));
+	CHECK(pos_after_veto.y == doctest::Approx(pos_at_join.y));
+	CHECK(pos_after_veto.z == doctest::Approx(pos_at_join.z));
+
+	// Cmd 2: dash held, not vetoed -> the first handler's { move = { x = 42
+	// } } reaches the second handler with x replaced but z untouched, and
+	// movement actually integrates this time (position changes).
+	vb::protocol::InputCmd dash_cmd;
+	dash_cmd.seq = 2;
+	dash_cmd.dt = 0.05f;
+	dash_cmd.move = { 1.0f, 0.0f, 7.0f };
+	dash_cmd.keybinds = 0b1u; // "dash" is bit 0
+	client.push_input(dash_cmd);
+	pump(4);
+
+	REQUIRE(rt.load_pack_file(R"(
+		assert(seen_dash == true)
+		assert(second_saw_move_x == 42.0)
+		assert(second_saw_move_z == 7.0)
+	)"));
+	const Vec3d pos_after_dash = server.player_move_state(a_id)->position;
+	CHECK((pos_after_dash.x != pos_after_veto.x ||
+			pos_after_dash.y != pos_after_veto.y ||
+			pos_after_dash.z != pos_after_veto.z));
+}
+
 TEST_CASE("player_leave dispatch fires with the right net id") {
 	LoopbackNetwork net;
 	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();

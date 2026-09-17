@@ -69,6 +69,15 @@ rt.dispatch_tick(dt);
   (captured, no consumer this phase) / `vb.register_craft(def)` (captured;
   the engine itself doesn't read it back, but `content/base/crafting.lua`
   is a real, working example built on top of it — see below).
+  `vb.register_keybind(name) -> index` (Phase 6.3, idempotent by `name`)
+  declares a closed-schema custom input slot — `index` (registration order)
+  becomes bit *index* of every `InputCmd.keybinds` going forward, capped at
+  32 registrations (`S2CKeybindRegistry::kMaxKeybinds`) so the bitset always
+  fits one `u32`; an unregistered key literally cannot be represented on the
+  wire. Reaches joining clients as `S2C_KeybindRegistry` when
+  `PackRuntime::install_keybind_registry(host)` is called (`src/server/
+  main.cpp` does, right alongside `install_join_veto`), same opt-in shape as
+  `block_registry`.
   `vb.worldgen.set_pipeline` is **not implemented** — the worldgen pipeline
   swap is out of this phase's scope; calling it errors as a nil call.
   A pack registering blocks beyond the Phase 2 `base()` set logs an info
@@ -112,9 +121,10 @@ rt.dispatch_tick(dt);
   today, crafted-only materials included (see `content/base/blocks/
   planks.lua`/`sticks.lua`).
 - Events: `vb.on("player_join"|"player_leave"|"block_break"|"block_place"|
-  "player_interact"|"chat"|"tick"|"ui_event"|"player_death", handler)`,
-  vetoable via `return false` (except `tick`/`ui_event`, which have no veto
-  semantics; `player_death` is a *decision* hook, not a veto — see below).
+  "player_interact"|"chat"|"tick"|"ui_event"|"player_death"|"player_input",
+  handler)`, vetoable via `return false` (except `tick`/`ui_event`, which have
+  no veto semantics; `player_death` is a *decision* hook, not a veto —
+  see below; `player_input` may veto *or* replace, see below).
   `player_join` fires from `install_join_veto`'s `authenticate` wrapper (a
   real pre-join veto — note it hands the handler a plain player *name*
   string, not a `Player` handle, since no session/connection exists yet at
@@ -145,6 +155,22 @@ rt.dispatch_tick(dt);
   `ServerSession::spawn_point(net_id)` (not a Lua binding, a host-side
   accessor) exposes the original join spawn point if a handler wants to
   fall back to it deliberately.
+  `player_input` (Phase 6.3) fires once per `InputCmd`, before movement
+  integration, as `function(player, input) -> false | table | nil`. `input`
+  is `{ move = {x,y,z}, yaw, pitch, buttons = {jump,sprint,primary,
+  secondary,fly_up,fly_down}, keybinds = {[name] = bool, ...} }` (only
+  *registered* keybind names ever appear as `keybinds` keys). Returning
+  `false` vetoes — the cmd's effect on movement/rotation is dropped entirely
+  for that tick (its seq is still consumed/acked, so the client doesn't
+  replay it forever); returning a table overrides only the fields present in
+  it (omitted fields keep the previous value) — e.g. `return { move = {
+  z = 2.0 } }` to reinterpret input as a dash. Multiple handlers chain in
+  registration order, each seeing the prior one's output; the first `false`
+  short-circuits the rest. Movement/look fields (`PlayerInput`'s existing
+  wire shape) are otherwise untouched by this channel — it's additive.
+  Only installed (`ServerSession::set_input_handler`) when a pack actually
+  registers a `player_input` handler, so packs that don't use it pay zero
+  extra cost in the per-tick input path.
 - Scheduling: `vb.after(seconds, fn)` (one-shot), `vb.every(seconds, fn)`
   (repeating; catches up on a stalled tick, capped at 8 fires/dispatch).
   Storage: `vb.storage.key = value` — a metatable-backed proxy over a

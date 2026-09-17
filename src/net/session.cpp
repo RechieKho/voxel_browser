@@ -118,6 +118,27 @@ void ServerSession::handle_input_batch(Conn &conn,
 		if (cmd.seq <= input.last_seq) {
 			continue; // already simulated (batches resend recent commands)
 		}
+		// Phase 6.3 (vb.on("player_input", handler)): a pack may veto this
+		// cmd's effect on movement/rotation entirely, or replace the values
+		// used below. The seq is still consumed either way (see the ack
+		// comment above) -- a veto means "this happened, we chose to have it
+		// do nothing," not "never received," so client reconciliation still
+		// converges instead of replaying it forever.
+		protocol::InputCmd effective = cmd;
+		if (on_input_) {
+			const ServerSession::InputHookResult hook = on_input_(conn.net_id, cmd);
+			if (hook.veto) {
+				input.last_seq = cmd.seq;
+				continue;
+			}
+			if (hook.replacement) {
+				effective.move = hook.replacement->move;
+				effective.yaw = hook.replacement->yaw;
+				effective.pitch = hook.replacement->pitch;
+				effective.buttons = hook.replacement->buttons;
+				effective.keybinds = hook.replacement->keybinds;
+			}
+		}
 		// The spawn chunk may still be generating (async worldgen worker) --
 		// simulating gravity against unloaded-as-air terrain lets the player
 		// free-fall with no collision and end up embedded in the ground the
@@ -129,12 +150,12 @@ void ServerSession::handle_input_batch(Conn &conn,
 						[this](core::ChunkCoord c) {
 							return replicator_->world().has_chunk(c);
 						})) {
-			move = physics::step_movement(move, to_move_input(cmd),
+			move = physics::step_movement(move, to_move_input(effective),
 					move_params_, world);
 		}
 		input.last_seq = cmd.seq;
-		rot.yaw = cmd.yaw;
-		rot.pitch = cmd.pitch;
+		rot.yaw = effective.yaw;
+		rot.pitch = effective.pitch;
 	}
 	pos.value = move.position;
 	vel.value = move.velocity;
@@ -741,6 +762,15 @@ void ClientSession::tick(double) {
 					}
 					break;
 				}
+				if (frame->header.type == protocol::MessageType::kS2CKeybindRegistry) {
+					if (auto m = protocol::S2CKeybindRegistry::decode(frame->payload)) {
+						apply_keybind_registry(*m);
+					} else {
+						VB_ERROR("net", "malformed S2C_KeybindRegistry: ",
+								core::message(m.error()));
+					}
+					break;
+				}
 				if (handshake_.status() == ClientHandshakeStatus::kJoined &&
 						apply_gameplay_frame(*frame)) {
 					break;
@@ -909,6 +939,11 @@ void ClientSession::apply_block_registry(const protocol::S2CBlockRegistry &msg) 
 	}
 	VB_INFO("net", "received block registry (", msg.blocks.size(), " blocks)");
 	chunks_.set_registry(std::move(reg));
+}
+
+void ClientSession::apply_keybind_registry(const protocol::S2CKeybindRegistry &msg) {
+	keybind_names_ = msg.names;
+	VB_INFO("net", "received keybind registry (", msg.names.size(), " keybinds)");
 }
 
 void ClientSession::apply_snapshot(const protocol::S2CEntitySnapshot &snap) {

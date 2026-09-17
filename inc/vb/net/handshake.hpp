@@ -94,6 +94,14 @@ struct HandshakeServerHost {
 		return std::optional<std::vector<protocol::BlockRegistryRecord>>{};
 	};
 
+	// Pack-registered custom keybind names, sent as S2C_KeybindRegistry
+	// alongside block_registry above (spec §10.6, Phase 6.3) -- `names[i]`
+	// becomes bit i of every InputCmd::keybinds from then on. `nullopt`
+	// (default) sends no frame at all: no host/test that doesn't use this
+	// channel sees any behavior change.
+	std::function<std::optional<std::vector<std::string>>()> keybind_registry =
+			[] { return std::optional<std::vector<std::string>>{}; };
+
 	// Built once at server startup (assetsync::build_manifest over the
 	// content pack) and handed to every connection by reference -- never
 	// rebuilt per connection. `nullptr` (default) skips asset sync entirely

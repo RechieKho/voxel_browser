@@ -199,6 +199,7 @@ int main(int argc, char **argv) {
 		}
 		return buf;
 	};
+	pack_runtime.install_keybind_registry(host); // before ServerSession copies `host` in
 	pack_runtime.install_join_veto(host); // before ServerSession copies `host` in
 
 	vb::net::ServerSession session(transport, hs_config, host);
