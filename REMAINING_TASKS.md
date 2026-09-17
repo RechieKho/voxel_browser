@@ -627,11 +627,9 @@ Lua-defined UI.
 - [ ] `EntityKind` tick/spawn/hit/death callbacks wired into `ScriptPreTick` /
       `ScriptPostTick` systems — waits on 3.1's EnTT registry; `register_entity`
       already captures the callbacks, nothing iterates entities to call them.
-- [ ] Lua-driven worldgen pipeline replaces the Phase 2 hardcoded one; biomes
-      (Voronoi-cell, adjacency-weighted selection — `ARCHITECTURE_SPEC.md` §6
-      stage 2) + carvers + vein/scatter (new stage 5, ore/valuable-block
-      placement) + decoration — explicitly out of this pass's scope, still a
-      separate, meaningfully-sized follow-up.
+- [ ] Lua-driven worldgen pipeline replaces the Phase 2 hardcoded one —
+      moved to Phase 6.14 (extensibility push, FastNoise2 backend); tracked
+      there now instead of here.
 - [ ] `register_entity`'s `visual = {...}` sub-table (atlas, `facings`,
       per-clip frame lists) for 3.5's `entity_renderer` — not added; nothing
       reads a per-kind visual def yet (3.5 still hardcodes a flat placeholder).
@@ -1640,10 +1638,38 @@ windows, chatting, crafting, and seeing each other, all at once.
       spawn density to view distance), not a full override registry like
       6.6-6.11 above.
 
-> World generation (biome selection, height params, block choice — all
-> still 100% hardcoded in `WorldGenerator::generate` today) is not repeated
-> here; it's already fully tracked under Phase 4.2 / the worldgen items in
-> Phase 6's intro note.
+### 6.14 Lua-driven worldgen pipeline (FastNoise2 backend)
+
+> Moved here from Phase 4.2 (2026-09-17) — it's the same "override an
+> engine default from a pack" shape as the rest of Phase 6, and `biomes`
+> was already named in this phase's own intro note as one of the four
+> systems in scope. World generation (biome selection, height params, block
+> choice) is currently 100% hardcoded in `WorldGenerator::generate`
+> (Phase 2's fBm heightmap pipeline); `vb.worldgen.set_pipeline` doesn't
+> exist. FastNoise2 (`v0.10.0`, `VB_WITH_WORLDGEN`) has been a pinned
+> dependency since Phase 0 but nothing constructs a node graph with it yet
+> — the hand-rolled integer-hash noise in `vb/core/noise.hpp` is what
+> `WorldGenerator` actually uses today.
+
+- [ ] `vb.worldgen.set_pipeline(fn)` — a pack-supplied stage function (or
+      ordered list of stages) that replaces `WorldGenerator::generate`'s
+      hardcoded body; falls back to the current hand-rolled fBm heightmap
+      when no pack sets one, so an unmodified `content/base` keeps working.
+- [ ] Expose FastNoise2 node-graph construction to Lua (`vb.noise.*`) —
+      the natural backend for pack-defined pipelines; the hand-rolled
+      `vb/core/noise.hpp` path stays as the deterministic zero-dependency
+      default (`VB_WITH_WORLDGEN` off), same posture as every other
+      `VB_WITH_*`-gated optional backend.
+- [ ] Biome selection (`ARCHITECTURE_SPEC.md` §6 stage 2): Voronoi-cell
+      partitioning with adjacency-weighted probability (WFC-flavored,
+      non-backtracking — design finalized 2026-09-17) reads `register_biome`
+      entries (already captured by `PackRuntime`, 4.2) instead of nothing.
+- [ ] Carvers + vein/scatter (new stage 5, ore/valuable-block placement) +
+      decoration pass — each a pipeline stage a pack can plug in via the
+      same `set_pipeline` mechanism.
+- [ ] Determinism gate (`tests/unit/worldgen_test.cpp`'s golden-hash test)
+      needs a pack-driven pipeline case once this lands, alongside the
+      existing hardcoded-pipeline golden.
 
 ---
 
