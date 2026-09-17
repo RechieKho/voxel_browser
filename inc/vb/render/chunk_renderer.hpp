@@ -2,7 +2,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "vb/core/ids.hpp"
 #include "vb/world/chunk_mesh_worker_pool.hpp"
@@ -29,10 +31,14 @@ public:
 	ChunkRenderer &operator=(const ChunkRenderer &) = delete;
 
 	// Submit at most `submit_budget` changed/new chunks to the background mesh
-	// pool, then drain and GPU-upload whatever mesh jobs finished since the
-	// last call. A chunk's mesh can now lag its data arriving by a frame or
-	// more -- see chunk_mesh_worker_pool.hpp.
-	void sync(const world::ClientChunkStore &store, int submit_budget = 8);
+	// pool, then GPU-upload at most `upload_budget` finished mesh jobs (a
+	// first-time upload does a real UnloadModel/UploadMesh -- VAO/VBO churn --
+	// so an unbounded drain-and-upload-all-at-once burst on join is exactly
+	// the trigger for the NVIDIA driver heap corruption documented in
+	// STATE.md; any jobs finished but not yet uploaded stay queued and are
+	// uploaded on a later call). A chunk's mesh can now lag its data arriving
+	// by a frame or more -- see chunk_mesh_worker_pool.hpp.
+	void sync(const world::ClientChunkStore &store, int submit_budget = 8, int upload_budget = 4);
 
 	// Draw every uploaded chunk. Call inside BeginMode3D/EndMode3D.
 	void draw() const;
@@ -47,6 +53,13 @@ private:
 
 	world::ChunkMeshWorkerPool pool_;
 	std::unordered_map<core::ChunkCoord, GpuChunk> gpu_;
+	std::deque<world::ChunkMeshResult> pending_uploads_;
+	// Mirrors the coords in pending_uploads_ for O(1) "already waiting to
+	// upload, don't resubmit" checks -- pool_.in_flight_or_queued() alone
+	// can't see this queue, since a result leaves the pool the moment it's
+	// polled into pending_uploads_ but may sit there for several frames
+	// under upload_budget pacing.
+	std::unordered_set<core::ChunkCoord> pending_coords_;
 };
 
 } // namespace vb::render

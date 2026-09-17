@@ -190,7 +190,7 @@ void ChunkRenderer::upload(core::ChunkCoord coord, const world::MeshData &data,
 	slot.revision = revision;
 }
 
-void ChunkRenderer::sync(const world::ClientChunkStore &store, int submit_budget) {
+void ChunkRenderer::sync(const world::ClientChunkStore &store, int submit_budget, int upload_budget) {
 	// Drop GPU state for chunks that unloaded.
 	std::vector<core::ChunkCoord> gone;
 	for (const auto &[coord, gpu] : gpu_) {
@@ -203,16 +203,29 @@ void ChunkRenderer::sync(const world::ClientChunkStore &store, int submit_budget
 		drop(c);
 	}
 
-	// Upload whatever background meshing finished since the last call. A
-	// result is stale if the chunk changed again after its snapshot was
-	// taken -- drop it silently; the chunk's current revision won't match
-	// gpu_[coord].revision, so the submit loop below requeues it.
+	// Queue whatever background meshing finished since the last call; these
+	// aren't uploaded yet, just appended behind anything already waiting.
 	for (world::ChunkMeshResult &result : pool_.poll_completed()) {
+		pending_coords_.insert(result.coord);
+		pending_uploads_.push_back(std::move(result));
+	}
+
+	// GPU-upload at most `upload_budget` queued results this frame. A result
+	// is stale if the chunk changed again after its snapshot was taken (or
+	// unloaded while queued) -- drop it silently without counting against the
+	// budget; the chunk's current revision won't match gpu_[coord].revision,
+	// so the submit loop below requeues it.
+	int uploaded = 0;
+	while (uploaded < upload_budget && !pending_uploads_.empty()) {
+		world::ChunkMeshResult result = std::move(pending_uploads_.front());
+		pending_uploads_.pop_front();
+		pending_coords_.erase(result.coord);
 		const world::Chunk *chunk = store.find(result.coord);
 		if (chunk == nullptr || chunk->revision() != result.revision) {
 			continue; // unloaded or superseded since the snapshot was built
 		}
 		upload(result.coord, result.mesh, result.revision);
+		++uploaded;
 	}
 
 	// Submit new / changed chunks for background meshing, up to the budget.
@@ -224,7 +237,7 @@ void ChunkRenderer::sync(const world::ClientChunkStore &store, int submit_budget
 		const world::Chunk *chunk = store.find(coord);
 		const auto it = gpu_.find(coord);
 		const bool needs = it == gpu_.end() || it->second.revision != chunk->revision();
-		if (!needs || pool_.in_flight_or_queued(coord)) {
+		if (!needs || pool_.in_flight_or_queued(coord) || pending_coords_.contains(coord)) {
 			continue;
 		}
 		world::ChunkMeshSnapshot snapshot = world::build_chunk_mesh_snapshot(store, coord);
