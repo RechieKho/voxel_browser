@@ -193,6 +193,19 @@ public:
 		on_item_pickup_ = std::move(handler);
 	}
 
+	// Phase 6.1 (vb.register_entity / vb.world.spawn): a generic Lua-kind
+	// entity, replicated the exact same way spawn_item_drop's entries are --
+	// no dedicated wire message, just another interest-grid entry keyed by a
+	// NetId from its own id range (disjoint from both players, which start at
+	// 1, and item drops, which start at 0x8000'0000 -- see item_drops.hpp).
+	// ServerSession has no idea these are Lua-backed; PackRuntime owns the
+	// per-instance `self` table and on_spawn/on_tick/on_hit/on_death
+	// dispatch entirely on its own side.
+	core::NetId spawn_script_entity(core::EntityKindId kind, core::Vec3d pos);
+	void set_script_entity_state(core::NetId id, core::Vec3d pos,
+			core::Vec2f rot = {}, core::Vec3f vel = {});
+	void remove_script_entity(core::NetId id);
+
 private:
 	struct Conn {
 		explicit Conn(ServerHandshake hs) : handshake(std::move(hs)) {}
@@ -257,6 +270,10 @@ private:
 	std::uint32_t server_tick_ = 0;
 	std::size_t playing_ = 0;
 	std::uint32_t next_net_id_ = 1;
+	// Phase 6.1: starts well past any plausible player NetId (1, counting up)
+	// and well short of ItemDropSystem's 0x8000'0000 range, so all three id
+	// spaces stay disjoint without sharing a counter.
+	std::uint32_t next_script_entity_id_ = 0x4000'0000u;
 	std::vector<TransportEvent> scratch_;
 	std::vector<SessionPlayerJoined> joins_;
 	std::vector<SessionPlayerLeft> leaves_;

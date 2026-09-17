@@ -160,6 +160,28 @@ struct EntityKindDef {
 	sol::protected_function on_death;
 };
 
+// Phase 6.1: one spawned `vb.world.spawn(kind, pos)` instance. `self` is a
+// plain Lua table (the spec's `ScriptState`) that on_spawn/on_tick/on_hit/
+// on_death all receive as their first argument and that persists across
+// calls, so it works as real instance state -- not just a fresh handle
+// rebuilt per call the way PlayerHandle is. Its metatable's __index points at
+// the shared `entity_methods` table (built once in install_bindings), so
+// base-component accessors (get_pos/set_pos/...) are reachable as
+// `self:get_pos()` while arbitrary fields (`self.hp = 10`) live directly on
+// the table with no collision unless a pack picks a method's exact name --
+// the "arbitrary fields for custom data, accessors for engine-owned
+// components" split REMAINING_TASKS.md 6.1 leaned toward.
+//
+// No generic EnTT registry backs this (same posture as ItemDropSystem,
+// world/item_drops.hpp): kind/self/position live in this map, replicated
+// through ServerSession::spawn_script_entity's interest-grid entry exactly
+// like a dropped item is, with no dedicated wire message.
+struct ScriptEntity {
+	std::size_t kind_index = 0; // index into Impl::entity_kinds
+	sol::table self;
+	core::Vec3d pos{};
+};
+
 struct BiomeDef {
 	std::string name;
 	sol::table raw;
@@ -186,6 +208,13 @@ struct PackRuntime::Impl {
 	std::vector<EntityKindDef> entity_kinds;
 	std::vector<BiomeDef> biomes;
 	std::vector<CraftDef> crafts;
+
+	// Phase 6.1: spawned vb.register_entity instances, keyed by the NetId
+	// ServerSession::spawn_script_entity handed back. entity_mt is the shared
+	// metatable (__index = entity_methods) applied to every spawned `self`.
+	std::unordered_map<core::NetId, ScriptEntity> entities;
+	sol::table entity_methods;
+	sol::table entity_mt;
 
 	std::unordered_map<std::string, std::vector<sol::protected_function>> handlers;
 
@@ -228,6 +257,13 @@ struct PackRuntime::Impl {
 	// spawn point if no handler is registered or none returns a table.
 	net::ServerSession::RespawnDecision run_respawn_handler(
 			core::NetId id, std::string_view cause, float health_before);
+
+	// Phase 6.1: vb.world.spawn / self:damage / self:remove dispatch. See
+	// ScriptEntity's comment above for the overall design.
+	core::NetId self_net_id(const sol::table &self) const;
+	void dispatch_entity_tick(double dt);
+	void dispatch_entity_hit(core::NetId id, double amount, std::string_view cause);
+	void despawn_entity(core::NetId id, std::string_view cause);
 
 	template <typename... Args>
 	void fire(const std::string &event, Args &&...args) {
@@ -591,13 +627,83 @@ void PackRuntime::Impl::install_bindings() {
 		session->spawn_item_drop(p, static_cast<core::BlockId>(item), count);
 	};
 
-	world_tbl["spawn"] = [this](const std::string &kind, sol::table pos) {
-		(void)pos;
-		const bool found = std::any_of(entity_kinds.begin(), entity_kinds.end(),
+	// Phase 6.1: shared instance-method table for every spawned `self`, set
+	// as the metatable of each so `self:get_pos()`/`self:damage(...)`/... work
+	// while arbitrary fields (`self.hp = 10`) stay free on the table itself.
+	entity_methods = lua.create_table();
+	entity_methods["get_pos"] = [this](sol::table self, sol::this_state ts) -> sol::object {
+		sol::state_view sv(ts);
+		auto it = entities.find(self_net_id(self));
+		if (it == entities.end()) {
+			throw sol::error("entity:get_pos(): entity is gone");
+		}
+		sol::table t = sv.create_table();
+		t["x"] = it->second.pos.x;
+		t["y"] = it->second.pos.y;
+		t["z"] = it->second.pos.z;
+		return t;
+	};
+	entity_methods["set_pos"] = [this](sol::table self, double x, double y, double z) {
+		const core::NetId id = self_net_id(self);
+		auto it = entities.find(id);
+		if (it == entities.end()) {
+			throw sol::error("entity:set_pos(): entity is gone");
+		}
+		it->second.pos = { x, y, z };
+		if (session != nullptr) {
+			session->set_script_entity_state(id, it->second.pos);
+		}
+	};
+	entity_methods["get_kind"] = [this](sol::table self) -> std::string {
+		auto it = entities.find(self_net_id(self));
+		if (it == entities.end()) {
+			return {};
+		}
+		return entity_kinds[it->second.kind_index].name;
+	};
+	// Notification-only: the engine tracks no health for generic entities
+	// (same "engine takes no position" posture as 6.5's block-damage design)
+	// -- this just fires the kind's on_hit so a pack can implement whatever
+	// health/aggro/knockback logic it wants.
+	entity_methods["damage"] = [this](sol::table self, double amount,
+											sol::optional<std::string> cause) {
+		dispatch_entity_hit(self_net_id(self), amount, cause.value_or(std::string{}));
+	};
+	entity_methods["remove"] = [this](sol::table self, sol::optional<std::string> cause) {
+		despawn_entity(self_net_id(self), cause.value_or(std::string{}));
+	};
+	entity_mt = lua.create_table();
+	entity_mt["__index"] = entity_methods;
+
+	world_tbl["spawn"] = [this](const std::string &kind, sol::table pos,
+										sol::this_state ts) -> sol::object {
+		sol::state_view sv(ts);
+		auto kind_it = std::find_if(entity_kinds.begin(), entity_kinds.end(),
 				[&](const EntityKindDef &e) { return e.name == kind; });
-		(void)found;
-		VB_INFO("script", "vb.world.spawn: kind '", kind,
-				"' recorded (no entity system yet -- Phase 3.1)");
+		if (kind_it == entity_kinds.end()) {
+			throw sol::error("vb.world.spawn: unknown entity kind '" + kind + "'");
+		}
+		if (session == nullptr) {
+			throw sol::error("vb.world.spawn: session not attached yet");
+		}
+		const core::Vec3d p{ pos.get_or("x", 0.0), pos.get_or("y", 0.0),
+			pos.get_or("z", 0.0) };
+		const core::NetId id = session->spawn_script_entity(kind_it->id, p);
+		sol::table self = sv.create_table();
+		self[sol::metatable_key] = entity_mt;
+		self["__net_id"] = static_cast<double>(static_cast<std::uint32_t>(id));
+		const std::size_t kind_index =
+				static_cast<std::size_t>(kind_it - entity_kinds.begin());
+		entities[id] = ScriptEntity{ kind_index, self, p };
+		if (kind_it->on_spawn.valid()) {
+			vm.begin_call_budget();
+			sol::protected_function_result r = kind_it->on_spawn(self);
+			if (!r.valid()) {
+				const sol::error e = r;
+				VB_WARN("script", "entity on_spawn handler error: ", e.what());
+			}
+		}
+		return self;
 	};
 
 	static const std::set<std::string> kValidEvents = { "player_join",
@@ -637,8 +743,86 @@ void PackRuntime::Impl::install_bindings() {
 	vb["storage"] = storage_proxy;
 }
 
+core::NetId PackRuntime::Impl::self_net_id(const sol::table &self) const {
+	return static_cast<core::NetId>(
+			static_cast<std::uint32_t>(self.get_or("__net_id", 0.0)));
+}
+
+// Phase 6.1's ScriptPreTickSystem-equivalent: fires on_tick(self, dt) for
+// every currently-spawned entity, once per PackRuntime::dispatch_tick. Ids are
+// snapshotted first since a handler may spawn/remove entities (including
+// itself) mid-iteration.
+void PackRuntime::Impl::dispatch_entity_tick(double dt) {
+	std::vector<core::NetId> ids;
+	ids.reserve(entities.size());
+	for (const auto &[id, e] : entities) {
+		(void)e;
+		ids.push_back(id);
+	}
+	for (const core::NetId id : ids) {
+		const auto it = entities.find(id);
+		if (it == entities.end()) {
+			continue; // removed by an earlier handler this tick
+		}
+		const EntityKindDef &kind = entity_kinds[it->second.kind_index];
+		if (!kind.on_tick.valid()) {
+			continue;
+		}
+		vm.begin_call_budget();
+		sol::protected_function_result r = kind.on_tick(it->second.self, dt);
+		if (!r.valid()) {
+			const sol::error e = r;
+			VB_WARN("script", "entity on_tick handler error: ", e.what());
+		}
+	}
+}
+
+void PackRuntime::Impl::dispatch_entity_hit(
+		core::NetId id, double amount, std::string_view cause) {
+	const auto it = entities.find(id);
+	if (it == entities.end()) {
+		return;
+	}
+	const EntityKindDef &kind = entity_kinds[it->second.kind_index];
+	if (!kind.on_hit.valid()) {
+		return;
+	}
+	vm.begin_call_budget();
+	sol::protected_function_result r =
+			kind.on_hit(it->second.self, amount, std::string(cause));
+	if (!r.valid()) {
+		const sol::error e = r;
+		VB_WARN("script", "entity on_hit handler error: ", e.what());
+	}
+}
+
+// Phase 6.1's ScriptPostTickSystem-equivalent (the "entity despawn commit"
+// half): fires on_death(self, cause), then removes the entity from both this
+// map and the interest grid, so it stops replicating.
+void PackRuntime::Impl::despawn_entity(core::NetId id, std::string_view cause) {
+	const auto it = entities.find(id);
+	if (it == entities.end()) {
+		return;
+	}
+	const EntityKindDef &kind = entity_kinds[it->second.kind_index];
+	if (kind.on_death.valid()) {
+		vm.begin_call_budget();
+		sol::protected_function_result r =
+				kind.on_death(it->second.self, std::string(cause));
+		if (!r.valid()) {
+			const sol::error e = r;
+			VB_WARN("script", "entity on_death handler error: ", e.what());
+		}
+	}
+	if (session != nullptr) {
+		session->remove_script_entity(id);
+	}
+	entities.erase(it);
+}
+
 void PackRuntime::Impl::dispatch_tick(double dt) {
 	fire("tick", dt);
+	dispatch_entity_tick(dt);
 
 	for (auto &t : timers) {
 		if (t.cancelled) {

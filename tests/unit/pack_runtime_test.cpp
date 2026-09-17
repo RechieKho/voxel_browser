@@ -185,14 +185,16 @@ TEST_CASE("vb.world.raycast finds the first solid voxel") {
 	REQUIRE(miss);
 }
 
-TEST_CASE("vb.world.spawn on an unregistered kind is a no-op, returns nil") {
+TEST_CASE("vb.world.spawn on an unregistered kind raises a Lua error") {
 	Fixture f(temp_storage("spawn"));
 
+	// Phase 6.1: same "reject, don't silently no-op" convention as
+	// vb.world.set_block's unknown-block-id check -- a typo'd kind name is a
+	// bug, not something to swallow.
 	const auto r = f.rt.load_pack_file(R"(
-		local result = vb.world.spawn("unknown_kind", { x = 0, y = 0, z = 0 })
-		assert(result == nil)
+		vb.world.spawn("unknown_kind", { x = 0, y = 0, z = 0 })
 	)");
-	REQUIRE(r);
+	CHECK_FALSE(r);
 }
 
 TEST_CASE("vb.on('tick') fires with dt; vb.after/vb.every fire on schedule") {

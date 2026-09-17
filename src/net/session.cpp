@@ -519,6 +519,30 @@ core::NetId ServerSession::spawn_item_drop(
 	return id;
 }
 
+core::NetId ServerSession::spawn_script_entity(
+		core::EntityKindId kind, core::Vec3d pos) {
+	const auto id = static_cast<core::NetId>(next_script_entity_id_++);
+	interest_.upsert(replication::EntityState{ id, kind, pos, {}, {} });
+	return id;
+}
+
+void ServerSession::set_script_entity_state(
+		core::NetId id, core::Vec3d pos, core::Vec2f rot, core::Vec3f vel) {
+	replication::EntityState s;
+	if (const auto *existing = interest_.get(id)) {
+		s = *existing;
+	}
+	s.net_id = id;
+	s.pos = pos;
+	s.rot = rot;
+	s.vel = vel;
+	interest_.upsert(s);
+}
+
+void ServerSession::remove_script_entity(core::NetId id) {
+	interest_.remove(id);
+}
+
 void ServerSession::broadcast_time_of_day() {
 	const protocol::S2CTimeOfDay msg{ static_cast<std::uint32_t>(time_of_day_ticks_) };
 	for (auto &[conn, state] : conns_) {

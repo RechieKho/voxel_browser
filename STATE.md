@@ -7,13 +7,21 @@
 > Companion docs: `ARCHITECTURE_SPEC.md` (target design) · `REMAINING_TASKS.md`
 > (implementation backlog). This file is for *traps and context*, not the plan.
 
-Last updated: 2026-09-17 (Phase 6.6 — player damage/death primitive: generic
-`player:damage(amount, cause)` + a `vb.on("player_death", ...)` hook replace
-the hardcoded instant-heal-and-teleport `check_respawns()`; `ServerSession`
-falls back to the exact old behavior when no pack installs a handler, so
-every pre-6.6 test still passes unmodified. See §8's newest entry for the
+Last updated: 2026-09-17 (Phase 6.1 — entity kinds as classes: `vb.register_entity`
++ `vb.world.spawn(kind, pos)` now really spawns something, with a persistent
+per-instance `self` table and `on_spawn`/`on_tick`/`on_hit`/`on_death` all
+wired up — following `ItemDropSystem`'s hardcoded-system-ahead-of-the-generic-
+one precedent rather than the spec's EnTT-`ScriptState` design, since Phase
+3.1's generic registry is still deferred. See §8's newest entry for the
+design-deviation rationale and a test-writing gotcha (don't assert an exact
+`self` value right after a spawn+pump — ticks already ran). Previous entry:
+Phase 6.6 — player damage/death primitive: generic `player:damage(amount,
+cause)` + a `vb.on("player_death", ...)` hook replace the hardcoded
+instant-heal-and-teleport `check_respawns()`; `ServerSession` falls back to
+the exact old behavior when no pack installs a handler, so every pre-6.6 test
+still passes unmodified. See §8's Phase 6.6 entry for the
 drop-inventory-at-death-not-respawn-position lesson learned while testing
-it. Previous entry: Phase 5.5 documentation pass complete —
+it. Earlier: Phase 5.5 documentation pass complete —
 `CONTRIBUTING.md` added (module map, build/test workflow, wire-message
 checklist, Lua-binding guidelines); `docs/lua-api.md`/README's stale claims
 fixed; see §8's fourteenth 2026-09-16 entry. Phase 5.1/4.3 — `--singleplayer` now runs the real
@@ -318,6 +326,66 @@ Other undecided-but-not-yet-in-spec:
 ## 8. Done / resolved
 
 _(Move items here with a date + commit when fixed, so the history is visible.)_
+
+- **2026-09-17 — Phase 6.1 entity kinds as classes landed (uncommitted).**
+  `vb.world.spawn(kind, pos)` now actually does something: it creates a
+  spawned instance whose `self` is a persistent Lua table (`ScriptState` in
+  spirit) stored in `PackRuntime::Impl::entities`
+  (`src/script/pack_runtime.cpp`), fires `on_spawn(self)` once, then
+  `on_tick(self, dt)` once per `dispatch_tick` for as long as it's alive.
+  **Design deviation from `ARCHITECTURE_SPEC.md` §7.1/§7.2, deliberate:** the
+  spec assumes an EnTT-backed `ScriptState` component driven by real
+  `ScriptPreTickSystem`/`ScriptPostTickSystem` classes — neither exists.
+  Phase 3.1's generic registry wiring is still deferred (see §2 below), the
+  same gap 5.1's `ItemDropSystem` hit first; this item followed that exact
+  precedent again rather than building the general system: a small
+  hardcoded map, replicated through the interest grid exactly like a dropped
+  item (`ServerSession::spawn_script_entity`/`set_script_entity_state`/
+  `remove_script_entity`, `src/net/session.cpp`, literally copy-pasted from
+  `spawn_item_drop`'s shape). `self`'s base-component accessors
+  (`get_pos`/`set_pos`/`get_kind`/`damage`/`remove`) reach it via a shared
+  metatable's `__index`, not a usertype — arbitrary fields (`self.hp = 10`)
+  live directly on the table, unlike `PlayerHandle` which is rebuilt fresh
+  every call and has nowhere to persist anything.
+  **`on_hit` has no built-in trigger** — the engine tracks no health at all
+  for generic entities (matching 6.5's still-unbuilt "engine takes no
+  position" stance on damage). `self:damage(amount, cause)` just fires
+  `on_hit` as a notification; a pack wanting mob HP owns that entirely on
+  `self` and calls `self:remove(cause)` (which fires `on_death` then
+  despawns) itself.
+  **Trap that cost a debugging round in the integration test:** don't assert
+  an exact `self` field value right after `pump(N)` following a spawn — the
+  spawning chat message doesn't land on the server until a tick or two into
+  the pump, and every remaining tick in that same `pump` call already runs
+  `on_tick` before the assertion, so e.g. an `hp` seeded to `10` and
+  incremented by `dt` each tick is already `> 10` by the time you can check
+  it, not exactly `10`. Assert a baseline (`> 10`, or capture the value into
+  a Lua global) and compare against *that* after more ticks instead of a
+  literal.
+  **Test-running gotcha hit this session, unrelated to the code:** driving
+  MSVC through `vcvars64.bat` from an agent shell via `cmd.exe /c '<path>'`
+  silently hangs forever if the path is wrong (e.g. a bash `/tmp/...` path
+  that doesn't resolve to the same location under `cmd.exe`) — no error, no
+  output, just sits there looking like a slow compile. Write the batch file
+  to (and invoke it from) a real Windows path (e.g. the scratchpad dir under
+  `C:\Users\...\AppData\Local\...`), not bash's `/tmp`. `cmd /c '"<vcvars>"
+  && ninja ...'` chained in one line via the PowerShell tool worked reliably
+  where the two-line-batch-file-via-Bash-tool approach didn't.
+  **Verification:** full `vb_tests` green on `build-net-lua`
+  (`VB_WITH_NET=ON`, `VB_WITH_LUA=ON`, 197/197 cases) and on `build-meshing`
+  (`VB_WITH_LUA=OFF`, ASan build, 166/166 cases, no ASan findings — confirms
+  the `ServerSession` engine-side change alone, without any Lua bindings,
+  compiles and behaves under the no-Lua config too, same as 6.6's
+  verification pattern).
+  **Existing test updated:** `pack_runtime_test.cpp`'s
+  "`vb.world.spawn` on an unregistered kind" case asserted the old stub's
+  silent-no-op-returns-nil behavior; changed to assert it now raises a Lua
+  error, matching `vb.world.set_block`'s existing "reject, don't silently
+  swallow" convention for an unknown id.
+  **Not done:** no client-side rendering branches on `EntityKind` yet (same
+  pre-existing limitation `world::kItemDropKind` already has — every remote
+  entity draws the same placeholder billboard); no automatic despawn-on-
+  zero-health since no generic health primitive exists.
 
 - **2026-09-17 — Phase 6.6 player damage/death primitive landed
   (uncommitted).** `player:damage(amount, cause)` (`PlayerHandle::damage`,

@@ -1426,7 +1426,7 @@ windows, chatting, crafting, and seeing each other, all at once.
 
 ---
 
-## Phase 6 — Lua-Driven Extensibility (in progress — 6.6 done, 6.1-6.5/6.7-6.14 design only)
+## Phase 6 — Lua-Driven Extensibility (in progress — 6.1/6.6 done, 6.2-6.5/6.7-6.14 design only)
 
 > Design agreed in discussion on 2026-09-17: four systems that let content
 > packs override/extend engine defaults (biomes, entities, UI, input, data)
@@ -1435,20 +1435,52 @@ windows, chatting, crafting, and seeing each other, all at once.
 > still-open "wire `register_entity` callbacks" item — see
 > `ARCHITECTURE_SPEC.md` §7.1-7.2, §10.3-10.6, §17, §19 Q6 for the design.
 
-### 6.1 Entity kinds as classes, spawned entities as objects
+### 6.1 Entity kinds as classes, spawned entities as objects  ✅ (2026-09-17)
 
-- [ ] Per-instance Lua state: the `ScriptState` component (`ARCHITECTURE_SPEC.md`
-      §7.1, already in the base component table but unused) holds a table per
-      spawned entity, passed as `self` to every callback, so two objects of
-      the same `register_entity` kind track independent data.
-- [ ] Wire `on_spawn`/`on_tick`/`on_hit`/`on_death` into `ScriptPreTickSystem`/
-      `ScriptPostTickSystem` — same item already tracked under 4.2 ("waits on
-      3.1's EnTT registry"); the `self`-table plumbing above has to land
-      alongside it, not after, since it changes the callback signature.
-- [ ] Decide: do accessor methods on `self` cover only base components
-      (`get_pos`, mirroring the player object), or can `self` expose
-      arbitrary kind-specific fields directly? Leaning arbitrary fields for
-      custom data, accessors for engine-owned components.
+> Landed without the EnTT registry the original design assumed (§7.1's
+> `ScriptState` component / `ScriptPreTickSystem`/`ScriptPostTickSystem`
+> classes don't exist — 3.1's generic registry wiring is still deferred, same
+> as when 5.1's `ItemDropSystem` hit the exact same gap). Followed
+> `item_drops.hpp`'s established precedent instead: a small hardcoded system
+> (`PackRuntime::Impl::entities`, `src/script/pack_runtime.cpp`) replicated
+> through `ServerSession::spawn_script_entity`/`set_script_entity_state`/
+> `remove_script_entity` (`inc/vb/net/session.hpp`, mirrors `spawn_item_drop`
+> exactly — another interest-grid entry, no new wire message, its own NetId
+> range at `0x4000'0000` disjoint from players and item drops).
+
+- [x] Per-instance Lua state: `self` is a plain Lua table (the spec's
+      `ScriptState`, just not EnTT-component-backed) created by
+      `vb.world.spawn(kind, pos)` and stored in `PackRuntime::Impl::entities`
+      keyed by NetId — persists across every `on_tick` call for that
+      instance (verified in the integration test below by accumulating a
+      counter on `self` across ticks), so two spawned objects of the same
+      kind track independent data.
+- [x] `on_spawn`/`on_tick`/`on_hit`/`on_death` wired: `on_spawn` fires once
+      from `vb.world.spawn`; `on_tick` fires once per `PackRuntime::dispatch_tick`
+      per live instance (`Impl::dispatch_entity_tick`); `on_hit` fires from a
+      new `self:damage(amount, cause)` (notification-only — the engine
+      tracks no generic-entity health, same "engine takes no position"
+      posture as the still-unbuilt 6.5); `on_death` fires from a new
+      `self:remove(cause)`, which also despawns (interest-grid removal +
+      map erase) right after.
+- [x] Decided: arbitrary fields for custom data, accessors for engine-owned
+      state — `self` is a plain table (`self.hp = 10` just works) whose
+      metatable's `__index` points at a shared `entity_methods` table
+      (`get_pos`/`set_pos`/`get_kind`/`damage`/`remove`), so both coexist
+      unless a pack picks a method's exact field name.
+- [x] Test: `pack_runtime_integration_test.cpp` — real `ServerSession`/
+      `ClientSession`/`LoopbackTransport`, spawn via chat command, asserts
+      `self` state persists and grows across many ticks (not rebuilt per
+      call), `on_hit`/`on_death` fire with the right args, and the instance
+      both replicates to a client while alive and disappears from
+      `remote_entities()` after `self:remove()`.
+- [ ] Not done (out of scope for this item): no automatic despawn-on-health
+      trigger (no health primitive exists for generic entities at all, only
+      the notification hook) — a pack wanting mob HP tracks it itself on
+      `self` and calls `self:remove()` when it hits zero. No client-side
+      kind-specific rendering yet (`EntityKind` id is threaded through to
+      replication but nothing branches on it, same pre-existing limitation
+      `world::kItemDropKind` has).
 
 ### 6.2 Fully Lua-defined, immediate-mode reactive UI
 

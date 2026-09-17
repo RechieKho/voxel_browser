@@ -556,4 +556,106 @@ TEST_CASE(
 	)"));
 }
 
+TEST_CASE("vb.register_entity + vb.world.spawn: self persists across on_tick, "
+		  "on_hit/on_death fire, and the instance replicates to a client") {
+	LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("entity_kind"));
+	REQUIRE(rt.load_pack_file(R"(
+		spawn_count = 0
+		hit_amount = nil
+		hit_cause = nil
+		death_cause = nil
+		instance = nil
+
+		vb.register_entity({
+			name = "test:slime",
+			on_spawn = function(self)
+				self.hp = 10
+				spawn_count = spawn_count + 1
+			end,
+			on_tick = function(self, dt)
+				self.hp = self.hp + dt
+			end,
+			on_hit = function(self, amount, cause)
+				hit_amount = amount
+				hit_cause = cause
+			end,
+			on_death = function(self, cause)
+				death_cause = cause
+			end,
+		})
+
+		vb.on("chat", function(player, text)
+			if text == "spawn" then
+				instance = vb.world.spawn("test:slime", { x = 5, y = 5, z = 5 })
+			elseif text == "hit" then
+				instance:damage(3, "punch")
+			elseif text == "kill" then
+				instance:remove("script")
+			end
+			return true
+		end)
+	)"));
+	rt.freeze();
+
+	HandshakeServerConfig cfg;
+	cfg.world_seed = 7;
+	ServerSession server(net.server(), cfg);
+	rt.attach_session(server);
+	REQUIRE(net.server().listen(0));
+
+	Transport &ta = net.create_client();
+	auto ida = ta.connect("x", 0);
+	REQUIRE(ida);
+	ClientSession client(ta, *ida, HandshakeClientConfig{ "A", "", "v", 1 });
+
+	auto pump = [&](int n) {
+		for (int i = 0; i < n; ++i) {
+			server.tick(0.05);
+			client.tick(0.05);
+			rt.dispatch_tick(0.05);
+		}
+	};
+	pump(16);
+	REQUIRE(client.joined());
+	server.set_player_state(client.join_accept()->your_net_id, Vec3d{ 5, 5, 7 });
+
+	client.send_chat("spawn");
+	pump(6);
+	REQUIRE(rt.load_pack_file(R"(
+		assert(spawn_count == 1)
+		assert(instance ~= nil)
+		-- on_tick has already fired a few times by now (spawn happened partway
+		-- through this pump), so hp is > 10, not exactly 10 -- remember it as
+		-- the baseline for the persistence check below.
+		assert(instance.hp > 10)
+		hp_after_spawn = instance.hp
+	)"));
+
+	// Every subsequent pumped tick calls on_tick(self, dt) and self.hp keeps
+	// accumulating past its own baseline -- proves `self` is the *same*
+	// persistent table across calls, not a fresh one rebuilt each dispatch
+	// (unlike PlayerHandle).
+	pump(10);
+	REQUIRE(rt.load_pack_file(R"( assert(instance.hp > hp_after_spawn) )"));
+
+	// Replicated to the client through the same interest-grid path as a
+	// dropped item -- no dedicated wire message.
+	CHECK_FALSE(client.remote_entities().empty());
+
+	client.send_chat("hit");
+	pump(6);
+	REQUIRE(rt.load_pack_file(R"(
+		assert(hit_amount == 3)
+		assert(hit_cause == "punch")
+	)"));
+
+	client.send_chat("kill");
+	pump(6);
+	REQUIRE(rt.load_pack_file(R"( assert(death_cause == "script") )"));
+	CHECK(client.remote_entities().empty());
+}
+
 #endif // VB_WITH_LUA
