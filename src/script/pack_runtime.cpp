@@ -217,6 +217,17 @@ struct PackRuntime::Impl {
 	// one exists. No-op (not an error) if the session/connection isn't ready
 	// yet -- same posture as send_message/open_ui below.
 	void sync_inventory(core::NetId id);
+	// Phase 6.6: spawns every slot of `id`'s inventory as a dropped item at
+	// `pos` and empties it. Called by run_respawn_handler when a
+	// vb.on("player_death", ...) handler's returned table asks for
+	// drop_inventory = true.
+	void drop_all_items(core::NetId id, core::Vec3d pos);
+	// Phase 6.6: calls the first registered vb.on("player_death", ...)
+	// handler (if any) and turns its returned table into a
+	// ServerSession::RespawnDecision; falls back to a full heal at the join
+	// spawn point if no handler is registered or none returns a table.
+	net::ServerSession::RespawnDecision run_respawn_handler(
+			core::NetId id, std::string_view cause, float health_before);
 
 	template <typename... Args>
 	void fire(const std::string &event, Args &&...args) {
@@ -397,6 +408,17 @@ struct PlayerHandle {
 		}
 		return std::string(rt->session->player_name(net_id));
 	}
+
+	// Phase 6.6: the one way to reduce a player's health from Lua. `cause` is
+	// an opaque string (e.g. "fall", "pvp") threaded through unchanged to a
+	// vb.on("player_death", ...) handler once health reaches 0 -- the engine
+	// takes no position on what "fall"/"pvp" mean.
+	void damage(float amount, sol::optional<std::string> cause) const {
+		if (rt->session == nullptr) {
+			throw sol::error("entity:damage(): session not attached yet");
+		}
+		rt->session->damage_player(net_id, amount, cause.value_or(std::string{}));
+	}
 };
 
 PackRuntime::Impl::Impl(net::Transport &t, world::BlockRegistry &reg,
@@ -425,7 +447,8 @@ void PackRuntime::Impl::install_bindings() {
 			&PlayerHandle::remove, "get_inventory", &PlayerHandle::get_inventory,
 			"send_message", &PlayerHandle::send_message, "open_ui",
 			&PlayerHandle::open_ui, "give", &PlayerHandle::give, "take",
-			&PlayerHandle::take, "get_name", &PlayerHandle::get_name);
+			&PlayerHandle::take, "get_name", &PlayerHandle::get_name, "damage",
+			&PlayerHandle::damage);
 
 	sol::table vb = lua.create_named_table("vb");
 
@@ -579,7 +602,7 @@ void PackRuntime::Impl::install_bindings() {
 
 	static const std::set<std::string> kValidEvents = { "player_join",
 		"player_leave", "block_break", "block_place", "player_interact",
-		"chat", "tick", "ui_event" };
+		"chat", "tick", "ui_event", "player_death" };
 	vb["on"] = [this](const std::string &event, sol::protected_function fn) {
 		if (kValidEvents.find(event) == kValidEvents.end()) {
 			throw sol::error("vb.on: unknown event '" + event + "'");
@@ -724,6 +747,65 @@ void PackRuntime::Impl::sync_inventory(core::NetId id) {
 	net::send_message(transport, conn, msg);
 }
 
+void PackRuntime::Impl::drop_all_items(core::NetId id, core::Vec3d pos) {
+	if (session == nullptr) {
+		return;
+	}
+	for (const auto &stack : inventories[id].slots) {
+		session->spawn_item_drop(pos, stack.item, stack.count);
+	}
+	inventories[id].slots.clear();
+	sync_inventory(id);
+}
+
+net::ServerSession::RespawnDecision PackRuntime::Impl::run_respawn_handler(
+		core::NetId id, std::string_view cause, float health_before) {
+	net::ServerSession::RespawnDecision decision{ 20.0f, session->spawn_point(id),
+		"* you died and respawned" };
+
+	auto it = handlers.find("player_death");
+	if (it == handlers.end()) {
+		return decision;
+	}
+	// Captured before the caller (check_respawns) overwrites the player's
+	// position with the respawn point -- this is where they actually died,
+	// used as the drop location so a dropped inventory doesn't just land at
+	// the respawn point and get instantly re-picked-up there (pickup_radius
+	// covers it).
+	const core::Vec3d death_pos =
+			session->player_move_state(id).value_or(physics::MoveState{}).position;
+	PlayerHandle p{ id, this };
+	for (auto &fn : it->second) {
+		if (!fn.valid()) {
+			continue;
+		}
+		vm.begin_call_budget();
+		sol::protected_function_result r = fn(p, std::string(cause), health_before);
+		if (!r.valid()) {
+			const sol::error e = r;
+			VB_WARN("script", "vb.on('player_death') handler error: ", e.what());
+			continue;
+		}
+		const sol::object ret = r;
+		if (!ret.valid() || ret.get_type() != sol::type::table) {
+			continue;
+		}
+		sol::table t = ret.as<sol::table>();
+		decision.heal_to = t.get_or("heal", decision.heal_to);
+		if (sol::optional<sol::table> pos_tbl = t.get<sol::optional<sol::table>>("pos")) {
+			decision.pos = { pos_tbl->get_or("x", decision.pos.x),
+				pos_tbl->get_or("y", decision.pos.y),
+				pos_tbl->get_or("z", decision.pos.z) };
+		}
+		decision.message = t.get_or("message", decision.message);
+		if (t.get_or("drop_inventory", false)) {
+			drop_all_items(id, death_pos);
+		}
+		break; // first handler that returns a decision table wins
+	}
+	return decision;
+}
+
 PackRuntime::PackRuntime(net::Transport &transport,
 		world::BlockRegistry &registry, std::filesystem::path storage_path,
 		VmLimits limits)
@@ -802,6 +884,17 @@ void PackRuntime::attach_session(net::ServerSession &session) {
 		self->inventories[player].slots.push_back({ item, count });
 		self->sync_inventory(player);
 	});
+	// Phase 6.6: only installed when a pack actually registered
+	// vb.on("player_death", ...) (all pack loading finished before
+	// attach_session() runs, so `handlers` is already final) -- otherwise
+	// ServerSession keeps its own built-in fallback, matching every
+	// pre-6.6 caller/test exactly.
+	if (self->handlers.count("player_death") != 0) {
+		session.set_respawn_handler([self](core::NetId id, std::string_view cause,
+											   float health_before) {
+			return self->run_respawn_handler(id, cause, health_before);
+		});
+	}
 }
 
 void PackRuntime::dispatch_player_join_completed(

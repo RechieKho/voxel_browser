@@ -137,6 +137,44 @@ public:
 	// is shared so a future damage source gets respawn for free.
 	void set_void_kill_y(double y) { void_kill_y_ = y; }
 
+	// Phase 6.6: generic damage primitive -- the only way to reduce a
+	// player's health besides the void-kill check above. `cause` is opaque
+	// to the engine (e.g. "fall", "pvp", "void") and threaded through
+	// unchanged to the respawn handler below. No-op if `id` isn't a playing
+	// connection or is already at 0 health awaiting this tick's respawn.
+	void damage_player(core::NetId id, float amount, std::string_view cause);
+
+	// Authoritative feet position `id` was granted at join (spec §8.3's
+	// JoinGrant::spawn_pos) -- the same fixed point respawns used to reuse
+	// forever before the respawn handler below existed. A pack's respawn
+	// handler can read this as a default respawn point, or ignore it
+	// entirely for its own checkpoint/bed logic. {} if `id` isn't playing.
+	core::Vec3d spawn_point(core::NetId id) const;
+
+	// Phase 6.6: what to do once a player's health reaches 0, decided by the
+	// respawn handler below rather than hardcoded. Inventory-drop and any
+	// other side effect is the handler's own business (ServerSession has no
+	// concept of inventory) -- it gets the full decision here, but the
+	// *doing* of a drop, if any, happens on the handler's side before it
+	// returns.
+	struct RespawnDecision {
+		float heal_to = 0.0f;
+		core::Vec3d pos{};
+		std::string message; // sent as a private S2C_Chat line if non-empty
+	};
+
+	// Fires once per respawn (health reaching 0, for any cause -- void-kill
+	// included) with (player, cause, health_before), and decides the new
+	// health/position/message. Unset (the default -- e.g. `--singleplayer`
+	// before a PackRuntime attaches one) falls back to the original
+	// behavior: full heal, teleport to the join spawn point, fixed message
+	// -- so every pre-6.6 caller/test is unaffected.
+	void set_respawn_handler(std::function<RespawnDecision(
+					core::NetId, std::string_view, float)>
+					handler) {
+		on_respawn_ = std::move(handler);
+	}
+
 	// Dropped-item entities (spec §5.1). Spawns one at `pos`, replicated
 	// generically through the interest grid like any other entity -- no
 	// dedicated wire message. Auto-collected when a player's feet come
@@ -170,6 +208,10 @@ private:
 		entt::entity entity{ entt::null };
 		std::vector<core::NetId> last_visible;
 		core::Vec3d spawn_pos{};
+		// Set by apply_damage() the instant health reaches 0; consumed and
+		// cleared by check_respawns() when it calls the respawn handler.
+		std::string death_cause;
+		float death_health_before = 0.0f;
 	};
 
 	void drop(ConnId conn, const std::string &reason);
@@ -178,6 +220,7 @@ private:
 	void handle_block_edit(ConnId conn, Conn &state,
 			const protocol::Frame &frame);
 	void handle_chat(Conn &state, const protocol::Frame &frame);
+	void apply_damage(Conn &state, float amount, std::string_view cause);
 	void check_respawns();
 	void update_item_drops(double dt_seconds);
 	void broadcast_snapshots();
@@ -209,6 +252,8 @@ private:
 	double day_length_seconds_ = 1200.0; // 20 real minutes per in-game day
 	double time_of_day_broadcast_accum_ = 0.0;
 	double void_kill_y_ = -64.0;
+	std::function<RespawnDecision(core::NetId, std::string_view, float)>
+			on_respawn_;
 	std::uint32_t server_tick_ = 0;
 	std::size_t playing_ = 0;
 	std::uint32_t next_net_id_ = 1;

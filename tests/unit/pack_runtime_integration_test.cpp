@@ -483,4 +483,77 @@ TEST_CASE("vb.world.spawn_item_drop replicates to a client and is picked up on a
 	CHECK(inv[0].count == 2);
 }
 
+TEST_CASE(
+		"player:damage() + vb.on('player_death') drives a custom respawn "
+		"(heal/pos/message/drop_inventory)") {
+	LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("death"));
+	REQUIRE(rt.load_pack_file(R"(
+		seen_cause = nil
+		seen_health_before = nil
+		vb.on("player_death", function(player, cause, health_before)
+			seen_cause = cause
+			seen_health_before = health_before
+			return { heal = 7, pos = { x = 1, y = 2, z = 3 },
+				message = "* custom respawn", drop_inventory = true }
+		end)
+		vb.on("chat", function(player, text)
+			player:give({ item = 2, count = 5 })
+			player:damage(100, "test")
+			return true
+		end)
+	)"));
+	rt.freeze();
+
+	HandshakeServerConfig cfg;
+	cfg.world_seed = 7;
+	ServerSession server(net.server(), cfg);
+	rt.attach_session(server);
+	REQUIRE(net.server().listen(0));
+
+	Transport &ta = net.create_client();
+	auto ida = ta.connect("x", 0);
+	REQUIRE(ida);
+	ClientSession client(ta, *ida, HandshakeClientConfig{ "A", "", "v", 1 });
+
+	auto pump = [&](int n) {
+		for (int i = 0; i < n; ++i) {
+			server.tick(0.05);
+			client.tick(0.05);
+			rt.dispatch_tick(0.05);
+		}
+	};
+	pump(16);
+	REQUIRE(client.joined());
+	const NetId a_id = client.join_accept()->your_net_id;
+	client.take_chat_messages(); // drain join-system lines
+
+	client.send_chat("hit me");
+	pump(6);
+
+	// The handler's chosen respawn: custom heal, custom position, custom
+	// message, and the pre-existing inventory got dropped instead of kept.
+	const auto srv = server.player_move_state(a_id);
+	REQUIRE(srv.has_value());
+	CHECK(srv->position.x == doctest::Approx(1.0));
+	CHECK(srv->position.y == doctest::Approx(2.0));
+	CHECK(srv->position.z == doctest::Approx(3.0));
+	CHECK(client.inventory().empty()); // given 5 stone, then dropped on death
+
+	bool saw_custom_msg = false;
+	for (const auto &m : client.take_chat_messages()) {
+		if (m == "* custom respawn") {
+			saw_custom_msg = true;
+		}
+	}
+	CHECK(saw_custom_msg);
+
+	REQUIRE(rt.load_pack_file(R"(
+		assert(seen_cause == "test")
+		assert(seen_health_before == 20.0)
+	)"));
+}
+
 #endif // VB_WITH_LUA

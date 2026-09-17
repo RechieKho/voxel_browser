@@ -439,6 +439,39 @@ void ServerSession::update_item_drops(double dt_seconds) {
 	}
 }
 
+void ServerSession::apply_damage(Conn &state, float amount, std::string_view cause) {
+	auto &health = registry_.get<ecs::Health>(state.entity);
+	if (health.current <= 0.0f) {
+		return; // already at 0, awaiting this tick's respawn
+	}
+	const float before = health.current;
+	health.current = std::max(0.0f, health.current - amount);
+	if (health.current <= 0.0f) {
+		state.death_cause = std::string(cause);
+		state.death_health_before = before;
+	}
+}
+
+void ServerSession::damage_player(core::NetId id, float amount, std::string_view cause) {
+	for (auto &[conn, state] : conns_) {
+		(void)conn;
+		if (state.playing && state.net_id == id) {
+			apply_damage(state, amount, cause);
+			return;
+		}
+	}
+}
+
+core::Vec3d ServerSession::spawn_point(core::NetId id) const {
+	for (const auto &[conn, state] : conns_) {
+		(void)conn;
+		if (state.playing && state.net_id == id) {
+			return state.spawn_pos;
+		}
+	}
+	return {};
+}
+
 void ServerSession::check_respawns() {
 	for (auto &[conn, state] : conns_) {
 		if (!state.playing) {
@@ -446,14 +479,20 @@ void ServerSession::check_respawns() {
 		}
 		auto &pos = registry_.get<ecs::Position>(state.entity);
 		auto &health = registry_.get<ecs::Health>(state.entity);
-		if (pos.value.y < void_kill_y_) {
-			health.current = 0.0f; // fell out of the world -- instant kill
+		if (pos.value.y < void_kill_y_ && health.current > 0.0f) {
+			apply_damage(state, health.current, "void");
 		}
 		if (health.current > 0.0f) {
 			continue;
 		}
-		health.current = health.max;
-		pos.value = state.spawn_pos;
+		RespawnDecision decision{ health.max, state.spawn_pos,
+			"* you died and respawned" };
+		if (on_respawn_) {
+			decision = on_respawn_(
+					state.net_id, state.death_cause, state.death_health_before);
+		}
+		health.current = decision.heal_to;
+		pos.value = decision.pos;
 		registry_.get<ecs::Velocity>(state.entity).value = {};
 		registry_.get<ecs::Collider>(state.entity).on_ground = false;
 		replication::EntityState s;
@@ -461,11 +500,14 @@ void ServerSession::check_respawns() {
 			s = *e;
 		}
 		s.net_id = state.net_id;
-		s.pos = state.spawn_pos;
+		s.pos = decision.pos;
 		s.vel = {};
 		interest_.upsert(s);
-		send_message(
-				transport_, conn, protocol::S2CChat{ "* you died and respawned" });
+		if (!decision.message.empty()) {
+			send_message(transport_, conn, protocol::S2CChat{ decision.message });
+		}
+		state.death_cause.clear();
+		state.death_health_before = 0.0f;
 	}
 }
 

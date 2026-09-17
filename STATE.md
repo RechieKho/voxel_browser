@@ -7,7 +7,13 @@
 > Companion docs: `ARCHITECTURE_SPEC.md` (target design) · `REMAINING_TASKS.md`
 > (implementation backlog). This file is for *traps and context*, not the plan.
 
-Last updated: 2026-09-16 (Phase 5.5 documentation pass complete —
+Last updated: 2026-09-17 (Phase 6.6 — player damage/death primitive: generic
+`player:damage(amount, cause)` + a `vb.on("player_death", ...)` hook replace
+the hardcoded instant-heal-and-teleport `check_respawns()`; `ServerSession`
+falls back to the exact old behavior when no pack installs a handler, so
+every pre-6.6 test still passes unmodified. See §8's newest entry for the
+drop-inventory-at-death-not-respawn-position lesson learned while testing
+it. Previous entry: Phase 5.5 documentation pass complete —
 `CONTRIBUTING.md` added (module map, build/test workflow, wire-message
 checklist, Lua-binding guidelines); `docs/lua-api.md`/README's stale claims
 fixed; see §8's fourteenth 2026-09-16 entry. Phase 5.1/4.3 — `--singleplayer` now runs the real
@@ -145,6 +151,27 @@ with *both* binaries (bundle/publish still merge by `voxel_browser-*` pattern).
   restriction (this agent's Bash tool runs sandboxed), not a real regression.
   Don't assume that failure means something's broken; do treat any *other*
   `VB_WITH_NET` test failure on this box as real.
+- **Agent shells (Bash/PowerShell tool) on this Windows dev machine do NOT
+  have MSVC's environment set up by default** — `cl.exe` is found on `PATH`
+  but `INCLUDE`/`LIB` aren't set, so even `#include <Windows.h>` fails
+  (`fatal error C1034: Windows.h: no include path set`), which in turn
+  breaks CMake's own `try_compile` checks (seen failing GNS's BCrypt
+  detection) as well as any real target build. Confirmed 2026-09-17: neither
+  the Bash tool nor a plain PowerShell tool call has it; running
+  `cmd /c '"...VC\Auxiliary\Build\vcvars64.bat" && <rest of the command>'`
+  (chained in one call, since env vars set by a `.bat` don't persist to the
+  next tool invocation) does. Needed before *building* anything
+  (`cmake --build`/`cmake --configure` from scratch); an already-built
+  `.exe` runs fine without it. Also: `cmake --build . -- -j <N>` errors
+  here (`ninja: fatal: invalid -j parameter`) — just omit `-j`.
+- Two pre-configured build directories exist in the repo root with real
+  binaries already built at least once — reuse rather than reconfiguring
+  from scratch: `build-net-lua/` (`VB_WITH_NET=ON`, `VB_WITH_LUA=ON` —
+  scripting/PackRuntime/GNS work) and `build-meshing/` (`VB_WITH_NET=ON`,
+  `VB_WITH_LUA=OFF`, **ASan-instrumented**, MSVC multi-config layout so
+  binaries land under `build-meshing/Debug/`, not the build root directly —
+  good for exercising the `#if !VB_WITH_LUA` stub path and catching memory
+  bugs at the same time).
 
 ---
 
@@ -291,6 +318,43 @@ Other undecided-but-not-yet-in-spec:
 ## 8. Done / resolved
 
 _(Move items here with a date + commit when fixed, so the history is visible.)_
+
+- **2026-09-17 — Phase 6.6 player damage/death primitive landed
+  (uncommitted).** `player:damage(amount, cause)` (`PlayerHandle::damage`,
+  `src/script/pack_runtime.cpp`) → `ServerSession::damage_player`
+  (`src/net/session.cpp`) is now the one way to reduce a player's `Health`
+  from Lua; the void-kill check is just another call into the same
+  `apply_damage()` helper with `cause = "void"`, not a separate code path.
+  `check_respawns()` no longer hardcodes the outcome (instant full heal,
+  teleport to the join spawn point, a fixed chat line) — it calls a
+  `ServerSession::set_respawn_handler` callback (unset = the exact old
+  behavior, verified by `netcode_test.cpp`'s pre-existing void-kill test
+  passing unmodified) and `PackRuntime::attach_session` wires one in only
+  when a pack actually registered `vb.on("player_death", ...)`.
+  **Bug caught by the new integration test, not just reasoned about:** the
+  first version of `drop_inventory = true` handling spawned the dropped
+  items at the handler's *returned* respawn position (`decision.pos`) —
+  since the player is teleported to that exact same position in the same
+  tick, `ItemDropSystem`'s pickup radius immediately picked the items right
+  back up, so the inventory never actually looked empty to the client. Fixed
+  by capturing the player's position *before* `check_respawns()` overwrites
+  it (i.e. where they actually died) and dropping there instead
+  (`run_respawn_handler` in `src/script/pack_runtime.cpp`). Worth
+  remembering for any future code that both teleports a player and spawns
+  something at "their" position in the same tick — the interest-grid pickup
+  systems don't know or care which one happened first.
+  **Verification:** full `vb_tests` green on `build-net-lua`
+  (`VB_WITH_NET=ON`, `VB_WITH_LUA=ON`, 196/196 cases) and on `build-meshing`
+  (`VB_WITH_LUA=OFF`, ASan build, 166/166 cases — confirms the stub-build
+  path and the engine-side change alone, without any Lua bindings, both
+  still compile and pass).
+  **Not done:** no content uses this yet — `content/base` has no
+  `death.lua`, so the shipped base pack still gets the built-in fallback
+  behavior (same "mechanism before content" posture as every other Phase
+  4/5 item). Fall damage, PvP, mob damage, hunger are all still separate,
+  unstarted follow-ups (`REMAINING_TASKS.md` 6.6's last bullet) — this item
+  only adds the primitive and the decision hook, not any of the systems that
+  would call them.
 
 - **2026-09-15 — "Heap corruption after normal block" root-caused to the
   NVIDIA OpenGL driver itself, not this codebase (no code fix; investigation

@@ -630,9 +630,13 @@ Lua-defined UI.
 - [ ] Lua-driven worldgen pipeline replaces the Phase 2 hardcoded one —
       moved to Phase 6.14 (extensibility push, FastNoise2 backend); tracked
       there now instead of here.
-- [ ] `register_entity`'s `visual = {...}` sub-table (atlas, `facings`,
-      per-clip frame lists) for 3.5's `entity_renderer` — not added; nothing
-      reads a per-kind visual def yet (3.5 still hardcodes a flat placeholder).
+- [ ] `register_entity`'s `visual = {...}` sub-table (`variant` frame-size
+      lookup, `texture`, `facings`, `origin`, `clips` grid) for 3.5's
+      `entity_renderer`, schema finalized 2026-09-17 — see `ARCHITECTURE_SPEC.md`
+      §11.3. Not implemented yet; nothing reads a per-kind visual def (3.5
+      still hardcodes a flat placeholder). Also needs the per-instance
+      `entity.visual_override` merge (`ScriptState`) for reskins (e.g. player
+      skins) once this lands.
 
 ### 4.3 Block registry replication  ✅ (name/solid/opaque/liquid/light only)
 
@@ -1422,7 +1426,7 @@ windows, chatting, crafting, and seeing each other, all at once.
 
 ---
 
-## Phase 6 — Lua-Driven Extensibility (design only, not started)
+## Phase 6 — Lua-Driven Extensibility (in progress — 6.6 done, 6.1-6.5/6.7-6.14 design only)
 
 > Design agreed in discussion on 2026-09-17: four systems that let content
 > packs override/extend engine defaults (biomes, entities, UI, input, data)
@@ -1537,35 +1541,68 @@ windows, chatting, crafting, and seeing each other, all at once.
       registry. **Blocked on** the still-pending real texture/atlas system
       (4.3/5.1 — client is untextured cubes today) landing first.
 
-### 6.6 Player damage & death (foundational — split out from the rest below)
+### 6.6 Player damage & death (foundational — split out from the rest below) ✅
 
-> Audited 2026-09-17: `void_kill_y` (`inc/vb/core/config.hpp:31`) is
-> currently **the only damage source in the entire engine** — no fall
-> damage, no PvP, no mob damage, no hunger/starvation. `Health` exists on
-> the entity but nothing but falling into the void can ever reduce it. This
-> is upstream of combat, PvP, and hazards, so it's called out on its own
-> rather than folded into the rest of 6.7-6.13 — most of that later content
-> depends on this landing first.
+> Audited 2026-09-17: `void_kill_y` (`inc/vb/core/config.hpp:31`) was
+> the only damage source in the entire engine — no fall damage, no PvP, no
+> mob damage, no hunger/starvation. This was upstream of combat, PvP, and
+> hazards, so it was called out on its own rather than folded into the rest
+> of 6.7-6.13 — most of that later content still depends on this having
+> landed first.
 
-- [ ] A generic damage primitive (e.g. `player:damage(amount, cause)`) —
-      doesn't exist today; currently the only way to reduce `Health` is the
-      hardcoded void-kill check. Without this, no pack can implement combat,
-      PvP, fall damage, hunger, or mob attacks no matter what else lands.
-- [ ] `check_respawns()` (`src/net/session.cpp:442-470`) is entirely
-      hardcoded: instant full heal, teleport to `state.spawn_pos`
-      unconditionally, a fixed chat string, no drops-on-death, no
-      death-cause info. **Raw state, Lua decides:** fire a hook with
-      `(player, cause, health_before)` and let Lua decide heal amount,
-      respawn point, whether to drop inventory, and the message text.
-- [ ] Spawn point is a single fixed world column (`worldgen::
-      default_spawn_position`, always `(0,0)`), set once at join and reused
-      for every respawn forever (`session.cpp:307,456,464`) — no
-      bed/checkpoint/team-spawn concept can exist today. **Raw state, Lua
-      decides:** a per-respawn "pick spawn point" hook, engine just calls it
-      when a respawn is about to happen.
-- [ ] No PvP toggle exists, and none would be meaningful yet since there's
-      no damage system for it to gate — not a separate item, just confirms
-      it's downstream of the primitive above.
+- [x] A generic damage primitive: `player:damage(amount, cause)`
+      (`PlayerHandle::damage`, `src/script/pack_runtime.cpp`) →
+      `ServerSession::damage_player(NetId, float, string_view)`
+      (`src/net/session.cpp`). `cause` is an opaque string threaded through
+      unchanged to the respawn hook below — the engine takes no position on
+      what "fall"/"pvp"/"void" mean. The void-kill check itself is now just
+      another `apply_damage()` call with `cause = "void"`, not a separate
+      code path.
+- [x] `check_respawns()` no longer hardcodes the outcome: it fires
+      `ServerSession::set_respawn_handler(fn(NetId, cause, health_before) ->
+      RespawnDecision{heal_to, pos, message})` once health reaches 0 (any
+      cause, void included) and applies whatever it returns. Unset (e.g.
+      `--singleplayer` before any `PackRuntime` attaches one) falls back to
+      the original behavior byte-for-byte — full heal, teleport to the join
+      spawn point, the same `"* you died and respawned"` line — so every
+      pre-6.6 caller/test (`netcode_test.cpp`'s void-kill test included)
+      passes unmodified. `PackRuntime::attach_session` installs a real
+      handler only when a pack actually registered
+      `vb.on("player_death", ...)` (checked once, after `freeze()`, so every
+      pack file has already had a chance to register).
+      Inventory-drop is the *handler's* business, not the primitive's: a
+      `drop_inventory = true` in the returned table spawns every slot as a
+      real dropped-item entity (Phase 5.1's `ItemDropSystem`, reusing
+      `spawn_item_drop`) at the player's position **at time of death**, not
+      wherever they're about to respawn — dropping at the new respawn point
+      instead was tried first and immediately self-picked-up by
+      `ItemDropSystem`'s pickup radius since the player is standing right on
+      it; caught by the new integration test below, not just reasoned about.
+- [x] Spawn point: `check_respawns()`'s hardcoded reuse of the join spawn
+      point is gone; `ServerSession::spawn_point(NetId)` exposes the join
+      point as a value a respawn handler can read (e.g. to keep the old
+      behavior on purpose), not something it's stuck with. A real
+      bed/checkpoint pack feature still needs pack-side storage (`vb.db`,
+      6.4, not yet landed) to remember a chosen point across respawns —
+      *this* item was only about the engine no longer forcing one point.
+- [x] No PvP toggle: still N/A, same reasoning as before — now meaningful to
+      add once a pack actually calls `player:damage` on another player, not
+      before.
+- [x] Tests: `netcode_test.cpp`'s existing void-kill/respawn test passes
+      unmodified (proves the no-handler-set fallback is byte-identical).
+      New: `pack_runtime_integration_test.cpp` — `player:damage()` +
+      `vb.on("player_death", ...)` end-to-end over a real
+      `ServerSession`/`ClientSession`/`LoopbackTransport`: custom heal
+      amount, custom respawn position, custom chat message, and
+      `drop_inventory = true` actually dropping+clearing inventory (and not
+      self-repicking-up) all asserted through the real wire messages a
+      client receives.
+- [ ] Not done, left for whichever pack/phase actually needs it: fall
+      damage, PvP, mob damage, hunger — this item only adds the *primitive*
+      (`player:damage`) and the *decision hook* (`player_death`); no content
+      calls either yet (same "mechanism before content" posture as every
+      other Phase 4/5 item). `content/base` has no `death.lua` — nothing
+      currently overrides the built-in fallback in the shipped base pack.
 
 ### 6.7 Physics / movement parameters (default + override)
 

@@ -62,7 +62,10 @@ rt.dispatch_tick(dt);
   fields are accepted but not stored — no wire-visible model/texture fields
   exist on `BlockType` yet), `vb.register_item(def)`, `vb.register_entity(def)`
   (captures `on_spawn`/`on_tick`/`on_hit`/`on_death` but nothing dispatches
-  them yet — no EnTT registry exists, Phase 3.1), `vb.register_biome(def)`
+  them yet — no EnTT registry exists, Phase 3.1; its `visual = {...}`
+  sub-table — spritesheet variant/facings/origin/clips grid, schema finalized
+  2026-09-17 in `ARCHITECTURE_SPEC.md` §11.3 — isn't read yet either, see
+  `REMAINING_TASKS.md` 4.2), `vb.register_biome(def)`
   (captured, no consumer this phase) / `vb.register_craft(def)` (captured;
   the engine itself doesn't read it back, but `content/base/crafting.lua`
   is a real, working example built on top of it — see below).
@@ -94,7 +97,10 @@ rt.dispatch_tick(dt);
   `:take({item,count}) -> bool` (removes up to `count` of `item` across
   however many slots hold it; `false` and no change at all if the player
   doesn't have enough — all-or-nothing, not partial), `:send_message(text)`,
-  `:open_ui(name, ctx?)`, `:get_name()`.
+  `:open_ui(name, ctx?)`, `:get_name()`, `:damage(amount, cause?)` (Phase
+  6.6 — the one way to reduce a player's health from Lua; `cause` is an
+  opaque string, e.g. `"fall"`/`"pvp"`, threaded through unchanged to a
+  `player_death` handler below).
   `send_message`/`open_ui` are real, framed messages (`S2C_Chat`/`S2C_OpenUi`,
   see `docs/protocol.md`) that a real client actually handles: `send_message`
   lands in the HUD chat log (`src/client/main.cpp`, Phase 5.4) exactly like a
@@ -106,8 +112,9 @@ rt.dispatch_tick(dt);
   today, crafted-only materials included (see `content/base/blocks/
   planks.lua`/`sticks.lua`).
 - Events: `vb.on("player_join"|"player_leave"|"block_break"|"block_place"|
-  "player_interact"|"chat"|"tick"|"ui_event", handler)`, vetoable via
-  `return false` (except `tick`/`ui_event`, which have no veto semantics).
+  "player_interact"|"chat"|"tick"|"ui_event"|"player_death", handler)`,
+  vetoable via `return false` (except `tick`/`ui_event`, which have no veto
+  semantics; `player_death` is a *decision* hook, not a veto — see below).
   `player_join` fires from `install_join_veto`'s `authenticate` wrapper (a
   real pre-join veto — note it hands the handler a plain player *name*
   string, not a `Player` handle, since no session/connection exists yet at
@@ -121,7 +128,23 @@ rt.dispatch_tick(dt);
   entirely on top of this one event. `ui_event` fires from `C2S_UiEvent`
   (Phase 4.5). `player_interact` is still wired generically
   (`PackRuntime::dispatch_player_interact`) with nothing calling it — no
-  interact wire message exists yet.
+  interact wire message exists yet. `player_death` (Phase 6.6) fires once
+  per respawn — health reaching 0, for any cause, void-kill included — as
+  `function(player, cause, health_before) -> table?`; the *first* registered
+  handler that returns a table wins (not a veto chain), and that table may
+  set `heal` (new health), `pos` (`{x,y,z}`, the new position), `message`
+  (a private chat line, `""`/omitted = none), and `drop_inventory` (spawns
+  every inventory slot as a real dropped-item entity **at the player's
+  death position**, not wherever they're about to respawn, and empties
+  their inventory). No handler registered at all (or none returns a table)
+  falls back to the engine's built-in behavior — full heal, teleport to the
+  join spawn point, `"* you died and respawned"` — unchanged from every
+  pre-6.6 build. `player:get_pos()` inside the handler still reads the
+  death position (the engine hasn't moved the player yet at this point),
+  useful for anything beyond the built-in `drop_inventory` flag.
+  `ServerSession::spawn_point(net_id)` (not a Lua binding, a host-side
+  accessor) exposes the original join spawn point if a handler wants to
+  fall back to it deliberately.
 - Scheduling: `vb.after(seconds, fn)` (one-shot), `vb.every(seconds, fn)`
   (repeating; catches up on a stalled tick, capped at 8 fires/dispatch).
   Storage: `vb.storage.key = value` — a metatable-backed proxy over a

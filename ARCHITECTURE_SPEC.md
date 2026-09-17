@@ -750,14 +750,81 @@ the new `flags` bits bumps `kEngineProtocolVersion` and `docs/protocol.md` when
 it happens (Phase 3.5) — this section records the *plan*, not a shipped wire
 change.
 
-**Where it's defined.** `vb.register_entity{ visual = { atlas, frame_size,
-facings, clips = { idle = {...}, walk = {...}, ... } } }` (§10.3, Phase 4.2) is
-the single source of truth; the atlas PNG travels through Asset Sync (§9, Phase
-4.4) like any other texture, with no separate synced manifest. Phase 3 ships
-first against a **hardcoded single-frame placeholder** (`facings = 1`, a flat
-tint) so remote players are visible before Lua/asset-sync exist, the same way
-Phase 2 shipped a hand-rolled mesher ahead of Cellulose — real art (5.1) is a
-local swap once 4.2/4.4 land.
+**Where it's defined.** `vb.register_entity{ visual = {...} }` (§10.3, Phase
+4.2) is the single source of truth per entity *kind*; the atlas PNG travels
+through Asset Sync (§9, Phase 4.4) like any other texture, with no separate
+synced manifest. Phase 3 ships first against a **hardcoded single-frame
+placeholder** (`facings = 1`, a flat tint) so remote players are visible
+before Lua/asset-sync exist, the same way Phase 2 shipped a hand-rolled mesher
+ahead of Cellulose — real art (5.1) is a local swap once 4.2/4.4 land.
+
+**Decided (2026-09-17): frame-size variants, spritesheet grid schema, and
+per-instance override.** The atlas is a spritesheet, not one loose sprite per
+pose, so the engine needs a declared frame size to slice it into a grid —
+rather than accept arbitrary pixel dimensions, packs pick from a small closed
+set of named variants (multiples of 128px, matching typical small/medium/large
+entity silhouettes at a fixed pixels-per-metre ratio):
+
+| variant | frame size (px) |
+|---|---|
+| `small` | 128×128 |
+| `tall` | 128×256 |
+| `flat` | 256×128 |
+| `medium` | 256×256 |
+| `medium_tall` | 256×512 |
+| `medium_flat` | 512×256 |
+| `large` | 512×512 |
+| `large_tall` | 512×1024 |
+| `large_flat` | 1024×512 |
+
+These are an authoring/validation convenience, not an engine type — the
+variant name just looks up a `{frame_width, frame_height}` pair used below.
+
+**Kind-level default**, set via `vb.register_entity{ visual = {...} }`:
+
+```lua
+visual = {
+  variant = "tall",              -- looked up -> frame_width/frame_height
+  texture = "textures/entities/player.png",
+  facings = 8,                   -- rows = floor(facings/2)+1 unique poses
+                                  -- (§11.3 pose mirroring), engine mirrors rest
+  origin = { x = 0.5, y = 1.0 }, -- normalized anchor within a frame (feet point)
+  clips = {                      -- column layout, shared across every pose row
+    { clip = "idle",   frames = 4, fps = 6  },
+    { clip = "walk",   frames = 6, fps = 10 },
+    { clip = "run",    frames = 6, fps = 14 },
+    { clip = "jump",   frames = 1, fps = 1  },
+    { clip = "fall",   frames = 1, fps = 1  },
+    { clip = "acting", frames = 4, fps = 8  },
+    { clip = "hurt",   frames = 2, fps = 10 },
+    { clip = "dead",   frames = 1, fps = 1  },
+  },
+}
+```
+
+Row = pose index (the same index `select_pose()` already produces). Column =
+a pose-row-local pixel offset, computed by the engine as a running sum over
+`clips` in declared order — so `clip` names and per-clip frame counts/fps are
+entirely pack-defined (no positional row/column convention to memorize), while
+built-in kinds (`base:player`, `base:dropped_item`) simply ship their own
+`visual` table as sensible defaults in `content/base`, the same mechanism a
+third-party pack would use, not a special-cased engine path. The required
+sheet size is derived and validated exactly at load time: `width ==
+frame_width * sum(frames)`, `height == frame_height * (floor(facings/2)+1)` —
+a mismatch is a pack load error, not a silent misdraw. A kind that omits a
+clip `resolve_anim_clip()` can still resolve to (e.g. `base:dropped_item`
+never running or jumping) falls back to the first declared clip (conventionally
+`idle`) rather than erroring at runtime.
+
+**Per-instance override.** Each spawned instance may carry its own partial
+`visual` table in its `ScriptState` under a reserved key (`entity.
+visual_override = {...}`), merged field-by-field over its kind's default —
+this is the *only* per-instance case (e.g. a player skin overriding just
+`texture` while inheriting `variant`/`clips`/`facings`/`origin` unchanged);
+every other entity kind is expected to look the same across all its
+instances and only needs the kind-level default. No new storage mechanism:
+`ScriptState` already exists as arbitrary per-entity Lua data (§4's entity
+component table above).
 
 **Client-side.** `vb/render/entity_renderer` (sibling to `vb/render/chunk_renderer`)
 keeps one `EntityRenderState` (clip, elapsed time, direction bucket + hysteresis
