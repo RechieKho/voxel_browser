@@ -2474,3 +2474,26 @@ _(Move items here with a date + commit when fixed, so the history is visible.)_
   engine only offering a `vb.crypto.hash` primitive so a pack that does build
   login doesn't roll its own credential hashing in pure Lua. None of this is
   implemented; it's a backlog entry, not a code change.
+
+- **2026-09-17: Design-only pass, "Phase 6.5 — Shared block-damage
+  breaking."** No code changed. Follow-up to the Phase 6 pass above, adding
+  block breaking as a shared damage pool rather than an instant edit:
+  `BlockType` gains `max_damage` (0 = today's instant break, default, no
+  behavior change) and an optional `crack_texture` override; a sparse
+  server-side `pos → damage` map rides the *existing* interest/replication
+  system as a transient record (appears/disappears via the same spawn/despawn
+  diffing every other replicated object already gets, so nearby players see
+  cracks form without a new wire channel); `C2S_BlockBreakBegin`/`...Stop`
+  bracket a player contributing, gated by the same reach/tool/protection
+  checks `C2S_BlockEdit` already has; two symmetric per-tick Lua hooks split
+  mechanism from policy — `block_break_tick` (per contributing player, sums
+  concurrently so multiple players can break together) adds damage,
+  `block_health_tick` (per damaged block, every tick) lets Lua decide heal
+  policy entirely (no heal / full heal / decay / heal-after-idle, engine has
+  no default); completion still drives the existing unchanged
+  `C2S_BlockEdit`/`BlockEditSystem`/`on_break` pipeline. Crack rendering is
+  default-with-override (baseline generic overlay + optional per-block
+  texture), explicitly noted as blocked on the still-pending real
+  texture/atlas system (4.3/5.1) landing first. Updated
+  `ARCHITECTURE_SPEC.md` §5.2, §8.5, §10.3, new §10.7, §17, and added
+  `REMAINING_TASKS.md` Phase 6.5. Backlog entry, not a code change.

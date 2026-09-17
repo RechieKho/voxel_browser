@@ -181,6 +181,10 @@ struct BlockType {
     LuaRef        on_interact;   // server-side callback (optional)
     LuaRef        on_break;
     LuaRef        on_place;
+    float         max_damage;    // 0 = instant break (default); >0 = shared
+                                  // damage-pool breaking, see §10.7
+    TextureRef    crack_texture; // optional; unset falls back to the engine's
+                                  // default generic crack atlas, see §10.7
 };
 ```
 
@@ -389,7 +393,10 @@ Client                                        Server
   client request. Client may **optimistically** apply it locally; server
   validates (reach distance, tool, `on_break`/`on_place` Lua veto, protection)
   and replies with `S2C_BlockEditResult{ predicted_seq, accepted }` plus the
-  authoritative `S2C_ChunkDelta`. On rejection the client rolls back.
+  authoritative `S2C_ChunkDelta`. On rejection the client rolls back. For a
+  `max_damage > 0` block this is the *completion* of the shared-damage flow
+  in §10.7, not the whole interaction — see that section for
+  `C2S_BlockBreakBegin`/`...Stop` and how in-progress damage is replicated.
 
 ### 8.6 Time & tick sync
 
@@ -481,7 +488,9 @@ Both VMs run with a curated global environment:
 
 Registration (call-time: pack load only):
 
-- `vb.register_block(def) -> BlockId`
+- `vb.register_block(def) -> BlockId` — `def.max_damage` (0 = instant break,
+  the default) and `def.crack_texture` (optional override, §10.7) join the
+  existing fields.
 - `vb.register_item(def)`
 - `vb.register_entity(kind_def)` — the **kind is the class**: `on_spawn`,
   `on_tick`, `on_hit`, `on_death`. Each entity `vb.world.spawn(kind, pos)`
@@ -507,9 +516,11 @@ Runtime:
   `player:give(itemstack)`, `player:take(itemstack) -> bool`,
   `player:get_name()`.
 - Events (subscribe): `vb.on("player_join" | "player_leave" | "block_break" |
-  "block_place" | "player_interact" | "chat" | "tick" | "player_input",
-  handler)`. Handlers may return `false` to veto vetoable events;
-  `player_input` may instead return a replacement input table (§10.6).
+  "block_place" | "player_interact" | "chat" | "tick" | "player_input" |
+  "block_break_begin" | "block_break_tick" | "block_health_tick", handler)`.
+  Handlers may return `false` to veto vetoable events; `player_input` may
+  instead return a replacement input table (§10.6); `block_break_tick` and
+  `block_health_tick` return numbers, not booleans (§10.7).
 - Scheduling: `vb.after(seconds, fn)`, `vb.every(seconds, fn)`.
 - Storage: `vb.storage` — a persisted key/value table (JSON-backed) for
   pack-global world data (counters, config). `vb.db.get/set/delete(key)` is
@@ -575,6 +586,55 @@ its own crypto. The engine still takes no position on auth as a concept.
 Backend: the current single `storage.json` blob doesn't scale to one record
 per identity — `vb.db` needs an actual per-key store (SQLite is the leading
 candidate) once implemented.
+
+### 10.7 Shared block-damage breaking
+
+For any block with `max_damage > 0` (§5.2), breaking is a **shared damage
+pool** rather than instant: multiple players may contribute concurrently
+("breaking together"), progress is visible to everyone nearby, and the
+engine ships zero built-in policy for how fast damage accrues or whether/how
+it heals — those are entirely Lua's call, following the same
+mechanism-vs-policy split used for input interception (§10.6).
+
+- **State**: server tracks a sparse `pos → {damage, max_damage,
+  last_touched_tick}` map — only blocks with damage > 0 exist in it. This
+  rides the *existing* interest/replication system (§8.4) as a transient
+  record rather than a new wire channel: it appears in nearby players'
+  snapshots when damage becomes > 0 and disappears when it returns to 0, the
+  same spawn/despawn diffing every other replicated object already gets.
+  It does **not** touch chunk revisions or mesh invalidation — a block's
+  damage is not a block-data change until the actual break commits.
+- **Contributing**: `C2S_BlockBreakBegin{pos, face}` / `C2S_BlockBreakStop{pos}`
+  bracket a player holding on a target (reach/tool checks same as
+  `C2S_BlockEdit` today). While held, `vb.on("block_break_begin", handler)`
+  gates entry (vetoable — reach/tool/protection), then
+  `vb.on("block_break_tick", handler)` fires once per tick **per
+  contributing player**, returning the damage delta to add this tick. The
+  engine sums all concurrent contributors' deltas and clamps at
+  `max_damage`; it has no opinion on tool speed, enchantments, or anything
+  else that delta is computed from.
+- **Healing**: `vb.on("block_health_tick", handler)` fires once per tick for
+  every block currently holding damage — `(pos, damage, max_damage,
+  ticks_since_last_hit)` in, a new damage value (or nothing, meaning
+  unchanged) out. No heal, full heal, gradual decay, heal-after-N-idle-ticks
+  — all of it is the handler's decision; the engine only tracks
+  `last_touched_tick` and calls the hook. A pack that registers no handler
+  gets permanent damage (no healing at all).
+- **Completion**: when summed damage reaches `max_damage`, the engine drives
+  the *existing*, unchanged `C2S_BlockEdit`/`BlockEditSystem`/`on_break`
+  pipeline (§8.5, §10.5) to actually break the block — this system only
+  gates when that pipeline fires, it doesn't replace it.
+- **Rendering — default + override, not Lua's job**: the engine ships one
+  baseline generic crack overlay (progressive stages by `damage/max_damage`)
+  so breaking looks right with zero scripting. A block may override it via
+  `crack_texture` (§5.2), same override-by-name convention as every other
+  registry in this doc. **Dependency:** this needs the real texture/atlas
+  system that's still pending (`REMAINING_TASKS.md` 4.3/5.1 — client is
+  untextured cubes today), so crack textures can't land before that does.
+- **Cost**: `block_break_tick`/`block_health_tick` are bounded by the number
+  of blocks currently being damaged, which is small and player-driven, not
+  proportional to world size — same reasoning as why the custom-keybind
+  per-connection cost in §10.6 is acceptable.
 
 ---
 
@@ -811,6 +871,7 @@ content for CI.
 | Custom keybind flood    | wire bandwidth / dispatch DoS       | closed schema (bounded bitset, registered set only, §10.6), not a post-receipt filter; per-connection rate limit on top |
 | Connection flood        | resource exhaustion                 | GNS connection limits, handshake timeout, per-IP cap                 |
 | Pack-implemented auth   | weak/pure-Lua credential hashing    | engine offers `vb.crypto.hash` (§10.6) so packs aren't rolling their own; engine itself takes no position on auth |
+| Block-break begin/stop spam | CPU DoS via many concurrent damage-pool entries | `C2S_BlockBreakBegin` still gated by the same reach/tool/protection checks as `C2S_BlockEdit`; sparse map size is bounded by actual concurrent contributors, not attacker-controlled growth (§10.7) |
 
 The engine assumes a **trusted server operator** but an **untrusted network and
 untrusted clients**. Client sandboxing protects players from malicious servers

@@ -1488,6 +1488,43 @@ windows, chatting, crafting, and seeing each other, all at once.
       slow and easy to get wrong. The engine still takes no position on auth
       as a concept — see `ARCHITECTURE_SPEC.md` §19 Q6.
 
+### 6.5 Shared block-damage breaking (default + override crack texture)
+
+- [ ] `BlockType` gains `max_damage` (0 = today's instant break, the
+      default — no behavior change for any existing block) and an optional
+      `crack_texture` override (§5.2). `vb.register_block{...}` exposes both.
+- [ ] Sparse server-side damage map (`pos → {damage, max_damage,
+      last_touched_tick}`), only holding entries with damage > 0 — does not
+      touch chunk revisions or mesh invalidation.
+- [ ] Ride the *existing* interest/replication system (§8.4) for visibility
+      rather than a new channel: a damaged block is a transient
+      interest-managed record, spawned when damage > 0, despawned at 0 —
+      reuses the spawn/despawn diffing every other replicated object already
+      gets, so everyone nearby sees cracks form and vanish for free.
+- [ ] `C2S_BlockBreakBegin{pos, face}` / `C2S_BlockBreakStop{pos}` bracket a
+      player holding on a target; same reach/tool/protection checks as
+      `C2S_BlockEdit` today gate entry via `vb.on("block_break_begin", ...)`
+      (vetoable).
+- [ ] `vb.on("block_break_tick", handler)` fires once per tick **per
+      contributing player** while held — returns the damage delta to add.
+      Multiple players contributing to the same block sum concurrently
+      ("breaking together"). Engine has no opinion on tool speed,
+      enchantments, or anything the delta is computed from.
+- [ ] `vb.on("block_health_tick", handler)` fires once per tick **per
+      damaged block**, regardless of contributors — `(pos, damage,
+      max_damage, ticks_since_last_hit)` in, new damage value (or unchanged)
+      out. No heal / full heal / gradual decay / heal-after-idle are all
+      just what the handler computes; no handler registered = permanent
+      damage, no built-in default policy.
+- [ ] Completion (summed damage reaches `max_damage`) drives the *existing*,
+      unchanged `C2S_BlockEdit`/`BlockEditSystem`/`on_break` pipeline — this
+      system only gates when that fires, doesn't replace it.
+- [ ] Default generic crack overlay (progressive stages by damage ratio)
+      ships so breaking looks right with zero scripting; `crack_texture`
+      override follows the same override-by-name convention as every other
+      registry. **Blocked on** the still-pending real texture/atlas system
+      (4.3/5.1 — client is untextured cubes today) landing first.
+
 ---
 
 ## Cross-Cutting / Continuous
