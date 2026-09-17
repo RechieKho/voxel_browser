@@ -107,8 +107,15 @@ const world::BlockSolidQuery &ServerSession::world_query() const {
 void ServerSession::handle_input_batch(Conn &conn,
 		const protocol::C2SInputBatch &batch) {
 	const world::BlockSolidQuery &world = world_query();
+	auto &pos = registry_.get<ecs::Position>(conn.entity);
+	auto &vel = registry_.get<ecs::Velocity>(conn.entity);
+	auto &rot = registry_.get<ecs::Rotation>(conn.entity);
+	auto &collider = registry_.get<ecs::Collider>(conn.entity);
+	auto &input = registry_.get<ecs::PlayerInput>(conn.entity);
+
+	physics::MoveState move{ pos.value, vel.value, collider.on_ground };
 	for (const auto &cmd : batch.cmds) {
-		if (cmd.seq <= conn.last_input_seq) {
+		if (cmd.seq <= input.last_seq) {
 			continue; // already simulated (batches resend recent commands)
 		}
 		// The spawn chunk may still be generating (async worldgen worker) --
@@ -118,16 +125,20 @@ void ServerSession::handle_input_batch(Conn &conn,
 		// column is actually there; still ack the seq so the client doesn't
 		// pile up a backlog to replay once it unfreezes.
 		if (replicator_ == nullptr ||
-				physics::ground_area_loaded(conn.move.position,
+				physics::ground_area_loaded(move.position,
 						[this](core::ChunkCoord c) {
 							return replicator_->world().has_chunk(c);
 						})) {
-			conn.move = physics::step_movement(conn.move, to_move_input(cmd),
+			move = physics::step_movement(move, to_move_input(cmd),
 					move_params_, world);
 		}
-		conn.last_input_seq = cmd.seq;
-		conn.look = { cmd.yaw, cmd.pitch };
+		input.last_seq = cmd.seq;
+		rot.yaw = cmd.yaw;
+		rot.pitch = cmd.pitch;
 	}
+	pos.value = move.position;
+	vel.value = move.velocity;
+	collider.on_ground = move.on_ground;
 	conn.input_driven = true;
 
 	replication::EntityState s;
@@ -135,11 +146,11 @@ void ServerSession::handle_input_batch(Conn &conn,
 		s = *e;
 	}
 	s.net_id = conn.net_id;
-	s.pos = conn.move.position;
-	s.rot = conn.look;
-	s.vel = core::Vec3f{ static_cast<float>(conn.move.velocity.x),
-		static_cast<float>(conn.move.velocity.y),
-		static_cast<float>(conn.move.velocity.z) };
+	s.pos = pos.value;
+	s.rot = { rot.yaw, rot.pitch };
+	s.vel = core::Vec3f{ static_cast<float>(vel.value.x),
+		static_cast<float>(vel.value.y),
+		static_cast<float>(vel.value.z) };
 	interest_.upsert(s);
 }
 
@@ -182,7 +193,9 @@ void ServerSession::handle_chat(Conn &state, const protocol::Frame &frame) {
 	if (on_chat_ && !on_chat_(state.net_id, msg->text)) {
 		return; // vetoed by the pack (vb.on("chat"))
 	}
-	const protocol::S2CChat out{ state.name + ": " + msg->text };
+	const protocol::S2CChat out{
+		registry_.get<ecs::PlayerTag>(state.entity).name + ": " + msg->text
+	};
 	for (auto &[other_conn, other] : conns_) {
 		if (other.playing) {
 			send_message(transport_, other_conn, out);
@@ -190,21 +203,25 @@ void ServerSession::handle_chat(Conn &state, const protocol::Frame &frame) {
 	}
 }
 
-const physics::MoveState *ServerSession::player_move_state(core::NetId id) const {
+std::optional<physics::MoveState> ServerSession::player_move_state(core::NetId id) const {
 	for (const auto &[conn, state] : conns_) {
 		(void)conn;
 		if (state.playing && state.net_id == id) {
-			return &state.move;
+			return physics::MoveState{
+				registry_.get<ecs::Position>(state.entity).value,
+				registry_.get<ecs::Velocity>(state.entity).value,
+				registry_.get<ecs::Collider>(state.entity).on_ground
+			};
 		}
 	}
-	return nullptr;
+	return std::nullopt;
 }
 
 void ServerSession::set_player_velocity(core::NetId id, core::Vec3d vel) {
 	for (auto &[conn, state] : conns_) {
 		(void)conn;
 		if (state.playing && state.net_id == id) {
-			state.move.velocity = vel;
+			registry_.get<ecs::Velocity>(state.entity).value = vel;
 			return;
 		}
 	}
@@ -223,7 +240,7 @@ std::string_view ServerSession::player_name(core::NetId id) const {
 	for (const auto &[conn, state] : conns_) {
 		(void)conn;
 		if (state.playing && state.net_id == id) {
-			return state.name;
+			return registry_.get<ecs::PlayerTag>(state.entity).name;
 		}
 	}
 	return {};
@@ -287,11 +304,17 @@ void ServerSession::tick(double dt_seconds) {
 					++playing_;
 					const JoinGrant &g = it->second.handshake.grant();
 					it->second.net_id = g.net_id;
-					it->second.move = physics::MoveState{};
-					it->second.move.position = g.spawn_pos;
 					it->second.spawn_pos = g.spawn_pos;
-					it->second.health = 20.0f;
-					it->second.name = step.player_name;
+					it->second.entity = registry_.create();
+					registry_.emplace<ecs::Position>(it->second.entity, g.spawn_pos);
+					registry_.emplace<ecs::Velocity>(it->second.entity);
+					registry_.emplace<ecs::Rotation>(it->second.entity);
+					registry_.emplace<ecs::Collider>(
+							it->second.entity, move_params_, /*on_ground=*/false);
+					registry_.emplace<ecs::PlayerInput>(it->second.entity);
+					registry_.emplace<ecs::Health>(it->second.entity, 20.0f, 20.0f);
+					registry_.emplace<ecs::PlayerTag>(it->second.entity, step.player_name);
+					registry_.emplace<ecs::NetReplicated>(it->second.entity, g.net_id);
 					interest_.upsert(replication::EntityState{
 							g.net_id, core::EntityKindId::kInvalid, g.spawn_pos,
 							{}, {} });
@@ -304,7 +327,8 @@ void ServerSession::tick(double dt_seconds) {
 					protocol::S2CPlayerList list_msg;
 					for (auto &[other_conn, other] : conns_) {
 						if (other.playing && other_conn != ev.conn) {
-							list_msg.players.push_back({ other.net_id, other.name });
+							list_msg.players.push_back({ other.net_id,
+									registry_.get<ecs::PlayerTag>(other.entity).name });
 						}
 					}
 					send_message(transport_, ev.conn, list_msg);
@@ -339,6 +363,7 @@ void ServerSession::tick(double dt_seconds) {
 							send_message(transport_, other_conn, leave_msg);
 						}
 					}
+					registry_.destroy(it->second.entity);
 				}
 				conns_.erase(it);
 				break;
@@ -419,15 +444,18 @@ void ServerSession::check_respawns() {
 		if (!state.playing) {
 			continue;
 		}
-		if (state.move.position.y < void_kill_y_) {
-			state.health = 0.0f; // fell out of the world -- instant kill
+		auto &pos = registry_.get<ecs::Position>(state.entity);
+		auto &health = registry_.get<ecs::Health>(state.entity);
+		if (pos.value.y < void_kill_y_) {
+			health.current = 0.0f; // fell out of the world -- instant kill
 		}
-		if (state.health > 0.0f) {
+		if (health.current > 0.0f) {
 			continue;
 		}
-		state.health = 20.0f;
-		state.move = physics::MoveState{};
-		state.move.position = state.spawn_pos;
+		health.current = health.max;
+		pos.value = state.spawn_pos;
+		registry_.get<ecs::Velocity>(state.entity).value = {};
+		registry_.get<ecs::Collider>(state.entity).on_ground = false;
 		replication::EntityState s;
 		if (const auto *e = interest_.get(state.net_id)) {
 			s = *e;
@@ -525,21 +553,25 @@ void ServerSession::broadcast_snapshots() {
 
 		state.last_visible = std::move(visible);
 
-		snap.last_acked_input_seq = state.last_input_seq;
+		snap.last_acked_input_seq = registry_.get<ecs::PlayerInput>(state.entity).last_seq;
 		if (state.input_driven) {
 			snap.has_local = true;
 			if (self) {
 				snap.local = to_record(*self);
 			}
+			const auto &pos = registry_.get<ecs::Position>(state.entity);
+			const auto &vel = registry_.get<ecs::Velocity>(state.entity);
+			const auto &rot = registry_.get<ecs::Rotation>(state.entity);
+			const auto &collider = registry_.get<ecs::Collider>(state.entity);
 			snap.local.net_id = state.net_id;
-			snap.local.pos = state.move.position;
+			snap.local.pos = pos.value;
 			snap.local.vel = core::Vec3f{
-				static_cast<float>(state.move.velocity.x),
-				static_cast<float>(state.move.velocity.y),
-				static_cast<float>(state.move.velocity.z)
+				static_cast<float>(vel.value.x),
+				static_cast<float>(vel.value.y),
+				static_cast<float>(vel.value.z)
 			};
-			snap.local.rot = state.look;
-			snap.local.flags = pack_flags(state.move.on_ground);
+			snap.local.rot = { rot.yaw, rot.pitch };
+			snap.local.flags = pack_flags(collider.on_ground);
 		}
 
 		if (!snap.has_local && snap.entered.empty() && snap.updated.empty() &&

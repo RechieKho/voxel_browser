@@ -362,10 +362,23 @@ with prediction/interpolation.
       at a fixed `1/20 s`, capped at 5 catch-up steps per frame (drops the
       backlog past that rather than spiralling). Client-side prediction still
       ticks once per real frame, unchanged.
-- [ ] EnTT registry wiring on the server. **(deferred — the session drives
-      per-player movement directly for now; the registry + `SystemRunner` is a
-      refactor once Lua entity kinds (Phase 4) need to iterate arbitrary
-      entities.)**
+- [x] EnTT registry wiring on the server (2026-09-17): `ServerSession` now
+      creates a real entity per playing connection (`Conn::entity`) holding
+      `ecs::Position/Velocity/Rotation/Collider/PlayerInput/Health/PlayerTag/
+      NetReplicated`, populated on join completion and destroyed on
+      disconnect. `Conn`'s old inline fields (`move`, `look`, `name`, `health`,
+      `last_input_seq`) are gone -- every method that used to read/write them
+      (`handle_input_batch`, `handle_chat`, `check_respawns`,
+      `broadcast_snapshots`, `player_move_state`, `set_player_velocity`,
+      `player_name`) now goes through `registry_.get<...>()` directly, so the
+      registry is the actual source of truth, not a synced mirror.
+      `player_move_state()`'s signature changed from a raw pointer to
+      `std::optional<physics::MoveState>` (assembled from three components on
+      demand, so there's no `MoveState` object to point into anymore) --
+      updated its 3 call sites (`pack_runtime.cpp`, `netcode_test.cpp` x2).
+      **Still deferred:** nothing iterates the registry generically yet — a
+      `SystemRunner` (below) is only worth adding once a Lua entity kind
+      (Phase 4) needs to.
 - [ ] System runner with explicit ordering (§7.2).
 - [ ] Client-side lightweight registry — currently `ClientSession` holds the
       predicted local state + a `remote_samples_` interp buffer inline.
