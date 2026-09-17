@@ -2452,3 +2452,25 @@ _(Move items here with a date + commit when fixed, so the history is visible.)_
   not the opt-in, backend. CI's explicit `-DVB_WITH_REPLICATION=ON` in the
   three `build_*.yml` legs is now redundant but harmless — left as-is rather
   than churned.
+
+- **2026-09-17: Design-only pass, "Phase 6 — Lua-Driven Extensibility."** No
+  code changed. Captured a design discussion into `ARCHITECTURE_SPEC.md`
+  (§7.1-7.2, §10.3-10.6, §17, §19 Q6) and a new `REMAINING_TASKS.md` Phase 6
+  section, covering four systems: (1) entity kinds as Lua "classes" with
+  spawned entities as "objects" carrying per-instance state via the
+  already-declared-but-unused `ScriptState` component; (2) reframing
+  `ui.define` from static declaration to an immediate-mode `render(state)`
+  function called every UI frame — leans on `raygui` already being
+  immediate-mode, so no virtual-DOM diffing is needed for a React/Svelte-like
+  feel; (3) a closed-schema custom-keybind channel
+  (`vb.register_keybind`/`vb.on("player_input", ...)`) where the flood
+  defense is the wire format itself (bounded bitset, registered set only)
+  rather than a post-receipt filter, plus a server-side input-interception
+  hook (veto or replace) between `IngestInputSystem` and
+  `MovementIntegrationSystem`; (4) a generic per-key `vb.db` store, distinct
+  from the existing pack-global `vb.storage`, explicitly designed so the
+  engine has no opinion on "logged in" — any auth/identity model is entirely
+  pack-implemented on top of it (joining a world ≠ authenticating), with the
+  engine only offering a `vb.crypto.hash` primitive so a pack that does build
+  login doesn't roll its own credential hashing in pure Lua. None of this is
+  implemented; it's a backlog entry, not a code change.

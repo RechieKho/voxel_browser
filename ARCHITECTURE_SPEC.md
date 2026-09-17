@@ -265,7 +265,13 @@ components but can register **entity kinds** with tick callbacks.
 ### 7.2 Systems (ordered per tick)
 
 1. `IngestInputSystem` — drain per-player `InputCmd` queues, clamp/validate.
+   Fires `vb.on("player_input", handler)` here, before movement integration —
+   a handler may veto (`return false`, drop this tick's input) or return a
+   replacement input table (§10.6).
 2. `ScriptPreTickSystem` — dispatch `on_tick` for entity kinds + global timers.
+   `on_tick`/`on_spawn`/`on_hit`/`on_death` all receive the entity's
+   `ScriptState` table as `self` (§10.3), so kind-local data survives between
+   calls the way instance fields do on an object.
 3. `MovementIntegrationSystem` — apply gravity, integrate velocity.
 4. `VoxelCollisionSystem` — swept AABB vs. solid voxels, resolve penetration,
    set `on_ground`, apply step-up.
@@ -477,10 +483,19 @@ Registration (call-time: pack load only):
 
 - `vb.register_block(def) -> BlockId`
 - `vb.register_item(def)`
-- `vb.register_entity(kind_def)` — `on_spawn`, `on_tick`, `on_hit`, `on_death`
+- `vb.register_entity(kind_def)` — the **kind is the class**: `on_spawn`,
+  `on_tick`, `on_hit`, `on_death`. Each entity `vb.world.spawn(kind, pos)`
+  creates is an independent **object** — its `ScriptState` component (§7.1)
+  holds a per-instance Lua table, passed as `self` to every callback, so two
+  entities of the same kind track separate data the way object instances do.
+  Base components (`get_pos`, ...) stay accessor methods on `self`, matching
+  the existing `player:`/`entity:` style; kind-specific fields are free-form
+  on `self` itself.
 - `vb.register_biome(def)`
 - `vb.worldgen.set_pipeline(node_tree_def)`
 - `vb.register_craft(recipe)`
+- `vb.register_keybind(name)` — declares a custom input slot (§10.6); frozen
+  at `freeze()` like every other registry above.
 
 Runtime:
 
@@ -492,19 +507,32 @@ Runtime:
   `player:give(itemstack)`, `player:take(itemstack) -> bool`,
   `player:get_name()`.
 - Events (subscribe): `vb.on("player_join" | "player_leave" | "block_break" |
-  "block_place" | "player_interact" | "chat" | "tick", handler)`. Handlers may
-  return `false` to veto vetoable events.
+  "block_place" | "player_interact" | "chat" | "tick" | "player_input",
+  handler)`. Handlers may return `false` to veto vetoable events;
+  `player_input` may instead return a replacement input table (§10.6).
 - Scheduling: `vb.after(seconds, fn)`, `vb.every(seconds, fn)`.
-- Storage: `vb.storage` — a persisted key/value table (JSON-backed) for pack
-  world data.
+- Storage: `vb.storage` — a persisted key/value table (JSON-backed) for
+  pack-global world data (counters, config). `vb.db.get/set/delete(key)` is
+  the separate, generic per-key store for script-owned records (players,
+  sessions, anything) — see §10.6.
 
-### 10.4 UI API surface (client VM)
+### 10.4 UI API surface (client VM) — immediate-mode, reactive
 
-- `ui.define(name, layout_fn)` — layout described declaratively (panels, labels,
-  buttons, lists, item grids, text inputs). The C++ side renders it with raygui.
+- `ui.define(name, render_fn)` — `render_fn(state)` is called **every UI
+  frame** the screen is open, and declares the widget tree for that frame
+  (panels, labels, buttons, lists, item grids, text inputs). The C++ side
+  walks whatever it returns and issues the matching `raygui` calls directly.
+  `raygui` is itself immediate-mode, so this needs no virtual-DOM diff — a
+  state mutation (from an event handler, or a value pushed down from the
+  server) just changes what `render_fn` returns next frame, giving the same
+  reactive feel as a retained-mode framework without the bookkeeping.
 - Callbacks: `on_click`, `on_change`, `on_close` — these send a `C2S_UiEvent`
   RPC to the server VM (`player:open_ui` context round-trips), so UI logic that
-  matters is still server-authoritative. Purely cosmetic state stays local.
+  matters is still server-authoritative. Purely cosmetic state (hover, scroll
+  position) can be mutated locally and read straight back by `render_fn`.
+- This replaces the older static-declaration model; `content/base/ui/
+  {inventory,pause}.lua` need rewriting to the `render_fn` shape when this
+  lands, not just extending (tracked in `REMAINING_TASKS.md` Phase 6).
 
 ### 10.5 Event flow example (block break)
 
@@ -515,6 +543,38 @@ client click ─▶ C2S_BlockEdit ─▶ server: reach/tool check
   ─▶ Lua on_break callback (drops, sfx trigger, ...)
   ─▶ S2C_BlockEditResult + S2C_ChunkDelta to all interested players
 ```
+
+### 10.6 Custom input channel & generic storage
+
+**Input.** `vb.register_keybind(name)` builds a frozen, ordered registry, same
+as blocks/entities. The registered set is synced to the client at handshake
+(same shape as `S2C_BlockRegistry`, §4.3 lineage), and from then on the wire
+only ever carries a bounded bitset indexed by registration order — there is
+no arbitrary key+string encoding, so an unregistered key cannot be
+represented at all. That closed schema is the flood defense, not a
+post-receipt filter; a per-connection rate limit on top is defense in depth
+(§17). This channel is additive to `PlayerInput`'s existing movement/look
+fields, which are untouched. Server-side only: `vb.on("player_input",
+handler)` fires in `IngestInputSystem` (§7.2) before `MovementIntegrationSystem`
+runs, and may veto or replace the tick's input — e.g. blocking movement
+entirely, or reinterpreting it as a dash/ability.
+
+**Storage.** `vb.storage` (§10.3) stays pack-global. `vb.db.get(key)` /
+`vb.db.set(key, value)` / `vb.db.delete(key)` is a separate, generic
+per-key store — `key` is whatever the script chooses (`"user:" .. name`,
+`"session:" .. token`, ...). The engine has no notion of "logged in": a
+connection is just a connection, exactly as today, until a pack's own login
+flow (built on `vb.db` + the input/UI APIs above) looks up a record and
+decides to recognize it. Joining a world is not authenticating, the same way
+loading a webpage isn't — that only happens if and when the pack implements
+it. Since packs that do build a login flow need to hash credentials, and the
+sandbox deliberately strips `os`/`io` (§10.2) making pure-Lua hashing both
+slow and easy to get wrong, a minimal `vb.crypto.hash(...)` primitive is
+planned so that a pack that chooses to implement auth doesn't have to roll
+its own crypto. The engine still takes no position on auth as a concept.
+Backend: the current single `storage.json` blob doesn't scale to one record
+per identity — `vb.db` needs an actual per-key store (SQLite is the leading
+candidate) once implemented.
 
 ---
 
@@ -748,7 +808,9 @@ content for CI.
 | Packet decode           | malformed input crash               | bounds-checked `Result` codecs, fuzz targets, size caps              |
 | Block edits             | reach hacks, protected-area grief   | server reach check, tool check, Lua veto, per-region protection API  |
 | Input flood             | CPU DoS                             | per-connection input rate limit, `InputCmd` count clamp per tick     |
+| Custom keybind flood    | wire bandwidth / dispatch DoS       | closed schema (bounded bitset, registered set only, §10.6), not a post-receipt filter; per-connection rate limit on top |
 | Connection flood        | resource exhaustion                 | GNS connection limits, handshake timeout, per-IP cap                 |
+| Pack-implemented auth   | weak/pure-Lua credential hashing    | engine offers `vb.crypto.hash` (§10.6) so packs aren't rolling their own; engine itself takes no position on auth |
 
 The engine assumes a **trusted server operator** but an **untrusted network and
 untrusted clients**. Client sandboxing protects players from malicious servers
@@ -803,7 +865,13 @@ to the extent practical (no code exec, no arbitrary FS writes).
 5. **Persistence**: region file format for world save — deferred past first
    playable, but the chunk store should not assume in-memory-forever.
 6. **Account/auth**: `auth_mode = none | token` — token verification service is
-   out of scope for v0 but the handshake reserves the field.
+   out of scope for v0 but the handshake reserves the field. **Direction set
+   (2026-09-17, not yet implemented):** the engine will not own an auth
+   concept at all — `vb.db` (§10.6) gives packs a generic per-key store, and
+   any login flow (recognizing a returning player, credential checks) is
+   entirely pack-implemented on top of it plus the UI/input APIs. This
+   `auth_mode` field stays reserved for a future *transport-level* token
+   check, which is a different, lower-level concern than pack-level identity.
 7. **Entity visual presentation**: 3D blocky models vs. 2D sprites.
    **Resolved (2026-09-11): Don't Starve-style Y-axis-billboarded sprites**, not
    blocky models — full design in §11.3. Key parameters locked in: raylib

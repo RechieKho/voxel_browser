@@ -1410,6 +1410,86 @@ windows, chatting, crafting, and seeing each other, all at once.
 
 ---
 
+## Phase 6 — Lua-Driven Extensibility (design only, not started)
+
+> Design agreed in discussion on 2026-09-17: four systems that let content
+> packs override/extend engine defaults (biomes, entities, UI, input, data)
+> the way the register-by-name registries already let blocks be overridden
+> today. Builds on 3.1's EnTT wiring, 4.2's registration API, and 4.2's
+> still-open "wire `register_entity` callbacks" item — see
+> `ARCHITECTURE_SPEC.md` §7.1-7.2, §10.3-10.6, §17, §19 Q6 for the design.
+
+### 6.1 Entity kinds as classes, spawned entities as objects
+
+- [ ] Per-instance Lua state: the `ScriptState` component (`ARCHITECTURE_SPEC.md`
+      §7.1, already in the base component table but unused) holds a table per
+      spawned entity, passed as `self` to every callback, so two objects of
+      the same `register_entity` kind track independent data.
+- [ ] Wire `on_spawn`/`on_tick`/`on_hit`/`on_death` into `ScriptPreTickSystem`/
+      `ScriptPostTickSystem` — same item already tracked under 4.2 ("waits on
+      3.1's EnTT registry"); the `self`-table plumbing above has to land
+      alongside it, not after, since it changes the callback signature.
+- [ ] Decide: do accessor methods on `self` cover only base components
+      (`get_pos`, mirroring the player object), or can `self` expose
+      arbitrary kind-specific fields directly? Leaning arbitrary fields for
+      custom data, accessors for engine-owned components.
+
+### 6.2 Fully Lua-defined, immediate-mode reactive UI
+
+- [ ] Reframe `ui.define` from "declare a static screen" to "register a
+      `render(state)` function called every UI frame" (§10.4) — `raygui` is
+      already immediate-mode, so no virtual-DOM diffing is needed: the C++
+      side just walks whatever `render_fn` returns that frame and issues the
+      matching `raygui` calls. State mutation naturally reflows next frame.
+- [ ] Real API break from `content/base/ui/{inventory,pause}.lua`'s current
+      static-declaration style — those need rewriting to the new shape, not
+      just extending, once this lands.
+- [ ] Event handlers keep the existing `C2S_UiEvent` round-trip
+      (server-authoritative for anything that matters); purely cosmetic
+      state (hover, scroll) can stay client-local.
+
+### 6.3 Server-side player-input interception, closed-schema custom keybinds
+
+- [ ] `vb.register_keybind(name)` at pack load — idempotent registry, frozen
+      at `PackRuntime::freeze()`, same pattern as blocks/entities.
+- [ ] Sync the registered set to the client at handshake (same shape as
+      `S2C_BlockRegistry`, §4.3); the wire only ever encodes a bounded bitset
+      indexed by registration order — an unregistered key cannot be
+      represented on the wire at all. This closed schema is the flood
+      defense, not a post-receipt filter (§17).
+- [ ] Movement input (`PlayerInput`'s existing fields) is untouched — this
+      channel is additive, for pack-defined shortcuts only.
+- [ ] New `vb.on("player_input", handler)` fires in `IngestInputSystem`,
+      before `MovementIntegrationSystem` runs (§7.2). Handler may veto
+      (`return false`) or return a replacement input table before
+      integration — covers both "block movement" and "reinterpret it" (e.g.
+      a dash ability).
+- [ ] Per-connection rate limiting on custom-keybind events, defense in depth
+      on top of the closed schema — folds into the already-tracked
+      "per-player rate limit / flood guard belongs with `GnsTransport`" item
+      (Phase 1.3).
+
+### 6.4 Generic per-key persistent storage (script-owned identity/auth)
+
+- [ ] `vb.db.get(key)` / `vb.db.set(key, value)` / `vb.db.delete(key)` —
+      arbitrary script-chosen keys (`"user:" .. name`, `"session:" .. token`,
+      ...), distinct from the existing pack-global `vb.storage`. The engine
+      has no concept of "logged in" — a connection stays just a connection
+      (as today) until a pack's own login flow looks up a record and decides
+      to recognize it. Joining a world isn't authenticating, the same way
+      loading a webpage isn't.
+- [ ] Storage backend: today's single `storage.json` blob doesn't scale to
+      one record per identity — needs an actual per-key store (SQLite is the
+      leading candidate, common well-trodden dependency) once this lands.
+      Implementation detail, not a design blocker.
+- [ ] Expose a minimal `vb.crypto.hash(...)` primitive so packs implementing
+      their own login don't roll credential hashing in pure Lua — the
+      sandbox strips `os`/`io` deliberately (§10.2), and pure-Lua hashing is
+      slow and easy to get wrong. The engine still takes no position on auth
+      as a concept — see `ARCHITECTURE_SPEC.md` §19 Q6.
+
+---
+
 ## Cross-Cutting / Continuous
 
 - [ ] Keep `ENGINE_PROTOCOL_VERSION` + `docs/protocol.md` in lockstep with every
