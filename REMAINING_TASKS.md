@@ -1525,6 +1525,112 @@ windows, chatting, crafting, and seeing each other, all at once.
       registry. **Blocked on** the still-pending real texture/atlas system
       (4.3/5.1 — client is untextured cubes today) landing first.
 
+### 6.6 Player damage & death (foundational — split out from the rest below)
+
+> Audited 2026-09-17: `void_kill_y` (`inc/vb/core/config.hpp:31`) is
+> currently **the only damage source in the entire engine** — no fall
+> damage, no PvP, no mob damage, no hunger/starvation. `Health` exists on
+> the entity but nothing but falling into the void can ever reduce it. This
+> is upstream of combat, PvP, and hazards, so it's called out on its own
+> rather than folded into the rest of 6.7-6.13 — most of that later content
+> depends on this landing first.
+
+- [ ] A generic damage primitive (e.g. `player:damage(amount, cause)`) —
+      doesn't exist today; currently the only way to reduce `Health` is the
+      hardcoded void-kill check. Without this, no pack can implement combat,
+      PvP, fall damage, hunger, or mob attacks no matter what else lands.
+- [ ] `check_respawns()` (`src/net/session.cpp:442-470`) is entirely
+      hardcoded: instant full heal, teleport to `state.spawn_pos`
+      unconditionally, a fixed chat string, no drops-on-death, no
+      death-cause info. **Raw state, Lua decides:** fire a hook with
+      `(player, cause, health_before)` and let Lua decide heal amount,
+      respawn point, whether to drop inventory, and the message text.
+- [ ] Spawn point is a single fixed world column (`worldgen::
+      default_spawn_position`, always `(0,0)`), set once at join and reused
+      for every respawn forever (`session.cpp:307,456,464`) — no
+      bed/checkpoint/team-spawn concept can exist today. **Raw state, Lua
+      decides:** a per-respawn "pick spawn point" hook, engine just calls it
+      when a respawn is about to happen.
+- [ ] No PvP toggle exists, and none would be meaningful yet since there's
+      no damage system for it to gate — not a separate item, just confirms
+      it's downstream of the primitive above.
+
+### 6.7 Physics / movement parameters (default + override)
+
+- [ ] `physics::MoveParams` (`inc/vb/physics/movement.hpp:18-33` — gravity,
+      jump speed, walk/sprint speed, accel, friction, step height, fly
+      speed) is a hardcoded struct whose own comment already says *"Engine
+      defaults; a Lua pack overrides per entity kind"* — planned, never
+      wired up. Enables double-jump, low-gravity zones, custom movement
+      abilities per entity kind.
+- [ ] `ServerConfig.gravity` (`inc/vb/core/config.hpp`) duplicates
+      `MoveParams.gravity` as a separate server-operator setting — worth
+      reconciling which one wins once physics is Lua-overridable, so an
+      operator's `server.toml` and a pack's override don't silently fight.
+
+### 6.8 Day/night cycle curve (default + override)
+
+- [ ] `sky_brightness()`/`sky_color_for_time()` (`inc/vb/world/
+      daynight.hpp:26-39`) are a fixed 4-keyframe gradient, not Lua-reachable
+      at all today. `day_length_seconds` already exists as a runtime value
+      (`ServerSession::set_day_length_seconds`) but isn't wired to any
+      config or Lua surface either. Ship the current curve as the default;
+      let a pack supply its own keyframes/curve function (eternal night,
+      custom skyboxes, alien day cycles).
+
+### 6.9 Inventory stacking (default + override)
+
+- [ ] No max stack size or slot cap exists anywhere; `PackRuntime::give()`
+      (`src/script/pack_runtime.cpp:346-352`) always pushes a new slot,
+      never combines. More a missing feature than a hardcode, but same
+      shape: ship a default stack cap (e.g. 64) and slot count, let
+      `register_item` override its own stack size (non-stackable tools vs.
+      stackable blocks), and let Lua opt into combining logic.
+
+### 6.10 Chat transform/moderation hook
+
+- [ ] `handle_chat()` (`src/net/session.cpp:185-204`) hardcodes the message
+      format (`name: text`), has no rate limit, and the existing
+      `vb.on("chat")` hook is veto-only (`return false` or nothing) — it
+      can't transform the text. Extend it to the same veto-or-replace shape
+      already designed for `player_input` (`ARCHITECTURE_SPEC.md` §10.6), so
+      a pack can do profanity filtering, custom formatting, or its own
+      rate-limit policy instead of the engine's none-at-all.
+
+### 6.11 Item drop parameters (default + override)
+
+- [ ] `pickup_radius` (default 1.5) and `lifetime_seconds` (default 120.0)
+      on `world::ItemDropTickResult` (`inc/vb/world/item_drops.hpp:63-67`)
+      are fixed at C++ construction, uniform across every item type, no Lua
+      reach at all. Expose as engine defaults, let `register_item` override
+      per-item (a magnet-radius power-up, a rare drop that never despawns).
+
+### 6.12 Entity animation clip priority (cosmetic, low priority)
+
+- [ ] `resolve_anim_clip()`'s fixed priority order (`kDead > kHurt > kActing
+      > kJump/kFall > kRun > kWalk > kIdle`) and its speed thresholds
+      (`AnimThresholds`, `inc/vb/render/entity_visual.hpp:44-48`) stay
+      engine-fixed even once per-kind clip *assets* are pack-defined
+      (already tracked separately under 4.2's `visual = {...}` sub-table) —
+      *which* clip wins in a given state is a distinct, finer-grained
+      concern. Cosmetic only; lowest priority in this section.
+
+### 6.13 Read-only server config visibility (not a pack-override surface)
+
+- [ ] `ServerConfig` (`tick_rate`, `view_distance`, `max_players`,
+      `void_kill_y`, ...) are server-**operator** settings
+      (`server.toml`/CLI), a different persona from a content-pack author —
+      a pack should not be able to silently change `max_players` out from
+      under the operator running the server. At most, expose a read-only
+      `vb.config.get(key)` so a pack can *react* to these values (e.g. tune
+      spawn density to view distance), not a full override registry like
+      6.6-6.11 above.
+
+> World generation (biome selection, height params, block choice — all
+> still 100% hardcoded in `WorldGenerator::generate` today) is not repeated
+> here; it's already fully tracked under Phase 4.2 / the worldgen items in
+> Phase 6's intro note.
+
 ---
 
 ## Cross-Cutting / Continuous
