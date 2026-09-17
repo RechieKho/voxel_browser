@@ -2497,3 +2497,37 @@ _(Move items here with a date + commit when fixed, so the history is visible.)_
   texture/atlas system (4.3/5.1) landing first. Updated
   `ARCHITECTURE_SPEC.md` §5.2, §8.5, §10.3, new §10.7, §17, and added
   `REMAINING_TASKS.md` Phase 6.5. Backlog entry, not a code change.
+  (Two further design-only passes landed the same day without their own
+  STATE.md entries — `REMAINING_TASKS.md` Phase 6.6-6.13, a codebase audit
+  for more Lua-extensibility candidates including a foundational player
+  damage/death gap, and a Deferred-section note on rule-based decorative
+  structure placement authored via an external tool.)
+
+- **2026-09-17: Redesign worldgen §6 stage 2 (biome selection) to
+  Voronoi-cell, adjacency-weighted probability.** No code changed — the
+  Phase 4.2/6 worldgen pipeline is still fully unimplemented (base pipeline
+  is heightmap-only today). This replaces the originally-sketched continuous
+  temperature/humidity noise selection with a discrete Voronoi cellular
+  partition where each cell's biome is a weighted draw from
+  `vb.register_biome`'d biomes, weighted by that biome's base probability
+  **times an adjacency-compatibility factor** against already-resolved
+  neighboring cells (e.g. desert next to tundra near-zero, desert next to
+  plains normal) — Lua supplies both tables, engine only draws.
+  Deliberately **not** textbook wave-function-collapse: cell resolution
+  order is fixed by a hash of `(world_seed, cell_id)` rather than
+  exploration/entropy order (so two players approaching the same seed from
+  different directions can't see different layouts — would violate the
+  `(world_seed, chunk_coord, pack_version)`-purity every other stage
+  depends on), and adjacency weights are **soft multipliers with a floor,
+  never hard exclusions**, so a cell can never hit a contradiction and the
+  algorithm never needs backtracking — required for a world generated
+  lazily per-chunk that must always succeed, unlike a bounded grid solved
+  once. Also added a new **stage 5, vein/scatter pass** for underground
+  ore/valuable-block placement (`{block, target_rock, height_range,
+  vein_size, spawn_rate}` per biome or pack-global) — this didn't exist
+  anywhere in the prior pipeline sketch at all, not even as a stub; decor
+  (trees) is stage 6 and lighting stage 7 now, renumbered from the prior
+  5/6. Updated `ARCHITECTURE_SPEC.md` §6 and the corresponding
+  `REMAINING_TASKS.md` worldgen items (2.2, 4.2) plus a stale `§6 stage 5`
+  cross-reference in the Deferred section (now stage 6). Backlog entry, not
+  a code change.

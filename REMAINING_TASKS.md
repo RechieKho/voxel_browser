@@ -265,8 +265,12 @@ Goal: server generates terrain, streams chunks, client meshes and renders them.
       tick thread (mutex+CV queue; "lock-free" is aspirational, correctness first).
 - [x] Determinism gate: `tests/unit/worldgen_test.cpp` hashes a fixed 4-chunk
       region (FNV-1a) against a committed golden — CI runs it on all 3 platforms.
-- [ ] Biome selection (2.2 step 2) + carvers + decoration pass — deferred to the
-      Lua pipeline (Phase 4); base pipeline is heightmap-only for now.
+- [ ] Biome selection (2.2 step 2) + carvers + vein/scatter + decoration pass
+      — deferred to the Lua pipeline (Phase 4); base pipeline is
+      heightmap-only for now. Biome selection design updated 2026-09-17 to
+      Voronoi-cell partitioning with adjacency-weighted probability
+      (WFC-flavored, non-backtracking — see `ARCHITECTURE_SPEC.md` §6 stage
+      2), not the originally-sketched continuous temperature/humidity noise.
 
 ### 2.3 Lighting  ✅ (per-chunk)
 
@@ -616,7 +620,9 @@ Lua-defined UI.
       `ScriptPostTick` systems — waits on 3.1's EnTT registry; `register_entity`
       already captures the callbacks, nothing iterates entities to call them.
 - [ ] Lua-driven worldgen pipeline replaces the Phase 2 hardcoded one; biomes
-      + carvers + decoration — explicitly out of this pass's scope, still a
+      (Voronoi-cell, adjacency-weighted selection — `ARCHITECTURE_SPEC.md` §6
+      stage 2) + carvers + vein/scatter (new stage 5, ore/valuable-block
+      placement) + decoration — explicitly out of this pass's scope, still a
       separate, meaningfully-sized follow-up.
 - [ ] `register_entity`'s `visual = {...}` sub-table (atlas, `facings`,
       per-clip frame lists) for 3.5's `entity_renderer` — not added; nothing
@@ -1662,7 +1668,7 @@ windows, chatting, crafting, and seeing each other, all at once.
 - Dedicated server browser / master server list.
 - Modding: multiple stacked content packs, dependency resolution.
 - Rule-based decorative structure placement (trees, ruins, rock formations)
-  for the worldgen decoration pass (`ARCHITECTURE_SPEC.md` §6 stage 5):
+  for the worldgen decoration pass (`ARCHITECTURE_SPEC.md` §6 stage 6):
   structures authored in a dedicated external tool and imported into the
   content pack as a schematic, placed by declarative rules (neighbor-block
   constraints — e.g. "must be on dirt", clustering tendency, biome/density
