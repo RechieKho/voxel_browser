@@ -351,10 +351,21 @@ with prediction/interpolation.
       `Velocity`, `Rotation`, `Collider`, `PlayerInput`, `PlayerTag`,
       `NetReplicated`, `EntityKind`, `Health`, `Inventory`, `ItemStack`,
       `InterpBuffer`). `ScriptState` waits for Phase 4.
-- [ ] EnTT registry wiring on the server; fixed 20 Hz tick loop with accumulator.
-      **(deferred — the session drives per-player movement directly for now;
-      the registry + `SystemRunner` is a refactor once Lua entity kinds (Phase 4)
-      need to iterate arbitrary entities.)**
+- [x] Fixed 20 Hz tick loop with accumulator (2026-09-17): a dedicated server
+      is naturally paced at `tick_rate` by `sleep_until()` (`src/server/main.cpp`),
+      but `--singleplayer`'s integrated server (`Singleplayer::tick()`,
+      `src/client/main.cpp`) was stepping the server once per render frame
+      with the raw frame `dt` — authoritative sim rate (and therefore physics/
+      worldgen determinism, replication cadence) depended on framerate, unlike
+      every other server. `Singleplayer::tick()` now accumulates frame `dt`
+      and steps `server.tick()` + the pack runtime's join/leave/tick dispatch
+      at a fixed `1/20 s`, capped at 5 catch-up steps per frame (drops the
+      backlog past that rather than spiralling). Client-side prediction still
+      ticks once per real frame, unchanged.
+- [ ] EnTT registry wiring on the server. **(deferred — the session drives
+      per-player movement directly for now; the registry + `SystemRunner` is a
+      refactor once Lua entity kinds (Phase 4) need to iterate arbitrary
+      entities.)**
 - [ ] System runner with explicit ordering (§7.2).
 - [ ] Client-side lightweight registry — currently `ClientSession` holds the
       predicted local state + a `remote_samples_` interp buffer inline.
