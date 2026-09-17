@@ -1044,6 +1044,14 @@ to the extent practical (no code exec, no arbitrary FS writes).
 4. **Chunk compression**: LZ4 vs. zstd vs. palette-only. Start LZ4, measure.
 5. **Persistence**: region file format for world save — deferred past first
    playable, but the chunk store should not assume in-memory-forever.
+   **Future direction noted (2026-09-17, not yet planned into a phase):**
+   lean toward an LMDB-backed store keyed by `ChunkCoord`, reusing the
+   existing `vb/world/chunk_codec` palette+RLE serialization (the same
+   format `S2C_ChunkAdd` already uses) as the on-disk chunk payload, with
+   LZ4 (§19 Q4) as the compression layer on top. LMDB avoids reinventing
+   sector allocation and crash-safety that a hand-rolled Anvil-style region
+   file would require; a per-chunk-file or Anvil-style layout remains the
+   fallback if a zero-extra-dependency approach is preferred later.
 6. **Account/auth**: `auth_mode = none | token` — token verification service is
    out of scope for v0 but the handshake reserves the field. **Direction set
    (2026-09-17, not yet implemented):** the engine will not own an auth
@@ -1052,6 +1060,13 @@ to the extent practical (no code exec, no arbitrary FS writes).
    entirely pack-implemented on top of it plus the UI/input APIs. This
    `auth_mode` field stays reserved for a future *transport-level* token
    check, which is a different, lower-level concern than pack-level identity.
+   **Future direction noted (2026-09-17, not yet planned into a phase):** a
+   baked-in OpenID Connect client using the loopback-redirect flow (RFC 8252)
+   -- the client opens the system browser to the identity provider and spins
+   up a local HTTP listener to catch the redirect back, so no embedded
+   browser or client secret is needed. This would land as a new `auth_mode =
+   oidc` value at the transport/handshake level, alongside (not replacing)
+   the pack-level `vb.db`-based identity approach above.
 7. **Entity visual presentation**: 3D blocky models vs. 2D sprites.
    **Resolved (2026-09-11): Don't Starve-style Y-axis-billboarded sprites**, not
    blocky models — full design in §11.3. Key parameters locked in: raylib
