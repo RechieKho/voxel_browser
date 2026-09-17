@@ -8,13 +8,16 @@
 #include "vb/core/math.hpp"
 #include "vb/physics/movement.hpp"
 
-// Base ECS components (spec §7.1). The server holds an EnTT registry of these;
-// the client keeps a lightweight subset for rendering (Position prev/current,
-// Rotation, EntityKind, RenderHandle). Systems live in vb/ecs and vb/physics.
+// Base ECS components (spec §7.1). The server holds an EnTT registry of these
+// (one entity per playing connection, `vb::net::ServerSession`); the client
+// keeps a lightweight subset for rendering (Position prev/current, Rotation,
+// EntityKind, RenderHandle). Systems live in vb/ecs and vb/physics.
 //
-// Phase 3 wires Position/Velocity/Rotation/PlayerInput/PlayerTag through the
-// session layer directly; the full registry + system runner is Phase 3.1
-// follow-up work. Keeping the struct definitions here so both ends agree.
+// Phase 3.1 (2026-09-17): ServerSession's own methods read/write player state
+// through the registry directly (no indirection through Conn's old inline
+// fields anymore); a `SystemRunner` that iterates the registry generically is
+// still follow-up work, deferred until a Lua entity kind (Phase 4) actually
+// needs to.
 
 namespace vb::ecs {
 

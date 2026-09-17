@@ -52,7 +52,8 @@ jobs:
             -DVB_WARNINGS_AS_ERRORS=ON \
             -DVB_HEADLESS=OFF \
             -DVB_WITH_LUA=ON \
-            -DVB_WITH_NET=ON
+            -DVB_WITH_NET=ON \
+            -DVB_WITH_REPLICATION=ON
 
       - name: Build
         shell: bash

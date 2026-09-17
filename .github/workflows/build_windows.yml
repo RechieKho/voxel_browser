@@ -53,6 +53,7 @@ jobs:
             -DVB_HEADLESS=OFF ^
             -DVB_WITH_LUA=ON ^
             -DVB_WITH_NET=ON ^
+            -DVB_WITH_REPLICATION=ON ^
             -DCMAKE_TOOLCHAIN_FILE=%VCPKG_INSTALLATION_ROOT%\scripts\buildsystems\vcpkg.cmake
 
       - name: Build

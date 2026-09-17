@@ -72,17 +72,51 @@ visibility) are exactly what §8.4 needs and are painful to reimplement well; th
 payload stays ours so wire changes still flow through `docs/protocol.md` +
 `kEngineProtocolVersion`.
 
-**Not yet wired in.** The Phase 1 hand-rolled `InterestGrid` implements the same
-diff semantics behind a narrow interface, so swapping librg underneath it later
-is localised. Turn on `-DVB_WITH_REPLICATION=ON`; `Dependencies.cmake` fetches
-librg `v7.4.0` only (zpl is bundled). Chunk-size config should map one librg cell
-to the interest-cell size, not the voxel chunk.
+### Wired in (`VB_WITH_REPLICATION`)
 
-### Open items for the integration pass
+`InterestGrid` (`inc/vb/replication/interest.hpp` + `src/replication/interest.cpp`)
+now picks its backend at compile time from `VB_WITH_REPLICATION`, with no change
+to its public interface or to any caller (`ServerSession` only ever calls
+`upsert`/`remove`/`visible_from`/`diff_interest`):
 
-- librg cell coords are `int16`; clamp/verify world extent fits.
-- `librg_world_write` needs a caller-sized buffer; size it from
-  `max_entities_in_view * (record_size + librg_overhead)` and handle
-  `LIBRG_WRITE_REJECT` (buffer full) by growing + retrying.
-- librg is C with `-Wunused-parameter` noise — compile it as its own target
-  without the project warning flags (same pattern as `vb_raygui_impl`).
+- **Off** (default): the original Phase 1 hand-rolled linear scan.
+- **On**: `upsert()` tracks the `NetId` as a librg entity (`librg_entity_track`)
+  and self-owns it (`librg_entity_owner_set(world, id, id)` — required so the
+  id can later be used as a query owner) the first time it's seen, then keeps
+  its librg chunk current every call (`librg_entity_chunk_set` +
+  `librg_chunk_from_realpos`). `visible_from` calls `librg_world_query(world,
+  self, radius, ...)` (growing the result buffer and retrying if it overflows,
+  per the real `LIBRG_API`) and filters `self` back out of the result — librg's
+  query always force-includes entities owned by the querying id, which is
+  exactly `self` here. `remove()` calls `librg_entity_untrack`.
+
+librg's actual v7.4.0 API differs from the older article this doc originally
+summarized (no `librg_world_create`-then-`LIBRG_WRITE_*` framing callbacks at
+this call site — that layer still exists in librg for wire framing but isn't
+needed here since we already have our own `S2C_EntitySnapshot` codec and only
+wanted the interest query). The real, current API surface used is:
+`librg_world_create/destroy`, `librg_config_chunk{size,amount,offset}_set`,
+`librg_entity_track/untrack/tracked`, `librg_entity_owner_set`,
+`librg_entity_chunk_set`, `librg_chunk_from_realpos`, and `librg_world_query`
+(see `code/header/{general,entity,query}.h` in the librg repo).
+
+`librg.h`'s `LIBRG_IMPL` translation unit lives in
+`src/replication/librg_impl.c`, built as its own target (`vb_librg_impl`) so
+the project's `-Werror` flags never see librg's C99 — same isolation pattern
+as `vb_raygui_impl`.
+
+Chunk size maps 1:1 to `InterestGrid`'s `cell_size_` (default 32 world units,
+independent of the 32³ voxel chunk — coincidence, not a shared constant).
+
+### Known limitation — world extent
+
+librg chunk ids are bounded: `chunkamount.x * chunkamount.y * chunkamount.z`
+must fit a signed 32-bit int internally, and `librg_chunk_from_realpos` casts
+each axis to `int16_t` chunks. `interest.cpp` configures 1024 chunks/axis,
+which keeps that product (~1.07e9) well under `INT32_MAX` while covering
+±512 × `cell_size` world units per axis around the origin. An entity that
+strays outside that range gets `LIBRG_CHUNK_INVALID` from librg and is simply
+excluded from everyone's interest set until it moves back in range (no crash,
+no exception — just silently not replicated). Large open worlds will need a
+bigger `chunkamount` (traded against the `int32` chunk-id overflow risk above)
+or a coordinate scheme with a movable local origin; neither exists yet.

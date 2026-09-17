@@ -2366,3 +2366,77 @@ _(Move items here with a date + commit when fixed, so the history is visible.)_
   automated check (`CONTRIBUTING.md` isn't parsed by anything); read
   through once for internal consistency against the actual current
   `CMakeLists.txt`/`tests/CMakeLists.txt` contents before publishing.
+
+- **2026-09-17: Wire librg in as the interest backend (`VB_WITH_REPLICATION`).**
+  `cmake/Dependencies.cmake` already declared a `vb::librg` INTERFACE target
+  and `src/core/CMakeLists.txt` already linked it under the flag, but nothing
+  compiled `LIBRG_IMPL` or called into the header — the flag turned the
+  dependency on and did nothing else (`REMAINING_TASKS.md` still had "Wire
+  real librg in" and "Map players ↔ librg network entities" unchecked).
+  **Checked the actual v7.4.0 API first** (`code/header/{general,entity,
+  query}.h` in a throwaway clone) rather than trusting `docs/replication.md`'s
+  existing summary, which turned out to describe an older/different librg
+  shape (`librg_world_write`/`LIBRG_WRITE_*` framing callbacks) — the real
+  v7.4.0 surface for a pure interest query is `librg_world_create/destroy`,
+  `librg_config_chunk{size,amount,offset}_set`, `librg_entity_track/untrack`,
+  `librg_entity_owner_set` (self-owned — required for an id to later be
+  usable as a query owner; `librg_world_query` always force-includes entities
+  owned by the querying id, which is how it returns "my own" objects), the
+  per-tick `librg_entity_chunk_set(librg_chunk_from_realpos(...))`, and
+  `librg_world_query` itself (grow-and-retry on its overflow return, per its
+  own documented contract).
+  **Kept the existing public interface exactly.** `InterestGrid` (`inc/vb/
+  replication/interest.hpp`) split into a header (declarations only, no
+  `librg.h` include — the librg world is stored as an opaque `mutable void*`
+  so the header never needs the vendored C99 header) and `src/replication/
+  interest.cpp`, which `#ifdef VB_WITH_REPLICATION`s between the librg-backed
+  implementation and the original Phase 1 linear scan verbatim. No caller
+  (`ServerSession`, both replication tests) needed a single line changed —
+  same `upsert`/`remove`/`clear`/`get`/`visible_from` signatures either way.
+  One necessary interface narrowing, documented in the header: the librg
+  backend ignores `visible_from`'s `eye` parameter and instead uses the
+  querying id's own last-`upsert`ed position, since librg's query is
+  owner/chunk-based, not a free-floating-point query — true of every existing
+  call site already (`ServerSession::broadcast_snapshots` always upserts a
+  player before its own first snapshot).
+  **librg's `LIBRG_IMPL` isolated in its own target** (`src/replication/
+  librg_impl.c` → `vb_librg_impl`, linked `PRIVATE` into `vb_core`), same
+  reason and same pattern as `vb_raygui_impl`: librg is vendored C99 and must
+  never see the project's `-Werror` flags. New `src/replication/CMakeLists.txt`
+  (subdirectory wasn't registered in `src/CMakeLists.txt` before — interest.hpp
+  was purely header-only, pulled in via `vb_core`'s include path with no `.cpp`
+  attached to any target).
+  **Known limitation, documented in `docs/replication.md` and in code:**
+  librg chunk ids need `chunkamount.x*y*z` to fit a signed 32-bit int
+  internally, and `librg_chunk_from_realpos` casts each axis to `int16_t`
+  chunks — `interest.cpp` picked 1024 chunks/axis (product ~1.07e9, safely
+  under `INT32_MAX`), covering ±512×`cell_size` world units per axis around
+  the origin. An entity straying outside that range gets `LIBRG_CHUNK_INVALID`
+  and is silently excluded from everyone's interest until it re-enters — no
+  crash. This was flagged as an explicit open item in the original spike doc;
+  a bigger world needs a bigger `chunkamount` (traded against the same int32
+  overflow risk) or a movable local origin, neither of which exists yet — not
+  attempted here since nothing today needs a world bigger than ±16384 units
+  per axis (default 32-unit cells).
+  **CI**: added `-DVB_WITH_REPLICATION=ON` to all three `build_*.yml` OS legs,
+  same posture as `VB_WITH_NET`/`VB_WITH_LUA` — librg needs no new system
+  packages (single vendored C99 header, FetchContent only), so this was a
+  low-risk addition, unlike the still-off `VB_WITH_NET` on macOS (multi-arch
+  protobuf problem, see that workflow's own comment).
+  **Verification:** built `-DVB_WITH_REPLICATION=ON` fresh with
+  `CC=clang CXX=clang++` (this box's toolchain) — all 166 existing test
+  cases / 99875 assertions pass unchanged (including both replication tests
+  in `tests/unit/replication_test.cpp`, which exercise `InterestGrid`
+  directly and the two-client join/move/leave visibility scenario). Also
+  rebuilt with the flag off to confirm the linear-scan path is byte-for-byte
+  unaffected (identical 166/99875 pass counts). Confirmed `interest.cpp`
+  itself compiles clean under the project's exact `-Wall -Wextra -Wpedantic
+  -Wshadow -Wconversion -Wsign-conversion -Wnon-virtual-dtor -Wold-style-cast
+  -Wcast-align -Wunused -Woverloaded-virtual -Wdouble-promotion -Werror` set
+  in both configurations (isolated single-file compile, since building all of
+  `vb_core` end-to-end with `-Werror` on this box's clang 21 currently fails
+  on unrelated EnTT `meta.hpp`/`dense_map.hpp` `-Wsign-conversion` noise —
+  confirmed pre-existing on `main` with the same toolchain before touching
+  anything, not something this change introduced or can fix from here; CI's
+  pinned compiler versions apparently don't hit it, since "CI is fully green"
+  per the 2026-09-10 entry above).

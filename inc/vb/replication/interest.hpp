@@ -3,19 +3,20 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <cstdlib>
 #include <iterator>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 #include "vb/core/ids.hpp"
 #include "vb/core/math.hpp"
 
-// Phase-1 hand-rolled interest management (spec §8.4, docs/replication.md).
-// Same diff semantics as librg's chunk-radius query behind a narrow interface,
-// so librg can be swapped in underneath later (§19 Q3). Linear scan — fine for
-// the player counts of the first playable base; librg replaces it for scale.
+// Interest management (spec §8.4, docs/replication.md).
+//
+// Without VB_WITH_REPLICATION: a hand-rolled linear scan over a coarse grid.
+// With VB_WITH_REPLICATION: `visible_from` is backed by librg's chunk-radius
+// query (§19 Q3) -- librg owns entity tracking + the culling query, we keep
+// our own EntityState payload and diff/snapshot code untouched either way.
+// Same public interface, same diff semantics, in both configurations.
 
 namespace vb::replication {
 
@@ -31,11 +32,17 @@ struct EntityState {
 
 class InterestGrid {
 public:
-	explicit InterestGrid(double cell_size = 32.0) : cell_size_(cell_size > 0.0 ? cell_size : 32.0) {}
+	explicit InterestGrid(double cell_size = 32.0);
+	~InterestGrid();
 
-	void upsert(const EntityState &state) { entities_[state.net_id] = state; }
-	void remove(core::NetId id) { entities_.erase(id); }
-	void clear() { entities_.clear(); }
+	InterestGrid(const InterestGrid &) = delete;
+	InterestGrid &operator=(const InterestGrid &) = delete;
+	InterestGrid(InterestGrid &&) = delete;
+	InterestGrid &operator=(InterestGrid &&) = delete;
+
+	void upsert(const EntityState &state);
+	void remove(core::NetId id);
+	void clear();
 	std::size_t size() const { return entities_.size(); }
 
 	const EntityState *get(core::NetId id) const {
@@ -43,30 +50,17 @@ public:
 		return it == entities_.end() ? nullptr : &it->second;
 	}
 
-	// Net ids whose interest cell is within `radius_cells` (Chebyshev distance)
-	// of `eye`'s cell, excluding `self`. Sorted ascending for stable diffs.
-	std::vector<core::NetId> visible_from(core::Vec3d eye, int radius_cells,
-			core::NetId self) const {
-		const std::int64_t ex = cell_of(eye.x);
-		const std::int64_t ey = cell_of(eye.y);
-		const std::int64_t ez = cell_of(eye.z);
-		const std::int64_t r = radius_cells < 0 ? 0 : radius_cells;
-
-		std::vector<core::NetId> out;
-		for (const auto &[id, s] : entities_) {
-			if (id == self) {
-				continue;
-			}
-			const std::int64_t dx = std::llabs(cell_of(s.pos.x) - ex);
-			const std::int64_t dy = std::llabs(cell_of(s.pos.y) - ey);
-			const std::int64_t dz = std::llabs(cell_of(s.pos.z) - ez);
-			if (dx <= r && dy <= r && dz <= r) {
-				out.push_back(id);
-			}
-		}
-		std::sort(out.begin(), out.end());
-		return out;
-	}
+	// Net ids visible to `self` within `radius_cells` of its interest cell,
+	// excluding `self`. Sorted ascending for stable diffs.
+	//
+	// `eye` is only consulted by the non-librg backend (a plain distance
+	// check against every tracked entity); the librg backend instead uses
+	// the cell `self` was placed at by its most recent upsert(), so callers
+	// must upsert(self, ...) before querying its own visibility -- true of
+	// every call site today (ServerSession always upserts a player on join
+	// before the first broadcast tick).
+	std::vector<core::NetId> visible_from(
+			core::Vec3d eye, int radius_cells, core::NetId self) const;
 
 private:
 	std::int64_t cell_of(double v) const {
@@ -75,6 +69,13 @@ private:
 
 	double cell_size_;
 	std::unordered_map<core::NetId, EntityState> entities_;
+#if defined(VB_WITH_REPLICATION)
+	// Opaque `librg_world*`; kept as void* so this header never has to
+	// include librg.h (a vendored C99 single-header) -- only interest.cpp
+	// does. Mutable: librg_world_query() only mutates transient scratch
+	// state internal to librg, not anything entities_ already reflects.
+	mutable void *librg_world_ = nullptr;
+#endif
 };
 
 struct InterestDiff {

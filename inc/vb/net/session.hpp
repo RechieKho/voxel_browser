@@ -12,9 +12,12 @@
 #include <unordered_map>
 #include <utility>
 
+#include <entt/entt.hpp>
+
 #include "vb/assetsync/cache.hpp"
 #include "vb/core/ids.hpp"
 #include "vb/core/math.hpp"
+#include "vb/ecs/components.hpp"
 #include "vb/net/handshake.hpp"
 #include "vb/net/transport.hpp"
 #include "vb/net/world_replicator.hpp"
@@ -86,8 +89,9 @@ public:
 	void set_move_params(physics::MoveParams p) { move_params_ = p; }
 
 	// Authoritative feet position of a player (for tests / teleports). Input
-	// batches are the normal drive path.
-	const physics::MoveState *player_move_state(core::NetId id) const;
+	// batches are the normal drive path. nullopt if `id` isn't a playing
+	// connection.
+	std::optional<physics::MoveState> player_move_state(core::NetId id) const;
 
 	// Phase 4.2 (Lua entity/player API): directly set a connected player's
 	// authoritative velocity. No-op if `id` isn't a playing connection.
@@ -159,13 +163,13 @@ private:
 		bool playing = false;
 		bool input_driven = false;
 		core::NetId net_id = core::NetId::kInvalid;
-		std::string name;
+		// The player's ecs::Position/Velocity/Rotation/Collider/PlayerInput/
+		// Health/PlayerTag/NetReplicated components live in `registry_` -- see
+		// the comment there. Only valid once `playing` (created on join
+		// completion, destroyed on disconnect); entt::null until then.
+		entt::entity entity{ entt::null };
 		std::vector<core::NetId> last_visible;
-		physics::MoveState move;
-		core::Vec2f look;
-		std::uint32_t last_input_seq = 0;
 		core::Vec3d spawn_pos{};
-		float health = 20.0f;
 	};
 
 	void drop(ConnId conn, const std::string &reason);
@@ -183,6 +187,15 @@ private:
 	Transport &transport_;
 	HandshakeServerConfig config_;
 	HandshakeServerHost host_;
+	// One entity per playing connection (spec §7.1's base components --
+	// Position/Velocity/Rotation/Collider/PlayerInput/Health/PlayerTag/
+	// NetReplicated), created in tick()'s join-completion handling and
+	// destroyed on disconnect. Nothing iterates this generically yet (no
+	// SystemRunner -- Phase 3.1's other, still-deferred half); ServerSession's
+	// own methods below read/write player state through it directly, same as
+	// they did through Conn's old inline fields, but a future Lua entity kind
+	// or system now has a real registry to query players through.
+	entt::registry registry_;
 	std::map<ConnId, Conn> conns_;
 	replication::InterestGrid interest_;
 	std::unique_ptr<WorldReplicator> replicator_;

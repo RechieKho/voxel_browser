@@ -52,7 +52,8 @@ jobs:
             -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
             -DVB_WARNINGS_AS_ERRORS=ON \
             -DVB_HEADLESS=OFF \
-            -DVB_WITH_LUA=ON
+            -DVB_WITH_LUA=ON \
+            -DVB_WITH_REPLICATION=ON
 
       - name: Build
         shell: bash

@@ -278,8 +278,8 @@ struct PlayerHandle {
 		if (rt->session == nullptr) {
 			throw sol::error("entity:get_pos(): session not attached yet");
 		}
-		const physics::MoveState *st = rt->session->player_move_state(net_id);
-		if (st == nullptr) {
+		const auto st = rt->session->player_move_state(net_id);
+		if (!st) {
 			throw sol::error("entity:get_pos(): entity is gone");
 		}
 		sol::table t = lua.create_table();

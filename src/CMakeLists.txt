@@ -7,6 +7,7 @@ add_subdirectory(worldgen)
 add_subdirectory(physics)
 add_subdirectory(script)
 add_subdirectory(assetsync)
+add_subdirectory(replication)
 add_subdirectory(net)
 
 if(VB_BUILD_CLIENT)

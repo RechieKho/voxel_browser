@@ -198,8 +198,11 @@ network space; client window + render loop alive.
       join one server; each sees the other only within interest range, gets a
       `removed` when the other moves out or disconnects. **(README Phase 1
       acceptance — met over the loopback transport.)**
-- [ ] Wire real librg in (`VB_WITH_REPLICATION`) as the interest backend — after
-      players actually move (Phase 3) so scale testing is meaningful.
+- [x] Wire real librg in (`VB_WITH_REPLICATION`) as the interest backend —
+      `InterestGrid::visible_from` now dispatches to a librg-backed
+      implementation (`src/replication/interest.cpp`) at compile time; same
+      public interface, same diff semantics, no caller changes. CI now
+      builds with `-DVB_WITH_REPLICATION=ON` on all three OSes.
 - [ ] The two-client test currently runs over `LoopbackTransport`; re-run it over
       `GnsTransport` once that lands.
 
@@ -351,10 +354,34 @@ with prediction/interpolation.
       `Velocity`, `Rotation`, `Collider`, `PlayerInput`, `PlayerTag`,
       `NetReplicated`, `EntityKind`, `Health`, `Inventory`, `ItemStack`,
       `InterpBuffer`). `ScriptState` waits for Phase 4.
-- [ ] EnTT registry wiring on the server; fixed 20 Hz tick loop with accumulator.
-      **(deferred — the session drives per-player movement directly for now;
-      the registry + `SystemRunner` is a refactor once Lua entity kinds (Phase 4)
-      need to iterate arbitrary entities.)**
+- [x] Fixed 20 Hz tick loop with accumulator (2026-09-17): a dedicated server
+      is naturally paced at `tick_rate` by `sleep_until()` (`src/server/main.cpp`),
+      but `--singleplayer`'s integrated server (`Singleplayer::tick()`,
+      `src/client/main.cpp`) was stepping the server once per render frame
+      with the raw frame `dt` — authoritative sim rate (and therefore physics/
+      worldgen determinism, replication cadence) depended on framerate, unlike
+      every other server. `Singleplayer::tick()` now accumulates frame `dt`
+      and steps `server.tick()` + the pack runtime's join/leave/tick dispatch
+      at a fixed `1/20 s`, capped at 5 catch-up steps per frame (drops the
+      backlog past that rather than spiralling). Client-side prediction still
+      ticks once per real frame, unchanged.
+- [x] EnTT registry wiring on the server (2026-09-17): `ServerSession` now
+      creates a real entity per playing connection (`Conn::entity`) holding
+      `ecs::Position/Velocity/Rotation/Collider/PlayerInput/Health/PlayerTag/
+      NetReplicated`, populated on join completion and destroyed on
+      disconnect. `Conn`'s old inline fields (`move`, `look`, `name`, `health`,
+      `last_input_seq`) are gone -- every method that used to read/write them
+      (`handle_input_batch`, `handle_chat`, `check_respawns`,
+      `broadcast_snapshots`, `player_move_state`, `set_player_velocity`,
+      `player_name`) now goes through `registry_.get<...>()` directly, so the
+      registry is the actual source of truth, not a synced mirror.
+      `player_move_state()`'s signature changed from a raw pointer to
+      `std::optional<physics::MoveState>` (assembled from three components on
+      demand, so there's no `MoveState` object to point into anymore) --
+      updated its 3 call sites (`pack_runtime.cpp`, `netcode_test.cpp` x2).
+      **Still deferred:** nothing iterates the registry generically yet — a
+      `SystemRunner` (below) is only worth adding once a Lua entity kind
+      (Phase 4) needs to.
 - [ ] System runner with explicit ordering (§7.2).
 - [ ] Client-side lightweight registry — currently `ClientSession` holds the
       predicted local state + a `remote_samples_` interp buffer inline.
@@ -419,7 +446,9 @@ with prediction/interpolation.
       sees the first move.
 - [ ] Wall-clock `server_time_est` + smoothing on the client (needs `GnsTransport`
       RTT; the loopback path has no latency to estimate).
-- [ ] Map players ↔ librg network entities — with the rest of `VB_WITH_REPLICATION`.
+- [x] Map players ↔ librg network entities — `InterestGrid::upsert`/`remove` track
+      every `NetId` (players and item drops alike) 1:1 as a self-owned librg
+      entity; see `src/replication/interest.cpp`.
 
 ### 3.5 Entity visual presentation — billboard sprites (§11.3)  ✅ (placeholder art)
 

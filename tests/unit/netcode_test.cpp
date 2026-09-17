@@ -85,8 +85,8 @@ TEST_CASE("integrated: client prediction converges to server authority") {
 		game.tick(0.05);
 	}
 
-	const auto *srv = game.server().player_move_state(id);
-	REQUIRE(srv != nullptr);
+	const auto srv = game.server().player_move_state(id);
+	REQUIRE(srv.has_value());
 	const Vec3d predicted = game.client().predicted_feet();
 
 	// Moved a meaningful distance along +X from spawn.
@@ -314,8 +314,8 @@ TEST_CASE(
 	}
 	pump(4);
 
-	const auto *srv = server.player_move_state(a_id);
-	REQUIRE(srv != nullptr);
+	const auto srv = server.player_move_state(a_id);
+	REQUIRE(srv.has_value());
 	// Respawned back at spawn height, not left sitting in the void.
 	CHECK(srv->position.y == doctest::Approx(spawn.y).epsilon(0.05));
 	CHECK(srv->position.y > spawn.y - 5.0);

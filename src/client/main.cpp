@@ -213,22 +213,48 @@ struct Singleplayer {
 
 	vb::net::ClientSession &client() { return *client_session; }
 
-	// Advances the server, the client, and the pack runtime's join/leave/tick
-	// dispatch together -- mirrors src/server/main.cpp's own tick loop so a
-	// pack behaves identically whether it's driven by a real dedicated server
-	// or this in-process one.
+	// Server tick rate (spec §7's fixed simulation rate; matches
+	// HandshakeServerConfig::tick_rate's default -- sp_server_config() doesn't
+	// override it). A dedicated server (src/server/main.cpp) sleep_until()s
+	// between ticks, so it's naturally paced at this rate; the integrated
+	// server here is instead driven by the client's render loop, so tick()
+	// accumulates the variable frame dt and steps the server at this fixed
+	// rate itself -- otherwise physics/worldgen determinism and replication
+	// cadence would depend on framerate, unlike every other server.
+	static constexpr double kFixedDt = 1.0 / 20.0;
+	// Caps how many fixed steps one frame will catch up on (e.g. after a
+	// stall from asset loading or a debugger breakpoint) -- runs behind at
+	// that point instead of spiralling into an ever-growing catch-up burst.
+	static constexpr int kMaxStepsPerFrame = 5;
+	double tick_accum_ = 0.0;
+
+	// Advances the client every frame (render-rate prediction/interpolation),
+	// and the server + pack runtime's join/leave/tick dispatch at the fixed
+	// rate above -- mirrors src/server/main.cpp's own tick loop so a pack
+	// behaves identically whether it's driven by a real dedicated server or
+	// this in-process one.
 	void tick(double dt) {
-		server.tick(dt);
 		if (client_session) {
 			client_session->tick(dt);
 		}
-		for (auto &j : server.take_joins()) {
-			pack_runtime.dispatch_player_join_completed(j);
+
+		tick_accum_ += dt;
+		int steps = 0;
+		while (tick_accum_ >= kFixedDt && steps < kMaxStepsPerFrame) {
+			server.tick(kFixedDt);
+			for (auto &j : server.take_joins()) {
+				pack_runtime.dispatch_player_join_completed(j);
+			}
+			for (auto &l : server.take_leaves()) {
+				pack_runtime.dispatch_player_leave(l);
+			}
+			pack_runtime.dispatch_tick(kFixedDt);
+			tick_accum_ -= kFixedDt;
+			++steps;
 		}
-		for (auto &l : server.take_leaves()) {
-			pack_runtime.dispatch_player_leave(l);
+		if (steps == kMaxStepsPerFrame) {
+			tick_accum_ = 0.0; // drop the backlog rather than spiral
 		}
-		pack_runtime.dispatch_tick(dt);
 	}
 };
 
