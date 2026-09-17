@@ -235,7 +235,12 @@ Pipeline, executed on a pool of **worldgen worker threads**, deterministic from
 5. **Decoration / population pass** — runs once *neighbors are generated* so
    trees/structures may cross chunk borders. Deterministic per-chunk RNG seeded
    from `(seed, coord)`. Trees etc. are defined in Lua as schematics or
-   procedural callbacks.
+   procedural callbacks. **Further out (post this pipeline landing, see
+   `REMAINING_TASKS.md`'s Deferred section):** a dedicated external structure
+   tool exporting into the schematic format, plus declarative placement rules
+   (neighbor-block constraints, clustering tendency, biome/density weighting)
+   evaluated by this pass, instead of every structure needing a hand-written
+   procedural callback.
 6. **Lighting** — initial sky/block light flood fill.
 
 Generated chunks are inserted into the world with `revision = 1` and flagged for

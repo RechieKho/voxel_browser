@@ -1661,3 +1661,12 @@ windows, chatting, crafting, and seeing each other, all at once.
 - Compression tuning (zstd), snapshot delta compression, bit-packed inputs.
 - Dedicated server browser / master server list.
 - Modding: multiple stacked content packs, dependency resolution.
+- Rule-based decorative structure placement (trees, ruins, rock formations)
+  for the worldgen decoration pass (`ARCHITECTURE_SPEC.md` §6 stage 5):
+  structures authored in a dedicated external tool and imported into the
+  content pack as a schematic, placed by declarative rules (neighbor-block
+  constraints — e.g. "must be on dirt", clustering tendency, biome/density
+  weighting) rather than every structure needing a hand-written procedural
+  callback. Explicitly post-first-playable — depends on the Lua-driven
+  worldgen pipeline itself (Phase 4.2/6) landing and settling first; noted
+  now so the decoration-pass design leaves room for it.
