@@ -84,7 +84,7 @@ option(VB_ENABLE_TSAN    "Enable ThreadSanitizer"                             OF
 
 # Dependency gates — flipped on per implementation phase.
 option(VB_WITH_NET       "GameNetworkingSockets transport (Phase 1)"          OFF)
-option(VB_WITH_REPLICATION "librg replication (Phase 1)"                      OFF)
+option(VB_WITH_REPLICATION "librg replication (Phase 1); OFF uses the hand-rolled linear-scan interest backend instead" ON)
 option(VB_WITH_LUA       "Lua 5.4 + sol2 scripting (Phase 4)"                 OFF)
 option(VB_WITH_WORLDGEN  "FastNoise2 world generation (Phase 2)"              OFF)
 option(VB_WITH_COMPRESSION "LZ4 + xxHash chunk/asset codecs (Phase 2/4)"      OFF)

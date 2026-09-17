@@ -79,8 +79,7 @@ now picks its backend at compile time from `VB_WITH_REPLICATION`, with no change
 to its public interface or to any caller (`ServerSession` only ever calls
 `upsert`/`remove`/`visible_from`/`diff_interest`):
 
-- **Off** (default): the original Phase 1 hand-rolled linear scan.
-- **On**: `upsert()` tracks the `NetId` as a librg entity (`librg_entity_track`)
+- **On** (default): `upsert()` tracks the `NetId` as a librg entity (`librg_entity_track`)
   and self-owns it (`librg_entity_owner_set(world, id, id)` — required so the
   id can later be used as a query owner) the first time it's seen, then keeps
   its librg chunk current every call (`librg_entity_chunk_set` +
@@ -89,6 +88,8 @@ to its public interface or to any caller (`ServerSession` only ever calls
   per the real `LIBRG_API`) and filters `self` back out of the result — librg's
   query always force-includes entities owned by the querying id, which is
   exactly `self` here. `remove()` calls `librg_entity_untrack`.
+- **Off**: the original Phase 1 hand-rolled linear scan, for anyone who'd
+  rather not pull in librg as a dependency. Same public interface either way.
 
 librg's actual v7.4.0 API differs from the older article this doc originally
 summarized (no `librg_world_create`-then-`LIBRG_WRITE_*` framing callbacks at

@@ -2440,3 +2440,15 @@ _(Move items here with a date + commit when fixed, so the history is visible.)_
   anything, not something this change introduced or can fix from here; CI's
   pinned compiler versions apparently don't hit it, since "CI is fully green"
   per the 2026-09-10 entry above).
+
+- **2026-09-17: Flip `VB_WITH_REPLICATION` default from OFF to ON.** librg is
+  now the default entity-replication backend (`CMakeLists.txt` option default),
+  not just something CI opts into — it's the more battle-tested option, and
+  the hand-rolled linear scan remains available as an explicit opt-out
+  (`-DVB_WITH_REPLICATION=OFF`) for anyone who'd rather avoid the extra
+  dependency. No source changes; `InterestGrid`'s dual-backend `#ifdef`
+  structure (`src/replication/interest.cpp`) is unchanged. Updated
+  `README.md` and `docs/replication.md` to describe librg as the default,
+  not the opt-in, backend. CI's explicit `-DVB_WITH_REPLICATION=ON` in the
+  three `build_*.yml` legs is now redundant but harmless — left as-is rather
+  than churned.
