@@ -1,4 +1,4 @@
-# vb_render — client-only rendering. Links raylib + raygui (+ Cellulose later).
+# vb_render — client-only rendering. Links raylib + raygui.
 # Never linked by the server. Builds in headless mode too (window.cpp no-ops).
 
 # raygui implementation isolated so -Werror / /WX never touches third-party code.
@@ -28,8 +28,3 @@ target_link_libraries(vb_render
     vb_warnings
     vb_sanitizers
 )
-
-if(VB_WITH_MESHING)
-  target_link_libraries(vb_render PUBLIC cellulose)
-  target_compile_definitions(vb_render PUBLIC VB_WITH_MESHING=1)
-endif()

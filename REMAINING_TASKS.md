@@ -309,12 +309,17 @@ Goal: server generates terrain, streams chunks, client meshes and renders them.
       (auto-mirrors chunk messages post-join). Integration test: a joined client
       mirrors the 27-chunk box around its spawn and reclaims it on move.
 
-### 2.5 Client meshing  ✅ (hand-rolled; Cellulose swap-in pending)
+### 2.5 Client meshing  ✅ (hand-rolled, permanent — Cellulose evaluated and reverted)
 
 - [x] **(spike)** Cellulose API — resolved in `ARCHITECTURE_SPEC.md §19 Q2`.
       Emits vertex data (`ChunkMesh`); reusable seam is `greedy_mesh(vector<
-      MeshSample>, …)`. Blocked on `VB_WITH_MESHING` (submodule + demo-raylib
-      fetch); `Dependencies.cmake` prepared.
+      MeshSample>, …)`. Wired in behind `VB_WITH_MESHING` (2026-09-16), but
+      reverted after its more volatile greedy-merged vertex/index counts
+      reproduced the NVIDIA VAO/VBO-churn crash documented in `STATE.md`
+      §1/§8 — see §19 Q2's updated resolution note and `STATE.md` §8's 15th
+      entry. The `VB_WITH_MESHING` flag and Cellulose `FetchContent` block
+      were later removed outright (2026-09-17); not a planned swap-in
+      anymore.
 - [x] `vb/world/chunk_mesher.{hpp,cpp}`: face-culled cube mesh from a
       `ClientChunkStore` (reads neighbours across chunk borders), per-vertex
       light + ambient occlusion. `MeshData { MeshVertex[], u32 indices[] }` —
@@ -341,9 +346,12 @@ Goal: server generates terrain, streams chunks, client meshes and renders them.
 terrain, streams it as chunks, meshes and renders it, and loads/unloads chunks
 as the player moves. Determinism gate is green on all 3 platforms. Deferred to
 later phases: biomes/carvers/decoration (Lua pipeline, Phase 4), cross-chunk sky
-occlusion + relight-on-edit (Phase 3/5), mesh worker pool + greedy merge
-(Cellulose, `VB_WITH_MESHING`), texture atlas (Phase 4), LZ4 chunk compression
-(`VB_WITH_COMPRESSION`).
+occlusion + relight-on-edit (Phase 3/5), texture atlas (Phase 4), LZ4 chunk
+compression (`VB_WITH_COMPRESSION`). Greedy merge (Cellulose,
+`VB_WITH_MESHING`) is no longer deferred-but-planned — it was tried, reverted
+(2026-09-16, see 2.5 above), and the dependency removed outright
+(2026-09-17); the mesh worker pool itself shipped (2026-09-15) with the
+hand-rolled per-face mesher.
 
 ---
 

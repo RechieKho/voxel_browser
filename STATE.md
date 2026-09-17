@@ -202,11 +202,14 @@ with *both* binaries (bundle/publish still merge by `voxel_browser-*` pattern).
 
 ## 5. Dependency notes / unknowns
 
-- **Cellulose** (`github.com/RechieKho/cellulose`) is the maintainer's own repo.
-  API is unknown — **inspect it directly** before writing any meshing code
-  (`REMAINING_TASKS.md` Phase 2 spike). Does it emit vertex data or own GPU
-  buffers? What chunk size does it expect? The 32³ choice in the spec is an
-  assumption pending this.
+- **Cellulose** (`github.com/RechieKho/cellulose`) — **resolved and reverted,
+  see §8's 15th entry.** Its API was inspected and wired in behind
+  `VB_WITH_MESHING` (a header-only `greedy_mesh(vector<MeshSample>, ...) ->
+  ChunkMesh` free function); it emits vertex data, not GPU buffers, and the
+  32³ chunk size works fine with it. It was then reverted after causing the
+  NVIDIA-driver VAO/VBO heap-corruption crash — hand-rolled
+  `vb::world::chunk_mesher` is the permanent meshing backend now, not a
+  placeholder for this.
 - **FastNoise2**: README links `electronicarts/fastnoise`. Upstream is
   `Auburn/FastNoise2`; the EA repo is a fork. Confirm which one, and that it
   ships a usable `CMakeLists` / `FastNoise2Config.cmake` (it does export a
@@ -243,7 +246,9 @@ with *both* binaries (bundle/publish still merge by `voxel_browser-*` pattern).
 Tracked in `ARCHITECTURE_SPEC.md` §19, repeated here for visibility:
 
 1. Lua binding layer: `sol2` vs. raw C API.
-2. Cellulose meshing API shape (blocking spike, see §5).
+2. ~~Cellulose meshing API shape (blocking spike, see §5).~~ **Resolved and
+   reverted (2026-09-16, §8's 15th entry)** — hand-rolled meshing stays
+   permanent; see `ARCHITECTURE_SPEC.md` §19 Q2's updated resolution note.
 3. librg version + whether we use its serialization or only its interest culling.
 4. Chunk compression: LZ4 (spec's starting choice) vs. zstd vs. palette-only.
 5. World persistence / region file format — deferred, but don't design the chunk
@@ -672,10 +677,12 @@ _(Move items here with a date + commit when fixed, so the history is visible.)_
     capping collected uploads per frame too, not just submissions.
   - Doesn't touch the unpaced `WorldReplicator` burst noted below — that's
     server→client wire volume, orthogonal to this (client-side CPU meshing).
-  - Cellulose's `greedy_mesh` (`VB_WITH_MESHING`, still not wired) is meant to
-    drop into exactly this seam (`mesh_chunk_from_snapshot`'s call site
-    inside `ChunkMeshWorkerPool::mesh`) — this change doesn't block that,
-    it's the same shape.
+  - Cellulose's `greedy_mesh` was later wired into exactly this seam
+    (`mesh_chunk_from_snapshot`'s call site inside `ChunkMeshWorkerPool::
+    mesh`) and then reverted — its more volatile per-edit vertex/index
+    counts defeated this entry's headroom/`UpdateMeshBuffer()` mitigation
+    and reproduced the driver crash it exists to avoid. See §8's 15th entry
+    (2026-09-16) for the full story; `VB_WITH_MESHING` is unused.
 
 - **2026-09-15 — ACTUAL root cause of the invisible-but-walkable chunk gap
   found and fixed: GNS's default 512 KiB send buffer, silently overflowed.**
@@ -2367,6 +2374,64 @@ _(Move items here with a date + commit when fixed, so the history is visible.)_
   through once for internal consistency against the actual current
   `CMakeLists.txt`/`tests/CMakeLists.txt` contents before publishing.
 
+- **2026-09-16 (15th): Cellulose evaluated as the `VB_WITH_MESHING` backend,
+  then reverted — hand-rolled `vb::world::chunk_mesher` is now the permanent
+  choice, not a placeholder.** §19 Q2 and this file's §5 entry above both
+  called Cellulose's API shape "unknown, inspect before writing meshing
+  code" — that spike finally happened this session. Fixed a real bug first:
+  Cellulose's own `CMakeLists.txt` names its CMake target `libcellulose`
+  (`LIBRARY_NAME = "lib${PROJECT_NAME}"`), not `cellulose` — `src/render/
+  CMakeLists.txt` and `cmake/Dependencies.cmake`'s `NOT TARGET` guard both
+  referenced the wrong name, so `target_link_libraries` silently fell back
+  to treating `cellulose` as a raw linker item and the linker went looking
+  for a `cellulose.lib` that could never exist (it's header-only/
+  `INTERFACE`) — `LNK1104`. Also moved the link from `vb_render` to
+  `vb_core`, since `chunk_mesh_snapshot.cpp` (the actual `greedy_mesh` call
+  site per the header comments) lives there, not in render.
+  With that fixed, `mesh_chunk_from_snapshot` was wired to build a
+  `cellulose::MeshSample` grid from the existing `ChunkMeshSnapshot` (face
+  visibility + per-corner AO computed the same way as the hand-rolled path,
+  walked along `cellulose::impl::face_layout`'s axis_u/axis_v so
+  `face_occlusion` packs the way `greedy_mesh` expects) and call
+  `greedy_mesh(..., ambient_occlusion=true, weld_t_junctions=true)`. Built
+  clean, all 166 `vb_tests` cases passed both with the flag on (after
+  updating a handful of tests that hardcoded the hand-rolled mesher's
+  unmerged quad counts — a full solid chunk's shell is 6144 unit quads
+  unmerged vs. 6 once greedy-merged, etc.) and off.
+  **Then it crashed in actual play**, reported as the same class of failure
+  as §1's/this file's earlier NVIDIA-driver VAO/VBO heap-corruption bug (see
+  the entry above this one's sibling investigation, and the 2026-09-15
+  `chunk_renderer.cpp` headroom/`UpdateMeshBuffer()` mitigation) — rapid
+  `UnloadModel`+`UploadMesh` churn. Root cause: that mitigation only helps
+  when a re-mesh's new vertex/index count still fits the chunk's existing
+  (25%-headroom) GPU buffers. The hand-rolled mesher emits a fixed 4
+  vertices/6 indices per visible face, so an edit's effect on buffer size is
+  small and local. Greedy-merged output doesn't have that property — merging
+  means a single block edit near a merge boundary can swing a whole face's
+  quad count by a lot (splitting or joining large merged rectangles), so
+  chunks blow past their headroom and fall back to full unload/recreate far
+  more often, which is exactly the churn pattern that reproduces the driver
+  bug. The fewer-draw-calls win from greedy meshing came directly at the
+  cost of undermining the one thing keeping the renderer stable on affected
+  drivers.
+  **Reverted in full** (nothing had been committed, so a plain `git
+  checkout --` on the touched files restored the pre-spike state exactly):
+  `chunk_mesh_snapshot.cpp` is back to the sole hand-rolled implementation,
+  `VB_WITH_MESHING` is back to unused/untested (and still carries the
+  `cellulose` vs. `libcellulose` target-name bug described above — nobody
+  should re-flip this flag without re-applying that fix first), and
+  `cmake/Dependencies.cmake`'s Cellulose `FetchContent` block is untouched
+  (harmless dead scaffolding while the flag stays off). `README.md`'s Tech
+  Stack row for Voxel Meshing now says this outright instead of "not yet
+  wired in". This closes out design question #2 in §6 below and
+  `ARCHITECTURE_SPEC.md` §19 Q2 with the opposite outcome from what Q2
+  originally planned — see that section's updated resolution note.
+  **If anyone revisits a greedy mesher here** (Cellulose or otherwise), the
+  VAO/VBO churn sensitivity above is the thing to solve first, e.g. giving
+  merged chunks proportionally more headroom, or decoupling "AO enabled"
+  (the actual source of the volatility, since it's what breaks merge-key
+  uniformity at edit boundaries) from whether merging happens at all.
+
 - **2026-09-17: Wire librg in as the interest backend (`VB_WITH_REPLICATION`).**
   `cmake/Dependencies.cmake` already declared a `vb::librg` INTERFACE target
   and `src/core/CMakeLists.txt` already linked it under the flag, but nothing
@@ -2531,3 +2596,25 @@ _(Move items here with a date + commit when fixed, so the history is visible.)_
   `REMAINING_TASKS.md` worldgen items (2.2, 4.2) plus a stale `§6 stage 5`
   cross-reference in the Deferred section (now stage 6). Backlog entry, not
   a code change.
+
+- **2026-09-17: Cellulose's dormant `VB_WITH_MESHING` scaffolding removed
+  outright, at the user's request** — the 15th entry above (2026-09-16) had
+  reverted the actual meshing wiring but deliberately left the build-flag
+  and `FetchContent` block in place as documented dead scaffolding, "kept
+  only in case a future session wants to re-investigate a different
+  greedy-mesh approach." No further investigation is planned, and the
+  scaffolding was judged not worth carrying forward just in case. Removed:
+  the `VB_WITH_MESHING` option (`CMakeLists.txt`), its `FetchContent`
+  declaration (`cmake/Dependencies.cmake`), the conditional
+  `target_link_libraries`/`target_compile_definitions` block in
+  `src/render/CMakeLists.txt`, the dependency-table row in
+  `docs/protocol.md`, and the explanatory comments in `chunk_mesher.hpp`/
+  `chunk_mesh_snapshot.hpp`/`chunk_mesh_worker_pool.hpp` that referenced it.
+  `ARCHITECTURE_SPEC.md` §19 Q2, `REMAINING_TASKS.md` §2.5, and `README.md`'s
+  Tech Stack row were reworded to say the dependency was removed rather than
+  left unused. This entry (and the 15th entry it follows) remain as the
+  historical record of why Cellulose isn't here — no source code besides
+  the flag/comment surface was ever touched by this cleanup, since none of
+  it had built or run since the revert. Nothing to test: `VB_WITH_MESHING`
+  had no effect on any default build before this change, so removing it
+  changes no build output.

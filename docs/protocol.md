@@ -307,4 +307,3 @@ one ordered stream (a latency nuance, not a correctness issue — see
 | FastNoise2            | `v0.10.0`  | Phase 2                                 |
 | lz4 / xxHash          | `v1.9.4` / `v0.8.2` | Phase 4.4 manifest hashing (`XXH3_128bits`) is the first real consumer; both fetched under `VB_WITH_COMPRESSION`. xxHash is linked **before** lz4 in `src/core/CMakeLists.txt` on purpose — lz4 vendors its own private, older `xxhash.h` with no XXH3 API, and `#include <xxhash.h>` resolves against whichever `-I` entry comes first |
 | Lua / sol2            | `v5.4.6` / `v3.3.0` | Phase 4                          |
-| Cellulose             | `main`     | Phase 2.5 spike — pin a commit then     |

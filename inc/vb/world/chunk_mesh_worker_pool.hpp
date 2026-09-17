@@ -20,9 +20,7 @@
 // background threads: ChunkRenderer builds a snapshot on the main thread (the
 // only thread allowed to touch ClientChunkStore), submits it here, and later
 // drains poll_completed() to GPU-upload finished meshes (also main-thread
-// only, a raylib/GL requirement). This is also the intended call site for
-// Cellulose's greedy_mesh once VB_WITH_MESHING lands -- same snapshot in,
-// same MeshData out.
+// only, a raylib/GL requirement).
 
 namespace vb::world {
 

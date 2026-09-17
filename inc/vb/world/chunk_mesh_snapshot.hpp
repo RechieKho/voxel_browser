@@ -50,9 +50,7 @@ constexpr std::size_t padded_index(int px, int py, int pz) {
 // empty) if `coord` itself has no chunk yet.
 ChunkMeshSnapshot build_chunk_mesh_snapshot(const ClientChunkStore &store, core::ChunkCoord coord);
 
-// Pure function over the snapshot -- no store access, safe on any thread. This
-// is also the intended call site for Cellulose's greedy_mesh once
-// VB_WITH_MESHING lands (same snapshot in, same MeshData out).
+// Pure function over the snapshot -- no store access, safe on any thread.
 MeshData mesh_chunk_from_snapshot(const ChunkMeshSnapshot &snapshot, const BlockRegistry &registry);
 
 } // namespace vb::world

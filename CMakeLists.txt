@@ -2,15 +2,15 @@
 #
 # Layout (see ARCHITECTURE_SPEC.md §4):
 #   vb_core                STATIC  engine core (no rendering, headless-capable)
-#   vb_render              STATIC  client-only rendering (raylib + raygui + Cellulose)
+#   vb_render              STATIC  client-only rendering (raylib + raygui)
 #   voxel_browser_server   EXE     authoritative headless server
 #   voxel_browser          EXE     client ("the browser")
 #   vb_tests               EXE     unit + integration tests (doctest)
 #
 # Heavy dependencies (GameNetworkingSockets, librg, Lua, sol2, FastNoise2,
-# Cellulose, LZ4, xxHash) are declared in cmake/Dependencies.cmake and gated
-# behind VB_WITH_* options so each implementation phase can turn on only what
-# it needs. Phase 0 builds green with just raylib + raygui + EnTT + doctest.
+# LZ4, xxHash) are declared in cmake/Dependencies.cmake and gated behind
+# VB_WITH_* options so each implementation phase can turn on only what it
+# needs. Phase 0 builds green with just raylib + raygui + EnTT + doctest.
 
 cmake_minimum_required(VERSION 3.25)
 
@@ -88,7 +88,6 @@ option(VB_WITH_REPLICATION "librg replication (Phase 1); OFF uses the hand-rolle
 option(VB_WITH_LUA       "Lua 5.4 + sol2 scripting (Phase 4)"                 OFF)
 option(VB_WITH_WORLDGEN  "FastNoise2 world generation (Phase 2)"              OFF)
 option(VB_WITH_COMPRESSION "LZ4 + xxHash chunk/asset codecs (Phase 2/4)"      OFF)
-option(VB_WITH_MESHING   "Cellulose voxel meshing (Phase 2)"                  OFF)
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   set(VB_TESTS_DEFAULT_HEADLESS ON)

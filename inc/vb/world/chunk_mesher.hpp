@@ -9,9 +9,7 @@
 
 // Chunk meshing (spec §11.2). Renderer-neutral output — the client converts
 // MeshData to a raylib Mesh at upload time. Face-culled cube geometry with
-// per-vertex light + ambient occlusion; greedy merging is the Cellulose
-// `greedy_mesh` swap-in behind VB_WITH_MESHING (spec §19 Q2). Same inputs and
-// output shape so that swap is local.
+// per-vertex light + ambient occlusion.
 
 namespace vb::world {
 

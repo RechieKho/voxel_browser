@@ -88,7 +88,7 @@ matchmaking/lobby services, and audio.
                  │  └─────────────┬──────────────┘               │
                  │                │                              │
                  │  ┌─────────────▼──────────────┐  ┌──────────┐ │
-                 │  │ Cellulose meshing + render │  │ Sandboxed│ │
+                 │  │ Hand-rolled mesher + render│  │ Sandboxed│ │
                  │  │ raygui HUD / menus         │◀─│ Lua VM   │ │
                  │  │ Input capture              │  │ (UI only)│ │
                  │  └────────────────────────────┘  └──────────┘ │
@@ -119,7 +119,7 @@ voxel_browser/
 │       ├── assetsync/          # manifest, hashing, transfer state machine
 │       ├── script/             # Lua VM wrapper, binding registration, event bus
 │       ├── protocol/           # generated/handwritten wire structs + versions
-│       └── render/             # (client) Cellulose glue, camera, interpolation
+│       └── render/             # (client) mesher glue, camera, interpolation
 ├── src/
 │   ├── core/  world/  worldgen/  ecs/  net/  replication/  assetsync/  script/
 │   ├── server/                 # server executable: main.cpp, tick loop, CLI
@@ -144,7 +144,7 @@ voxel_browser/
 | Target        | Type        | Links                                                        |
 | ------------- | ----------- | ----------------------------------------------------------- |
 | `vb_core`     | STATIC lib  | fastnoise2, entt, lua, gamenetworkingsockets, librg, xxhash |
-| `vb_render`   | STATIC lib  | `vb_core`, raylib, cellulose                                 |
+| `vb_render`   | STATIC lib  | `vb_core`, raylib                                            |
 | `voxel_browser_server` | EXE | `vb_core`                                                    |
 | `voxel_browser` (client) | EXE | `vb_core`, `vb_render`, raygui                            |
 | `vb_tests`    | EXE         | `vb_core`, test framework                                    |
@@ -195,8 +195,8 @@ the client.
 ### 5.3 Chunks
 
 - Chunk size: **32×32×32** voxels (`CHUNK_DIM = 32`). Rationale: good SIMD/mesh
-  batch size, aligns with Cellulose's expected chunk granularity, keeps a full
-  uncompressed chunk at 2 KB (`uint16` × 32³ = 64 KiB — see compression below).
+  batch size, keeps a full uncompressed chunk at 2 KB (`uint16` × 32³ = 64 KiB
+  — see compression below).
 - Storage: `std::array<BlockId, 32*32*32>` behind a **palette-compressed**
   container:
   - `PalettedChunkStore`: per-chunk palette + bit-packed indices
@@ -685,16 +685,18 @@ mechanism-vs-policy split used for input interception (§10.6).
 
 ### 11.1 Stack
 
-`raylib` owns the window, GL context, input, and 2D/UI draw. `Cellulose` owns
-voxel meshing and chunk mesh management. `raygui` draws menus/HUD as an
-immediate-mode overlay.
+`raylib` owns the window, GL context, input, and 2D/UI draw. A hand-rolled
+face-culled mesher (`vb::world::chunk_mesher` / `chunk_mesh_snapshot`) owns
+voxel meshing and chunk mesh management — see §19 Q2 for why this is the
+permanent choice rather than a placeholder for a greedy-mesh library.
+`raygui` draws menus/HUD as an immediate-mode overlay.
 
 ### 11.2 Chunk meshing
 
 - Client keeps a `ClientChunkStore` mirroring replicated chunk data.
 - On `ChunkAdd`/`ChunkDelta`, mark mesh dirty; a **mesh worker thread pool**
-  builds greedy-meshed vertex buffers via Cellulose from `(block registry,
-  block data, light volume, neighbor faces)`. Per-vertex light + AO baked in.
+  builds per-face-culled vertex buffers from `(block registry, block data,
+  light volume, neighbor faces)`. Per-vertex light + AO baked in.
 - Completed meshes are uploaded to GPU on the main thread (GL calls are
   single-threaded); a budget caps uploads per frame to avoid hitches.
 - Frustum culling + distance culling per chunk. Optional simple occlusion via
@@ -825,7 +827,7 @@ thread via lock-free queues; the Lua VM is touched only from the tick thread.
 | ---------------------- | --------------------------------------------------------- |
 | Main / render          | input, prediction, GL, raygui, mesh upload, client Lua VM  |
 | Network I/O            | GNS poll, decode, apply to double-buffered state           |
-| Mesh pool (N)          | Cellulose greedy meshing from chunk snapshots              |
+| Mesh pool (N)          | hand-rolled face-culled meshing from chunk snapshots       |
 | Asset writer           | verify hash + write cache files                            |
 
 ---
@@ -944,20 +946,27 @@ to the extent practical (no code exec, no arbitrary FS writes).
 
 1. **Binding layer**: raw Lua C API vs. `sol2`. **Resolved (2026-09-10): sol2**
    (v3.3.0), for ergonomics; compile-time cost accepted.
-2. **Cellulose API fit**: **Resolved (2026-09-11).** Cellulose is a mature
-   header-only lib (same maintainer). It **emits vertex data, not GPU buffers**:
-   `ChunkMesh { vector<MeshVertex{position, normal, u, v, brightness, block_id,
-   texture_id, occlusion}>, vector<u32> indices }`. The reusable seam is
-   `greedy_mesh(vector<MeshSample>, size, block_scale, ao, weld) -> ChunkMesh`
-   where `MeshSample { visible[6], block_id, brightness[6], texture[6],
-   face_occlusion[6] }` — a flat grid we can fill from `ClientChunkStore`
-   *without* adopting Cellulose's `World`. `cellulose/raylib.hpp` has
-   `to_raylib_mesh`. **Plan: adopt `greedy_mesh` under `VB_WITH_MESHING`.**
-   Blocker for turning it on now: Cellulose vendors `unordered_dense` as a git
-   submodule (empty on a shallow clone) and its default `CELLULOSE_BUILD_DEMO`
-   fetches raylib again — `Dependencies.cmake` needs `GIT_SUBMODULES` +
-   `CELLULOSE_BUILD_DEMO=OFF`. Phase 2 ships a hand-rolled mesher
-   (`vb/render/chunk_mesher`) with the same inputs/outputs so the swap is local.
+2. **Cellulose API fit**: **Resolved (2026-09-11), then reversed
+   (2026-09-16), and the dependency fully removed (2026-09-17) — hand-rolled
+   meshing is the permanent backend.** Cellulose (a header-only greedy
+   mesher) was spiked behind a build flag: it emitted vertex data, not GPU
+   buffers, via a reusable `greedy_mesh(vector<
+   MeshSample>, size, block_scale, ao, weld) -> ChunkMesh` entry point, fed
+   from a flat grid filled from `ClientChunkStore`. It was wired in and
+   passed the full test suite, but crashed in real play: greedy-merged
+   output has far more volatile per-edit vertex/index counts than the
+   hand-rolled per-face mesher (merging means one edit near a merge boundary
+   can swing a whole face's quad count a lot), which defeated
+   `chunk_renderer.cpp`'s GPU-buffer-headroom mitigation for the NVIDIA
+   VAO/VBO-churn heap-corruption bug (see `STATE.md` §1/§8) and reproduced
+   it far more often. Reverted, and Cellulose's build-flag/FetchContent
+   scaffolding was later removed outright rather than kept dormant —
+   `vb/world/
+   chunk_mesher` + `chunk_mesh_snapshot`'s hand-rolled per-face mesher
+   (fixed 4 vertices/6 indices per visible face, so an edit's effect on GPU
+   buffer size stays small and local) is the permanent choice, with no
+   planned swap-in. Full story: `STATE.md` §8's 15th entry (2026-09-16) and
+   the 2026-09-17 removal entry.
 3. **librg version / API**: **Resolved (2026-09-10): librg v7.4.0** (single
    self-contained header, zpl bundled). Interest is chunk-radius based (cells
    independent of voxel chunks). **Use librg for interest culling + its

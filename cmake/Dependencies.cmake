@@ -12,7 +12,6 @@
 #   VB_WITH_WORLDGEN    -> FastNoise2              (Phase 2.2 terrain)
 #   VB_WITH_COMPRESSION -> lz4 + xxHash            (Phase 2.4 / 4.4 codecs)
 #   VB_WITH_LUA         -> Lua 5.4 + sol2          (Phase 4 scripting)
-#   VB_WITH_MESHING     -> Cellulose               (Phase 2.5 meshing spike)
 #
 # Keep the pinned tags in sync with docs/protocol.md / STATE.md when bumped.
 
@@ -247,21 +246,4 @@ if(VB_WITH_LUA)
   if(NOT nlohmann_json_FOUND AND NOT TARGET nlohmann_json::nlohmann_json)
     vb_fetch(nlohmann_json TAG v3.11.3 REPO https://github.com/nlohmann/json.git)
   endif()
-endif()
-
-# ===========================================================================
-# Cellulose — voxel meshing (spec §19 Q2, resolved). Header-only; we use its
-# greedy_mesh(vector<MeshSample>, ...) entry point. It vendors unordered_dense
-# as a submodule and its demo would re-fetch raylib, so: pull submodules and
-# turn the demo off. Phase 2 ships vb/render/chunk_mesher (same I/O) with this
-# OFF; flip VB_WITH_MESHING to swap in greedy_mesh.
-# ===========================================================================
-if(VB_WITH_MESHING AND NOT TARGET cellulose)
-  set(CELLULOSE_BUILD_DEMO OFF CACHE INTERNAL "")
-  FetchContent_Declare(cellulose
-    GIT_REPOSITORY https://github.com/RechieKho/cellulose.git
-    GIT_TAG main
-    GIT_SHALLOW TRUE
-    GIT_SUBMODULES_RECURSE TRUE)
-  FetchContent_MakeAvailable(cellulose)
 endif()
