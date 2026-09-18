@@ -877,6 +877,15 @@ void ClientSession::tick(double) {
 					}
 					break;
 				}
+				if (frame->header.type == protocol::MessageType::kS2CMoveParams) {
+					if (auto m = protocol::S2CMoveParams::decode(frame->payload)) {
+						apply_move_params(*m);
+					} else {
+						VB_ERROR("net", "malformed S2C_MoveParams: ",
+								core::message(m.error()));
+					}
+					break;
+				}
 				if (handshake_.status() == ClientHandshakeStatus::kJoined &&
 						apply_gameplay_frame(*frame)) {
 					break;
@@ -1050,6 +1059,26 @@ void ClientSession::apply_block_registry(const protocol::S2CBlockRegistry &msg) 
 void ClientSession::apply_keybind_registry(const protocol::S2CKeybindRegistry &msg) {
 	keybind_names_ = msg.names;
 	VB_INFO("net", "received keybind registry (", msg.names.size(), " keybinds)");
+}
+
+void ClientSession::apply_move_params(const protocol::S2CMoveParams &msg) {
+	physics::MoveParams p;
+	p.half_width = msg.half_width;
+	p.height = msg.height;
+	p.eye_height = msg.eye_height;
+	p.walk_speed = msg.walk_speed;
+	p.sprint_speed = msg.sprint_speed;
+	p.accel = msg.accel;
+	p.air_accel = msg.air_accel;
+	p.friction = msg.friction;
+	p.gravity = msg.gravity;
+	p.jump_speed = msg.jump_speed;
+	p.terminal_velocity = msg.terminal_velocity;
+	p.step_height = msg.step_height;
+	p.fly_speed = msg.fly_speed;
+	p.fly = msg.fly;
+	move_params_ = p;
+	VB_INFO("net", "received move params (gravity=", p.gravity, ")");
 }
 
 void ClientSession::apply_snapshot(const protocol::S2CEntitySnapshot &snap) {

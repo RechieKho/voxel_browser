@@ -124,6 +124,45 @@ TEST_CASE("vb.register_keybind is idempotent, capped, and rejected after freeze"
 	CHECK_FALSE(r2);
 }
 
+TEST_CASE("vb.physics.set_params overrides only the fields it sets, rejected "
+		"after freeze (Phase 6.7)") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("physics"));
+
+	const auto r = rt.load_pack_file(R"(
+		vb.physics.set_params({ gravity = 3.5, jump_speed = 4.0 })
+	)");
+	REQUIRE(r);
+	rt.freeze();
+
+	vb::physics::MoveParams base;
+	base.gravity = 24.0; // e.g. ServerConfig::gravity already folded in
+	const vb::physics::MoveParams effective = rt.effective_move_params(base);
+	CHECK(effective.gravity == doctest::Approx(3.5)); // pack override wins
+	CHECK(effective.jump_speed == doctest::Approx(4.0));
+	CHECK(effective.walk_speed == doctest::Approx(base.walk_speed)); // untouched
+
+	const auto r2 = rt.load_pack_file(R"(vb.physics.set_params({ gravity = 1 }))");
+	CHECK_FALSE(r2);
+}
+
+TEST_CASE("without a vb.physics.set_params call, effective_move_params "
+		"returns base unchanged (Phase 6.7)") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("physics_default"));
+	rt.freeze();
+
+	vb::physics::MoveParams base;
+	base.gravity = 24.0;
+	const vb::physics::MoveParams effective = rt.effective_move_params(base);
+	CHECK(effective.gravity == doctest::Approx(24.0));
+	CHECK(effective.walk_speed == doctest::Approx(base.walk_speed));
+	CHECK(effective.jump_speed == doctest::Approx(base.jump_speed));
+	CHECK(effective.fly == base.fly);
+}
+
 TEST_CASE("vb.register_biome / vb.register_craft accept arbitrary def tables") {
 	vb::net::LoopbackNetwork net;
 	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();

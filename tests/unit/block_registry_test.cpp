@@ -114,3 +114,48 @@ TEST_CASE("without a keybind_registry hook, the client has no registered "
 
 	CHECK(client.registered_keybinds().empty());
 }
+
+TEST_CASE("server sends custom move params and the client's prediction uses "
+		"them (Phase 6.7)") {
+	LoopbackNetwork net;
+	HandshakeServerConfig cfg;
+	HandshakeServerHost host;
+	host.move_params = []() -> std::optional<vb::protocol::S2CMoveParams> {
+		vb::protocol::S2CMoveParams p;
+		p.gravity = 3.5; // e.g. a low-gravity pack
+		p.jump_speed = 4.0;
+		return p;
+	};
+	ServerSession server(net.server(), cfg, host);
+	REQUIRE(net.server().listen(0));
+
+	Transport &t = net.create_client();
+	auto id = t.connect("x", 0);
+	REQUIRE(id);
+	ClientSession client(t, *id, HandshakeClientConfig{ "P", "", "v", 1 });
+
+	pump(server, client, 10);
+	REQUIRE(client.joined());
+
+	CHECK(client.move_params().gravity == doctest::Approx(3.5));
+	CHECK(client.move_params().jump_speed == doctest::Approx(4.0));
+}
+
+TEST_CASE("without a move_params hook, the client keeps its own default "
+		"MoveParams") {
+	LoopbackNetwork net;
+	HandshakeServerConfig cfg;
+	ServerSession server(net.server(), cfg); // default host: no hook set
+	REQUIRE(net.server().listen(0));
+
+	Transport &t = net.create_client();
+	auto id = t.connect("x", 0);
+	REQUIRE(id);
+	ClientSession client(t, *id, HandshakeClientConfig{ "P", "", "v", 1 });
+
+	pump(server, client, 10);
+	REQUIRE(client.joined());
+
+	CHECK(client.move_params().gravity ==
+			doctest::Approx(vb::physics::MoveParams{}.gravity));
+}

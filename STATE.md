@@ -7,7 +7,15 @@
 > Companion docs: `ARCHITECTURE_SPEC.md` (target design) · `REMAINING_TASKS.md`
 > (implementation backlog). This file is for *traps and context*, not the plan.
 
-Last updated: 2026-09-18 (Phase 6.5 — shared block-damage breaking:
+Last updated: 2026-09-18 (Phase 6.7 — physics/movement parameters:
+`vb.physics.set_params{...}` + `PackRuntime::effective_move_params()`,
+`S2C_MoveParams` (id 50, `kEngineProtocolVersion` 13 → 14) so client
+prediction mirrors the server's authoritative tunables instead of silently
+drifting; also fixed a pre-existing bug found while wiring it — the client
+never received the server's `MoveParams` at all before this, and two
+`src/client/main.cpp` call sites were stomping it back to hardcoded defaults
+right after join. See §8's newest entry for the full writeup. Previous
+entry: Phase 6.5 — shared block-damage breaking:
 `vb.register_block{max_damage=...}` + `vb::world::BlockDamageSystem` +
 `C2S_BlockBreakBegin`/`Stop` + `vb.on("block_break_begin"/"block_break_tick"/
 "block_health_tick", ...)`, completion drives the existing `C2S_BlockEdit`
@@ -345,6 +353,89 @@ Other undecided-but-not-yet-in-spec:
 ## 8. Done / resolved
 
 _(Move items here with a date + commit when fixed, so the history is visible.)_
+
+- **2026-09-18 — Phase 6.7 physics/movement parameters landed
+  (uncommitted).** `vb.physics.set_params{...}` (`src/script/pack_runtime.cpp`)
+  lets a pack override any `physics::MoveParams` field, per
+  `REMAINING_TASKS.md` 6.7 and the struct's own long-standing "a Lua pack
+  overrides per entity kind" comment.
+  **Scoped to one global override, not per-entity-kind, on purpose:** no
+  entity kind besides the player runs `step_movement` today (6.1's script
+  entities have no physics at all) — a per-kind table would have nowhere
+  else to apply. `PackRuntime::effective_move_params(base)` reads the raw
+  `sol::table` field-by-field with `get_or(name, base.field)`, so a field the
+  pack never set falls back to whatever `base` the caller passed in, not a
+  fixed literal.
+  **`ServerConfig.gravity` reconciliation, decided:** it's the *base*
+  `effective_move_params()` is called with (`move_params.gravity =
+  config.gravity` before the override runs, `src/server/main.cpp`) — the
+  operator's `server.toml` sets the engine default, an explicit pack
+  override wins over it if the pack sets `gravity` itself.
+  **The actual bug this session found, bigger than the task as scoped:**
+  auditing "does the client's prediction ever see this" turned up that it
+  never did, for *any* value of `MoveParams` — not just a hypothetical
+  future pack override, but `ServerConfig.gravity` itself. Every client
+  (dedicated-server and `--singleplayer` alike) constructs its own
+  `physics::MoveParams{}` locally and only ever calls
+  `ClientSession::set_move_params()` with that hardcoded default; nothing
+  on the wire carried the server's actual tunables. Client-side prediction
+  running with the wrong gravity mostly hides behind
+  `ClientSession::reconcile()` snapshotting the position back to server
+  truth every tick, so this was invisible without measuring — worth
+  remembering as a category: a value that only affects *prediction* (not
+  correctness, since the server is authoritative regardless) can silently
+  diverge for a long time before anyone notices the jitter.
+  **Fix — new wire message**: `S2C_MoveParams` (id 50,
+  `inc/vb/protocol/world.hpp`, `kEngineProtocolVersion` 13 → 14) mirrors
+  `physics::MoveParams` flat (13 `f64` fields + `bool fly`) rather than
+  protocol/ taking a dependency on physics/ — same posture as
+  `BlockRegistryRecord` mirroring `world::BlockType`. Sent between
+  `C2S_Ready` and `S2C_JoinAccept` alongside `S2C_BlockRegistry`/
+  `S2C_KeybindRegistry` via a new `HandshakeServerHost::move_params` hook
+  (`nullopt` default = no frame, so every existing host/test is unaffected).
+  `ClientSession::apply_move_params` (handled unconditionally in `tick()`,
+  same as block/keybind registry, since real transports don't guarantee
+  cross-lane ordering) converts it straight into `move_params_`.
+  **Second bug found while wiring the fix in, not just reasoned about:**
+  two call sites in `src/client/main.cpp` (`run_headless`'s single-connection
+  path and the windowed `enter_playing` lambda) constructed a *fresh*
+  default `physics::MoveParams` and called `client->set_move_params()` with
+  it right after checking `join_accept()` — i.e., *after* `S2C_MoveParams`
+  had already arrived and been applied (it travels in the same handshake
+  step as `JoinAccept`), immediately overwriting the real value back to the
+  hardcoded default. Neither call site needed to construct a MoveParams at
+  all; both were just trying to get *some* value into a local variable used
+  for eye-height math. Fixed by adding a `ClientSession::move_params()`
+  const getter and reading that back instead
+  (`move_params = client->move_params();`) — the general lesson: once a
+  session applies something unconditionally as soon as it arrives, any
+  later "set it up for use" code must read it back, not reconstruct a
+  default and reassert it.
+  **`--singleplayer` wiring**: `Singleplayer`'s in-process host needed the
+  same `host.move_params` hook as the dedicated server
+  (`make_singleplayer_host`, `src/client/main.cpp`) — added a `move_params`
+  member (declared right after `pack_runtime`, so member-init order lets it
+  be computed via `pack_runtime.effective_move_params(vb::physics::
+  MoveParams{})` before `server` is constructed) and an explicit
+  `server.set_move_params(move_params)` call in the body (the dedicated
+  server already did this; the integrated server previously didn't call
+  `set_move_params` at all, silently running server-side physics on
+  `MoveParams{}`'s hardcoded defaults too — not just a client-side gap).
+  **Verification:** full `vb_tests` green on `build-net-lua`
+  (`VB_WITH_NET=ON`, `VB_WITH_LUA=ON`, 230/230 cases, up from 225 — this
+  session's 2 new `protocol_test.cpp` cases, 2 new `block_registry_test.cpp`
+  cases, and 2 new `pack_runtime_test.cpp` cases). All 4 CTest cases
+  (`vb_tests`/`server_smoke`/`client_smoke`/`singleplayer_smoke`) pass. Ran
+  the real `voxel_browser.exe --headless --singleplayer` binary directly
+  (not just ctest) and confirmed the log line `received move params
+  (gravity=28)` appears right after join, proving the new wire path fires
+  in the actual integrated-server path, not just in a unit test's
+  `LoopbackNetwork`.
+  **Not done, deliberately deferred:** per-entity-kind override (no second
+  physics-driven kind exists to need it, see above); 6.8-6.13's other
+  "default + override" items (day/night curve, inventory stacking, chat
+  transform, item-drop params, anim clip priority, read-only config
+  visibility) are separate, untouched follow-ups in the same phase-6 shape.
 
 - **2026-09-18 — Phase 6.5 shared block-damage breaking landed
   (uncommitted).** `vb.register_block{max_damage=N}` (default 0 = today's

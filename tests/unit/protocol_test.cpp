@@ -246,6 +246,43 @@ TEST_CASE("block-break begin/stop round-trip (Phase 6.5)") {
 	CHECK(stop.pos == vb::core::IVec3{ 1, 2, 3 });
 }
 
+TEST_CASE("move params round-trip (Phase 6.7)") {
+	auto defaults = round_trip(S2CMoveParams{});
+	CHECK(defaults.gravity == doctest::Approx(28.0));
+	CHECK(defaults.fly == false);
+
+	S2CMoveParams p;
+	p.half_width = 0.35;
+	p.height = 1.9;
+	p.eye_height = 1.7;
+	p.walk_speed = 5.0;
+	p.sprint_speed = 9.0;
+	p.accel = 40.0;
+	p.air_accel = 8.0;
+	p.friction = 10.0;
+	p.gravity = 12.5;
+	p.jump_speed = 6.0;
+	p.terminal_velocity = 50.0;
+	p.step_height = 1.1;
+	p.fly_speed = 20.0;
+	p.fly = true;
+	auto p2 = round_trip(p);
+	CHECK(p2.half_width == doctest::Approx(0.35));
+	CHECK(p2.height == doctest::Approx(1.9));
+	CHECK(p2.eye_height == doctest::Approx(1.7));
+	CHECK(p2.walk_speed == doctest::Approx(5.0));
+	CHECK(p2.sprint_speed == doctest::Approx(9.0));
+	CHECK(p2.accel == doctest::Approx(40.0));
+	CHECK(p2.air_accel == doctest::Approx(8.0));
+	CHECK(p2.friction == doctest::Approx(10.0));
+	CHECK(p2.gravity == doctest::Approx(12.5));
+	CHECK(p2.jump_speed == doctest::Approx(6.0));
+	CHECK(p2.terminal_velocity == doctest::Approx(50.0));
+	CHECK(p2.step_height == doctest::Approx(1.1));
+	CHECK(p2.fly_speed == doctest::Approx(20.0));
+	CHECK(p2.fly == true);
+}
+
 TEST_CASE("keybind registry round-trips, including an empty list") {
 	auto empty = round_trip(S2CKeybindRegistry{});
 	CHECK(empty.names.empty());

@@ -373,6 +373,13 @@ public:
 	// --- local-player prediction (spec §8.4) -----------------------------
 
 	void set_move_params(physics::MoveParams p) { move_params_ = p; }
+	// Whatever set_move_params() last set -- the engine default until (if
+	// ever) a real S2C_MoveParams frame arrives and apply_move_params()
+	// overwrites it (Phase 6.7). Callers that keep their own copy of
+	// MoveParams for non-prediction purposes (e.g. eye height for the
+	// camera) should re-read this rather than assume their local default
+	// still matches what the session is actually predicting with.
+	const physics::MoveParams &move_params() const { return move_params_; }
 	// Seed the predicted state from S2C_JoinAccept spawn_pos.
 	void set_local_feet(core::Vec3d feet) { predicted_.position = feet; }
 
@@ -487,6 +494,7 @@ private:
 	bool apply_gameplay_frame(const protocol::Frame &frame);
 	void apply_block_registry(const protocol::S2CBlockRegistry &msg);
 	void apply_keybind_registry(const protocol::S2CKeybindRegistry &msg);
+	void apply_move_params(const protocol::S2CMoveParams &msg);
 	void apply_snapshot(const protocol::S2CEntitySnapshot &snap);
 	void reconcile(const protocol::EntityRecord &authoritative,
 			std::uint32_t acked_seq);

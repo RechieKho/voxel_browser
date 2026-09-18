@@ -4,8 +4,21 @@
 > as any change to a struct in `inc/vb/protocol/`, and bump
 > `kEngineProtocolVersion` in `cmake/version.hpp.in`.
 
-Current `ENGINE_PROTOCOL_VERSION`: **13**.
+Current `ENGINE_PROTOCOL_VERSION`: **14**.
 
+- **14** — `S2C_MoveParams` (50) payload defined (Phase 6.7, spec §7.3): a
+  flat snapshot of `vb::physics::MoveParams` (`f64×13` tunables + `bool fly`)
+  mirroring `vb::protocol::BlockRegistryRecord`'s posture of duplicating
+  fields rather than protocol/ depending on physics/. Sent between
+  `C2S_Ready` and `S2C_JoinAccept` alongside `S2C_BlockRegistry`/
+  `S2C_KeybindRegistry` (`HandshakeServerHost::move_params`, `nullopt`
+  default = no frame, zero behavior change) so client-side prediction uses
+  the exact same tunables (gravity included) as the server's authoritative
+  simulation instead of silently keeping `MoveParams`'s own hardcoded
+  defaults. `PackRuntime::effective_move_params()` applies a pack's
+  `vb.physics.set_params{...}` on top of the engine/operator default
+  (`ServerConfig::gravity` folded in first) — only fields the pack actually
+  sets are overridden.
 - **13** — Phase 6.5 (shared block-damage breaking, spec §10.7):
   `BlockRegistryRecord` (`S2C_BlockRegistry`, 40) gains a `u16 max_damage`
   field (0 = today's instant break, no behavior change for any existing
@@ -194,6 +207,21 @@ rebuilds a `world::BlockRegistry` from the records (in order, so ids match)
 and swaps it into its `ClientChunkStore`. No model/texture/collision-shape
 fields exist yet — those wait on asset sync (4.4) + the base pack (5.1).
 
+### Physics parameters — `inc/vb/protocol/world.hpp` (implemented)
+
+| Type (id)             | Fields                                                        |
+| ---------------------- | ------------------------------------------------------------ |
+| `S2C_MoveParams` (50) | `f64×13 {half_width, height, eye_height, walk_speed, sprint_speed, accel, air_accel, friction, gravity, jump_speed, terminal_velocity, step_height, fly_speed}`, `bool fly` |
+
+Sent between `C2S_Ready` and `S2C_JoinAccept` (Phase 6.7) only if
+`HandshakeServerHost::move_params` returns a value; `nullopt` (default) sends
+nothing, so a host/test that never opts in leaves the client on
+`vb::physics::MoveParams`'s own hardcoded defaults, unchanged. The client
+swaps this straight into the same `physics::MoveParams` its local prediction
+already runs (`ClientSession::set_move_params`), so a pack's
+`vb.physics.set_params{...}` override (or the operator's `server.toml`
+`gravity`) reaches client-side prediction exactly, not just server authority.
+
 ### World editing — `inc/vb/protocol/world.hpp` (implemented)
 
 | Type (id)               | Fields                                                        |
@@ -301,7 +329,9 @@ log as `"* <name> joined/left the game"` lines and keeps a live
 See `ARCHITECTURE_SPEC.md` §8.3 for the full diagram. Order:
 `Hello → ServerInfo → Auth → AuthResult → AssetManifestRequest →
 AssetManifest → AssetRequest → AssetData×N → Ready → BlockRegistry →
-JoinAccept → initial ChunkAdd + EntitySnapshot`.
+KeybindRegistry → MoveParams → JoinAccept → initial ChunkAdd + EntitySnapshot`
+(the last three are each sent only if their respective
+`HandshakeServerHost` hook opts in).
 
 Implemented, transport-agnostic, in `inc/vb/net/handshake.hpp`:
 

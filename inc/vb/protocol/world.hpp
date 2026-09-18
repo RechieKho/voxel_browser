@@ -43,6 +43,36 @@ struct S2CBlockRegistry {
 	static Decoded<S2CBlockRegistry> decode(std::span<const std::byte> in);
 };
 
+// --- physics parameters (spec §7.3, Phase 6.7) --------------------------
+// vb::physics::MoveParams's own comment says "Engine defaults; a Lua pack
+// overrides per entity kind" -- mirrored here flat (no dependency from
+// protocol/ onto physics/, same posture as BlockRegistryRecord mirroring
+// BlockType) so the client's prediction can use the exact tunables the
+// server's authoritative simulation does, instead of silently drifting from
+// vb::physics::MoveParams's own hardcoded defaults. Sent between C2S_Ready
+// and S2C_JoinAccept alongside S2C_BlockRegistry/S2C_KeybindRegistry.
+struct S2CMoveParams {
+	static constexpr MessageType kType = MessageType::kS2CMoveParams;
+
+	double half_width = 0.4;
+	double height = 1.8;
+	double eye_height = 1.62;
+	double walk_speed = 4.5;
+	double sprint_speed = 7.0;
+	double accel = 45.0;
+	double air_accel = 10.0;
+	double friction = 12.0;
+	double gravity = 28.0;
+	double jump_speed = 8.9;
+	double terminal_velocity = 60.0;
+	double step_height = 1.05;
+	double fly_speed = 12.0;
+	bool fly = false;
+
+	void encode(std::vector<std::byte> &out) const;
+	static Decoded<S2CMoveParams> decode(std::span<const std::byte> in);
+};
+
 struct S2CChunkAdd {
 	static constexpr MessageType kType = MessageType::kS2CChunkAdd;
 

@@ -249,6 +249,9 @@ ServerHandshakeStep ServerHandshake::on_frame(const Frame &frame) {
 				step.send.push_back(
 						frame_message(protocol::S2CKeybindRegistry{ std::move(*names) }));
 			}
+			if (auto mp = host_.move_params()) {
+				step.send.push_back(frame_message(*mp));
+			}
 
 			protocol::S2CJoinAccept accept;
 			accept.your_net_id = grant_.net_id;

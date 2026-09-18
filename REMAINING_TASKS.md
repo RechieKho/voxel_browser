@@ -1724,18 +1724,44 @@ windows, chatting, crafting, and seeing each other, all at once.
       other Phase 4/5 item). `content/base` has no `death.lua` — nothing
       currently overrides the built-in fallback in the shipped base pack.
 
-### 6.7 Physics / movement parameters (default + override)
+### 6.7 Physics / movement parameters (default + override) ✅ (global override; per-entity-kind deferred)
 
-- [ ] `physics::MoveParams` (`inc/vb/physics/movement.hpp:18-33` — gravity,
-      jump speed, walk/sprint speed, accel, friction, step height, fly
-      speed) is a hardcoded struct whose own comment already says *"Engine
-      defaults; a Lua pack overrides per entity kind"* — planned, never
-      wired up. Enables double-jump, low-gravity zones, custom movement
-      abilities per entity kind.
-- [ ] `ServerConfig.gravity` (`inc/vb/core/config.hpp`) duplicates
-      `MoveParams.gravity` as a separate server-operator setting — worth
-      reconciling which one wins once physics is Lua-overridable, so an
-      operator's `server.toml` and a pack's override don't silently fight.
+- [x] `vb.physics.set_params{...}` (`src/script/pack_runtime.cpp`) lets a
+      pack override any `physics::MoveParams` field (gravity, walk/sprint
+      speed, accel, friction, jump speed, step height, fly speed, ...).
+      **Scoped to one global override, not per-entity-kind:** no entity kind
+      besides the player runs `step_movement` today (script entities from
+      6.1 have no physics at all), so a per-kind table would have nowhere
+      else to apply — revisit if/when a non-player kind gets real physics.
+      `PackRuntime::effective_move_params(base)` applies only the fields the
+      pack actually set on top of `base`, leaving the rest untouched.
+- [x] `ServerConfig.gravity` reconciliation, decided: it's the *base* fed
+      into `effective_move_params()` (`move_params.gravity = config.gravity`
+      in `src/server/main.cpp`, before the pack override runs) — an
+      operator's `server.toml` sets the engine default, a pack's explicit
+      `vb.physics.set_params{gravity=...}` wins over it if set. Documented
+      inline at the call site, not just here.
+- [x] **Also closed, not originally scoped but found while replicating
+      this:** the client's local prediction (`ClientSession::move_params_`)
+      never received the server's `MoveParams` at all before this — every
+      client (dedicated-server and `--singleplayer` alike) silently
+      predicted with `physics::MoveParams{}`'s own hardcoded defaults
+      regardless of `ServerConfig.gravity` or any future pack override,
+      correctness relying entirely on reconciliation snapshots papering
+      over the drift. New `S2C_MoveParams` (id 50, Phase 6.7,
+      `kEngineProtocolVersion` 13 → 14) sent between `C2S_Ready` and
+      `S2C_JoinAccept` alongside `S2C_BlockRegistry`/`S2C_KeybindRegistry`
+      (`HandshakeServerHost::move_params`, `nullopt` default = no frame,
+      zero behavior change) fixes this for both the dedicated server and
+      `--singleplayer`'s in-process host.
+      **Also found and fixed while wiring the client:** two call sites in
+      `src/client/main.cpp` (`run_headless` and the windowed `enter_playing`)
+      constructed a fresh default `physics::MoveParams` and called
+      `client->set_move_params()` with it *after* join, unconditionally
+      stomping whatever `S2C_MoveParams` had already applied moments
+      earlier (it arrives in the same handshake step as `JoinAccept`). Fixed
+      by reading back `client->move_params()` (new getter,
+      `inc/vb/net/session.hpp`) instead of reconstructing a default.
 
 ### 6.8 Day/night cycle curve (default + override)
 

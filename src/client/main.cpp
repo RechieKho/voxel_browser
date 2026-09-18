@@ -141,9 +141,23 @@ vb::script::PackRuntime make_singleplayer_pack_runtime(
 
 vb::net::HandshakeServerHost make_singleplayer_host(std::uint64_t seed,
 		vb::script::PackRuntime &pack_runtime,
-		const vb::world::BlockRegistry &registry) {
+		const vb::world::BlockRegistry &registry,
+		const vb::physics::MoveParams &move_params) {
 	vb::net::HandshakeServerHost host = sp_server_host(seed);
 	pack_runtime.install_join_veto(host); // before ServerSession copies `host`
+	// Phase 6.7: mirrors src/server/main.cpp's own host.move_params exactly --
+	// without this, --singleplayer's client-side prediction would silently
+	// keep vb::physics::MoveParams's hardcoded defaults even when a pack
+	// overrides them via vb.physics.set_params.
+	host.move_params =
+			[move_params]() -> std::optional<vb::protocol::S2CMoveParams> {
+		return vb::protocol::S2CMoveParams{ move_params.half_width,
+			move_params.height, move_params.eye_height, move_params.walk_speed,
+			move_params.sprint_speed, move_params.accel, move_params.air_accel,
+			move_params.friction, move_params.gravity, move_params.jump_speed,
+			move_params.terminal_velocity, move_params.step_height,
+			move_params.fly_speed, move_params.fly };
+	};
 	// Phase 4.3: without this, a joining client stays on its own base()
 	// registry and any pack-added block (planks/sticks from crafting.lua)
 	// resolves to nothing client-side -- name lookups fall back to "?" in
@@ -180,6 +194,12 @@ struct Singleplayer {
 	vb::net::LoopbackNetwork net;
 	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
 	vb::script::PackRuntime pack_runtime;
+	// Phase 6.7: no ServerConfig/server.toml on this in-process path, so the
+	// engine default (vb::physics::MoveParams{}) is the base a pack's
+	// vb.physics.set_params{...} overrides on top of -- computed right after
+	// pack_runtime (declaration order == init order) so it's ready both for
+	// make_singleplayer_host below and set_move_params() in the body.
+	vb::physics::MoveParams move_params;
 	vb::world::World world;
 	vb::worldgen::WorldGenWorkerPool pool;
 	vb::net::ServerSession server;
@@ -187,10 +207,12 @@ struct Singleplayer {
 
 	Singleplayer(std::uint64_t seed, const std::string &name, int view_distance)
 			: pack_runtime(make_singleplayer_pack_runtime(net.server(), registry)),
+			  move_params(pack_runtime.effective_move_params(vb::physics::MoveParams{})),
 			  world(registry),
 			  pool(make_generator(seed, registry)),
 			  server(net.server(), sp_server_config(seed),
-					  make_singleplayer_host(seed, pack_runtime, registry)) {
+					  make_singleplayer_host(seed, pack_runtime, registry, move_params)) {
+		server.set_move_params(move_params);
 		auto listening = net.server().listen(0);
 		(void)listening; // loopback listen never fails on a fresh network
 
@@ -462,8 +484,12 @@ int run_headless(const vb::core::ClientConfig &config, const vb::core::Args &arg
 	controller.set_look(0.0, -20.0);
 	controller.set_sensitivity(config.mouse_sensitivity);
 
-	vb::physics::MoveParams move_params;
-	client->set_move_params(move_params);
+	// Phase 6.7: read back whatever set_move_params() already holds (the
+	// engine default, or the real S2C_MoveParams applied while joining --
+	// it arrives alongside S2C_JoinAccept, so by the time join_accept() is
+	// non-null above it's already been applied) rather than overwrite it
+	// with a fresh default here.
+	const vb::physics::MoveParams move_params = client->move_params();
 	client->set_local_feet(spawn);
 	std::uint32_t input_seq = 0;
 	std::uint32_t edit_seq = 0;
@@ -672,8 +698,10 @@ int main(int argc, char **argv) {
 		controller.set_look(0.0, -20.0);
 		controller.set_sensitivity(config.mouse_sensitivity);
 
-		move_params = vb::physics::MoveParams{};
-		client->set_move_params(move_params);
+		// Phase 6.7: read back what's already applied (S2C_MoveParams arrives
+		// alongside S2C_JoinAccept, so it's already in the session by now)
+		// instead of stomping it back to the engine default.
+		move_params = client->move_params();
 		client->set_local_feet(spawn);
 		input_seq = 0;
 		edit_seq = 0;

@@ -44,6 +44,7 @@ enum class MessageType : std::uint16_t {
 	kS2CKeybindRegistry = 47,
 	kC2SBlockBreakBegin = 48,
 	kC2SBlockBreakStop = 49,
+	kS2CMoveParams = 50,
 
 	// --- snapshot (lane 2) ---
 	kS2CEntitySnapshot = 60,
@@ -83,6 +84,7 @@ constexpr Lane lane_for(MessageType type) {
 		case MessageType::kS2CKeybindRegistry:
 		case MessageType::kC2SBlockBreakBegin:
 		case MessageType::kC2SBlockBreakStop:
+		case MessageType::kS2CMoveParams:
 			return Lane::kWorld;
 		case MessageType::kS2CEntitySnapshot:
 			return Lane::kSnapshot;

@@ -10,6 +10,7 @@
 #include "vb/net/session.hpp"
 #include "vb/net/transport.hpp"
 #include "vb/net/world_replicator.hpp"
+#include "vb/physics/movement.hpp"
 #include "vb/script/vm.hpp"
 #include "vb/world/block.hpp"
 
@@ -78,6 +79,15 @@ public:
 	// on_place hooks and the entity/player runtime API respectively.
 	void attach_world(net::WorldReplicator &replicator);
 	void attach_session(net::ServerSession &session);
+
+	// Phase 6.7: applies a pack's `vb.physics.set_params{...}` on top of
+	// `base` -- only the fields the pack actually set replace `base`'s value,
+	// everything else keeps it. `base` is the engine/operator default (e.g.
+	// ServerConfig::gravity already folded in), so a pack that never calls
+	// vb.physics.set_params gets `base` back unchanged. Call after freeze(),
+	// once, before constructing the ServerSession (its result also belongs on
+	// HandshakeServerHost::move_params so the client mirrors it exactly).
+	physics::MoveParams effective_move_params(physics::MoveParams base) const;
 
 	// Drive from the main loop, once per tick, after ServerSession::tick():
 	void dispatch_player_join_completed(const net::SessionPlayerJoined &j);

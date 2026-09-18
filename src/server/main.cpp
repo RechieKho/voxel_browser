@@ -178,6 +178,22 @@ int main(int argc, char **argv) {
 		}
 		return out;
 	};
+	// Phase 6.7: fold the operator's server.toml gravity in as the base, then
+	// let a pack's vb.physics.set_params{...} override on top of it (only the
+	// fields it actually set) -- effective_move_params() returns `base`
+	// unchanged when no pack ever calls it. Advertised to joining clients so
+	// their prediction uses the exact same tunables as this authoritative
+	// simulation, mirroring host.block_registry's pattern.
+	vb::physics::MoveParams move_params;
+	move_params.gravity = config.gravity;
+	move_params = pack_runtime.effective_move_params(move_params);
+	host.move_params = [move_params]() -> std::optional<vb::protocol::S2CMoveParams> {
+		return vb::protocol::S2CMoveParams{ move_params.half_width, move_params.height,
+			move_params.eye_height, move_params.walk_speed, move_params.sprint_speed,
+			move_params.accel, move_params.air_accel, move_params.friction,
+			move_params.gravity, move_params.jump_speed, move_params.terminal_velocity,
+			move_params.step_height, move_params.fly_speed, move_params.fly };
+	};
 	host.asset_manifest = [manifest_ptr] { return manifest_ptr; };
 	host.asset_file_bytes = [manifest_ptr, content_pack = config.content_pack](
 			vb::core::AssetHash h) -> std::optional<std::vector<std::byte>> {
@@ -209,8 +225,6 @@ int main(int argc, char **argv) {
 	session.set_world_replicator(std::move(replicator));
 	pack_runtime.attach_session(session);
 
-	vb::physics::MoveParams move_params;
-	move_params.gravity = config.gravity;
 	session.set_move_params(move_params);
 	session.set_void_kill_y(config.void_kill_y);
 

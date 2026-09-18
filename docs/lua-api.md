@@ -227,6 +227,18 @@ rt.dispatch_tick(dt);
   its own login doesn't have to roll credential hashing in pure Lua (the
   sandbox strips `os`/`io`, §10.2). The engine still takes no position on
   auth as a concept (spec §19 Q6).
+- Physics tunables (Phase 6.7): `vb.physics.set_params{gravity=..,
+  walk_speed=.., sprint_speed=.., jump_speed=.., accel=.., air_accel=..,
+  friction=.., step_height=.., fly_speed=.., fly=.., half_width=..,
+  height=.., eye_height=.., terminal_velocity=..}` overrides
+  `physics::MoveParams` (pack-load time only, rejected once frozen) — only
+  the fields the table sets are replaced; everything else keeps the
+  operator's `server.toml` default (`gravity` there is the base a pack
+  override wins over, not the other way round). One global override, not
+  per-entity-kind — no entity kind besides the player runs physics today.
+  Reaches joining clients as `S2C_MoveParams` so client-side prediction uses
+  the exact same tunables as the server's authoritative simulation, same
+  opt-in-hook shape as `block_registry`/`keybind_registry`.
 
 ## Client UI API — `vb::script::UiRuntime` (`inc/vb/script/ui_runtime.hpp`, implemented, `VB_WITH_LUA`)
 

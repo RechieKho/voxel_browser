@@ -94,6 +94,17 @@ struct HandshakeServerHost {
 		return std::optional<std::vector<protocol::BlockRegistryRecord>>{};
 	};
 
+	// Effective physics::MoveParams, sent as S2C_MoveParams alongside
+	// block_registry above (spec §7.3, Phase 6.7) so client-side prediction
+	// uses the exact same tunables as the server's authoritative simulation
+	// instead of silently drifting from vb::physics::MoveParams's hardcoded
+	// defaults. `nullopt` (default) sends no frame at all -- the client keeps
+	// whatever MoveParams it was already constructed with, so hosts/tests
+	// that don't care about this see zero behavior change.
+	std::function<std::optional<protocol::S2CMoveParams>()> move_params = [] {
+		return std::optional<protocol::S2CMoveParams>{};
+	};
+
 	// Pack-registered custom keybind names, sent as S2C_KeybindRegistry
 	// alongside block_registry above (spec §10.6, Phase 6.3) -- `names[i]`
 	// becomes bit i of every InputCmd::keybinds from then on. `nullopt`

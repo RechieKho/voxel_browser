@@ -25,6 +25,9 @@ void PackRuntime::install_join_veto(net::HandshakeServerHost &) {}
 void PackRuntime::install_keybind_registry(net::HandshakeServerHost &) {}
 void PackRuntime::attach_world(net::WorldReplicator &) {}
 void PackRuntime::attach_session(net::ServerSession &) {}
+physics::MoveParams PackRuntime::effective_move_params(physics::MoveParams base) const {
+	return base;
+}
 void PackRuntime::dispatch_player_join_completed(const net::SessionPlayerJoined &) {}
 void PackRuntime::dispatch_player_leave(const net::SessionPlayerLeft &) {}
 void PackRuntime::dispatch_tick(double) {}
@@ -303,6 +306,12 @@ struct PackRuntime::Impl {
 	// InputCmd::keybinds -- capped at S2CKeybindRegistry::kMaxKeybinds so the
 	// bitset always fits one uint32_t.
 	std::vector<std::string> keybind_names;
+	// Phase 6.7: the raw table passed to vb.physics.set_params{...}, if a
+	// pack ever calls it. Read field-by-field (with get_or) in
+	// effective_move_params() rather than converted eagerly, so a field the
+	// pack didn't set naturally falls back to whatever base MoveParams the
+	// caller passes in at that point -- not a fixed literal baked in here.
+	std::optional<sol::table> move_params_table;
 
 	// Phase 6.1: spawned vb.register_entity instances, keyed by the NetId
 	// ServerSession::spawn_script_entity handed back. entity_mt is the shared
@@ -697,6 +706,23 @@ void PackRuntime::Impl::install_bindings() {
 		}
 		keybind_names.push_back(name);
 		return static_cast<std::uint16_t>(keybind_names.size() - 1);
+	};
+
+	// Phase 6.7: overrides the engine's physics::MoveParams tunables
+	// (gravity, walk/sprint speed, jump, step height, fly speed, ...).
+	// Global, not per-entity-kind -- no entity kind besides the player
+	// runs step_movement today, so a per-kind table would have nowhere to
+	// apply beyond the one kind that exists. Only whichever fields the
+	// table actually sets are used (see effective_move_params()); calling
+	// it more than once replaces the whole table, it doesn't merge with an
+	// earlier call.
+	sol::table physics_tbl = lua.create_table();
+	vb["physics"] = physics_tbl;
+	physics_tbl["set_params"] = [this](sol::table def) {
+		if (frozen) {
+			throw sol::error("vb.physics.set_params: registry already frozen");
+		}
+		move_params_table = def;
 	};
 
 	sol::table world_tbl = lua.create_table();
@@ -1384,6 +1410,29 @@ void PackRuntime::attach_world(net::WorldReplicator &replicator) {
 		self->on_block_edit_after(editor, pos, removed, placed, is_break);
 	};
 	replicator.set_block_edit_hooks(std::move(hooks));
+}
+
+physics::MoveParams PackRuntime::effective_move_params(physics::MoveParams base) const {
+	if (!impl_->move_params_table) {
+		return base;
+	}
+	const sol::table &def = *impl_->move_params_table;
+	physics::MoveParams out = base;
+	out.half_width = def.get_or("half_width", out.half_width);
+	out.height = def.get_or("height", out.height);
+	out.eye_height = def.get_or("eye_height", out.eye_height);
+	out.walk_speed = def.get_or("walk_speed", out.walk_speed);
+	out.sprint_speed = def.get_or("sprint_speed", out.sprint_speed);
+	out.accel = def.get_or("accel", out.accel);
+	out.air_accel = def.get_or("air_accel", out.air_accel);
+	out.friction = def.get_or("friction", out.friction);
+	out.gravity = def.get_or("gravity", out.gravity);
+	out.jump_speed = def.get_or("jump_speed", out.jump_speed);
+	out.terminal_velocity = def.get_or("terminal_velocity", out.terminal_velocity);
+	out.step_height = def.get_or("step_height", out.step_height);
+	out.fly_speed = def.get_or("fly_speed", out.fly_speed);
+	out.fly = def.get_or("fly", out.fly);
+	return out;
 }
 
 void PackRuntime::attach_session(net::ServerSession &session) {

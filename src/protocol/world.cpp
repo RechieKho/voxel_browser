@@ -77,6 +77,45 @@ Decoded<S2CBlockRegistry> S2CBlockRegistry::decode(std::span<const std::byte> in
 	return finish(r, std::move(m));
 }
 
+// --- S2CMoveParams ----------------------------------------------------------
+void S2CMoveParams::encode(std::vector<std::byte> &out) const {
+	ByteWriter w(out);
+	w.f64(half_width);
+	w.f64(height);
+	w.f64(eye_height);
+	w.f64(walk_speed);
+	w.f64(sprint_speed);
+	w.f64(accel);
+	w.f64(air_accel);
+	w.f64(friction);
+	w.f64(gravity);
+	w.f64(jump_speed);
+	w.f64(terminal_velocity);
+	w.f64(step_height);
+	w.f64(fly_speed);
+	w.boolean(fly);
+}
+
+Decoded<S2CMoveParams> S2CMoveParams::decode(std::span<const std::byte> in) {
+	ByteReader r(in);
+	S2CMoveParams m;
+	m.half_width = r.f64();
+	m.height = r.f64();
+	m.eye_height = r.f64();
+	m.walk_speed = r.f64();
+	m.sprint_speed = r.f64();
+	m.accel = r.f64();
+	m.air_accel = r.f64();
+	m.friction = r.f64();
+	m.gravity = r.f64();
+	m.jump_speed = r.f64();
+	m.terminal_velocity = r.f64();
+	m.step_height = r.f64();
+	m.fly_speed = r.f64();
+	m.fly = r.boolean();
+	return finish(r, std::move(m));
+}
+
 // --- S2CChunkAdd ----------------------------------------------------------
 void S2CChunkAdd::encode(std::vector<std::byte> &out) const {
 	ByteWriter w(out);
