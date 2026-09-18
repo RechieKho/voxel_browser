@@ -960,6 +960,9 @@ void PackRuntime::Impl::install_bindings() {
 		if (key == "asset_max_total_mb") {
 			return sol::make_object(lua_state(), c.asset_max_total_mb);
 		}
+		if (key == "max_connections_per_ip") {
+			return sol::make_object(lua_state(), c.max_connections_per_ip);
+		}
 		if (key == "auth_mode") {
 			return sol::make_object(lua_state(),
 					c.auth_mode == core::ConfigAuthMode::kToken ? std::string("token")

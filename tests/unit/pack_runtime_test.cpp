@@ -175,6 +175,7 @@ TEST_CASE("vb.config.get exposes the operator's ServerConfig read-only "
 	cfg.view_distance = 12;
 	cfg.void_kill_y = -128.0;
 	cfg.motd = "hello";
+	cfg.max_connections_per_ip = 3;
 	rt.set_server_config(cfg);
 
 	const auto r = rt.load_pack_file(R"(
@@ -183,6 +184,7 @@ TEST_CASE("vb.config.get exposes the operator's ServerConfig read-only "
 		assert(vb.config.get("view_distance") == 12)
 		assert(vb.config.get("void_kill_y") == -128.0)
 		assert(vb.config.get("motd") == "hello")
+		assert(vb.config.get("max_connections_per_ip") == 3)
 		assert(vb.config.get("no_such_key") == nil)
 	)");
 	REQUIRE(r);

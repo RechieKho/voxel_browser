@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -90,6 +91,17 @@ public:
 
 	virtual bool is_server() const = 0;
 	virtual std::size_t connection_count() const = 0;
+
+	// Best-effort remote peer identity (server-side inbound connections only),
+	// for policy decisions like a per-IP connection cap (see
+	// ServerSession::set_max_connections_per_ip). `std::nullopt` when unknown
+	// or not applicable -- every LoopbackTransport connection (no real
+	// network identity in-process) and the default for any Transport that
+	// doesn't override this.
+	virtual std::optional<std::string> remote_address(ConnId conn) const {
+		(void)conn;
+		return std::nullopt;
+	}
 };
 
 // Convenience: frame a typed message and send it on its natural lane.

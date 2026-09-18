@@ -315,8 +315,9 @@ rt.dispatch_tick(dt);
   operator's `server.toml`/CLI value for `key` — `bind_address`, `port`,
   `content_pack`, `max_players`, `view_distance`, `tick_rate`, `world_seed`,
   `gravity`, `void_kill_y`, `day_length_seconds`, `asset_max_file_mb`,
-  `asset_max_total_mb`, `auth_mode` (`"none"`/`"token"`), or `motd`; `nil` for
-  any other key. Deliberately **not** an override surface like
+  `asset_max_total_mb`, `max_connections_per_ip` (§8.3 hardening, Phase 1.3
+  polish — `0` = unlimited), `auth_mode` (`"none"`/`"token"`), or `motd`;
+  `nil` for any other key. Deliberately **not** an override surface like
   `vb.physics.set_params`/`vb.daynight.set_curve` above — a pack can react to
   these values (e.g. tune spawn density to `view_distance`) but can't change
   what the operator running the server configured. `--singleplayer`'s

@@ -76,6 +76,7 @@ ServerConfig server_from_table(const toml::table &tbl) {
 	read_double(tbl, "day_length_seconds", c.day_length_seconds);
 	read_uint(tbl, "asset_max_file_mb", c.asset_max_file_mb);
 	read_uint(tbl, "asset_max_total_mb", c.asset_max_total_mb);
+	read_uint(tbl, "max_connections_per_ip", c.max_connections_per_ip);
 	read_string(tbl, "motd", c.motd);
 	if (auto mode = tbl["auth_mode"].value<std::string>()) {
 		if (*mode == "token") {

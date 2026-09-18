@@ -35,6 +35,11 @@ struct ServerConfig {
 	double day_length_seconds = 1200.0;
 	std::uint32_t asset_max_file_mb = 32;
 	std::uint32_t asset_max_total_mb = 512;
+	// Per-IP connection cap (§8.3 hardening) -- 0 (default) = unlimited.
+	// Only bites over a real GnsTransport (VB_WITH_NET); LoopbackTransport
+	// has no network identity to cap on, see ServerSession::
+	// set_max_connections_per_ip's own comment.
+	std::uint32_t max_connections_per_ip = 0;
 	ConfigAuthMode auth_mode = ConfigAuthMode::kNone;
 	std::string motd;
 };

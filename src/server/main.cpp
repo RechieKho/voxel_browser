@@ -251,6 +251,10 @@ int main(int argc, char **argv) {
 
 	session.set_move_params(move_params);
 	session.set_void_kill_y(config.void_kill_y);
+	// §8.3 hardening: 0 (server.toml's own default) means unlimited, same as
+	// today's unset behavior -- only bites once an operator opts in.
+	session.set_max_connections_per_ip(
+			static_cast<int>(config.max_connections_per_ip));
 	// Phase 6.8: fold server.toml's day_length_seconds in as the base, then
 	// let a pack's vb.daynight.set_day_length(...) override on top of it --
 	// mirrors move_params.gravity's config-then-pack-override precedent.

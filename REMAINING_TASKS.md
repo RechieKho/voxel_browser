@@ -163,21 +163,55 @@ network space; client window + render loop alive.
       `GnsTransport` + `ClientSession` (`RemoteConnection` in `main.cpp`), same
       render/prediction/block-edit loop `--singleplayer` already used, unified
       behind one `ClientSession*` regardless of which path is active.
-- [ ] Per-IP connection cap belongs to the server loop.
+- [x] Per-IP connection cap belongs to the server loop. Done 2026-09-18:
+      `Transport::remote_address(ConnId) -> optional<string>` (new, default
+      `nullopt`; `GnsTransport` overrides it via `GetConnectionInfo`;
+      `LoopbackTransport` keeps the default -- no real network identity
+      in-process) + `ServerSession::set_max_connections_per_ip(int)` (`0` =
+      unlimited default), enforced in `tick()`'s `kConnected` handling by
+      counting already-tracked `Conn::remote_address` matches and
+      `Transport::close()`-ing the new one before any handshake traffic if
+      the cap is already met. Wired to a new `ServerConfig::
+      max_connections_per_ip`/`server.toml`'s own key (`src/server/
+      main.cpp`); no CLI flag, same as `void_kill_y`/`day_length_seconds`/
+      `asset_max_*`. Also exposed read-only via `vb.config.get(
+      "max_connections_per_ip")` (Phase 6.13's surface). New tests in
+      `gns_transport_test.cpp` (`remote_address()` returns the real peer IP
+      over UDP; a `ServerSession` with the cap set to 1 accepts a first
+      connection and transport-closes a second from the same address before
+      it can even join) plus `config_test.cpp`/`pack_runtime_test.cpp`
+      coverage for the new field.
 - [ ] `ENGINE_PROTOCOL_VERSION` mismatch → both FSMs already reject; surface it
       in the client connect UI (Phase 5.3 main menu).
-- [ ] Hostname resolution: `connect()` only accepts numeric IP literals today
+- [x] Hostname resolution: `connect()` only accepts numeric IP literals today
       (`SteamNetworkingIPAddr::ParseString` doesn't resolve DNS). "localhost" /
-      real hostnames need `getaddrinfo` in `GnsTransport::connect`.
+      real hostnames need `getaddrinfo` in `GnsTransport::connect`. Done
+      2026-09-18: `resolve_hostname()` (`src/net/gns_transport.cpp`) falls
+      back to `getaddrinfo`/`freeaddrinfo` (portable BSD-sockets resolver,
+      `<winsock2.h>`/`<ws2tcpip.h>` on Windows scoped in its own
+      `WSAStartup`/`WSACleanup` pair, `<netdb.h>` on POSIX) whenever
+      `ParseString()` rejects the input as non-numeric, preferring the
+      first IPv4 result and falling back to IPv6. New test in
+      `gns_transport_test.cpp`: `connect("localhost", ...)` completes a
+      real handshake over UDP; a genuinely unresolvable hostname
+      (`*.invalid`, RFC 2606) still fails `connect()` cleanly, same as
+      before.
 - [ ] macOS CI doesn't build `VB_WITH_NET` yet: it's a universal (arm64+x86_64)
       build, but a brew-installed protobuf is single-arch, which breaks linking
       the other slice. Needs a universal protobuf (vcpkg triplet, or building
       protobuf from source for both arches) — see `build_macos.yml`.
-- [ ] Two live `voxel_browser` + `voxel_browser_server` processes have not
+- [x] Two live `voxel_browser` + `voxel_browser_server` processes have not
       been run against each other manually yet — validated so far by
       `gns_transport_test.cpp` (raw transport, one process) and the existing
       Loopback-based session/handshake/replication tests (application logic,
       generically transport-agnostic). Worth an actual two-terminal smoke test.
+      Done 2026-09-18: `voxel_browser_server.exe --port 27099` in one
+      background process, `voxel_browser.exe --headless --frames 5 --server
+      127.0.0.1 --port 27099` in a second, separate process (real UDP over
+      loopback, `VB_WITH_NET`, `build-net-lua`) — real join completes
+      (`S2C_BlockRegistry`, `S2C_MoveParams`, `join_accept` all received,
+      client exits cleanly after its frame budget). No code changed; this
+      was purely a manual verification step, not a code gap.
 
 ### 1.4 Replication bootstrap (`vb_core/replication`)
 

@@ -13,7 +13,49 @@
 > instead of here** — see that file's own header for why. This file is for
 > gotchas that hold regardless of which machine an agent is running on.
 
-Last updated: 2026-09-18 (Phase 6.15 — kitchen-sink example pack: Phase 6 is
+Last updated: 2026-09-18 (Phase 1.3 networking polish, post-Phase-6: three
+items from §1.3's leftover bullet list. (1) **Manual two-process smoke
+test** — `voxel_browser_server.exe --port 27099` in one background process,
+`voxel_browser.exe --headless --frames 5 --server 127.0.0.1 --port 27099`
+in a separate one, real UDP over loopback (`VB_WITH_NET`, `build-net-lua`):
+a real join completes end to end. No code gap, purely a verification step.
+(2) **Per-IP connection cap**: `Transport` (`inc/vb/net/transport.hpp`)
+gained `remote_address(ConnId) -> optional<string>` (default `nullopt`;
+`GnsTransport` overrides it via `GetConnectionInfo`, `LoopbackTransport`
+keeps the default since there's no real network identity in-process) +
+`ServerSession::set_max_connections_per_ip(int)` (`0` = unlimited),
+enforced in `tick()`'s `kConnected` handling by counting already-tracked
+`Conn::remote_address` matches and `Transport::close()`-ing a new
+connection before any handshake traffic if the cap is already met — a
+deliberately *transport-level* rejection, not an application-level one like
+`max_players` (`handshake.cpp`), since IP identity doesn't exist at the
+transport-agnostic handshake-FSM layer at all (it's tested over
+`LoopbackTransport` too, which has no IPs). New `ServerConfig::
+max_connections_per_ip`/`server.toml` key, wired in `src/server/main.cpp`;
+also exposed via `vb.config.get("max_connections_per_ip")` (6.13's
+surface). (3) **Hostname resolution**: `GnsTransport::connect()`'s
+`SteamNetworkingIPAddr::ParseString()` only ever accepted numeric IP
+literals -- added a `getaddrinfo()`/`freeaddrinfo()` fallback
+(`resolve_hostname()`, `src/net/gns_transport.cpp`) whenever `ParseString`
+rejects the input, so `"localhost"`/a real hostname now resolves (prefers
+IPv4, falls back to IPv6). Windows needs `<winsock2.h>`/`<ws2tcpip.h>` +ve
+a scoped `WSAStartup`/`WSACleanup` pair around the resolve call (not
+relying on GNS's own internal Winsock init, which is undocumented
+behavior); POSIX uses `<netdb.h>` — **the POSIX branch is unverified this
+session** (Windows-only dev machine, see `STATE.md.local`; the code path
+is the standard portable `getaddrinfo` pattern, just not build/run-tested
+on Linux/macOS here). New tests: `gns_transport_test.cpp` gained
+`remote_address()`-over-real-UDP, a full `ServerSession` per-IP-cap
+accept/reject case, and a `connect("localhost", ...)` case (plus a
+genuinely-unresolvable-hostname-still-fails-cleanly check);
+`config_test.cpp`/`pack_runtime_test.cpp` cover the new config field.
+Two items from the same §1.3 list deliberately **not** attempted:
+`ENGINE_PROTOCOL_VERSION` mismatch surfaced in the client connect UI (touches
+Phase 5.3's main menu, out of scope for this pass) and macOS CI's universal-
+protobuf gap (`build_macos.yml`) -- can't be verified at all without a Mac,
+too risky to edit blind. Full `vb_tests` green (272/272, up from 269) and
+all 4 CTest cases pass on `build-net-lua`.
+Previous entry: Phase 6.15 — kitchen-sink example pack: Phase 6 is
 now fully done. `content/examples/kitchen_sink/` (new pack directory,
 sibling to `content/base/`, never loaded by default) exercises every
 Phase 6 "default + override" API at least once with a real, running effect

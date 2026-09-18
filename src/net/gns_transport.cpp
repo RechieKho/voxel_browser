@@ -25,15 +25,28 @@ void GnsTransport::poll(std::vector<TransportEvent> &) {}
 bool GnsTransport::is_server() const { return false; }
 std::size_t GnsTransport::connection_count() const { return 0; }
 std::uint16_t GnsTransport::bound_port() const { return 0; }
+std::optional<std::string> GnsTransport::remote_address(ConnId) const {
+	return std::nullopt;
+}
 
 } // namespace vb::net
 
 #else
 
 #include <algorithm>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <sys/socket.h>
+#endif
 
 #include <steam/isteamnetworkingutils.h>
 #include <steam/steamnetworkingsockets.h>
@@ -204,6 +217,59 @@ protocol::Lane lane_of_frame(const void *data, int size) {
 	return protocol::lane_for(type);
 }
 
+// Hostname resolution (REMAINING_TASKS.md 1.3 polish):
+// SteamNetworkingIPAddr::ParseString() only ever accepts numeric IP literals
+// (e.g. "127.0.0.1", "::1") -- it never resolves DNS, so "localhost" or a
+// real hostname always failed GnsTransport::connect() before this. getaddrinfo()
+// is the portable BSD-sockets resolver (present on Windows/Linux/macOS
+// alike); prefers the first IPv4 result, falling back to IPv6, matching
+// this project's near-exclusive use of IPv4 literals elsewhere (127.0.0.1
+// in every test/example). Returns false (leaves `out` untouched) if
+// resolution fails or yields nothing usable.
+bool resolve_hostname(const std::string &host, SteamNetworkingIPAddr &out) {
+#ifdef _WIN32
+	WSADATA wsa_data;
+	const bool wsa_ready = WSAStartup(MAKEWORD(2, 2), &wsa_data) == 0;
+#endif
+	addrinfo hints{};
+	hints.ai_family = AF_UNSPEC;
+	hints.ai_socktype = SOCK_DGRAM;
+	addrinfo *result = nullptr;
+	const int rc = getaddrinfo(host.c_str(), nullptr, &hints, &result);
+	bool ok = false;
+	if (rc == 0 && result != nullptr) {
+		const addrinfo *ipv4 = nullptr;
+		const addrinfo *ipv6 = nullptr;
+		for (const addrinfo *p = result; p != nullptr; p = p->ai_next) {
+			if (!ipv4 && p->ai_family == AF_INET) {
+				ipv4 = p;
+			} else if (!ipv6 && p->ai_family == AF_INET6) {
+				ipv6 = p;
+			}
+		}
+		if (const addrinfo *chosen = ipv4 ? ipv4 : ipv6) {
+			if (chosen->ai_family == AF_INET) {
+				const auto *sin =
+						reinterpret_cast<const sockaddr_in *>(chosen->ai_addr);
+				out.SetIPv4(ntohl(sin->sin_addr.s_addr), 0);
+			} else {
+				const auto *sin6 =
+						reinterpret_cast<const sockaddr_in6 *>(chosen->ai_addr);
+				out.SetIPv6(
+						reinterpret_cast<const uint8 *>(&sin6->sin6_addr), 0);
+			}
+			ok = true;
+		}
+		freeaddrinfo(result);
+	}
+#ifdef _WIN32
+	if (wsa_ready) {
+		WSACleanup();
+	}
+#endif
+	return ok;
+}
+
 } // namespace
 
 GnsTransport::GnsTransport() : impl_(std::make_unique<Impl>()) {
@@ -249,14 +315,16 @@ core::Status<core::NetError> GnsTransport::listen(std::uint16_t port) {
 
 core::Result<ConnId, core::NetError> GnsTransport::connect(
 		std::string_view host, std::uint16_t port) {
-	// Numeric IP literals only (e.g. "127.0.0.1", "::1", a public IPv4/IPv6
-	// address) -- SteamNetworkingIPAddr::ParseString() doesn't resolve DNS
-	// hostnames. Hostname resolution is a follow-up (see STATE.md).
 	SteamNetworkingIPAddr addr;
 	addr.Clear();
 	const std::string host_str(host);
 	if (!addr.ParseString(host_str.c_str())) {
-		return core::Err{ core::NetError::kConnectFailed };
+		// Not a numeric IP literal -- SteamNetworkingIPAddr::ParseString()
+		// never resolves DNS on its own (e.g. "localhost", a real
+		// hostname), so fall back to a real resolver (Phase 1.3 polish).
+		if (!resolve_hostname(host_str, addr)) {
+			return core::Err{ core::NetError::kConnectFailed };
+		}
 	}
 	addr.m_port = port;
 
@@ -359,6 +427,17 @@ std::size_t GnsTransport::connection_count() const {
 }
 
 std::uint16_t GnsTransport::bound_port() const { return impl_->bound_port; }
+
+std::optional<std::string> GnsTransport::remote_address(ConnId conn) const {
+	SteamNetConnectionInfo_t info;
+	if (!SteamNetworkingSockets()->GetConnectionInfo(
+				static_cast<HSteamNetConnection>(conn), &info)) {
+		return std::nullopt;
+	}
+	char buf[SteamNetworkingIPAddr::k_cchMaxString];
+	info.m_addrRemote.ToString(buf, sizeof(buf), /*bWithPort=*/false);
+	return std::string(buf);
+}
 
 } // namespace vb::net
 

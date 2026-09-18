@@ -327,7 +327,24 @@ void ServerSession::tick(double dt_seconds) {
 	for (auto &ev : scratch_) {
 		switch (ev.kind) {
 			case TransportEvent::Kind::kConnected: {
-				conns_.try_emplace(ev.conn, ServerHandshake(config_, host_));
+				const std::optional<std::string> addr = transport_.remote_address(ev.conn);
+				if (max_connections_per_ip_ > 0 && addr) {
+					int count = 0;
+					for (const auto &[c, state] : conns_) {
+						if (state.remote_address == addr) {
+							++count;
+						}
+					}
+					if (count >= max_connections_per_ip_) {
+						VB_INFO("net", "rejecting connection from ", *addr,
+								": per-IP cap (", max_connections_per_ip_,
+								") already reached");
+						transport_.close(ev.conn, "too many connections from this address");
+						break;
+					}
+				}
+				auto it = conns_.try_emplace(ev.conn, ServerHandshake(config_, host_)).first;
+				it->second.remote_address = addr;
 				VB_DEBUG("net", "connection ", static_cast<std::uint64_t>(ev.conn),
 						" opened");
 				break;

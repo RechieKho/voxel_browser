@@ -155,6 +155,15 @@ public:
 	// is shared so a future damage source gets respawn for free.
 	void set_void_kill_y(double y) { void_kill_y_ = y; }
 
+	// Per-IP connection cap (§8.3 hardening, tracked in REMAINING_TASKS.md's
+	// 1.3): `0` (default) = unlimited, matching every other optional policy
+	// knob in this class. Enforced in tick()'s kConnected handling, using
+	// Transport::remote_address() -- LoopbackTransport always returns
+	// nullopt there (no real network identity in-process), so this is
+	// effectively a no-op over loopback/singleplayer regardless of the
+	// configured value; it only bites over a real GnsTransport.
+	void set_max_connections_per_ip(int n) { max_connections_per_ip_ = n; }
+
 	// Phase 6.6: generic damage primitive -- the only way to reduce a
 	// player's health besides the void-kill check above. `cause` is opaque
 	// to the engine (e.g. "fall", "pvp", "void") and threaded through
@@ -272,6 +281,11 @@ private:
 	struct Conn {
 		explicit Conn(ServerHandshake hs) : handshake(std::move(hs)) {}
 		ServerHandshake handshake;
+		// Set once, from Transport::remote_address() at kConnected time --
+		// nullopt over LoopbackTransport (no real network identity), a real
+		// IP string over GnsTransport. Used only for the per-IP connection
+		// cap (set_max_connections_per_ip).
+		std::optional<std::string> remote_address;
 		double age = 0.0;
 		bool playing = false;
 		bool input_driven = false;
@@ -333,6 +347,7 @@ private:
 	double day_length_seconds_ = kDefaultDayLengthSeconds; // 20 real minutes/day
 	double time_of_day_broadcast_accum_ = 0.0;
 	double void_kill_y_ = -64.0;
+	int max_connections_per_ip_ = 0; // 0 = unlimited
 	std::function<RespawnDecision(core::NetId, std::string_view, float)>
 			on_respawn_;
 	std::function<InputHookResult(core::NetId, const protocol::InputCmd &)>
