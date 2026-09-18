@@ -37,6 +37,12 @@ const std::vector<Widget> &UiRuntime::widgets() const {
 void UiRuntime::report_click(const std::string &) {}
 void UiRuntime::report_change(const std::string &, std::string_view) {}
 void UiRuntime::report_list_change(const std::string &, int) {}
+void UiRuntime::set_break_progress(std::optional<float>) {}
+void UiRuntime::set_screen_size(int, int) {}
+const std::vector<Widget> &UiRuntime::render_hud() {
+	static const std::vector<Widget> kEmpty;
+	return kEmpty;
+}
 
 } // namespace vb::script
 
@@ -142,10 +148,57 @@ WidgetType widget_type_from(const std::string &s) {
 	if (s == "list") {
 		return WidgetType::kList;
 	}
+	if (s == "rect") {
+		return WidgetType::kRect;
+	}
 	if (s != "label") {
 		VB_WARN("script", "ui: unknown widget type '", s, "', treating as label");
 	}
 	return WidgetType::kLabel;
+}
+
+// Shared by evaluate_frame() (modal screens) and evaluate_hud_frame() (the
+// always-on HUD) -- both parse a `{widgets = {...}}` render result the same
+// way, just into two separate widget lists/widget_by_id maps.
+Widget widget_from_table(const sol::table &wt) {
+	Widget w;
+	w.id = wt.get_or("id", std::string{});
+	w.type = widget_type_from(wt.get_or("type", std::string("label")));
+	w.x = wt.get_or("x", 0.0f);
+	w.y = wt.get_or("y", 0.0f);
+	w.w = wt.get_or("w", 0.0f);
+	w.h = wt.get_or("h", 0.0f);
+	w.text = wt.get_or("text", std::string{});
+	w.list_index = wt.get_or("list_index", -1);
+	sol::object items_obj = wt["items"];
+	if (items_obj.get_type() == sol::type::table) {
+		for (const auto &ikv : items_obj.as<sol::table>()) {
+			if (ikv.second.is<std::string>()) {
+				w.items.push_back(ikv.second.as<std::string>());
+			}
+		}
+	}
+	// kRect only: `color = {r,g,b,a?}` (fill, default opaque white) and an
+	// optional `border = {r,g,b,a?}` (default fully transparent -- no
+	// border drawn). 1-indexed like every other Lua color array in this
+	// codebase (vb.daynight.set_curve's `color = {r,g,b}`).
+	sol::object color_obj = wt["color"];
+	if (color_obj.get_type() == sol::type::table) {
+		sol::table c = color_obj.as<sol::table>();
+		w.fill_r = c.get_or(1, std::uint8_t{ 255 });
+		w.fill_g = c.get_or(2, std::uint8_t{ 255 });
+		w.fill_b = c.get_or(3, std::uint8_t{ 255 });
+		w.fill_a = c.get_or(4, std::uint8_t{ 255 });
+	}
+	sol::object border_obj = wt["border"];
+	if (border_obj.get_type() == sol::type::table) {
+		sol::table c = border_obj.as<sol::table>();
+		w.border_r = c.get_or(1, std::uint8_t{ 0 });
+		w.border_g = c.get_or(2, std::uint8_t{ 0 });
+		w.border_b = c.get_or(3, std::uint8_t{ 0 });
+		w.border_a = c.get_or(4, std::uint8_t{ 255 });
+	}
+	return w;
 }
 
 } // namespace
@@ -163,6 +216,24 @@ struct UiRuntime::Impl {
 	std::vector<Widget> widgets_vec;
 	std::string current_widget_id; // scratch, valid during a callback
 
+	// HUD (always-on overlay, independent of open()/close() above): a
+	// single registered render_fn with its own persistent state table --
+	// there's only ever one HUD, unlike the named-screen registry
+	// (layout_fns) modal screens use.
+	sol::protected_function hud_render_fn;
+	sol::table hud_state;
+	std::vector<Widget> hud_widgets_vec;
+	// Raw engine state a HUD's render_fn can read via client.break_progress()
+	// -- nullopt when the player isn't currently breaking anything. Set once
+	// per frame by src/client/main.cpp's own input-handling code, which
+	// already computes this; the engine never draws it itself.
+	std::optional<float> break_progress;
+	// Window size a HUD's render_fn can read via client.screen_size() --
+	// widgets take absolute pixel positions, so centering anything needs
+	// this. Zero until the first set_screen_size() call.
+	int screen_w = 0;
+	int screen_h = 0;
+
 	explicit Impl(VmLimits limits);
 
 	sol::state &lua_state() { return vm.native_impl().lua; }
@@ -171,10 +242,14 @@ struct UiRuntime::Impl {
 	void run_callback(const std::string &widget_id, const char *field,
 			const sol::object &arg, bool has_arg);
 	void evaluate_frame();
+	void evaluate_hud_frame();
 	void do_close();
 };
 
-UiRuntime::Impl::Impl(VmLimits limits) : vm(limits) { install_bindings(); }
+UiRuntime::Impl::Impl(VmLimits limits) : vm(limits) {
+	install_bindings();
+	hud_state = lua_state().create_table();
+}
 
 void UiRuntime::Impl::send_event(const std::string &kind, const sol::object &value) {
 	if (session == nullptr) {
@@ -196,11 +271,35 @@ void UiRuntime::Impl::install_bindings() {
 		layout_fns[name] = std::move(fn);
 	};
 
+	// Registers the single always-on HUD render function (see the header's
+	// "HUD" section) -- distinct from ui.define's named-screen registry
+	// above since a HUD isn't opened/closed, just always active.
+	ui["define_hud"] = [this](sol::protected_function fn) {
+		hud_render_fn = std::move(fn);
+	};
+
 	ui["send_event"] = [this](const std::string &kind, sol::object value) {
 		send_event(kind, value);
 	};
 
 	ui["close"] = [this] { do_close(); };
+
+	// Raw, engine-computed local client state a HUD (or any Lua UI) can
+	// query for presentation -- "engine provides raw state, Lua decides how
+	// to show it": nothing here draws a pixel, it's read-only data.
+	sol::table client_tbl = lua.create_named_table("client");
+	client_tbl["break_progress"] = [this]() -> sol::object {
+		if (!break_progress) {
+			return sol::make_object(lua_state(), sol::lua_nil);
+		}
+		return sol::make_object(lua_state(), *break_progress);
+	};
+	client_tbl["screen_size"] = [this]() -> sol::table {
+		sol::table t = lua_state().create_table();
+		t["width"] = screen_w;
+		t["height"] = screen_h;
+		return t;
+	};
 }
 
 void UiRuntime::Impl::evaluate_frame() {
@@ -241,27 +340,45 @@ void UiRuntime::Impl::evaluate_frame() {
 			continue;
 		}
 		sol::table wt = entry.as<sol::table>();
-		Widget w;
-		w.id = wt.get_or("id", std::string{});
-		w.type = widget_type_from(wt.get_or("type", std::string("label")));
-		w.x = wt.get_or("x", 0.0f);
-		w.y = wt.get_or("y", 0.0f);
-		w.w = wt.get_or("w", 0.0f);
-		w.h = wt.get_or("h", 0.0f);
-		w.text = wt.get_or("text", std::string{});
-		w.list_index = wt.get_or("list_index", -1);
-		sol::object items_obj = wt["items"];
-		if (items_obj.get_type() == sol::type::table) {
-			for (const auto &ikv : items_obj.as<sol::table>()) {
-				if (ikv.second.is<std::string>()) {
-					w.items.push_back(ikv.second.as<std::string>());
-				}
-			}
-		}
+		Widget w = widget_from_table(wt);
 		if (!w.id.empty()) {
 			widget_by_id[w.id] = wt;
 		}
 		widgets_vec.push_back(std::move(w));
+	}
+}
+
+void UiRuntime::Impl::evaluate_hud_frame() {
+	if (!hud_render_fn.valid()) {
+		return;
+	}
+	vm.begin_call_budget();
+	sol::protected_function_result r = hud_render_fn(hud_state);
+	if (!r.valid()) {
+		const sol::error e = r;
+		VB_WARN("script", "ui hud render function error: ", e.what());
+		return; // leave the previous frame's widgets in place, don't flicker
+	}
+	sol::object result = r;
+	if (result.get_type() != sol::type::table) {
+		VB_WARN("script", "ui hud render function did not return a table");
+		return;
+	}
+	sol::table layout = result.as<sol::table>();
+	sol::object widgets_obj = layout["widgets"];
+	if (widgets_obj.get_type() != sol::type::table) {
+		VB_WARN("script", "ui hud render result has no 'widgets' array");
+		return;
+	}
+	sol::table widget_tables = widgets_obj.as<sol::table>();
+
+	hud_widgets_vec.clear();
+	for (const auto &kv : widget_tables) {
+		sol::object entry = kv.second;
+		if (entry.get_type() != sol::type::table) {
+			continue;
+		}
+		hud_widgets_vec.push_back(widget_from_table(entry.as<sol::table>()));
 	}
 }
 
@@ -374,6 +491,20 @@ void UiRuntime::report_change(const std::string &widget_id,
 void UiRuntime::report_list_change(const std::string &widget_id, int new_index) {
 	sol::object v = sol::make_object(impl_->lua_state(), new_index);
 	impl_->run_callback(widget_id, "on_change", v, true);
+}
+
+void UiRuntime::set_break_progress(std::optional<float> fraction) {
+	impl_->break_progress = fraction;
+}
+
+void UiRuntime::set_screen_size(int width, int height) {
+	impl_->screen_w = width;
+	impl_->screen_h = height;
+}
+
+const std::vector<Widget> &UiRuntime::render_hud() {
+	impl_->evaluate_hud_frame();
+	return impl_->hud_widgets_vec;
 }
 
 } // namespace vb::script

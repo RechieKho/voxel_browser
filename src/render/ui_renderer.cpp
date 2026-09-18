@@ -56,6 +56,22 @@ UiFrameResult UiRenderer::draw(std::string_view ui_name,
 				}
 				break;
 			}
+			case script::WidgetType::kRect: {
+				// The one non-interactive, no-baked-in-meaning primitive
+				// (Phase 6.16): plain raylib rectangle draws, no raygui
+				// control involved -- Lua decides what this rectangle
+				// *means* (a progress bar fill, a divider, a health bar
+				// segment, ...), the engine just draws a box.
+				DrawRectangle(static_cast<int>(w.x), static_cast<int>(w.y),
+						static_cast<int>(w.w), static_cast<int>(w.h),
+						Color{ w.fill_r, w.fill_g, w.fill_b, w.fill_a });
+				if (w.border_a > 0) {
+					DrawRectangleLines(static_cast<int>(w.x), static_cast<int>(w.y),
+							static_cast<int>(w.w), static_cast<int>(w.h),
+							Color{ w.border_r, w.border_g, w.border_b, w.border_a });
+				}
+				break;
+			}
 			case script::WidgetType::kList: {
 				std::vector<const char *> items;
 				items.reserve(w.items.size());

@@ -273,10 +273,40 @@ back which widgets fired an interaction — no sol2 in the render half.
   A callback that wants a different screen should still `ui.close()` + have
   the server `open_ui()` again.
 - Widget types implemented: `label`, `panel`, `button`, `textbox`, `list`
-  (spec's named set minus **item grid**, deferred to 5.1 — needs real items).
-  Each widget table: `id`, `type`, `x`/`y`/`w`/`h`, `text` (label/panel/
-  button/textbox), `items`/`list_index` (list only), and optional
-  `on_click`/`on_change` callback fields.
+  (spec's named set minus **item grid**, deferred to 5.1 — needs real
+  items), plus `rect` (Phase 6.16 — see below). Each widget table: `id`,
+  `type`, `x`/`y`/`w`/`h`, `text` (label/panel/button/textbox), `items`/
+  `list_index` (list only), and optional `on_click`/`on_change` callback
+  fields.
+- **`rect` — a raw filled/outlined rectangle, no baked-in meaning (Phase
+  6.16).** `color = {r,g,b,a?}` (fill, default opaque white) and an optional
+  `border = {r,g,b,a?}` (default: no border drawn). Unlike every other
+  widget type, this one carries no semantic ("this is a progress bar", "this
+  is a health bar") at all — it's the one primitive deliberately left
+  meaning-free so a pack can compose *any* purely-visual element (a progress
+  bar, a divider, a health bar segment, a colored swatch) out of one or more
+  of them, entirely in Lua, rather than the engine shipping a
+  `progress_bar`/`health_bar`/... widget type per use case.
+- **HUD (Phase 6.16): `ui.define_hud(render_fn)`** — registers a single
+  always-on overlay, separate from `ui.define`'s named-screen registry above.
+  Unlike a modal screen, it's never `open()`/`close()`'d: `render_fn(state)`
+  is evaluated every UI frame unconditionally (its own persistent `state`
+  table, untouched by any modal screen opening/closing alongside it) and
+  drawn regardless of whether a modal screen is also up. `content/base/ui/
+  hud.lua` uses this + two `rect` widgets (a background/border, and a fill
+  sized by the raw fraction below) to render the hold-to-break progress bar
+  — "engine provides raw state, Lua deals with presentation": the engine
+  still owns the actual hold-timer/reach/target-tracking logic (that's
+  gameplay input handling), and offers only the meaning-free `rect`
+  primitive, not a "progress bar" concept of its own.
+- **Raw client-local state: the `client` table** (Phase 6.16, sibling to
+  `ui` above) — read-only engine state a HUD (or any UI script) can query;
+  nothing here draws a pixel, callers decide whether/how to show it:
+  - `client.break_progress()` — `nil`, or `0..1` while the player is holding
+    to break a targeted block.
+  - `client.screen_size()` — `{width=.., height=..}`; widgets take absolute
+    pixel positions like everywhere else in this API, so centering something
+    in a HUD needs the real window size rather than a hardcoded guess.
 - `ui.send_event(kind, value)` — sends a `C2S_UiEvent` to the server
   (`current_name`/the widget whose callback is currently running are filled
   in automatically). `ui.close()` — always sends one `"close"` event, then
@@ -298,7 +328,11 @@ back which widgets fired an interaction — no sol2 in the render half.
   names, for the same `BlockId`-as-item-space reason noted above. The
   mechanism itself is exercised by `tests/unit/ui_runtime_test.cpp` and an
   end-to-end `player:open_ui` → click → `vb.on("ui_event", ...)` round trip
-  in `tests/unit/pack_runtime_integration_test.cpp`.
+  in `tests/unit/pack_runtime_integration_test.cpp`. `ui/hud.lua` (`Phase
+  6.16`) is the always-on HUD, loaded the same way; `--singleplayer` reads
+  every `ui/*.lua` file straight off disk (`kSingleplayerContentPack`)
+  rather than through Asset Sync, since it never asset-syncs at all — a
+  real multiplayer connection still uses `virtual_pack_fs()`.
 
 ## Worked example — `content/base`
 
@@ -318,6 +352,7 @@ than as a black box — every file is commented explaining *why*, not just
 | `entities/dropped_item.lua`           | `vb.register_entity`'s current limit: declarative only, nothing dispatches `on_spawn`/`on_tick` yet (waits on Phase 3.1) — contrast with `vb.world.spawn_item_drop` above, a separate, already-working hardcoded path |
 | `biomes/plains.lua`, `forest.lua`     | `vb.register_biome`: also declarative-only today, no worldgen pipeline reads it back |
 | `ui/inventory.lua`, `ui/pause.lua`    | `ui.define`, real screens loaded by every connecting client |
+| `ui/hud.lua`                          | `ui.define_hud` + the `client.*` raw-state table (Phase 6.16) — the always-on hold-to-break progress bar |
 | `init.lua`                            | Pack-wide setup that isn't a single registration — `vb.storage` persisting a boot counter across restarts |
 
 If you're writing a new pack: copy `content/base`'s directory layout, keep

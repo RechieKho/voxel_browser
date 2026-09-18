@@ -17,9 +17,11 @@
 #include <cstring>
 #include <deque>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <thread>
 
@@ -624,6 +626,12 @@ int main(int argc, char **argv) {
 
 	vb::script::UiRuntime ui_runtime;
 	vb::render::UiRenderer ui_renderer;
+	// A separate UiRenderer instance for the always-on HUD (below): drawing
+	// both the modal screen and the HUD through one UiRenderer would thrash
+	// its per-widget-id text/list edit caches every frame (it clears them
+	// whenever the drawn ui_name changes, which "hud" vs. the modal name
+	// would do twice a frame).
+	vb::render::UiRenderer hud_renderer;
 	vb::render::FirstPersonController controller;
 	vb::physics::MoveParams move_params;
 	std::uint32_t input_seq = 0;
@@ -695,21 +703,49 @@ int main(int argc, char **argv) {
 
 		// Client UI VM (spec §10.4, Phase 4.5): a second, restricted Lua VM,
 		// separate from PackRuntime's server-side one. `ui/*.lua` travels over
-		// Asset Sync like any other pack file (Phase 4.4) -- load every synced
-		// file under `ui/` now that join (and the asset transfer that
-		// precedes it, §8.3) has completed. **Known gap:** `--singleplayer`
-		// never asset-syncs (no PackRuntime/manifest on that in-process path,
-		// see REMAINING_TASKS.md 4.3), so this only runs anything for real
-		// multiplayer connections until that's wired.
+		// Asset Sync like any other pack file (Phase 4.4) for a real
+		// multiplayer connection; `--singleplayer` never asset-syncs (no
+		// PackRuntime/manifest on that in-process path, REMAINING_TASKS.md
+		// 4.3), so it instead reads `ui/*.lua` directly off disk from the
+		// same `kSingleplayerContentPack` the integrated server's PackRuntime
+		// already loads (client and server share one machine/filesystem
+		// there, so there's nothing to "sync") -- otherwise the HUD below
+		// (and every other Lua-defined screen) would silently never load in
+		// the most common dev/test path.
 		ui_runtime = vb::script::UiRuntime{};
 		ui_runtime.attach_session(*client);
-		for (const auto &[path, bytes] : client->virtual_pack_fs()) {
-			if (path.rfind("ui/", 0) != 0 || path.size() < 4 ||
-					path.substr(path.size() - 4) != ".lua") {
-				continue;
+		std::vector<std::pair<std::string, std::string>> ui_sources;
+		if (connecting_singleplayer) {
+			const std::filesystem::path ui_dir =
+					std::filesystem::path(kSingleplayerContentPack) / "ui";
+			std::error_code ec;
+			if (std::filesystem::is_directory(ui_dir, ec)) {
+				for (const auto &entry : std::filesystem::directory_iterator(ui_dir, ec)) {
+					if (entry.path().extension() != ".lua") {
+						continue;
+					}
+					std::ifstream f(entry.path(), std::ios::binary);
+					if (!f) {
+						continue;
+					}
+					std::ostringstream ss;
+					ss << f.rdbuf();
+					ui_sources.emplace_back(
+							"ui/" + entry.path().filename().string(), ss.str());
+				}
 			}
-			const std::string source(reinterpret_cast<const char *>(bytes.data()),
-					bytes.size());
+		} else {
+			for (const auto &[path, bytes] : client->virtual_pack_fs()) {
+				if (path.rfind("ui/", 0) != 0 || path.size() < 4 ||
+						path.substr(path.size() - 4) != ".lua") {
+					continue;
+				}
+				ui_sources.emplace_back(path,
+						std::string(reinterpret_cast<const char *>(bytes.data()),
+								bytes.size()));
+			}
+		}
+		for (const auto &[path, source] : ui_sources) {
 			const vb::script::ScriptResult result =
 					ui_runtime.load_pack_file(source, path);
 			if (!result.ok && result.error != vb::core::ScriptError::kDisabled) {
@@ -944,6 +980,17 @@ int main(int argc, char **argv) {
 					break_progress = 0.0;
 				}
 
+				// Raw state only -- "engine provides raw state, Lua deals
+				// with presentation" (the hold-to-break timing/reach logic
+				// above stays engine-side, it's gameplay, not cosmetics).
+				// Whether/how to show this is entirely up to whatever a
+				// pack's ui.define_hud renders from client.break_progress().
+				ui_runtime.set_break_progress(breaking
+						? std::optional<float>(static_cast<float>(
+								  std::min(break_progress / kBreakSeconds, 1.0)))
+						: std::nullopt);
+				ui_runtime.set_screen_size(GetScreenWidth(), GetScreenHeight());
+
 				std::size_t chunk_count = 0;
 				std::size_t entity_count = 0;
 				if (chunk_renderer) {
@@ -987,21 +1034,14 @@ int main(int argc, char **argv) {
 				draw_overlay(controller, status, chunk_count, entity_count,
 						mouse_captured, client->time_of_day());
 
-				// Hold-to-break progress bar: small, centered just below the
-				// crosshair position (screen center) -- only drawn while
-				// actively breaking something.
-				if (breaking) {
-					constexpr int kBarW = 120;
-					constexpr int kBarH = 8;
-					const int x = (GetScreenWidth() - kBarW) / 2;
-					const int y = GetScreenHeight() / 2 + 24;
-					const float frac = static_cast<float>(
-							std::min(break_progress / kBreakSeconds, 1.0));
-					DrawRectangle(x, y, kBarW, kBarH, Color{ 30, 30, 34, 200 });
-					DrawRectangle(x, y, static_cast<int>(kBarW * frac), kBarH,
-							Color{ 220, 220, 220, 230 });
-					DrawRectangleLines(x, y, kBarW, kBarH, Color{ 90, 90, 100, 230 });
-				}
+				// The HUD (spec §5.4-adjacent, Phase 6.16): an always-on,
+				// pack-defined overlay drawn every frame regardless of
+				// whether a modal ui_runtime screen is also open. Today this
+				// is how the hold-to-break progress bar is drawn --
+				// content/base/ui/hud.lua reads client.break_progress() (set
+				// above) and decides whether/how to show it; the engine
+				// itself no longer draws a single pixel of it.
+				hud_renderer.draw("hud", ui_runtime.render_hud());
 
 				// Player list (spec §5.4): top-right, this client's name plus
 				// everyone S2C_PlayerList/S2C_PlayerJoin/S2C_PlayerLeave says

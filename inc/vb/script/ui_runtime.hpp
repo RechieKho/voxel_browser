@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -31,6 +32,15 @@ enum class WidgetType : std::uint8_t {
 	kButton,
 	kTextBox,
 	kList,
+	// A raw filled rectangle, optionally outlined -- deliberately the only
+	// *non*-interactive primitive here with no baked-in meaning (no "this is
+	// a progress bar/health bar/divider" concept engine-side). Composing a
+	// progress bar, a health bar, a divider line, or anything else purely
+	// visual out of one or more of these is entirely a Lua/content concern
+	// (Phase 6.16) -- the engine only ever draws what it's told: a filled
+	// box at (x, y, w, h) in `fill_*`, plus a 1px outline in `border_*` when
+	// `border_a > 0`.
+	kRect,
 };
 
 struct Widget {
@@ -40,6 +50,8 @@ struct Widget {
 	std::string text; // label/panel/button text; textbox initial value
 	std::vector<std::string> items; // list only
 	int list_index = -1; // list only
+	std::uint8_t fill_r = 255, fill_g = 255, fill_b = 255, fill_a = 255; // kRect only
+	std::uint8_t border_r = 0, border_g = 0, border_b = 0, border_a = 0; // kRect only; alpha 0 = no border
 };
 
 class UiRuntime {
@@ -91,6 +103,39 @@ public:
 	void report_click(const std::string &widget_id);
 	void report_change(const std::string &widget_id, std::string_view text_value);
 	void report_list_change(const std::string &widget_id, int new_index);
+
+	// --- HUD: an always-on overlay independent of open()/close() ---------
+	//
+	// "Engine provides raw state, Lua handles presentation": the engine
+	// computes things like block-break progress (input timing, reach,
+	// target tracking) since that's gameplay logic, but never draws a pixel
+	// of it -- a pack's `ui.define_hud(render_fn)` (registered like
+	// `ui.define`, but always active, not tied to any open()/close() name)
+	// decides whether/how to show it. `render_fn(state)` is called every UI
+	// frame regardless of whether a modal screen (open()/close() above) is
+	// also open, with its own persistent `state` table (no ctx_json --
+	// there's no "opening" a HUD). Read the raw values a HUD might want via
+	// e.g. `client.break_progress()`/`client.screen_size()` below. Display-
+	// only for now: hud widgets aren't wired to report_click/report_change
+	// (no interactive HUD element exists yet).
+
+	// Sets the raw local state a HUD's render_fn can read back via
+	// `client.break_progress()` -- nullopt when not currently breaking
+	// anything. Call once per frame from the input-handling code that
+	// already computes this (src/client/main.cpp), before render_hud().
+	void set_break_progress(std::optional<float> fraction);
+
+	// Sets the window size a HUD's render_fn can read back via
+	// `client.screen_size()` (`{width=.., height=..}`) -- widgets take
+	// absolute pixel positions (same as modal screens), so a HUD wanting to
+	// center something needs this raw value rather than a hardcoded guess.
+	void set_screen_size(int width, int height);
+
+	// Evaluates the registered HUD render_fn (no-op, returning the last --
+	// likely empty -- list if none was ever registered via
+	// ui.define_hud) and returns the fresh widget list. Call once per UI
+	// frame, unconditionally (unlike render_frame(), not gated on is_open()).
+	const std::vector<Widget> &render_hud();
 
 	struct Impl;
 

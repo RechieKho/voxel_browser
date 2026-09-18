@@ -7,7 +7,15 @@
 > Companion docs: `ARCHITECTURE_SPEC.md` (target design) · `REMAINING_TASKS.md`
 > (implementation backlog). This file is for *traps and context*, not the plan.
 
-Last updated: 2026-09-18 (Phase 6.8 — day/night cycle curve:
+Last updated: 2026-09-18 (Phase 6.16 — client-local HUD mechanism:
+`ui.define_hud(render_fn)` + a new `client.*` raw-state table
+(`client.break_progress()`/`client.screen_size()`) let a pack render the
+hold-to-break progress bar in Lua instead of hardcoded `DrawRectangle` calls
+in `src/client/main.cpp` — "engine provides raw state, Lua deals with
+presentation." Also fixed a real bug found while wiring it: `--singleplayer`
+never loaded any `ui/*.lua` file at all (no asset sync on that path), so
+every existing Lua UI screen was silently dead there, not just the new HUD.
+See §8's newest entry for the full writeup. Previous entry: Phase 6.8 — day/night cycle curve:
 `vb::world::DayNightCurve` (a generalized `vector<DayNightKeyframe>`
 replacing the old fixed 4-stop gradient tables) + `vb.daynight.set_curve{...}`
 + `S2C_DayNightCurve` (id 51, `kEngineProtocolVersion` 14 → 15) so a pack's
@@ -360,6 +368,96 @@ Other undecided-but-not-yet-in-spec:
 ## 8. Done / resolved
 
 _(Move items here with a date + commit when fixed, so the history is visible.)_
+
+- **2026-09-18 — Phase 6.16 client-local HUD mechanism landed
+  (uncommitted), user-requested.** The user noticed the hold-to-break
+  progress bar (5.2) was still hardcoded C++ (`DrawRectangle` calls in
+  `src/client/main.cpp`) despite Phase 6's Lua-extensibility push, and asked
+  for it to move to Lua per the project's "engine provides raw state, Lua
+  deals with presentation" rule.
+  **Why a new mechanism was needed, not just a Lua rewrite:**
+  `vb::script::UiRuntime`'s existing model (`ui.define(name, fn)` +
+  `open()`/`close()`) is for server-pushed *modal* screens (inventory,
+  pause) — there's no concept of an always-on overlay independent of that.
+  Added one: `ui.define_hud(render_fn)` registers a single render function
+  evaluated every UI frame unconditionally (not gated on `is_open()`), with
+  its own persistent `state` table that a modal screen opening/closing
+  alongside it doesn't touch. `UiRuntime::render_hud()` evaluates it;
+  `evaluate_frame()`'s widget-table-to-`Widget` parsing was extracted into a
+  shared `widget_from_table()` free function so `evaluate_hud_frame()`
+  doesn't duplicate it.
+  **New widget type, revised once already (see below): `WidgetType::kRect`.**
+  The first pass shipped a `kProgressBar` type (`Widget::value`, drawn via
+  raygui's `GuiProgressBar`) — the user immediately called this out as still
+  baking a presentation *concept* into the engine (the engine "knows" what a
+  progress bar looks like; Lua only supplied a number). Replaced with
+  `kRect`: a raw filled rectangle (`fill_r/g/b/a`) with an optional 1px
+  outline (`border_r/g/b/a`, alpha 0 = none), drawn with plain
+  `DrawRectangle`/`DrawRectangleLines` — no raygui control, no semantic
+  meaning at all. `content/base/ui/hud.lua` now builds the bar from *two*
+  `rect` widgets (a background+border rect, and a fill rect whose width is
+  `bar_w * progress`) itself; the engine has no idea a "progress bar" exists,
+  it just draws boxes where it's told to. `widget_from_table()` parses
+  `color = {r,g,b,a?}`/`border = {r,g,b,a?}` the same 1-indexed-array
+  convention `vb.daynight.set_curve`'s `color` field already established.
+  **Raw state relay, the actual "engine provides raw state" part** (this
+  half was correct in the first pass and unchanged by the revision): a new
+  `client` top-level table in the UI Lua VM (`src/script/ui_runtime.cpp`,
+  sibling to the existing `ui` table) exposes `client.break_progress()`
+  (nil, or 0..1) and `client.screen_size()` (`{width=.., height=..}`).
+  `src/client/main.cpp`'s hold-timer/reach/target-tracking *logic* is
+  completely unchanged from 5.2 (still engine-side, since input handling and
+  reach validation are gameplay, not cosmetics) — it now just calls
+  `ui_runtime.set_break_progress(...)`/`set_screen_size(...)` once per frame
+  instead of computing pixel rectangles itself.
+  **Second `UiRenderer` instance, not incidental:** drawing both the modal
+  screen and the HUD through one `UiRenderer` would thrash its
+  per-widget-id text-box/list-selection edit-state caches every single
+  frame — `UiRenderer::draw()` clears them whenever the drawn `ui_name`
+  differs from the previous call, and a modal name alternating with `"hud"`
+  every frame is exactly that. `src/client/main.cpp` now holds
+  `ui_renderer` (modal) and `hud_renderer` (HUD) as two separate instances.
+  **Real bug found while wiring this in, bigger than the requested
+  change:** `--singleplayer` never asset-syncs (no `PackRuntime`/manifest on
+  that in-process path, a pre-existing 4.3 gap) — the `enter_playing` lambda
+  only ever populated `ui_runtime` from `client->virtual_pack_fs()`, which
+  is always empty for singleplayer. This meant `base:pause`/`base:inventory`
+  (and now the new hud.lua) silently never loaded in singleplayer at all,
+  the single most common dev/test path — not a regression from this
+  session's work, but this session's work would have been invisible without
+  fixing it, so it was fixed: singleplayer now reads `ui/*.lua` directly off
+  `kSingleplayerContentPack` from disk (client and the integrated server
+  share one filesystem there, so there's nothing to actually "sync"); the
+  real-multiplayer branch is untouched.
+  **Verified live twice, not just by unit test** (this repo's Lua UI
+  features have no automated GL-context coverage — same limitation 5.2's
+  original entry noted): once against the original `kProgressBar` version,
+  again after the `kRect` revision — both times launched the real
+  `voxel_browser.exe --singleplayer` windowed binary, captured the mouse,
+  held LMB on a targeted block, and screenshotted mid-hold. The revised
+  version shows the same visual (a light fill growing over a dark
+  background+border), now composed from two independent `rect` widgets
+  instead of one raygui control; console log both times showed zero "ui
+  pack file failed to load" lines (`hud.lua`/`pause.lua`/`inventory.lua` all
+  loaded cleanly). Screenshots not saved to the repo.
+  **Unit tests**: `tests/unit/ui_runtime_test.cpp` gained 4 cases —
+  hud renders nothing until `set_break_progress` is set and hides again on
+  `nullopt`, `render_hud()` is a safe no-op when `ui.define_hud` was never
+  called, the hud's `state` table persists across calls independent of a
+  modal screen's open/close cycle, and the disabled-build stub's
+  `set_break_progress`/`set_screen_size`/`render_hud` all no-op cleanly.
+  **Verification:** full `vb_tests` green on `build-net-lua`
+  (`VB_WITH_NET=ON`, `VB_WITH_LUA=ON`), all 4 CTest cases
+  (`vb_tests`/`server_smoke`/`client_smoke`/`singleplayer_smoke`) pass, plus
+  the live windowed run above.
+  **Deliberately not attempted:** hud widgets aren't wired to
+  `report_click`/`report_change` (no interactive HUD element exists yet to
+  need it); the player list/chat box/hotbar (`src/client/main.cpp`'s other
+  always-on HUD pieces, predating this session) are still hardcoded C++ —
+  only the break-progress bar was in scope. Migrating the rest to
+  `ui.define_hud` (replacing `draw_overlay` entirely with a real Lua HUD) is
+  a natural, larger follow-up tracked in `REMAINING_TASKS.md` 6.16's last
+  bullet, not started here.
 
 - **2026-09-18 — Phase 6.8 day/night cycle curve landed (uncommitted).**
   `sky_brightness()`/`sky_color_for_time()` (`inc/vb/world/daynight.hpp` +

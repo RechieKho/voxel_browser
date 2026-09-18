@@ -1910,6 +1910,86 @@ windows, chatting, crafting, and seeing each other, all at once.
       pack an operator can point `--content-pack` at, or a devs-only mode, not
       something a real server loads by default.
 
+### 6.16 Client-local HUD mechanism (engine raw state, Lua presentation) ✅
+
+> User-requested (2026-09-18): the hold-to-break progress bar added in 5.2
+> was pure hardcoded C++ (`DrawRectangle` calls in `src/client/main.cpp`),
+> which broke the project's "engine provides raw state, Lua deals with
+> presentation" rule as much as anything in the codebase. Closing that gap
+> needed a real mechanism first — `UiRuntime`'s existing `ui.define`/`open`/
+> `close` model is for server-pushed modal screens (inventory, pause), not an
+> always-on overlay — so this added one. **Revised same day, also
+> user-requested:** the first pass added a `kProgressBar` widget type, which
+> the user correctly called out as still baking a presentation *concept*
+> into the engine (Lua only supplied the value, not the drawing). Replaced
+> with a meaning-free `kRect` primitive — see the second bullet below.
+
+- [x] `ui.define_hud(render_fn)` (`vb::script::UiRuntime`, distinct from
+      `ui.define`'s named-screen registry): registers a single render
+      function that's evaluated every UI frame unconditionally, independent
+      of whatever modal screen `open()`/`close()` currently has up. Its own
+      persistent `state` table (Phase 6.2's reactivity mechanism) is created
+      once and never reset by a modal screen opening/closing alongside it.
+      `UiRuntime::render_hud()` evaluates it and returns the widget list;
+      `vb::render::UiRenderer` draws it exactly like a modal screen's widgets
+      (a *second* `UiRenderer` instance, since one shared instance would
+      thrash its per-widget-id text/list edit caches by seeing the drawn
+      `ui_name` toggle between "hud" and the modal name every frame).
+- [x] New `kRect` widget type — a raw filled rectangle (`fill_r/g/b/a`) with
+      an optional 1px outline (`border_r/g/b/a`, alpha 0 = none), drawn with
+      plain `DrawRectangle`/`DrawRectangleLines`, no raygui control involved.
+      Deliberately the only widget type with **no semantic meaning at all**
+      — not "a progress bar", not "a health bar", just a box at `(x,y,w,h)`.
+      A pack composes whatever purely-visual element it wants (a progress
+      bar is two of these: a background/border rect, and a fill rect sized
+      by a fraction) entirely in Lua; the engine never bakes in what the
+      rectangle *represents*. First new widget type since Phase 4.5/6.2
+      shipped label/panel/button/textbox/list.
+- [x] Raw client-local state exposed read-only to the UI Lua VM as `client.*`
+      (new top-level table, `src/script/ui_runtime.cpp`) — nothing here draws
+      a pixel, it's queried by whatever a HUD's `render_fn` chooses to show:
+    - `client.break_progress()` — nil, or 0..1 while holding to break a
+      block. The hold-timer/reach/target-tracking *logic* stays engine-side
+      (`src/client/main.cpp`, unchanged from 5.2) since it's gameplay input
+      handling, not cosmetics; only the *drawing* moved to Lua.
+    - `client.screen_size()` — `{width=.., height=..}`, since widgets take
+      absolute pixel positions and a HUD centering something needs the real
+      window size rather than a hardcoded guess.
+- [x] `content/base/ui/hud.lua` (new): reads `client.break_progress()` and
+      builds the bar from two `rect` widgets (background+border, and a fill
+      whose width is `bar_w * progress`) — the exact visual the old
+      hardcoded C++ produced, but every pixel of it (position, size, both
+      colors, and the two-rectangle composition itself) is a Lua-side
+      decision now, not an engine one.
+- [x] **Bug found and fixed while wiring this in, not just the requested
+      change:** `--singleplayer` never asset-syncs (no `PackRuntime`/manifest
+      on that in-process path, 4.3's known gap), so `ui/*.lua` was never
+      loaded there at all — every existing Lua UI screen (`base:pause`,
+      `base:inventory`) was already silently dead in the most common dev/test
+      path, not just the new HUD. Fixed in `src/client/main.cpp`'s
+      `enter_playing`: singleplayer now reads `ui/*.lua` directly off
+      `kSingleplayerContentPack` from disk (client and integrated server
+      share one filesystem there, so there's nothing to "sync"); a real
+      multiplayer connection is unaffected, still reading
+      `client->virtual_pack_fs()`.
+- [x] Verified live, not just by unit test: launched `voxel_browser.exe
+      --singleplayer` (windowed), captured the mouse, held LMB on a block,
+      and screenshotted mid-hold — the progress bar renders correctly at the
+      expected position/fill, with zero "ui pack file failed to load" lines
+      in the log. Unit tests: 4 new cases in `tests/unit/ui_runtime_test.cpp`
+      (hud renders nothing until `client.break_progress()` is set, hides
+      again on `nullopt`, hud `state` persists independent of a modal
+      screen's open/close cycle, disabled-build stub no-ops cleanly).
+- [ ] Display-only for now: hud widgets aren't wired to
+      `report_click`/`report_change` — no interactive HUD element exists yet.
+      A future one (e.g. a hotbar slot click) would need that wiring added.
+- [ ] The player list / chat box / hotbar (`src/client/main.cpp`'s other
+      always-on HUD elements, predating this) are still hardcoded C++,
+      untouched by this item — only the break-progress bar was in scope.
+      Migrating the rest to `ui.define_hud` (a "real" Lua HUD replacing
+      draw_overlay entirely) is a natural, larger follow-up, not attempted
+      here.
+
 ---
 
 ## Cross-Cutting / Continuous
