@@ -7,7 +7,15 @@
 > Companion docs: `ARCHITECTURE_SPEC.md` (target design) · `REMAINING_TASKS.md`
 > (implementation backlog). This file is for *traps and context*, not the plan.
 
-Last updated: 2026-09-17 (Phase 6.1 — entity kinds as classes: `vb.register_entity`
+Last updated: 2026-09-18 (Phase 6.4 — generic per-key persistent storage:
+`vb.db.get/set/delete` + `vb.crypto.hash`, landed with a hand-rolled
+`ScriptDb`/`sha256` instead of the SQLite backend `REMAINING_TASKS.md`
+originally floated as the "leading candidate" — see §8's newest entry for
+why and what's deferred if that swap is ever wanted. Note: the pre-built
+`build-meshing/` ASan directory this file's §3 used to point at no longer
+exists on this machine — only `build-net-lua/` remains; re-configure a fresh
+ASan build from `cmake/Sanitizers.cmake` if that coverage is needed again.
+Previous entry: 2026-09-17, Phase 6.1 — entity kinds as classes: `vb.register_entity`
 + `vb.world.spawn(kind, pos)` now really spawns something, with a persistent
 per-instance `self` table and `on_spawn`/`on_tick`/`on_hit`/`on_death` all
 wired up — following `ItemDropSystem`'s hardcoded-system-ahead-of-the-generic-
@@ -326,6 +334,67 @@ Other undecided-but-not-yet-in-spec:
 ## 8. Done / resolved
 
 _(Move items here with a date + commit when fixed, so the history is visible.)_
+
+- **2026-09-18 — Phase 6.4 generic per-key persistent storage landed
+  (uncommitted).** `vb.db.get(key)`/`vb.db.set(key, value)`/
+  `vb.db.delete(key)` + `vb.crypto.hash(data)`, per `ARCHITECTURE_SPEC.md`
+  §10.6/§10.7 and `REMAINING_TASKS.md` 6.4.
+  **Backend decision, deliberately not SQLite:** the task doc called SQLite
+  "the leading candidate" but also explicitly flagged it as "implementation
+  detail, not a design blocker." Added `vb::script::ScriptDb`
+  (`inc/vb/script/db.hpp` + `src/script/db.cpp`) instead: one file per key,
+  content-addressed by `sha256(key)` under a 2-hex-prefix shard dir
+  (`<content_pack>/db/<prefix>/<hash>`) — the exact same on-disk shape
+  `vb::assetsync::ClientAssetCache` already uses (§4.4, `src/assetsync/
+  cache.cpp`), write-to-`.tmp`-then-`rename()` included. Rationale: no new
+  dependency (SQLite meant either FetchContent-ing an amalgamation build or
+  another package-manager landmine like GNS's protobuf, §5), the spec's own
+  scaling complaint was specifically about `vb.storage`'s single JSON blob
+  (one record *shared* by every key) — a real filesystem entry per key
+  already solves that — and the spec gives `vb.db` no list/enumerate/query
+  surface, so nothing here actually needs SQL. If a future feature needs
+  range queries, transactions, or listing all keys, swapping the backend is
+  a pure `ScriptDb`-internal change; nothing in `PackRuntime`'s Lua bindings
+  would need to move.
+  **`vb.crypto.hash`**: a from-scratch, dependency-free SHA-256
+  (`inc/vb/core/sha256.hpp` + `src/core/sha256.cpp`, `vb::core::sha256_hex`)
+  rather than pulling in a crypto library — same "small and self-contained
+  beats a new dependency" call as the backend above, and it's also what
+  `ScriptDb` uses internally for key-to-filename hashing (one algorithm,
+  two call sites). Verified against three NIST/RFC test vectors (empty
+  string, `"abc"`, the 56-byte SHA-256 vector) in `sha256_test.cpp` — the
+  vectors were pulled from .NET's `SHA256.ComputeHash` run locally via
+  PowerShell (cross-checked against Python's `hashlib.sha256`, not
+  hand-typed from memory) rather than trusted from recall, since a
+  self-authored implementation being checked against a self-typed "known"
+  vector proves nothing if the vector itself is wrong.
+  **Construction-order trap avoided, not hit:** `PackRuntime::Impl::db`'s
+  root path is derived from `storage_path.parent_path()`, so `db` is
+  declared *after* `storage_path` in the `Impl` struct (member init order
+  follows declaration order, not initializer-list order) and initialized
+  from `storage_path` itself in the ctor body, not from the constructor's
+  `path` parameter after it's already been `std::move`'d into
+  `storage_path` — moving-from-and-then-reading `path` again would've been
+  UB-adjacent (unspecified-but-valid state, not guaranteed unchanged).
+  **Values round-trip through the same `json_to_lua`/`lua_to_json` helpers
+  `vb.storage` already uses** (`pack_runtime.cpp`, anonymous namespace), so
+  `vb.db.set(key, {level = 3})` persists a real table, not just strings —
+  consistent with `vb.storage`'s existing behavior, unlike a naive
+  string-only KV store.
+  **Verification:** full `vb_tests` green on `build-net-lua`
+  (`VB_WITH_NET=ON`, `VB_WITH_LUA=ON`, 215/215 cases — up from 197 at the
+  last count in this file, Phase 6.1's entry above; the delta is this
+  session's `sha256_test.cpp` (5 cases) + `script_db_test.cpp` (7 cases) +
+  2 new `pack_runtime_test.cpp` cases, plus whatever landed in 6.2/6.3
+  between those counts that this entry doesn't re-derive). Not verified
+  under a no-Lua/ASan config this session — `build-meshing/` (the pre-built
+  ASan dir prior entries used for that) no longer exists on this machine;
+  `db.cpp`/`sha256.cpp` don't touch sol2 at all though, so the no-Lua stub
+  build risk is low, just not actually re-confirmed here.
+  **Not done:** no content uses this yet (same "mechanism before content"
+  posture as every other Phase 4/6 primitive) — `content/base` has no login
+  flow. `vb.db` has no TTL/expiry and no enumeration, matching the spec
+  exactly (get/set/delete by an already-known key only).
 
 - **2026-09-17 — Phase 6.1 entity kinds as classes landed (uncommitted).**
   `vb.world.spawn(kind, pos)` now actually does something: it creates a

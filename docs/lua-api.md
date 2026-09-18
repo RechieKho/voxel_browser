@@ -176,6 +176,23 @@ rt.dispatch_tick(dt);
   Storage: `vb.storage.key = value` — a metatable-backed proxy over a
   `nlohmann::json` object, persisted to `<content_pack>/storage.json`
   (flushed once per tick when dirty, and in `flush_storage()`).
+- Generic per-key storage (Phase 6.4): `vb.db.get(key)` / `vb.db.set(key,
+  value)` / `vb.db.delete(key)` — distinct from `vb.storage` above, `key` is
+  whatever the script chooses (`"user:" .. name`, `"session:" .. token`, ...)
+  and `value` round-trips through the same JSON conversion as `vb.storage`
+  (tables/numbers/strings/booleans, not just strings). Written immediately
+  (no dirty-flag/flush step, unlike `vb.storage`). Backed by
+  `vb::script::ScriptDb` (`inc/vb/script/db.hpp`): each key's file lives at
+  `<content_pack>/db/<sha256(key) 2-hex-prefix>/<sha256(key)>`, the same
+  content-addressed shard layout as `vb::assetsync::ClientAssetCache`. No
+  enumeration API — get/set/delete by an already-known key only. The engine
+  has no notion of "logged in": a connection stays just a connection until a
+  pack's own login flow (built on `vb.db`) looks up a record and decides to
+  recognize it. `vb.crypto.hash(data)` — SHA-256 hex digest
+  (`vb::core::sha256_hex`, `inc/vb/core/sha256.hpp`) — so a pack implementing
+  its own login doesn't have to roll credential hashing in pure Lua (the
+  sandbox strips `os`/`io`, §10.2). The engine still takes no position on
+  auth as a concept (spec §19 Q6).
 
 ## Client UI API — `vb::script::UiRuntime` (`inc/vb/script/ui_runtime.hpp`, implemented, `VB_WITH_LUA`)
 

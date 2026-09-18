@@ -292,6 +292,49 @@ TEST_CASE("vb.storage persists across PackRuntime instances") {
 	std::filesystem::remove(storage);
 }
 
+TEST_CASE("vb.db persists across PackRuntime instances, unlike vb.storage "
+		"it's keyed per-script-chosen-string") {
+	const auto storage = temp_storage("db_persist");
+	{
+		vb::net::LoopbackNetwork net;
+		vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+		vb::script::PackRuntime rt(net.server(), registry, storage);
+		const auto r = rt.load_pack_file(R"(
+			assert(vb.db.get("pack_runtime_test:db_persist:user:alice") == nil)
+			vb.db.set("pack_runtime_test:db_persist:user:alice", { level = 3 })
+		)");
+		REQUIRE(r);
+	}
+	{
+		vb::net::LoopbackNetwork net;
+		vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+		vb::script::PackRuntime rt(net.server(), registry, storage);
+		const auto r = rt.load_pack_file(R"(
+			local v = vb.db.get("pack_runtime_test:db_persist:user:alice")
+			assert(v.level == 3)
+			vb.db.delete("pack_runtime_test:db_persist:user:alice")
+			assert(vb.db.get("pack_runtime_test:db_persist:user:alice") == nil)
+		)");
+		REQUIRE(r);
+	}
+	std::filesystem::remove(storage);
+}
+
+TEST_CASE("vb.crypto.hash is deterministic and content-sensitive") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("crypto_hash"));
+	const auto r = rt.load_pack_file(R"(
+		local a = vb.crypto.hash("password123")
+		local b = vb.crypto.hash("password123")
+		local c = vb.crypto.hash("password124")
+		assert(a == b)
+		assert(a ~= c)
+		assert(#a == 64) -- sha256 hex digest
+	)");
+	REQUIRE(r);
+}
+
 TEST_CASE("player_leave dispatch without an attached session doesn't crash "
 		"a send_message call") {
 	vb::net::LoopbackNetwork net;

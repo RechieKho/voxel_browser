@@ -27,6 +27,8 @@ add_executable(vb_tests
   unit/script_test.cpp
   unit/replication_test.cpp
   unit/render_test.cpp
+  unit/script_db_test.cpp
+  unit/sha256_test.cpp
   unit/ui_runtime_test.cpp
   unit/world_replication_test.cpp
   unit/world_test.cpp

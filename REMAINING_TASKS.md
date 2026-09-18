@@ -1427,7 +1427,7 @@ windows, chatting, crafting, and seeing each other, all at once.
 
 ---
 
-## Phase 6 — Lua-Driven Extensibility (in progress — 6.1/6.6 done, 6.2-6.5/6.7-6.14 design only)
+## Phase 6 — Lua-Driven Extensibility (in progress — 6.1/6.2/6.3/6.4/6.6 done, 6.5/6.7-6.14 design only)
 
 > Design agreed in discussion on 2026-09-17: four systems that let content
 > packs override/extend engine defaults (biomes, entities, UI, input, data)
@@ -1569,24 +1569,34 @@ windows, chatting, crafting, and seeing each other, all at once.
       (Phase 1.3). The closed-schema bitset itself remains the primary flood
       defense the spec calls out.
 
-### 6.4 Generic per-key persistent storage (script-owned identity/auth)
+### 6.4 Generic per-key persistent storage (script-owned identity/auth)  ✅ (2026-09-18)
 
-- [ ] `vb.db.get(key)` / `vb.db.set(key, value)` / `vb.db.delete(key)` —
+- [x] `vb.db.get(key)` / `vb.db.set(key, value)` / `vb.db.delete(key)` —
       arbitrary script-chosen keys (`"user:" .. name`, `"session:" .. token`,
       ...), distinct from the existing pack-global `vb.storage`. The engine
       has no concept of "logged in" — a connection stays just a connection
       (as today) until a pack's own login flow looks up a record and decides
       to recognize it. Joining a world isn't authenticating, the same way
       loading a webpage isn't.
-- [ ] Storage backend: today's single `storage.json` blob doesn't scale to
-      one record per identity — needs an actual per-key store (SQLite is the
-      leading candidate, common well-trodden dependency) once this lands.
-      Implementation detail, not a design blocker.
-- [ ] Expose a minimal `vb.crypto.hash(...)` primitive so packs implementing
-      their own login don't roll credential hashing in pure Lua — the
-      sandbox strips `os`/`io` deliberately (§10.2), and pure-Lua hashing is
-      slow and easy to get wrong. The engine still takes no position on auth
-      as a concept — see `ARCHITECTURE_SPEC.md` §19 Q6.
+- [x] Storage backend: **not SQLite** — `vb::script::ScriptDb`
+      (`inc/vb/script/db.hpp`/`src/script/db.cpp`) instead, one file per key,
+      content-addressed by `sha256(key)` under a 2-hex-prefix shard
+      directory (`<content_pack>/db/<prefix>/<hash>`), reusing
+      `ClientAssetCache`'s on-disk shape (§4.4) rather than adding a new
+      dependency. No list/enumerate — spec only calls for get/set/delete by
+      an already-known key, and this scales to "one record per identity"
+      fine without one. A real embedded-database swap (SQLite still the
+      leading candidate if this ever needs range queries or transactions)
+      stays a pure implementation-detail change behind the same interface,
+      per this item's original "implementation detail, not a design
+      blocker" framing.
+- [x] `vb.crypto.hash(data)` — SHA-256 hex digest (`vb::core::sha256_hex`,
+      `inc/vb/core/sha256.hpp`/`src/core/sha256.cpp`, dependency-free) so
+      packs implementing their own login don't roll credential hashing in
+      pure Lua — the sandbox strips `os`/`io` deliberately (§10.2), and
+      pure-Lua hashing is slow and easy to get wrong. The engine still takes
+      no position on auth as a concept — see `ARCHITECTURE_SPEC.md` §19 Q6.
+      Also used internally by `ScriptDb` for its key-to-filename hashing.
 
 ### 6.5 Shared block-damage breaking (default + override crack texture)
 

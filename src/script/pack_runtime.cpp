@@ -50,10 +50,12 @@ void PackRuntime::flush_storage() {}
 #include <nlohmann/json.hpp>
 
 #include "vb/core/log.hpp"
+#include "vb/core/sha256.hpp"
 #include "vb/ecs/components.hpp"
 #include "vb/protocol/chat.hpp"
 #include "vb/protocol/input.hpp"
 #include "vb/protocol/inventory.hpp"
+#include "vb/script/db.hpp"
 #include "vb/script/vm_internal.hpp"
 #include "vb/world/raycast.hpp"
 
@@ -279,6 +281,11 @@ struct PackRuntime::Impl {
 	net::Transport &transport;
 	world::BlockRegistry &registry;
 	std::filesystem::path storage_path;
+	// Phase 6.4: vb.db, a generic per-key store distinct from the single
+	// pack-global `storage` blob below -- see vb/script/db.hpp. Declared
+	// after storage_path (construction order == declaration order) so its
+	// root can be derived from storage_path's parent directory.
+	ScriptDb db;
 	Vm vm;
 	bool frozen = false;
 	net::WorldReplicator *replicator = nullptr;
@@ -555,7 +562,8 @@ struct PlayerHandle {
 
 PackRuntime::Impl::Impl(net::Transport &t, world::BlockRegistry &reg,
 		std::filesystem::path path, VmLimits limits)
-		: transport(t), registry(reg), storage_path(std::move(path)), vm(limits) {
+		: transport(t), registry(reg), storage_path(std::move(path)),
+		  db(storage_path.parent_path() / "db"), vm(limits) {
 	std::ifstream in(storage_path);
 	if (in) {
 		try {
@@ -861,6 +869,42 @@ void PackRuntime::Impl::install_bindings() {
 	};
 	storage_proxy[sol::metatable_key] = storage_meta;
 	vb["storage"] = storage_proxy;
+
+	// Phase 6.4: vb.db -- a generic per-key store, distinct from the
+	// pack-global vb.storage above. `key` is whatever the script chooses
+	// ("user:" .. name, "session:" .. token, ...); values round-trip through
+	// the same json_to_lua/lua_to_json used by vb.storage so tables/numbers/
+	// strings/booleans all persist correctly, not just strings.
+	sol::table db_tbl = lua.create_table();
+	db_tbl["get"] = [this](const std::string &key,
+							sol::this_state ts) -> sol::object {
+		sol::state_view sv(ts);
+		const std::optional<std::string> raw = db.get(key);
+		if (!raw) {
+			return sol::make_object(sv, sol::lua_nil);
+		}
+		const nlohmann::json parsed =
+				nlohmann::json::parse(*raw, nullptr, false);
+		if (parsed.is_discarded()) {
+			return sol::make_object(sv, sol::lua_nil);
+		}
+		return json_to_lua(sv, parsed);
+	};
+	db_tbl["set"] = [this](const std::string &key, sol::object value) {
+		db.set(key, lua_to_json(value).dump());
+	};
+	db_tbl["delete"] = [this](const std::string &key) { db.erase(key); };
+	vb["db"] = db_tbl;
+
+	// Phase 6.4: vb.crypto.hash -- a minimal primitive so a pack implementing
+	// its own login (built on vb.db above) doesn't have to roll credential
+	// hashing in pure Lua; the sandbox strips os/io deliberately (§10.2). The
+	// engine itself still takes no position on auth as a concept.
+	sol::table crypto_tbl = lua.create_table();
+	crypto_tbl["hash"] = [](const std::string &data) -> std::string {
+		return core::sha256_hex(data);
+	};
+	vb["crypto"] = crypto_tbl;
 }
 
 core::NetId PackRuntime::Impl::self_net_id(const sol::table &self) const {
