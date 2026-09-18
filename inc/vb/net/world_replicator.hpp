@@ -67,6 +67,11 @@ public:
 	// Chunks that a player currently mirrors (for edit fan-out + tests).
 	bool player_has_chunk(core::NetId id, core::ChunkCoord c) const;
 
+	// Phase 6.5: the same reach gate apply_block_edit uses, exposed so
+	// C2S_BlockBreakBegin (which doesn't itself mutate the world) can validate
+	// a target without duplicating the constant.
+	bool in_reach(core::Vec3d eye_pos, core::IVec3 pos) const;
+
 	const world::World &world() const { return world_; }
 	world::World &world() { return world_; }
 	std::size_t requested_chunk_count() const {

@@ -52,6 +52,7 @@ void S2CBlockRegistry::encode(std::vector<std::byte> &out) const {
 		w.boolean(b.opaque);
 		w.boolean(b.liquid);
 		w.u8(b.light_emission);
+		w.u16(b.max_damage);
 	}
 }
 
@@ -70,6 +71,7 @@ Decoded<S2CBlockRegistry> S2CBlockRegistry::decode(std::span<const std::byte> in
 		b.opaque = r.boolean();
 		b.liquid = r.boolean();
 		b.light_emission = r.u8();
+		b.max_damage = r.u16();
 		m.blocks.push_back(std::move(b));
 	}
 	return finish(r, std::move(m));
@@ -224,6 +226,35 @@ Decoded<S2CBlockEditResult> S2CBlockEditResult::decode(
 	S2CBlockEditResult m;
 	m.predicted_seq = r.u32();
 	m.accepted = r.boolean();
+	m.pos = read_ivec3(r);
+	return finish(r, std::move(m));
+}
+
+// --- C2SBlockBreakBegin / C2SBlockBreakStop -------------------------------
+void C2SBlockBreakBegin::encode(std::vector<std::byte> &out) const {
+	ByteWriter w(out);
+	write_ivec3(w, pos);
+	write_ivec3(w, face);
+}
+
+Decoded<C2SBlockBreakBegin> C2SBlockBreakBegin::decode(
+		std::span<const std::byte> in) {
+	ByteReader r(in);
+	C2SBlockBreakBegin m;
+	m.pos = read_ivec3(r);
+	m.face = read_ivec3(r);
+	return finish(r, std::move(m));
+}
+
+void C2SBlockBreakStop::encode(std::vector<std::byte> &out) const {
+	ByteWriter w(out);
+	write_ivec3(w, pos);
+}
+
+Decoded<C2SBlockBreakStop> C2SBlockBreakStop::decode(
+		std::span<const std::byte> in) {
+	ByteReader r(in);
+	C2SBlockBreakStop m;
 	m.pos = read_ivec3(r);
 	return finish(r, std::move(m));
 }

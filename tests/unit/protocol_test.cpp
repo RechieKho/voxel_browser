@@ -217,16 +217,33 @@ TEST_CASE("block registry round-trips, including an empty list") {
 	CHECK(empty.blocks.empty());
 
 	S2CBlockRegistry reg;
-	reg.blocks.push_back({ "base:air", false, false, false, 0 });
-	reg.blocks.push_back({ "base:stone", true, true, false, 0 });
-	reg.blocks.push_back({ "test:glow", true, true, false, 15 });
+	reg.blocks.push_back({ "base:air", false, false, false, 0, 0 });
+	reg.blocks.push_back({ "base:stone", true, true, false, 0, 0 });
+	reg.blocks.push_back({ "test:glow", true, true, false, 15, 0 });
+	reg.blocks.push_back({ "test:crumbly", true, true, false, 0, 5 });
 	auto r2 = round_trip(reg);
-	REQUIRE(r2.blocks.size() == 3);
+	REQUIRE(r2.blocks.size() == 4);
 	CHECK(r2.blocks[0].name == "base:air");
 	CHECK_FALSE(r2.blocks[0].solid);
 	CHECK(r2.blocks[2].name == "test:glow");
 	CHECK(r2.blocks[2].light_emission == 15);
+	CHECK(r2.blocks[3].max_damage == 5); // Phase 6.5
 	CHECK(r2.blocks == reg.blocks);
+}
+
+TEST_CASE("block-break begin/stop round-trip (Phase 6.5)") {
+	auto begin = round_trip(
+			C2SBlockBreakBegin{ { 1, 2, 3 }, { 0, 1, 0 } });
+	CHECK(begin.pos == vb::core::IVec3{ 1, 2, 3 });
+	CHECK(begin.face == vb::core::IVec3{ 0, 1, 0 });
+
+	auto begin_neg = round_trip(
+			C2SBlockBreakBegin{ { -5, -100, 7 }, { -1, 0, 0 } });
+	CHECK(begin_neg.pos == vb::core::IVec3{ -5, -100, 7 });
+	CHECK(begin_neg.face == vb::core::IVec3{ -1, 0, 0 });
+
+	auto stop = round_trip(C2SBlockBreakStop{ { 1, 2, 3 } });
+	CHECK(stop.pos == vb::core::IVec3{ 1, 2, 3 });
 }
 
 TEST_CASE("keybind registry round-trips, including an empty list") {

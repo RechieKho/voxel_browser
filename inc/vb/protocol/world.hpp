@@ -28,6 +28,8 @@ struct BlockRegistryRecord {
 	bool opaque = true;
 	bool liquid = false;
 	std::uint8_t light_emission = 0;
+	// Phase 6.5 (spec §10.7): 0 = instant break, no shared damage pool.
+	std::uint16_t max_damage = 0;
 
 	bool operator==(const BlockRegistryRecord &) const = default;
 };
@@ -119,6 +121,32 @@ struct S2CBlockEditResult {
 
 	void encode(std::vector<std::byte> &out) const;
 	static Decoded<S2CBlockEditResult> decode(std::span<const std::byte> in);
+};
+
+// --- shared block-damage breaking (spec §10.7) --------------------------
+// Brackets a player holding a target: begin starts (or refreshes) them as a
+// contributor to that pos's damage pool, stop drops them. The damage state
+// itself, and its completion into an actual break, ride the *existing*
+// C2S_BlockEdit/BlockEditSystem pipeline server-side -- these two messages
+// only mark who's currently holding, nothing more.
+
+struct C2SBlockBreakBegin {
+	static constexpr MessageType kType = MessageType::kC2SBlockBreakBegin;
+
+	core::IVec3 pos{}; // world voxel coordinate of the target
+	core::IVec3 face{}; // hit-face normal (from the client's own raycast)
+
+	void encode(std::vector<std::byte> &out) const;
+	static Decoded<C2SBlockBreakBegin> decode(std::span<const std::byte> in);
+};
+
+struct C2SBlockBreakStop {
+	static constexpr MessageType kType = MessageType::kC2SBlockBreakStop;
+
+	core::IVec3 pos{};
+
+	void encode(std::vector<std::byte> &out) const;
+	static Decoded<C2SBlockBreakStop> decode(std::span<const std::byte> in);
 };
 
 // --- day/night (spec §5.4) ------------------------------------------------

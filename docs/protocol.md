@@ -4,8 +4,19 @@
 > as any change to a struct in `inc/vb/protocol/`, and bump
 > `kEngineProtocolVersion` in `cmake/version.hpp.in`.
 
-Current `ENGINE_PROTOCOL_VERSION`: **12**.
+Current `ENGINE_PROTOCOL_VERSION`: **13**.
 
+- **13** — Phase 6.5 (shared block-damage breaking, spec §10.7):
+  `BlockRegistryRecord` (`S2C_BlockRegistry`, 40) gains a `u16 max_damage`
+  field (0 = today's instant break, no behavior change for any existing
+  block). `C2S_BlockBreakBegin` (48) `{svarint×3 pos, svarint×3 face}` and
+  `C2S_BlockBreakStop` (49) `{svarint×3 pos}` bracket a player holding a
+  target with `max_damage > 0`; the shared damage pool itself and its
+  completion into an actual break ride the *existing*
+  `C2S_BlockEdit`/`S2C_ChunkDelta` pipeline server-side (`vb::world::
+  BlockDamageSystem`) — no new replication channel for the damage value
+  itself yet (no client renders cracks regardless, see 6.5's texture-atlas
+  dependency note in `REMAINING_TASKS.md`).
 - **12** — `S2C_KeybindRegistry` (47) payload defined (Phase 6.3, closed-schema
   custom keybinds): `varint n`, `n × string` (registered keybind names, index
   == bit position). Sent between `C2S_Ready` and `S2C_JoinAccept` alongside
@@ -196,6 +207,27 @@ light change fans out to every interested player as an `S2C_ChunkDelta`; the
 server validates reach (≤ 5.5 blocks from the eye), target validity, and
 non-floating placement (a Lua `block_break`/`block_place` veto slots in at
 Phase 4.2).
+
+### Shared block-damage breaking — `inc/vb/protocol/world.hpp` (implemented, mechanism only)
+
+| Type (id)                    | Fields                                        |
+| ----------------------------- | ---------------------------------------------- |
+| `C2S_BlockBreakBegin` (48)    | `svarint×3 pos`, `svarint×3 face` (hit-normal) |
+| `C2S_BlockBreakStop` (49)     | `svarint×3 pos`                                |
+
+Sent by a client holding on a block whose registered `max_damage > 0`
+(§5.2/§10.7); `ServerSession` gates entry (reach + `max_damage > 0` +
+`vb.on("block_break_begin", ...)` veto), tracks contributors in a
+`vb::world::BlockDamageSystem`, and drives `vb.on("block_break_tick", ...)`/
+`vb.on("block_health_tick", ...)` once per server tick. Completion (summed
+damage reaches `max_damage`) commits the break through the unchanged
+`WorldReplicator::apply_block_edit` path — the exact same
+`S2C_ChunkDelta`/`on_break` flow a manual `C2S_BlockEdit` triggers. No wire
+message replicates the damage *value* itself to nearby players yet (no
+client renders cracks regardless of the wire format — see
+`REMAINING_TASKS.md` 6.5's texture-atlas dependency note), so a second
+player currently can't *see* another's break progress, only feel its effect
+once the block actually breaks.
 
 ### Day/night — `inc/vb/protocol/world.hpp` (implemented)
 

@@ -133,6 +133,129 @@ TEST_CASE("pack script vetoes a block break and observes on_break") {
 	CHECK(world.solid_at(deep)); // vetoed: unchanged
 }
 
+TEST_CASE("shared block-damage breaking: begin -> tick -> completes the break "
+		  "(Phase 6.5)") {
+	// Registry must be frozen (pack loaded) *before* World copies it (matches
+	// src/server/main.cpp's real construction order) -- otherwise the new
+	// "test:crumbly" block and its max_damage never reach World's own
+	// BlockRegistry copy, which is what apply_block_edit/handle_block_break_
+	// begin actually query.
+	LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("block_damage"));
+	REQUIRE(rt.load_pack_file(R"(
+		vb.register_block({ name = "test:crumbly", max_damage = 3 })
+		vb.on("block_break_tick", function(player, pos) return 1 end)
+	)"));
+	rt.freeze();
+
+	vb::world::World world(registry);
+	wg::WorldGenWorkerPool pool(
+			wg::WorldGenerator(wg::WorldGenParams{}, registry),
+			wg::WorldGenWorkerPool::kSynchronous);
+
+	HandshakeServerConfig cfg;
+	cfg.world_seed = 7;
+	ServerSession server(net.server(), cfg);
+	auto replicator = std::make_unique<WorldReplicator>(world, pool, registry,
+			/*view*/ 1, /*vview*/ 2);
+	rt.attach_world(*replicator);
+	server.set_world_replicator(std::move(replicator));
+	rt.attach_session(server);
+	REQUIRE(net.server().listen(0));
+
+	Transport &ta = net.create_client();
+	auto ida = ta.connect("x", 0);
+	REQUIRE(ida);
+	ClientSession client(ta, *ida, HandshakeClientConfig{ "A", "", "v", 1 });
+
+	auto pump = [&](int n) {
+		for (int i = 0; i < n; ++i) {
+			server.tick(0.05);
+			client.tick(0.05);
+			rt.dispatch_tick(0.05);
+		}
+	};
+
+	pump(20);
+	REQUIRE(client.joined());
+	const NetId a_id = client.join_accept()->your_net_id;
+
+	const IVec3 target = surface_voxel(world, 4, 4);
+	REQUIRE(target.y > 0);
+	const vb::core::BlockId crumbly = registry.find("test:crumbly");
+	REQUIRE(crumbly != vb::core::BlockId::kAir);
+	world.set_block(target, crumbly);
+	REQUIRE(world.solid_at(target));
+
+	server.set_player_state(
+			a_id, Vec3d{ target.x + 0.5, target.y + 2.0, target.z + 0.5 });
+	pump(1);
+
+	client.send_block_break_begin(target, { 0, 1, 0 });
+	pump(1);
+	CHECK(world.solid_at(target)); // one tick of damage (1/3), not broken yet
+
+	pump(3); // two more ticks of damage_tick_fn -> 3 == max_damage
+	// completed: the existing BlockEdit pipeline actually broke it
+	CHECK_FALSE(world.solid_at(target));
+}
+
+TEST_CASE("a target with max_damage == 0 never reaches the damage system") {
+	LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("block_damage_zero"));
+	// Registers the hook, but the target block (base:stone) keeps its default
+	// max_damage == 0 -- begin must be rejected outright regardless.
+	REQUIRE(rt.load_pack_file(R"(
+		vb.on("block_break_tick", function(player, pos) return 100 end)
+	)"));
+	rt.freeze();
+
+	vb::world::World world(registry);
+	wg::WorldGenWorkerPool pool(
+			wg::WorldGenerator(wg::WorldGenParams{}, registry),
+			wg::WorldGenWorkerPool::kSynchronous);
+
+	HandshakeServerConfig cfg;
+	cfg.world_seed = 7;
+	ServerSession server(net.server(), cfg);
+	auto replicator = std::make_unique<WorldReplicator>(world, pool, registry, 1, 2);
+	rt.attach_world(*replicator);
+	server.set_world_replicator(std::move(replicator));
+	rt.attach_session(server);
+	REQUIRE(net.server().listen(0));
+
+	Transport &ta = net.create_client();
+	auto ida = ta.connect("x", 0);
+	REQUIRE(ida);
+	ClientSession client(ta, *ida, HandshakeClientConfig{ "A", "", "v", 1 });
+
+	auto pump = [&](int n) {
+		for (int i = 0; i < n; ++i) {
+			server.tick(0.05);
+			client.tick(0.05);
+			rt.dispatch_tick(0.05);
+		}
+	};
+
+	pump(20);
+	REQUIRE(client.joined());
+	const NetId a_id = client.join_accept()->your_net_id;
+
+	const IVec3 deep{ 20, -5, 20 };
+	server.set_player_state(
+			a_id, Vec3d{ deep.x + 0.5, deep.y + 2.0, deep.z + 0.5 });
+	pump(6); // let the chunk around `deep` actually load
+	REQUIRE(world.solid_at(deep)); // generator fills solid stone this deep
+
+	client.send_block_break_begin(deep, { 0, 1, 0 });
+	pump(20); // even a huge per-tick delta never accrues -- begin was rejected
+	CHECK(world.solid_at(deep));
+}
+
 TEST_CASE("pack script vetoes a specific player's join") {
 	LoopbackNetwork net;
 	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();

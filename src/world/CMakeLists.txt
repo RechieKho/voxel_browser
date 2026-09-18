@@ -2,6 +2,7 @@
 
 target_sources(vb_core PRIVATE
   block.cpp
+  block_damage.cpp
   chunk_codec.cpp
   chunk_lifecycle.cpp
   chunk_mesher.cpp

@@ -1427,7 +1427,7 @@ windows, chatting, crafting, and seeing each other, all at once.
 
 ---
 
-## Phase 6 — Lua-Driven Extensibility (in progress — 6.1/6.2/6.3/6.4/6.6 done, 6.5/6.7-6.14 design only)
+## Phase 6 — Lua-Driven Extensibility (in progress — 6.1/6.2/6.3/6.4/6.5/6.6 done, 6.7-6.14 design only)
 
 > Design agreed in discussion on 2026-09-17: four systems that let content
 > packs override/extend engine defaults (biomes, entities, UI, input, data)
@@ -1598,42 +1598,68 @@ windows, chatting, crafting, and seeing each other, all at once.
       no position on auth as a concept — see `ARCHITECTURE_SPEC.md` §19 Q6.
       Also used internally by `ScriptDb` for its key-to-filename hashing.
 
-### 6.5 Shared block-damage breaking (default + override crack texture)
+### 6.5 Shared block-damage breaking (default + override crack texture) ✅ (2026-09-18, crack rendering deferred)
 
-- [ ] `BlockType` gains `max_damage` (0 = today's instant break, the
-      default — no behavior change for any existing block) and an optional
-      `crack_texture` override (§5.2). `vb.register_block{...}` exposes both.
-- [ ] Sparse server-side damage map (`pos → {damage, max_damage,
-      last_touched_tick}`), only holding entries with damage > 0 — does not
-      touch chunk revisions or mesh invalidation.
-- [ ] Ride the *existing* interest/replication system (§8.4) for visibility
-      rather than a new channel: a damaged block is a transient
-      interest-managed record, spawned when damage > 0, despawned at 0 —
-      reuses the spawn/despawn diffing every other replicated object already
-      gets, so everyone nearby sees cracks form and vanish for free.
-- [ ] `C2S_BlockBreakBegin{pos, face}` / `C2S_BlockBreakStop{pos}` bracket a
-      player holding on a target; same reach/tool/protection checks as
-      `C2S_BlockEdit` today gate entry via `vb.on("block_break_begin", ...)`
-      (vetoable).
-- [ ] `vb.on("block_break_tick", handler)` fires once per tick **per
-      contributing player** while held — returns the damage delta to add.
-      Multiple players contributing to the same block sum concurrently
-      ("breaking together"). Engine has no opinion on tool speed,
-      enchantments, or anything the delta is computed from.
-- [ ] `vb.on("block_health_tick", handler)` fires once per tick **per
+- [x] `BlockType` gains `max_damage` (0 = today's instant break, the
+      default — no behavior change for any existing block); `vb.register_block{...}`
+      exposes it (`def.max_damage`, `inc/vb/world/block.hpp`,
+      `src/script/pack_runtime.cpp`). No `crack_texture` field added — there's
+      nowhere to put it yet (`BlockType` has no texture/model fields at all
+      until 4.3/5.1's real atlas system lands), so it stays deferred alongside
+      the rendering item below rather than added unused.
+- [x] Sparse server-side damage map: `vb::world::BlockDamageSystem`
+      (`inc/vb/world/block_damage.hpp` + `src/world/block_damage.cpp`), a
+      pure `pos -> {damage, max_damage, last_touched_tick, contributors}` map
+      holding only entries with damage > 0 — same posture as `ItemDropSystem`
+      (no net/script dependency, unit-testable standalone,
+      `tests/unit/block_damage_test.cpp`). Does not touch chunk revisions or
+      mesh invalidation on its own.
+- [x] `C2S_BlockBreakBegin{pos, face}` / `C2S_BlockBreakStop{pos}`
+      (`inc/vb/protocol/world.hpp`, message ids 48/49; `BlockRegistryRecord`
+      also gains `max_damage`, `kEngineProtocolVersion` 12 → 13) bracket a
+      player holding a target;
+      `ServerSession::handle_block_break_begin` gates entry with the same
+      reach check `apply_block_edit` uses (`WorldReplicator::in_reach`, new)
+      plus an engine-level `max_damage > 0` check, then
+      `vb.on("block_break_begin", ...)` (vetoable) via
+      `ServerSession::BlockBreakHooks::begin`.
+- [x] `vb.on("block_break_tick", handler)` fires once per tick **per
+      contributing player** (`ServerSession::update_block_damage`, called
+      from `tick()` alongside `update_item_drops`) — returns the damage delta
+      to add; multiple concurrent contributors ("breaking together") sum,
+      and so do multiple registered handlers for the same call (an
+      orthogonal case the spec didn't call out, summed the same way rather
+      than picking one arbitrarily). No handler registered = zero built-in
+      policy, damage never accrues.
+- [x] `vb.on("block_health_tick", handler)` fires once per tick **per
       damaged block**, regardless of contributors — `(pos, damage,
-      max_damage, ticks_since_last_hit)` in, new damage value (or unchanged)
-      out. No heal / full heal / gradual decay / heal-after-idle are all
-      just what the handler computes; no handler registered = permanent
-      damage, no built-in default policy.
-- [ ] Completion (summed damage reaches `max_damage`) drives the *existing*,
-      unchanged `C2S_BlockEdit`/`BlockEditSystem`/`on_break` pipeline — this
-      system only gates when that fires, doesn't replace it.
-- [ ] Default generic crack overlay (progressive stages by damage ratio)
-      ships so breaking looks right with zero scripting; `crack_texture`
-      override follows the same override-by-name convention as every other
-      registry. **Blocked on** the still-pending real texture/atlas system
-      (4.3/5.1 — client is untextured cubes today) landing first.
+      max_damage, ticks_since_last_hit)` in, a replacement damage value (or
+      nothing = unchanged) out; the last handler to return a number wins if
+      several are registered. No handler registered = permanent damage, no
+      healing at all.
+- [x] Completion (summed damage reaches `max_damage`) drives the *existing*,
+      unchanged `C2S_BlockEdit`/`WorldReplicator::apply_block_edit`/`on_break`
+      pipeline via a synthesized `C2S_BlockEdit{kBreak}` attributed to
+      whichever player was contributing when it completed (arbitrary among
+      concurrent contributors) — this system only gates *when* that fires,
+      never replaces it.
+- [ ] **Deferred, not attempted:** no wire message replicates the damage
+      *value* itself to nearby players yet (the spec's "ride the existing
+      interest/replication system... a transient interest-managed record"
+      design) — scoped down this session to just the begin/stop/complete
+      mechanism, since the only consumer of a replicated damage value is the
+      crack overlay below, which is itself blocked. `BlockDamageTickResult::
+      changed`/`cleared` already exist and are ignored by
+      `ServerSession::update_block_damage` for exactly this reason — wiring
+      them up is the natural next step once there's a client to show them to.
+- [ ] Default generic crack overlay (progressive stages by damage ratio) +
+      `crack_texture` override: **still blocked on** the still-pending real
+      texture/atlas system (4.3/5.1 — client is untextured cubes today), same
+      as before this session. No client UI sends `C2S_BlockBreakBegin`/`Stop`
+      yet either (`ClientSession::send_block_break_begin`/`send_block_break_stop`
+      exist as a real, tested wire API — `src/client/main.cpp`'s existing 5.2
+      hold-to-break timer is untouched and still governs every
+      `max_damage == 0` block, which is every block in `content/base` today).
 
 ### 6.6 Player damage & death (foundational — split out from the rest below) ✅
 

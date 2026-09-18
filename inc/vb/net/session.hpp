@@ -28,6 +28,7 @@
 #include "vb/protocol/inventory.hpp"
 #include "vb/protocol/snapshot.hpp"
 #include "vb/replication/interest.hpp"
+#include "vb/world/block_damage.hpp"
 #include "vb/world/client_chunk_store.hpp"
 #include "vb/world/item_drops.hpp"
 
@@ -219,6 +220,24 @@ public:
 		on_item_pickup_ = std::move(handler);
 	}
 
+	// Phase 6.5 (spec §10.7): shared block-damage breaking hooks. Unset
+	// fields mean the corresponding half is a no-op -- e.g. no `begin` means
+	// every C2S_BlockBreakBegin is rejected outright (no pack attached), and
+	// no `tick_damage` means damage never accrues even for an accepted
+	// begin, matching "the engine ships zero built-in policy" (§10.7).
+	struct BlockBreakHooks {
+		std::function<bool(core::NetId, core::IVec3, core::BlockId)> begin;
+		std::function<float(
+				core::NetId, core::IVec3, core::BlockId, std::uint16_t)>
+				tick_damage;
+		std::function<std::optional<float>(
+				core::IVec3, core::BlockId, float, std::uint16_t, std::uint64_t)>
+				health_tick;
+	};
+	void set_block_break_hooks(BlockBreakHooks hooks) {
+		block_break_hooks_ = std::move(hooks);
+	}
+
 	// Phase 6.1 (vb.register_entity / vb.world.spawn): a generic Lua-kind
 	// entity, replicated the exact same way spawn_item_drop's entries are --
 	// no dedicated wire message, just another interest-grid entry keyed by a
@@ -259,9 +278,13 @@ private:
 	void handle_block_edit(ConnId conn, Conn &state,
 			const protocol::Frame &frame);
 	void handle_chat(Conn &state, const protocol::Frame &frame);
+	void handle_block_break_begin(ConnId conn, Conn &state,
+			const protocol::Frame &frame);
+	void handle_block_break_stop(Conn &state, const protocol::Frame &frame);
 	void apply_damage(Conn &state, float amount, std::string_view cause);
 	void check_respawns();
 	void update_item_drops(double dt_seconds);
+	void update_block_damage();
 	void broadcast_snapshots();
 	void broadcast_world();
 	void broadcast_time_of_day();
@@ -285,6 +308,8 @@ private:
 	std::function<bool(core::NetId, std::string_view)> on_chat_;
 	world::ItemDropSystem item_drops_;
 	std::function<void(core::NetId, core::BlockId, std::uint16_t)> on_item_pickup_;
+	world::BlockDamageSystem block_damage_;
+	BlockBreakHooks block_break_hooks_;
 	physics::MoveParams move_params_;
 	int interest_radius_cells_ = 2;
 	double time_of_day_ticks_ = 0.0;
@@ -362,6 +387,19 @@ public:
 	// the authoritative S2C_ChunkDelta.
 	void push_block_edit(const protocol::C2SBlockEdit &edit);
 	std::size_t pending_edit_count() const { return pending_edits_.size(); }
+
+	// Phase 6.5 (spec §10.7): shared block-damage breaking. No optimistic
+	// local apply here (unlike push_block_edit) -- there's nothing to predict
+	// until the server actually commits the break, which arrives as an
+	// ordinary S2C_ChunkDelta through the existing path. A future block-
+	// selection UI sends `begin` once per newly-targeted max_damage>0 block
+	// and `stop` when released/re-targeted/out of reach.
+	void send_block_break_begin(core::IVec3 pos, core::IVec3 face) {
+		send_message(transport_, conn_, protocol::C2SBlockBreakBegin{ pos, face });
+	}
+	void send_block_break_stop(core::IVec3 pos) {
+		send_message(transport_, conn_, protocol::C2SBlockBreakStop{ pos });
+	}
 
 	const physics::MoveState &predicted_state() const { return predicted_; }
 	core::Vec3d predicted_feet() const { return predicted_.position; }

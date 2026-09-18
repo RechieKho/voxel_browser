@@ -21,6 +21,11 @@ struct BlockType {
 	bool opaque = true; // face-culling + full light occlusion
 	bool liquid = false; // flows; non-solid; partial light occlusion
 	std::uint8_t light_emission = 0; // 0..15
+	// Phase 6.5 (spec §10.7): 0 (default) = today's instant break, no shared
+	// damage pool. > 0 opts into BlockDamageSystem's contribute/heal-hook
+	// flow -- the engine ships no accrual/heal policy, that's entirely Lua's
+	// call via vb.on("block_break_tick"/"block_health_tick", ...).
+	std::uint16_t max_damage = 0;
 };
 
 // Well-known ids in the Phase 2 base registry. Do not assume these hold once

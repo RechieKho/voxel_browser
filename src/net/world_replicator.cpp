@@ -152,6 +152,12 @@ bool WorldReplicator::player_has_chunk(core::NetId id, core::ChunkCoord c) const
 	return std::binary_search(it->second.begin(), it->second.end(), c);
 }
 
+bool WorldReplicator::in_reach(core::Vec3d eye_pos, core::IVec3 pos) const {
+	const core::Vec3d center{ static_cast<double>(pos.x) + 0.5,
+		static_cast<double>(pos.y) + 0.5, static_cast<double>(pos.z) + 0.5 };
+	return (center - eye_pos).length() <= kMaxReachBlocks;
+}
+
 std::vector<WorldReplicator::PlayerFrames> WorldReplicator::apply_block_edit(
 		core::NetId editor, core::Vec3d eye_pos,
 		const protocol::C2SBlockEdit &edit,

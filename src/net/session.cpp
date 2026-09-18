@@ -203,6 +203,50 @@ void ServerSession::handle_block_edit(ConnId conn, Conn &state,
 	}
 }
 
+void ServerSession::handle_block_break_begin(ConnId conn, Conn &state,
+		const protocol::Frame &frame) {
+	(void)conn;
+	if (!replicator_) {
+		return;
+	}
+	auto msg = protocol::C2SBlockBreakBegin::decode(frame.payload);
+	if (!msg) {
+		return;
+	}
+	const replication::EntityState *e = interest_.get(state.net_id);
+	core::Vec3d eye = e ? e->pos : core::Vec3d{};
+	eye.y += move_params_.eye_height;
+	if (!replicator_->in_reach(eye, msg->pos)) {
+		return;
+	}
+	const core::BlockId block = replicator_->world().get_block(msg->pos);
+	const world::BlockRegistry &reg = replicator_->world().registry();
+	if (block == core::BlockId::kAir || !reg.contains(block)) {
+		return;
+	}
+	const std::uint16_t max_damage = reg.get(block).max_damage;
+	if (max_damage == 0) {
+		return; // instant-break blocks never use this system (spec §10.7)
+	}
+	// No pack attached (or no vb.on("block_break_begin", ...) registered) --
+	// zero policy, so nothing can ever start accruing damage. Matches
+	// set_chat_handler/set_input_handler's "no handler, no side effect"
+	// posture elsewhere in this class.
+	if (!block_break_hooks_.begin || !block_break_hooks_.begin(state.net_id, msg->pos, block)) {
+		return;
+	}
+	block_damage_.begin(msg->pos, state.net_id, max_damage, server_tick_);
+}
+
+void ServerSession::handle_block_break_stop(
+		Conn &state, const protocol::Frame &frame) {
+	auto msg = protocol::C2SBlockBreakStop::decode(frame.payload);
+	if (!msg) {
+		return;
+	}
+	block_damage_.stop(msg->pos, state.net_id);
+}
+
 void ServerSession::handle_chat(Conn &state, const protocol::Frame &frame) {
 	auto msg = protocol::C2SChat::decode(frame.payload);
 	if (!msg) {
@@ -314,6 +358,16 @@ void ServerSession::tick(double dt_seconds) {
 						handle_chat(it->second, *frame);
 						break;
 					}
+					if (frame->header.type ==
+							protocol::MessageType::kC2SBlockBreakBegin) {
+						handle_block_break_begin(ev.conn, it->second, *frame);
+						break;
+					}
+					if (frame->header.type ==
+							protocol::MessageType::kC2SBlockBreakStop) {
+						handle_block_break_stop(it->second, *frame);
+						break;
+					}
 					// Other post-join C2S messages land in later phases;
 					// ignore unknown types rather than dropping.
 					break;
@@ -374,6 +428,7 @@ void ServerSession::tick(double dt_seconds) {
 				if (it->second.playing) {
 					--playing_;
 					interest_.remove(it->second.net_id);
+					block_damage_.remove_player(it->second.net_id);
 					if (replicator_) {
 						replicator_->forget_player(it->second.net_id);
 					}
@@ -427,6 +482,7 @@ void ServerSession::tick(double dt_seconds) {
 
 	check_respawns();
 	update_item_drops(dt_seconds);
+	update_block_damage();
 
 	++server_tick_;
 	broadcast_snapshots();
@@ -458,6 +514,56 @@ void ServerSession::update_item_drops(double dt_seconds) {
 			on_item_pickup_(p.player, p.item, p.count);
 		}
 	}
+}
+
+void ServerSession::update_block_damage() {
+	if (!replicator_) {
+		return;
+	}
+	auto damage_fn = [this](core::IVec3 pos, core::NetId player,
+							 std::uint16_t max_damage) -> float {
+		if (!block_break_hooks_.tick_damage) {
+			return 0.0f;
+		}
+		const core::BlockId block = replicator_->world().get_block(pos);
+		return block_break_hooks_.tick_damage(player, pos, block, max_damage);
+	};
+	auto health_fn = [this](core::IVec3 pos, float damage,
+							 std::uint16_t max_damage,
+							 std::uint64_t idle) -> std::optional<float> {
+		if (!block_break_hooks_.health_tick) {
+			return std::nullopt;
+		}
+		const core::BlockId block = replicator_->world().get_block(pos);
+		return block_break_hooks_.health_tick(pos, block, damage, max_damage, idle);
+	};
+	const world::BlockDamageTickResult result =
+			block_damage_.tick(server_tick_, damage_fn, health_fn);
+
+	for (const world::CompletedBreak &c : result.completed) {
+		core::Vec3d eye{};
+		if (const auto *e = interest_.get(c.contributor)) {
+			eye = e->pos;
+			eye.y += move_params_.eye_height;
+		}
+		protocol::C2SBlockEdit edit;
+		edit.action = protocol::BlockEditAction::kBreak;
+		edit.pos = c.pos;
+		protocol::S2CBlockEditResult unused_result;
+		auto per_player =
+				replicator_->apply_block_edit(c.contributor, eye, edit, unused_result);
+		for (auto &pf : per_player) {
+			for (auto &[other_conn, other] : conns_) {
+				if (other.playing && other.net_id == pf.id) {
+					send_frames(transport_, other_conn, pf.frames);
+					break;
+				}
+			}
+		}
+	}
+	// result.changed/cleared: worth re-replicating once a wire message
+	// consumes them (no client renders cracks yet, see REMAINING_TASKS.md
+	// 6.5's texture-atlas dependency note) -- nothing to do here for now.
 }
 
 void ServerSession::apply_damage(Conn &state, float amount, std::string_view cause) {

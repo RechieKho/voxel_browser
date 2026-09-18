@@ -64,6 +64,19 @@ struct std::hash<vb::core::ChunkCoord> {
 	}
 };
 
+// Phase 6.5 (block-damage breaking): a sparse pos -> damage map needs this.
+// Same 21-bits-per-axis packing as ChunkCoord above -- world voxel coordinates
+// need the same range a chunk coordinate times kChunkDim would.
+template <>
+struct std::hash<vb::core::IVec3> {
+	std::size_t operator()(const vb::core::IVec3 &v) const noexcept {
+		const std::uint64_t h = (static_cast<std::uint64_t>(v.x & 0x1FFFFF)) |
+				(static_cast<std::uint64_t>(v.y & 0x1FFFFF) << 21) |
+				(static_cast<std::uint64_t>(v.z & 0x1FFFFF) << 42);
+		return std::hash<std::uint64_t>{}(h);
+	}
+};
+
 template <>
 struct std::hash<vb::core::AssetHash> {
 	std::size_t operator()(const vb::core::AssetHash &a) const noexcept {

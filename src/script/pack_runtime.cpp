@@ -361,6 +361,15 @@ struct PackRuntime::Impl {
 	net::ServerSession::InputHookResult run_player_input(
 			core::NetId id, const protocol::InputCmd &cmd);
 
+	// Phase 6.5 (spec §10.7): shared block-damage breaking. See
+	// net::ServerSession::BlockBreakHooks for the calling contract each of
+	// these implements.
+	bool run_block_break_begin(core::NetId player, core::IVec3 pos);
+	float run_block_break_tick(
+			core::NetId player, core::IVec3 pos, std::uint16_t max_damage);
+	std::optional<float> run_block_health_tick(core::IVec3 pos, float damage,
+			std::uint16_t max_damage, std::uint64_t ticks_since_last_hit);
+
 	// Phase 6.1: vb.world.spawn / self:damage / self:remove dispatch. See
 	// ScriptEntity's comment above for the overall design.
 	core::NetId self_net_id(const sol::table &self) const;
@@ -606,6 +615,8 @@ void PackRuntime::Impl::install_bindings() {
 		type.liquid = def.get_or("liquid", false);
 		type.light_emission =
 				static_cast<std::uint8_t>(def.get_or("light", 0));
+		// Phase 6.5 (spec §10.7): 0 (default) = today's instant break.
+		type.max_damage = static_cast<std::uint16_t>(def.get_or("max_damage", 0));
 		const core::BlockId id = registry.add_or_get(name, type);
 		auto it = std::find_if(blocks.begin(), blocks.end(),
 				[&](const BlockDef &b) { return b.name == name; });
@@ -836,7 +847,8 @@ void PackRuntime::Impl::install_bindings() {
 
 	static const std::set<std::string> kValidEvents = { "player_join",
 		"player_leave", "block_break", "block_place", "player_interact",
-		"chat", "tick", "ui_event", "player_death", "player_input" };
+		"chat", "tick", "ui_event", "player_death", "player_input",
+		"block_break_begin", "block_break_tick", "block_health_tick" };
 	vb["on"] = [this](const std::string &event, sol::protected_function fn) {
 		if (kValidEvents.find(event) == kValidEvents.end()) {
 			throw sol::error("vb.on: unknown event '" + event + "'");
@@ -1224,6 +1236,87 @@ net::ServerSession::InputHookResult PackRuntime::Impl::run_player_input(
 	return result;
 }
 
+namespace {
+sol::table make_pos_table(sol::state &lua, core::IVec3 pos) {
+	sol::table t = lua.create_table();
+	t["x"] = pos.x;
+	t["y"] = pos.y;
+	t["z"] = pos.z;
+	return t;
+}
+} // namespace
+
+bool PackRuntime::Impl::run_block_break_begin(core::NetId player, core::IVec3 pos) {
+	PlayerHandle p{ player, this };
+	return run_veto("block_break_begin", p, make_pos_table(lua_state(), pos));
+}
+
+// Phase 6.5: sums every registered handler's returned delta, matching §10.7's
+// "the engine sums all concurrent contributors' deltas" -- concurrency there
+// is across *players* (one call each, from ServerSession), while multiple
+// handlers for the *same* call is an orthogonal, less-expected case; summing
+// both the same way keeps this simple and never silently drops a delta.
+float PackRuntime::Impl::run_block_break_tick(
+		core::NetId player, core::IVec3 pos, std::uint16_t max_damage) {
+	const auto it = handlers.find("block_break_tick");
+	if (it == handlers.end()) {
+		return 0.0f; // no policy registered -- damage never accrues (§10.7)
+	}
+	PlayerHandle p{ player, this };
+	sol::table pos_tbl = make_pos_table(lua_state(), pos);
+	float total = 0.0f;
+	for (auto &fn : it->second) {
+		if (!fn.valid()) {
+			continue;
+		}
+		vm.begin_call_budget();
+		sol::protected_function_result r = fn(p, pos_tbl, max_damage);
+		if (!r.valid()) {
+			const sol::error e = r;
+			VB_WARN("script", "vb.on('block_break_tick') handler error: ", e.what());
+			continue;
+		}
+		const sol::object ret = r;
+		if (ret.valid() && ret.get_type() == sol::type::number) {
+			total += ret.as<float>();
+		}
+	}
+	return total;
+}
+
+// Phase 6.5: the last handler to return a number wins (chained, like
+// run_player_input's replacement pipeline) -- nullopt (no handler, or every
+// handler returned nothing) means "unchanged", i.e. permanent damage, no
+// healing at all, matching §10.7's "no handler registered" default exactly.
+std::optional<float> PackRuntime::Impl::run_block_health_tick(core::IVec3 pos,
+		float damage, std::uint16_t max_damage, std::uint64_t ticks_since_last_hit) {
+	const auto it = handlers.find("block_health_tick");
+	if (it == handlers.end()) {
+		return std::nullopt;
+	}
+	sol::table pos_tbl = make_pos_table(lua_state(), pos);
+	std::optional<float> replacement;
+	for (auto &fn : it->second) {
+		if (!fn.valid()) {
+			continue;
+		}
+		vm.begin_call_budget();
+		sol::protected_function_result r = fn(pos_tbl, damage, max_damage,
+				static_cast<double>(ticks_since_last_hit));
+		if (!r.valid()) {
+			const sol::error e = r;
+			VB_WARN("script", "vb.on('block_health_tick') handler error: ", e.what());
+			continue;
+		}
+		const sol::object ret = r;
+		if (ret.valid() && ret.get_type() == sol::type::number) {
+			damage = ret.as<float>();
+			replacement = damage;
+		}
+	}
+	return replacement;
+}
+
 PackRuntime::PackRuntime(net::Transport &transport,
 		world::BlockRegistry &registry, std::filesystem::path storage_path,
 		VmLimits limits)
@@ -1332,6 +1425,28 @@ void PackRuntime::attach_session(net::ServerSession &session) {
 				[self](core::NetId id, const protocol::InputCmd &cmd) {
 			return self->run_player_input(id, cmd);
 		});
+	}
+	// Phase 6.5: only installed when a pack registered at least one of the
+	// three block-damage events -- a pack that never opts in pays zero extra
+	// cost in ServerSession's per-tick damage-map walk (it stays empty since
+	// `begin` is never installed to admit a contributor in the first place).
+	if (self->handlers.count("block_break_begin") != 0 ||
+			self->handlers.count("block_break_tick") != 0 ||
+			self->handlers.count("block_health_tick") != 0) {
+		net::ServerSession::BlockBreakHooks hooks;
+		hooks.begin = [self](core::NetId player, core::IVec3 pos, core::BlockId) {
+			return self->run_block_break_begin(player, pos);
+		};
+		hooks.tick_damage = [self](core::NetId player, core::IVec3 pos,
+										  core::BlockId, std::uint16_t max_damage) {
+			return self->run_block_break_tick(player, pos, max_damage);
+		};
+		hooks.health_tick = [self](core::IVec3 pos, core::BlockId, float damage,
+										  std::uint16_t max_damage,
+										  std::uint64_t idle) {
+			return self->run_block_health_tick(pos, damage, max_damage, idle);
+		};
+		session.set_block_break_hooks(std::move(hooks));
 	}
 }
 

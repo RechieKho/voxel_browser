@@ -7,7 +7,18 @@
 > Companion docs: `ARCHITECTURE_SPEC.md` (target design) · `REMAINING_TASKS.md`
 > (implementation backlog). This file is for *traps and context*, not the plan.
 
-Last updated: 2026-09-18 (Phase 6.4 — generic per-key persistent storage:
+Last updated: 2026-09-18 (Phase 6.5 — shared block-damage breaking:
+`vb.register_block{max_damage=...}` + `vb::world::BlockDamageSystem` +
+`C2S_BlockBreakBegin`/`Stop` + `vb.on("block_break_begin"/"block_break_tick"/
+"block_health_tick", ...)`, completion drives the existing `C2S_BlockEdit`
+pipeline; `kEngineProtocolVersion` 12 → 13. Crack-texture rendering and the
+damage-value replication channel stay deferred (blocked on the texture/atlas
+system, see `REMAINING_TASKS.md` 6.5) — see §8's newest entry for the full
+design-scoping notes, including why re-registering an existing base block's
+`max_damage` silently does nothing (`BlockRegistry::add_or_get` is
+idempotent-by-name and never updates an existing entry's properties) and a
+test-construction-order gotcha it cost debugging time to find. Previous
+entry: Phase 6.4 — generic per-key persistent storage:
 `vb.db.get/set/delete` + `vb.crypto.hash`, landed with a hand-rolled
 `ScriptDb`/`sha256` instead of the SQLite backend `REMAINING_TASKS.md`
 originally floated as the "leading candidate" — see §8's newest entry for
@@ -334,6 +345,114 @@ Other undecided-but-not-yet-in-spec:
 ## 8. Done / resolved
 
 _(Move items here with a date + commit when fixed, so the history is visible.)_
+
+- **2026-09-18 — Phase 6.5 shared block-damage breaking landed
+  (uncommitted).** `vb.register_block{max_damage=N}` (default 0 = today's
+  instant break) opts a block into a shared damage pool per
+  `ARCHITECTURE_SPEC.md` §10.7 / `REMAINING_TASKS.md` 6.5.
+  **Scoped down from the full spec on purpose:** the spec's design has the
+  damage *value* itself ride the interest/replication system as a transient
+  entity so nearby players see cracks form. That value has exactly one
+  consumer (a crack overlay), which is itself blocked on the still-missing
+  texture/atlas system (4.3/5.1 — client renders untextured cubes), so this
+  session implemented only the begin/tick/complete *mechanism* —
+  `vb::world::BlockDamageSystem` (`inc/vb/world/block_damage.hpp` +
+  `src/world/block_damage.cpp`, pure/dependency-free/unit-tested, same
+  posture as `ItemDropSystem`) tracks `pos -> {damage, max_damage,
+  last_touched_tick, contributors}`, but its `changed`/`cleared`
+  `BlockDamageTickResult` fields are computed and then ignored by
+  `ServerSession::update_block_damage` — there's no wire message to put them
+  on yet. Wiring that up is the natural next step once a client exists to
+  show it to.
+  **New wire messages**: `C2S_BlockBreakBegin{pos, face}` /
+  `C2S_BlockBreakStop{pos}` (ids 48/49, `inc/vb/protocol/world.hpp`) bracket
+  a player holding a target; `BlockRegistryRecord` also gains `max_damage`.
+  `kEngineProtocolVersion` 12 → 13 (`cmake/version.hpp.in`,
+  `docs/protocol.md`).
+  **Server flow**: `ServerSession::handle_block_break_begin` gates entry —
+  the same reach check `apply_block_edit` uses (extracted to a new public
+  `WorldReplicator::in_reach`, since `C2S_BlockBreakBegin` doesn't itself
+  mutate the world the way `apply_block_edit` does) plus an engine-level
+  `max_damage > 0` check, then a `vb.on("block_break_begin", ...)` veto via
+  a new `ServerSession::BlockBreakHooks` struct (same `std::function`-seam
+  pattern as `BlockEditHooks`/`set_chat_handler`/etc. — no sol2 in
+  `session.hpp`). `ServerSession::update_block_damage()` (called from
+  `tick()` alongside `update_item_drops`) drives `vb.on("block_break_tick",
+  ...)`/`vb.on("block_health_tick", ...)` once per server tick per
+  damaged block; on completion (summed damage reaches `max_damage`) it
+  synthesizes a `C2S_BlockEdit{kBreak}` and calls the *existing*
+  `WorldReplicator::apply_block_edit` — the same `on_break`/`S2C_ChunkDelta`
+  path a manually-sent edit uses, attributed to whichever player happened to
+  be contributing when it completed (`BlockDamageSystem::CompletedBreak`
+  captures one, arbitrary among concurrent "breaking together" contributors,
+  at the moment `states_` erases the entry — captured *before* erasure since
+  the completing tick's contributor list wouldn't otherwise survive past
+  `tick()`'s return).
+  **`vb.on` semantics, not veto-shaped**: `block_break_tick`/
+  `block_health_tick` return numbers, not booleans — multiple concurrent
+  *players* contributing sum their deltas per the spec, and this
+  implementation also sums multiple *handlers* registered for the same
+  event the same way (an orthogonal case the spec didn't call out;
+  summing rather than picking one avoids silently dropping a registered
+  handler's contribution). `block_health_tick`'s chain instead takes the
+  *last* handler's non-nil return, mirroring `run_player_input`'s
+  replacement-chaining style.
+  **Idempotent-registration trap hit while writing the integration test,
+  not just reasoned about:** `BlockRegistry::add_or_get` (existing code,
+  unchanged) returns an already-registered name's id unchanged — it never
+  applies the new `BlockType` passed in. Re-registering `"base:grass"` with
+  `max_damage = 3` in a test does *nothing*, since `base:grass` already
+  exists from `BlockRegistry::base()`. Fixed by registering a brand-new
+  block name (`"test:crumbly"`) instead and placing it into the world
+  directly (`world.set_block`, bypassing worldgen, which only ever emits
+  the 8 base ids) — worth remembering for any future test (or pack) that
+  wants to change a property of one of the base 8 blocks specifically:
+  it silently won't take effect the way `vb.register_item`/`vb.register_biome`
+  callers might expect from the "idempotent by name" framing.
+  **Construction-order trap, also hit while writing the test:** `World`
+  takes `BlockRegistry` *by value* (copies it at construction) — a new block
+  a pack registers via Lua only exists in a `World`'s internal registry copy
+  if the `World` is constructed *after* `PackRuntime::freeze()`, matching
+  `src/server/main.cpp`'s real order. The existing integration tests in this
+  file construct `World` *before* `PackRuntime`/`load_pack_file`/`freeze()`
+  and get away with it only because they never register a genuinely new
+  block id (just re-register existing base names for `on_break`/veto
+  purposes, which doesn't need `World`'s registry copy to know about it) —
+  copy this file's *newest* two tests' construction order, not the older
+  ones, for anything that needs a Lua-registered block to actually exist in
+  the live world.
+  **Test-content-loading trap** (unrelated to the above, cost a separate
+  debugging round): checking `world.solid_at(pos)` for a not-yet-loaded
+  chunk silently returns `false` (unloaded reads as air) — a
+  `REQUIRE(world.solid_at(far_away_pos))` placed *before* moving a player
+  near it and pumping enough ticks to load that chunk fails with no hint
+  why. The existing "vetoes a block break" test in this same file already
+  gets this right (moves the player first, pumps, *then* asserts) — a new
+  test copied the assert-then-move order by mistake and failed until
+  reordered to match.
+  **Not done, deliberately deferred** (all noted inline in
+  `REMAINING_TASKS.md` 6.5 too): `crack_texture` field on `BlockType` (no
+  texture/model fields exist on it at all yet, nowhere to put it); the
+  damage-value replication channel (see the scoping note above); any
+  content in `content/base` using `max_damage` (every base block keeps
+  `max_damage == 0`, so the existing 5.2 client-side 0.35s hold-to-break
+  timer in `src/client/main.cpp` is completely untouched and still governs
+  every real block in the shipped game today); no client UI sends
+  `C2S_BlockBreakBegin`/`Stop` yet, though `ClientSession::
+  send_block_break_begin`/`send_block_break_stop` are real, tested wire
+  calls ready for one.
+  **Verification:** full `vb_tests` green on `build-net-lua`
+  (`VB_WITH_NET=ON`, `VB_WITH_LUA=ON`, 225/225 cases, up from 215 at
+  6.4's count — the delta is this session's `block_damage_test.cpp` (7
+  cases) + 2 new `protocol_test.cpp` cases + 2 new
+  `pack_runtime_integration_test.cpp` cases); `voxel_browser`/
+  `voxel_browser_server` also rebuilt clean. Not verified under a no-Lua/
+  ASan config this session (`build-meshing/` no longer exists on this
+  machine, per 6.4's entry above) — the Lua-specific bindings are entirely
+  inside `pack_runtime.cpp`'s existing `#if VB_WITH_LUA` region, and the
+  `ServerSession`/`WorldReplicator`/`BlockDamageSystem` changes have no Lua
+  dependency at all, so the no-Lua stub-build risk is low, just not
+  re-confirmed here.
 
 - **2026-09-18 — Phase 6.4 generic per-key persistent storage landed
   (uncommitted).** `vb.db.get(key)`/`vb.db.set(key, value)`/

@@ -60,7 +60,13 @@ rt.dispatch_tick(dt);
 - Registration (pack load only, rejected once `freeze()` has run):
   `vb.register_block(def) -> BlockId` (idempotent by `name`; `texture`/`model`
   fields are accepted but not stored — no wire-visible model/texture fields
-  exist on `BlockType` yet), `vb.register_item(def)`, `vb.register_entity(def)`
+  exist on `BlockType` yet; `max_damage` — Phase 6.5, default `0` = today's
+  instant break — opts the block into the shared block-damage breaking system
+  below, replicated to clients as part of `S2C_BlockRegistry`. **Idempotent
+  registration doesn't update an already-registered block's properties** —
+  re-registering an existing `name` (e.g. one of the base 8) just returns its
+  id unchanged; `max_damage`/`solid`/`opaque`/etc. only take effect the first
+  time a name is registered), `vb.register_item(def)`, `vb.register_entity(def)`
   (captures `on_spawn`/`on_tick`/`on_hit`/`on_death` but nothing dispatches
   them yet — no EnTT registry exists, Phase 3.1; its `visual = {...}`
   sub-table — spritesheet variant/facings/origin/clips grid, schema finalized
@@ -121,10 +127,13 @@ rt.dispatch_tick(dt);
   today, crafted-only materials included (see `content/base/blocks/
   planks.lua`/`sticks.lua`).
 - Events: `vb.on("player_join"|"player_leave"|"block_break"|"block_place"|
-  "player_interact"|"chat"|"tick"|"ui_event"|"player_death"|"player_input",
-  handler)`, vetoable via `return false` (except `tick`/`ui_event`, which have
+  "player_interact"|"chat"|"tick"|"ui_event"|"player_death"|"player_input"|
+  "block_break_begin"|"block_break_tick"|"block_health_tick", handler)`,
+  vetoable via `return false` (except `tick`/`ui_event`, which have
   no veto semantics; `player_death` is a *decision* hook, not a veto —
-  see below; `player_input` may veto *or* replace, see below).
+  see below; `player_input` may veto *or* replace, see below;
+  `block_break_tick`/`block_health_tick` return numbers, not booleans —
+  see below).
   `player_join` fires from `install_join_veto`'s `authenticate` wrapper (a
   real pre-join veto — note it hands the handler a plain player *name*
   string, not a `Player` handle, since no session/connection exists yet at
@@ -171,6 +180,31 @@ rt.dispatch_tick(dt);
   Only installed (`ServerSession::set_input_handler`) when a pack actually
   registers a `player_input` handler, so packs that don't use it pay zero
   extra cost in the per-tick input path.
+  Shared block-damage breaking (Phase 6.5, spec §10.7) — only for a block
+  with `max_damage > 0` (§`register_block` above); a `max_damage == 0` target
+  never reaches any of these three, staying today's instant break.
+  `C2S_BlockBreakBegin{pos, face}`/`C2S_BlockBreakStop{pos}` bracket a client
+  holding on a target (`ClientSession::send_block_break_begin`/
+  `send_block_break_stop` — no base-pack/client UI wires these yet, same
+  "mechanism before content" posture as every other Phase 6 primitive).
+  `block_break_begin(player, pos) -> bool?` gates entry — vetoable, on top of
+  the engine's own reach + `max_damage > 0` checks. `block_break_tick(player,
+  pos, max_damage) -> number` fires once per tick per contributing player
+  (multiple concurrent players "breaking together" sum their own return
+  values; multiple registered handlers for the same call also sum, an
+  orthogonal case). `block_health_tick(pos, damage, max_damage,
+  ticks_since_last_hit) -> number?` fires once per tick per currently-damaged
+  block regardless of contributors — return a replacement damage value, or
+  nothing for "unchanged" (the last handler to return a number wins if
+  several are registered). No handler for either tick event = zero built-in
+  policy: `block_break_tick` absent means damage never accrues at all;
+  `block_health_tick` absent means permanent damage, no healing. Completion
+  (summed damage reaching `max_damage`) drives the *existing*, unchanged
+  `C2S_BlockEdit`/`block_break`/`on_break` pipeline — this system only gates
+  *when* that fires. No wire message replicates the damage value itself to
+  nearby players yet (blocked on the still-pending texture/atlas system for
+  the crack overlay, `REMAINING_TASKS.md` 6.5), so a second player can't see
+  another's break progress today, only feel its effect once it commits.
 - Scheduling: `vb.after(seconds, fn)` (one-shot), `vb.every(seconds, fn)`
   (repeating; catches up on a stalled tick, capped at 8 fires/dispatch).
   Storage: `vb.storage.key = value` — a metatable-backed proxy over a
