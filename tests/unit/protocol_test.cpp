@@ -283,6 +283,26 @@ TEST_CASE("move params round-trip (Phase 6.7)") {
 	CHECK(p2.fly == true);
 }
 
+TEST_CASE("day/night curve round-trips, including an empty list (Phase 6.8)") {
+	auto empty = round_trip(S2CDayNightCurve{});
+	CHECK(empty.keyframes.empty());
+
+	S2CDayNightCurve curve;
+	curve.keyframes = {
+		{ 0, 0.1, 10, 20, 30 },
+		{ 12000, 0.9, 200, 210, 220 },
+	};
+	auto r2 = round_trip(curve);
+	REQUIRE(r2.keyframes.size() == 2);
+	CHECK(r2.keyframes[0].tick == 0);
+	CHECK(r2.keyframes[0].brightness == doctest::Approx(0.1));
+	CHECK(r2.keyframes[0].r == 10);
+	CHECK(r2.keyframes[1].tick == 12000);
+	CHECK(r2.keyframes[1].brightness == doctest::Approx(0.9));
+	CHECK(r2.keyframes[1].b == 220);
+	CHECK(r2.keyframes == curve.keyframes);
+}
+
 TEST_CASE("keybind registry round-trips, including an empty list") {
 	auto empty = round_trip(S2CKeybindRegistry{});
 	CHECK(empty.names.empty());

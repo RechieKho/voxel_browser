@@ -73,6 +73,7 @@ ServerConfig server_from_table(const toml::table &tbl) {
 	read_uint(tbl, "world_seed", c.world_seed);
 	read_double(tbl, "gravity", c.gravity);
 	read_double(tbl, "void_kill_y", c.void_kill_y);
+	read_double(tbl, "day_length_seconds", c.day_length_seconds);
 	read_uint(tbl, "asset_max_file_mb", c.asset_max_file_mb);
 	read_uint(tbl, "asset_max_total_mb", c.asset_max_total_mb);
 	read_string(tbl, "motd", c.motd);

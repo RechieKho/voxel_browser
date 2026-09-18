@@ -40,6 +40,7 @@ TEST_CASE("server config: values are read from TOML") {
 		world_seed = 123456789
 		gravity = 19.5
 		void_kill_y = -32.0
+		day_length_seconds = 600.0
 		auth_mode = "token"
 		motd = "hi"
 	)");
@@ -51,8 +52,15 @@ TEST_CASE("server config: values are read from TOML") {
 	CHECK(c->world_seed == 123456789u);
 	CHECK(c->gravity == doctest::Approx(19.5));
 	CHECK(c->void_kill_y == doctest::Approx(-32.0));
+	CHECK(c->day_length_seconds == doctest::Approx(600.0));
 	CHECK(c->auth_mode == ConfigAuthMode::kToken);
 	CHECK(c->motd == "hi");
+}
+
+TEST_CASE("server config: day_length_seconds defaults to 1200 (Phase 6.8)") {
+	auto c = parse_server_config("");
+	REQUIRE(c);
+	CHECK(c->day_length_seconds == doctest::Approx(1200.0));
 }
 
 TEST_CASE("server config: malformed TOML is an error") {

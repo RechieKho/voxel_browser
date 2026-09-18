@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
 
 // Day/night cycle (spec §5.4): the server owns a single `time_of_day` clock
 // (ticks into the day, wrapping at kTicksPerDay) advanced once per tick and
@@ -23,19 +24,44 @@ inline constexpr std::uint32_t kTicksPerDay = 24000;
 double advance_time_of_day(
 		double current_ticks, double dt_seconds, double day_length_seconds);
 
-// Sky brightness at a given time of day, 0 (fully dark, midnight) to 1 (fully
-// bright, noon). Exposed separately from sky_color_for_time() so callers that
-// just need e.g. ambient light scaling don't need an RGB triple.
-double sky_brightness(std::uint32_t ticks);
-
 struct SkyColor {
 	std::uint8_t r = 0;
 	std::uint8_t g = 0;
 	std::uint8_t b = 0;
+
+	bool operator==(const SkyColor &) const = default;
 };
 
-// A simple 4-keyframe (sunrise/noon/sunset/midnight) gradient over the day
-// cycle -- "simple sky gradient" per the spec, not a physically based sky.
+// One point on a day/night gradient: at `tick`, the sky is exactly
+// `brightness`/`color`; between keyframes both are linearly interpolated,
+// wrapping from the last keyframe back to the first at kTicksPerDay.
+struct DayNightKeyframe {
+	std::uint32_t tick = 0;
+	double brightness = 1.0;
+	SkyColor color;
+
+	bool operator==(const DayNightKeyframe &) const = default;
+};
+
+// Phase 6.8: a pack-overridable day/night gradient (`vb.daynight.set_curve`).
+// `keyframes` should be sorted ascending by `tick`; an empty curve is treated
+// as "use default_day_night_curve()" by sky_brightness()/sky_color_for_time()
+// below, so a default-constructed DayNightCurve is always a safe fallback.
+struct DayNightCurve {
+	std::vector<DayNightKeyframe> keyframes;
+};
+
+// The engine's built-in 4-keyframe (sunrise/noon/sunset/midnight) gradient --
+// "simple sky gradient" per the spec, not a physically based sky.
+DayNightCurve default_day_night_curve();
+
+// Sky brightness at a given time of day, 0 (fully dark, midnight) to 1 (fully
+// bright, noon). Exposed separately from sky_color_for_time() so callers that
+// just need e.g. ambient light scaling don't need an RGB triple.
+double sky_brightness(std::uint32_t ticks);
+double sky_brightness(std::uint32_t ticks, const DayNightCurve &curve);
+
 SkyColor sky_color_for_time(std::uint32_t ticks);
+SkyColor sky_color_for_time(std::uint32_t ticks, const DayNightCurve &curve);
 
 } // namespace vb::world

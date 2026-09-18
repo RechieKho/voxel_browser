@@ -54,6 +54,57 @@ TEST_CASE("sky_color_for_time: noon is brighter/bluer than midnight") {
 	CHECK(midnight.b < 50);
 }
 
+TEST_CASE("sky_brightness/sky_color_for_time with an explicit curve match "
+		"the default overloads when passed default_day_night_curve() "
+		"(Phase 6.8)") {
+	const DayNightCurve curve = default_day_night_curve();
+	CHECK(sky_brightness(0, curve) == doctest::Approx(sky_brightness(0)));
+	CHECK(sky_brightness(kTicksPerDay / 4, curve) ==
+			doctest::Approx(sky_brightness(kTicksPerDay / 4)));
+	const SkyColor a = sky_color_for_time((kTicksPerDay * 3) / 4, curve);
+	const SkyColor b = sky_color_for_time((kTicksPerDay * 3) / 4);
+	CHECK(a.r == b.r);
+	CHECK(a.g == b.g);
+	CHECK(a.b == b.b);
+}
+
+TEST_CASE("an empty DayNightCurve falls back to the default curve "
+		"(Phase 6.8)") {
+	const DayNightCurve empty;
+	CHECK(sky_brightness(0, empty) == doctest::Approx(sky_brightness(0)));
+	const SkyColor a = sky_color_for_time(0, empty);
+	const SkyColor b = sky_color_for_time(0);
+	CHECK(a.r == b.r);
+	CHECK(a.g == b.g);
+	CHECK(a.b == b.b);
+}
+
+TEST_CASE("a custom DayNightCurve is honored exactly, not blended with the "
+		"default (Phase 6.8)") {
+	DayNightCurve curve;
+	curve.keyframes = {
+		{ 0, 0.2, SkyColor{ 10, 20, 30 } },
+		{ kTicksPerDay / 2, 0.8, SkyColor{ 200, 210, 220 } },
+	};
+	CHECK(sky_brightness(0, curve) == doctest::Approx(0.2));
+	CHECK(sky_brightness(kTicksPerDay / 2, curve) == doctest::Approx(0.8));
+	const SkyColor at_zero = sky_color_for_time(0, curve);
+	CHECK(at_zero.r == 10);
+	CHECK(at_zero.g == 20);
+	CHECK(at_zero.b == 30);
+	// Halfway between the two keyframes, brightness should be ~0.5.
+	CHECK(sky_brightness(kTicksPerDay / 4, curve) == doctest::Approx(0.5));
+}
+
+TEST_CASE("a single-keyframe DayNightCurve is constant for the whole day "
+		"(Phase 6.8)") {
+	DayNightCurve curve;
+	curve.keyframes = { { 0, 0.42, SkyColor{ 5, 6, 7 } } };
+	CHECK(sky_brightness(0, curve) == doctest::Approx(0.42));
+	CHECK(sky_brightness(kTicksPerDay / 2, curve) == doctest::Approx(0.42));
+	CHECK(sky_brightness(kTicksPerDay - 1, curve) == doctest::Approx(0.42));
+}
+
 TEST_CASE("sky_color_for_time: interpolates smoothly between keyframes") {
 	const SkyColor at_stop = sky_color_for_time(0);
 	const SkyColor just_after = sky_color_for_time(1);

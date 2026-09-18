@@ -886,6 +886,15 @@ void ClientSession::tick(double) {
 					}
 					break;
 				}
+				if (frame->header.type == protocol::MessageType::kS2CDayNightCurve) {
+					if (auto m = protocol::S2CDayNightCurve::decode(frame->payload)) {
+						apply_day_night_curve(*m);
+					} else {
+						VB_ERROR("net", "malformed S2C_DayNightCurve: ",
+								core::message(m.error()));
+					}
+					break;
+				}
 				if (handshake_.status() == ClientHandshakeStatus::kJoined &&
 						apply_gameplay_frame(*frame)) {
 					break;
@@ -1079,6 +1088,18 @@ void ClientSession::apply_move_params(const protocol::S2CMoveParams &msg) {
 	p.fly = msg.fly;
 	move_params_ = p;
 	VB_INFO("net", "received move params (gravity=", p.gravity, ")");
+}
+
+void ClientSession::apply_day_night_curve(const protocol::S2CDayNightCurve &msg) {
+	world::DayNightCurve curve;
+	curve.keyframes.reserve(msg.keyframes.size());
+	for (const auto &k : msg.keyframes) {
+		curve.keyframes.push_back(
+				{ k.tick, k.brightness, world::SkyColor{ k.r, k.g, k.b } });
+	}
+	VB_INFO("net", "received day/night curve (", curve.keyframes.size(),
+			" keyframes)");
+	day_night_curve_ = std::move(curve);
 }
 
 void ClientSession::apply_snapshot(const protocol::S2CEntitySnapshot &snap) {

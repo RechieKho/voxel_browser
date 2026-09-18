@@ -29,6 +29,10 @@ struct ServerConfig {
 	std::uint64_t world_seed = 0; // 0 = random at startup
 	double gravity = 24.0;
 	double void_kill_y = -64.0; // fall below this Y -> instant death, respawn at spawn
+	// Real seconds for one full in-game day/night cycle (spec §5.4). Matches
+	// ServerSession::day_length_seconds_'s own hardcoded default -- an unset
+	// value here changes nothing.
+	double day_length_seconds = 1200.0;
 	std::uint32_t asset_max_file_mb = 32;
 	std::uint32_t asset_max_total_mb = 512;
 	ConfigAuthMode auth_mode = ConfigAuthMode::kNone;

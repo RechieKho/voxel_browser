@@ -163,6 +163,78 @@ TEST_CASE("without a vb.physics.set_params call, effective_move_params "
 	CHECK(effective.fly == base.fly);
 }
 
+TEST_CASE("vb.daynight.set_curve overrides the default gradient, rejected "
+		"after freeze (Phase 6.8)") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("daynight"));
+
+	const auto r = rt.load_pack_file(R"(
+		vb.daynight.set_curve({
+			keyframes = {
+				{ tick = 0, brightness = 0.1, color = { 10, 20, 30 } },
+				{ tick = 12000, brightness = 0.9, color = { 200, 210, 220 } },
+			},
+		})
+	)");
+	REQUIRE(r);
+	rt.freeze();
+
+	const auto curve = rt.effective_day_night_curve();
+	REQUIRE(curve.has_value());
+	REQUIRE(curve->keyframes.size() == 2);
+	CHECK(curve->keyframes[0].tick == 0);
+	CHECK(curve->keyframes[0].brightness == doctest::Approx(0.1));
+	CHECK(curve->keyframes[0].color.r == 10);
+	CHECK(curve->keyframes[1].tick == 12000);
+	CHECK(curve->keyframes[1].color.b == 220);
+
+	const auto r2 = rt.load_pack_file(
+			R"(vb.daynight.set_curve({ keyframes = { { tick = 0 } } }))");
+	CHECK_FALSE(r2);
+}
+
+TEST_CASE("vb.daynight.set_curve rejects an empty/missing keyframes table "
+		"(Phase 6.8)") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("daynight_empty"));
+
+	CHECK_FALSE(rt.load_pack_file(R"(vb.daynight.set_curve({}))"));
+	CHECK_FALSE(rt.load_pack_file(R"(vb.daynight.set_curve({ keyframes = {} }))"));
+}
+
+TEST_CASE("without a vb.daynight.set_curve call, effective_day_night_curve "
+		"returns nullopt (Phase 6.8)") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("daynight_default"));
+	rt.freeze();
+
+	CHECK_FALSE(rt.effective_day_night_curve().has_value());
+}
+
+TEST_CASE("vb.daynight.set_day_length overrides the base day length, "
+		"rejected for non-positive values (Phase 6.8)") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("day_length"));
+
+	const auto r = rt.load_pack_file(R"(vb.daynight.set_day_length(600))");
+	REQUIRE(r);
+	rt.freeze();
+
+	CHECK(rt.effective_day_length_seconds(1200.0) == doctest::Approx(600.0));
+
+	vb::script::PackRuntime rt2(net.server(), registry, temp_storage("day_length_default"));
+	rt2.freeze();
+	CHECK(rt2.effective_day_length_seconds(1200.0) == doctest::Approx(1200.0));
+
+	vb::script::PackRuntime rt3(net.server(), registry, temp_storage("day_length_bad"));
+	CHECK_FALSE(rt3.load_pack_file(R"(vb.daynight.set_day_length(0))"));
+	CHECK_FALSE(rt3.load_pack_file(R"(vb.daynight.set_day_length(-5))"));
+}
+
 TEST_CASE("vb.register_biome / vb.register_craft accept arbitrary def tables") {
 	vb::net::LoopbackNetwork net;
 	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();

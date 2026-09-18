@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string_view>
 
 #include "vb/core/ids.hpp"
@@ -13,6 +14,7 @@
 #include "vb/physics/movement.hpp"
 #include "vb/script/vm.hpp"
 #include "vb/world/block.hpp"
+#include "vb/world/daynight.hpp"
 
 // Server-side Lua registration + runtime API (spec §10.3, Phase 4.2). Owns a
 // Vm, the frozen-after-load content registries, the event bus, and
@@ -88,6 +90,21 @@ public:
 	// once, before constructing the ServerSession (its result also belongs on
 	// HandshakeServerHost::move_params so the client mirrors it exactly).
 	physics::MoveParams effective_move_params(physics::MoveParams base) const;
+
+	// Phase 6.8: a pack's `vb.daynight.set_curve{keyframes = {...}}`, if it
+	// ever called it -- `nullopt` (default) means no pack ever overrode the
+	// curve, so the caller should send no S2C_DayNightCurve frame at all and
+	// let the client keep vb::world::default_day_night_curve() (same "no
+	// frame, no behavior change" posture as effective_move_params() feeding
+	// HandshakeServerHost::move_params).
+	std::optional<world::DayNightCurve> effective_day_night_curve() const;
+
+	// Phase 6.8: applies a pack's `vb.daynight.set_day_length(seconds)` on top
+	// of `base` (the operator's `server.toml` day_length_seconds, or
+	// ServerSession's own hardcoded default) -- returns `base` unchanged if no
+	// pack ever calls it, same "engine/operator default, pack overrides on
+	// top" shape as effective_move_params()/ServerConfig::gravity.
+	double effective_day_length_seconds(double base) const;
 
 	// Drive from the main loop, once per tick, after ServerSession::tick():
 	void dispatch_player_join_completed(const net::SessionPlayerJoined &j);

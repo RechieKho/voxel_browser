@@ -30,6 +30,7 @@
 #include "vb/replication/interest.hpp"
 #include "vb/world/block_damage.hpp"
 #include "vb/world/client_chunk_store.hpp"
+#include "vb/world/daynight.hpp"
 #include "vb/world/item_drops.hpp"
 
 // Sessions glue a Transport to the handshake FSMs and present a small
@@ -41,6 +42,12 @@
 // (dedicated server) with no code change.
 
 namespace vb::net {
+
+// Day/night cycle (spec §5.4): ServerSession's built-in real-seconds-per-day
+// default, also the base --singleplayer's in-process host feeds into
+// PackRuntime::effective_day_length_seconds() (Phase 6.8) since it has no
+// server.toml to read a config value from.
+inline constexpr double kDefaultDayLengthSeconds = 1200.0;
 
 // --- server ---------------------------------------------------------------
 
@@ -313,7 +320,7 @@ private:
 	physics::MoveParams move_params_;
 	int interest_radius_cells_ = 2;
 	double time_of_day_ticks_ = 0.0;
-	double day_length_seconds_ = 1200.0; // 20 real minutes per in-game day
+	double day_length_seconds_ = kDefaultDayLengthSeconds; // 20 real minutes/day
 	double time_of_day_broadcast_accum_ = 0.0;
 	double void_kill_y_ = -64.0;
 	std::function<RespawnDecision(core::NetId, std::string_view, float)>
@@ -469,6 +476,14 @@ public:
 		return players_;
 	}
 
+	// The day/night gradient to render with (spec §5.4, Phase 6.8): the
+	// engine default until (if ever) a real S2C_DayNightCurve frame arrives
+	// and apply_day_night_curve() overwrites it -- same "no frame, no
+	// behavior change" posture as move_params()/registered_keybinds().
+	const world::DayNightCurve &day_night_curve() const {
+		return day_night_curve_;
+	}
+
 	// This player's inventory (spec §5.1), kept in sync by S2C_Inventory.
 	// Empty until the first snapshot arrives (e.g. before any player:give()).
 	const std::vector<protocol::InventorySlot> &inventory() const {
@@ -495,6 +510,7 @@ private:
 	void apply_block_registry(const protocol::S2CBlockRegistry &msg);
 	void apply_keybind_registry(const protocol::S2CKeybindRegistry &msg);
 	void apply_move_params(const protocol::S2CMoveParams &msg);
+	void apply_day_night_curve(const protocol::S2CDayNightCurve &msg);
 	void apply_snapshot(const protocol::S2CEntitySnapshot &snap);
 	void reconcile(const protocol::EntityRecord &authoritative,
 			std::uint32_t acked_seq);
@@ -532,6 +548,7 @@ private:
 	std::optional<std::uint32_t> time_of_day_override_;
 	std::vector<protocol::InventorySlot> inventory_;
 	std::vector<std::string> keybind_names_;
+	world::DayNightCurve day_night_curve_; // empty = default_day_night_curve()
 
 	physics::MoveState predicted_;
 	physics::MoveParams move_params_;

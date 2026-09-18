@@ -73,6 +73,32 @@ struct S2CMoveParams {
 	static Decoded<S2CMoveParams> decode(std::span<const std::byte> in);
 };
 
+// --- day/night curve (spec §5.4, Phase 6.8) -----------------------------
+// Mirrors vb::world::DayNightKeyframe flat, same posture as
+// BlockRegistryRecord/S2CMoveParams (protocol/ never depends on world/).
+// Sent between C2S_Ready and S2C_JoinAccept alongside S2C_BlockRegistry/
+// S2C_MoveParams only when a pack overrides the default curve via
+// vb.daynight.set_curve{...}; no frame at all keeps every client on
+// vb::world::default_day_night_curve().
+struct DayNightKeyframeRecord {
+	std::uint32_t tick = 0;
+	double brightness = 1.0;
+	std::uint8_t r = 0;
+	std::uint8_t g = 0;
+	std::uint8_t b = 0;
+
+	bool operator==(const DayNightKeyframeRecord &) const = default;
+};
+
+struct S2CDayNightCurve {
+	static constexpr MessageType kType = MessageType::kS2CDayNightCurve;
+
+	std::vector<DayNightKeyframeRecord> keyframes;
+
+	void encode(std::vector<std::byte> &out) const;
+	static Decoded<S2CDayNightCurve> decode(std::span<const std::byte> in);
+};
+
 struct S2CChunkAdd {
 	static constexpr MessageType kType = MessageType::kS2CChunkAdd;
 

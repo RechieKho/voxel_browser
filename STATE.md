@@ -7,7 +7,14 @@
 > Companion docs: `ARCHITECTURE_SPEC.md` (target design) · `REMAINING_TASKS.md`
 > (implementation backlog). This file is for *traps and context*, not the plan.
 
-Last updated: 2026-09-18 (Phase 6.7 — physics/movement parameters:
+Last updated: 2026-09-18 (Phase 6.8 — day/night cycle curve:
+`vb::world::DayNightCurve` (a generalized `vector<DayNightKeyframe>`
+replacing the old fixed 4-stop gradient tables) + `vb.daynight.set_curve{...}`
++ `S2C_DayNightCurve` (id 51, `kEngineProtocolVersion` 14 → 15) so a pack's
+custom sky gradient actually reaches the client; also wired
+`day_length_seconds` to both `server.toml` and `vb.daynight.set_day_length(...)`,
+the second half of this item's originally-scoped gap. See §8's newest entry
+for the full writeup. Previous entry: Phase 6.7 — physics/movement parameters:
 `vb.physics.set_params{...}` + `PackRuntime::effective_move_params()`,
 `S2C_MoveParams` (id 50, `kEngineProtocolVersion` 13 → 14) so client
 prediction mirrors the server's authoritative tunables instead of silently
@@ -353,6 +360,82 @@ Other undecided-but-not-yet-in-spec:
 ## 8. Done / resolved
 
 _(Move items here with a date + commit when fixed, so the history is visible.)_
+
+- **2026-09-18 — Phase 6.8 day/night cycle curve landed (uncommitted).**
+  `sky_brightness()`/`sky_color_for_time()` (`inc/vb/world/daynight.hpp` +
+  `src/world/daynight.cpp`) were a fixed 4-keyframe gradient with no Lua
+  reach at all; generalized into `vb::world::DayNightCurve` (a
+  `vector<DayNightKeyframe>` of `{tick, brightness, color}`) with curve-taking
+  overloads of both functions. `default_day_night_curve()` reproduces the
+  exact 4 keyframes the old hardcoded tables had, and an *empty* curve passed
+  to either overload falls back to it — so every pre-6.8 call site (both the
+  existing no-curve overloads, kept as thin wrappers, and `daynight_test.cpp`'s
+  existing assertions) is byte-for-byte unaffected.
+  **Lua surface**: `vb.daynight.set_curve{keyframes = {{tick=, brightness=,
+  color={r,g,b}}, ...}}` (`src/script/pack_runtime.cpp`) stores the raw table;
+  `PackRuntime::effective_day_night_curve()` parses it into a
+  `world::DayNightCurve` lazily (mirrors `effective_move_params()`'s posture
+  of reading `move_params_table` field-by-field on demand rather than
+  eagerly), returning `nullopt` if no pack ever called it. Rejects an
+  empty/missing `keyframes` table and any call after `freeze()`.
+  **Replication, new wire message**: `S2C_DayNightCurve` (id 51,
+  `inc/vb/protocol/world.hpp`, `kEngineProtocolVersion` 14 → 15) mirrors
+  `DayNightKeyframe` flat (`varint n` + `n × {u32 tick, f64 brightness, u8 r,
+  u8 g, u8 b}`) rather than protocol/ depending on world/ — same posture as
+  `S2C_MoveParams` mirroring `physics::MoveParams`. Sent between `C2S_Ready`
+  and `S2C_JoinAccept` via a new `HandshakeServerHost::day_night_curve` hook
+  (`nullopt` default = no frame at all, so a host/test that never opts in
+  leaves the client on `default_day_night_curve()`, unchanged) — wired in
+  both `src/server/main.cpp` and `--singleplayer`'s `make_singleplayer_host`
+  (`src/client/main.cpp`), each reading `pack_runtime.effective_day_night_curve()`
+  once and capturing the result by value in the lambda (same pattern
+  `host.move_params` already used). `ClientSession::apply_day_night_curve`
+  (`src/net/session.cpp`) rebuilds the `world::DayNightCurve` and stores it in
+  a new `day_night_curve_` member, exposed via a `day_night_curve()` const
+  getter; intercepted unconditionally in `tick()` (not gated on handshake
+  state), same reasoning as `S2C_MoveParams`/`S2C_BlockRegistry` — real
+  transports don't guarantee cross-lane arrival order relative to
+  `JoinAccept`. `src/client/main.cpp`'s sky-clear code now reads
+  `vb::world::sky_color_for_time(client->time_of_day(), client->day_night_curve())`
+  instead of the bare single-argument overload, so a pack's override actually
+  reaches the rendered sky, not just server-side bookkeeping.
+  **Second half of the gap, also closed in this session (not originally
+  strictly required, but named in the same task item and cheap once the
+  curve plumbing existed):** `day_length_seconds` had a real runtime setter
+  (`ServerSession::set_day_length_seconds`) that literally nothing ever
+  called — every server (dedicated and `--singleplayer` alike) silently ran
+  on the hardcoded `1200.0` member-initializer default with no way to change
+  it. Extracted that literal to a new `vb::net::kDefaultDayLengthSeconds`
+  constant (`inc/vb/net/session.hpp`) so `ServerSession`'s own default and
+  `--singleplayer`'s host (which has no `server.toml` to read a config value
+  from) can't drift apart. Added `ServerConfig::day_length_seconds` (`server.toml`,
+  same default) as the config-layer base; `vb.daynight.set_day_length(seconds)`
+  (rejects `seconds <= 0`) overrides it via a new
+  `PackRuntime::effective_day_length_seconds(base)` — the exact same
+  config-then-pack-override shape 6.7 established for `gravity`/
+  `vb.physics.set_params`, not a new pattern. `src/server/main.cpp` calls
+  `session.set_day_length_seconds(pack_runtime.effective_day_length_seconds(
+  config.day_length_seconds))`; `Singleplayer`'s constructor body calls the
+  equivalent with `vb::net::kDefaultDayLengthSeconds` as the base.
+  **Deliberately not attempted:** a pack-supplied arbitrary curve *function*
+  (a Lua callback re-evaluated per read) — every other Phase 6 "default +
+  override" item ships data (a table of values), not an executable hook
+  re-invoked from the replication path, and piecewise-linear keyframes can
+  already approximate most shapes with enough points.
+  **Verification:** full `vb_tests` green on `build-net-lua`
+  (`VB_WITH_NET=ON`, `VB_WITH_LUA=ON`, 240/240 cases, up from 230 at 6.7's
+  count — this session's 4 new `daynight_test.cpp` cases, 4 new
+  `pack_runtime_test.cpp` cases, 1 new `protocol_test.cpp` case, and 1 new
+  `config_test.cpp` case). All 4 CTest cases
+  (`vb_tests`/`server_smoke`/`client_smoke`/`singleplayer_smoke`) pass. Not
+  verified under a no-Lua/ASan config this session (no pre-built ASan dir
+  remains on this machine, per 6.4's entry) — the Lua-specific bindings are
+  entirely inside `pack_runtime.cpp`'s existing `#if VB_WITH_LUA` region
+  (with a matching stub returning `base`/`nullopt` in the `#else` branch,
+  compiled but not exercised here), and every other changed file
+  (`daynight.cpp`, `world.cpp`, `handshake.cpp`, `session.cpp`) has no Lua
+  dependency at all, so the no-Lua stub-build risk is low, just not
+  re-confirmed here.
 
 - **2026-09-18 — Phase 6.7 physics/movement parameters landed
   (uncommitted).** `vb.physics.set_params{...}` (`src/script/pack_runtime.cpp`)

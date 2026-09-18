@@ -1763,15 +1763,41 @@ windows, chatting, crafting, and seeing each other, all at once.
       by reading back `client->move_params()` (new getter,
       `inc/vb/net/session.hpp`) instead of reconstructing a default.
 
-### 6.8 Day/night cycle curve (default + override)
+### 6.8 Day/night cycle curve (default + override) ✅
 
-- [ ] `sky_brightness()`/`sky_color_for_time()` (`inc/vb/world/
-      daynight.hpp:26-39`) are a fixed 4-keyframe gradient, not Lua-reachable
-      at all today. `day_length_seconds` already exists as a runtime value
-      (`ServerSession::set_day_length_seconds`) but isn't wired to any
-      config or Lua surface either. Ship the current curve as the default;
-      let a pack supply its own keyframes/curve function (eternal night,
-      custom skyboxes, alien day cycles).
+- [x] `vb::world::DayNightCurve` (`inc/vb/world/daynight.hpp`) generalizes the
+      old fixed 4-keyframe gradient into a `vector<DayNightKeyframe>` (tick +
+      brightness + color); `sky_brightness()`/`sky_color_for_time()` gain
+      curve-taking overloads (an empty curve falls back to
+      `default_day_night_curve()`, which reproduces the original 4 keyframes
+      exactly — every pre-6.8 call site/test is unaffected).
+      `vb.daynight.set_curve{keyframes = {{tick=, brightness=, color={r,g,b}},
+      ...}}` (`src/script/pack_runtime.cpp`) lets a pack override it; replicated
+      to joining clients as `S2C_DayNightCurve` (51, `kEngineProtocolVersion`
+      14 → 15) between `C2S_Ready` and `S2C_JoinAccept` alongside
+      `S2C_BlockRegistry`/`S2C_MoveParams` (`HandshakeServerHost::
+      day_night_curve`, `nullopt` default = no frame, zero behavior change).
+      `src/client/main.cpp`'s sky-clear code reads `client->day_night_curve()`
+      instead of the bare default overload.
+- [x] `day_length_seconds` wired to both a config surface and a Lua surface,
+      closing the second half of the gap this item called out:
+      `ServerConfig::day_length_seconds` (`server.toml`, default 1200.0,
+      matching `ServerSession`'s own hardcoded default exactly — extracted to
+      a shared `vb::net::kDefaultDayLengthSeconds` constant so the two never
+      drift) is the base; `vb.daynight.set_day_length(seconds)` overrides it
+      on top (rejects `seconds <= 0`), the same config-then-pack-override
+      shape 6.7's `gravity`/`vb.physics.set_params` established. Wired in both
+      `src/server/main.cpp` (`config.day_length_seconds` base) and
+      `--singleplayer`'s `Singleplayer` struct (`kDefaultDayLengthSeconds`
+      base, no `server.toml` there) via `PackRuntime::
+      effective_day_length_seconds(base)`.
+- [ ] Not done, deliberately out of scope: a pack-supplied arbitrary *curve
+      function* (Lua callback re-evaluated every read) — only data-driven
+      keyframes, matching every other Phase 6 "default + override" item's
+      shape (a table of values, not an executable hook) and avoiding a
+      per-frame Lua call from the replication path. A pack wanting a
+      non-piecewise-linear shape can still approximate it with more
+      keyframes.
 
 ### 6.9 Inventory stacking (default + override)
 

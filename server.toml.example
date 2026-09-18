@@ -11,6 +11,7 @@ tick_rate          = 20         # Hz, clamped to 1..240
 world_seed         = 0          # 0 = random each startup
 gravity            = 24.0
 void_kill_y        = -64.0      # fall below this Y -> instant death, respawn at spawn
+day_length_seconds = 1200.0     # real seconds per in-game day/night cycle
 asset_max_file_mb  = 32
 asset_max_total_mb = 512
 auth_mode          = "none"     # "none" | "token" (token verification is stubbed)

@@ -10,6 +10,7 @@ namespace {
 
 inline constexpr std::uint64_t kMaxChunkBytes = 8u * 1024u * 1024u;
 inline constexpr std::uint64_t kMaxBlockRegistryRecords = 4096u;
+inline constexpr std::uint64_t kMaxDayNightKeyframes = 256u;
 
 constexpr std::uint64_t chunk_volume() {
 	return static_cast<std::uint64_t>(core::kChunkDim) *
@@ -113,6 +114,39 @@ Decoded<S2CMoveParams> S2CMoveParams::decode(std::span<const std::byte> in) {
 	m.step_height = r.f64();
 	m.fly_speed = r.f64();
 	m.fly = r.boolean();
+	return finish(r, std::move(m));
+}
+
+// --- S2CDayNightCurve -------------------------------------------------------
+void S2CDayNightCurve::encode(std::vector<std::byte> &out) const {
+	ByteWriter w(out);
+	w.varint(keyframes.size());
+	for (const auto &k : keyframes) {
+		w.u32(k.tick);
+		w.f64(k.brightness);
+		w.u8(k.r);
+		w.u8(k.g);
+		w.u8(k.b);
+	}
+}
+
+Decoded<S2CDayNightCurve> S2CDayNightCurve::decode(std::span<const std::byte> in) {
+	ByteReader r(in);
+	S2CDayNightCurve m;
+	const std::uint64_t n = r.varint();
+	if (n > kMaxDayNightKeyframes) {
+		return Err{ core::ProtocolError::kLengthExceeded };
+	}
+	m.keyframes.reserve(static_cast<std::size_t>(n));
+	for (std::uint64_t i = 0; i < n && !r.failed(); ++i) {
+		DayNightKeyframeRecord k;
+		k.tick = r.u32();
+		k.brightness = r.f64();
+		k.r = r.u8();
+		k.g = r.u8();
+		k.b = r.u8();
+		m.keyframes.push_back(k);
+	}
 	return finish(r, std::move(m));
 }
 

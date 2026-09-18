@@ -105,6 +105,16 @@ struct HandshakeServerHost {
 		return std::optional<protocol::S2CMoveParams>{};
 	};
 
+	// A pack-overridden day/night gradient, sent as S2C_DayNightCurve
+	// alongside move_params above (spec §5.4, Phase 6.8). `nullopt` (default)
+	// sends no frame at all -- the client keeps rendering
+	// vb::world::default_day_night_curve(), so hosts/tests that don't care
+	// about this see zero behavior change.
+	std::function<std::optional<std::vector<protocol::DayNightKeyframeRecord>>()>
+			day_night_curve = [] {
+		return std::optional<std::vector<protocol::DayNightKeyframeRecord>>{};
+	};
+
 	// Pack-registered custom keybind names, sent as S2C_KeybindRegistry
 	// alongside block_registry above (spec §10.6, Phase 6.3) -- `names[i]`
 	// becomes bit i of every InputCmd::keybinds from then on. `nullopt`

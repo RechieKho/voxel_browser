@@ -174,6 +174,24 @@ vb::net::HandshakeServerHost make_singleplayer_host(std::uint64_t seed,
 		}
 		return out;
 	};
+	// Phase 6.8: mirrors src/server/main.cpp's own host.day_night_curve
+	// exactly -- nullopt (no pack called vb.daynight.set_curve) sends no
+	// frame, leaving --singleplayer on the same built-in gradient a
+	// dedicated server's clients get.
+	const std::optional<vb::world::DayNightCurve> day_night_curve =
+			pack_runtime.effective_day_night_curve();
+	host.day_night_curve =
+			[day_night_curve]() -> std::optional<std::vector<vb::protocol::DayNightKeyframeRecord>> {
+		if (!day_night_curve) {
+			return std::nullopt;
+		}
+		std::vector<vb::protocol::DayNightKeyframeRecord> out;
+		out.reserve(day_night_curve->keyframes.size());
+		for (const auto &k : day_night_curve->keyframes) {
+			out.push_back({ k.tick, k.brightness, k.color.r, k.color.g, k.color.b });
+		}
+		return out;
+	};
 	return host;
 }
 
@@ -213,6 +231,13 @@ struct Singleplayer {
 			  server(net.server(), sp_server_config(seed),
 					  make_singleplayer_host(seed, pack_runtime, registry, move_params)) {
 		server.set_move_params(move_params);
+		// Phase 6.8: no server.toml on this in-process path either, so
+		// ServerSession's own hardcoded default (kDefaultDayLengthSeconds,
+		// matching its member initializer) is the base a pack's
+		// vb.daynight.set_day_length(...) overrides on top of (mirrors
+		// move_params above).
+		server.set_day_length_seconds(pack_runtime.effective_day_length_seconds(
+				vb::net::kDefaultDayLengthSeconds));
 		auto listening = net.server().listen(0);
 		(void)listening; // loopback listen never fails on a fresh network
 
@@ -937,8 +962,8 @@ int main(int argc, char **argv) {
 				// kept current by periodic S2C_TimeOfDay updates). Overwrites
 				// window.begin_frame()'s flat dark clear for this state only.
 				{
-					const vb::world::SkyColor sky =
-							vb::world::sky_color_for_time(client->time_of_day());
+					const vb::world::SkyColor sky = vb::world::sky_color_for_time(
+							client->time_of_day(), client->day_night_curve());
 					ClearBackground(Color{ sky.r, sky.g, sky.b, 255 });
 				}
 

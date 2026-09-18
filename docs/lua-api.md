@@ -239,6 +239,18 @@ rt.dispatch_tick(dt);
   Reaches joining clients as `S2C_MoveParams` so client-side prediction uses
   the exact same tunables as the server's authoritative simulation, same
   opt-in-hook shape as `block_registry`/`keybind_registry`.
+- Day/night curve (Phase 6.8): `vb.daynight.set_curve{keyframes = {{tick=,
+  brightness=, color={r,g,b}}, ...}}` overrides the engine's default
+  4-keyframe sky gradient (`vb::world::default_day_night_curve()`); rejects
+  an empty/missing `keyframes` table and any call after `freeze()`. Reaches
+  joining clients as `S2C_DayNightCurve`, same "no call, no frame, client
+  keeps the default" opt-in shape as `vb.physics.set_params`/`S2C_MoveParams`
+  above — the client actually renders with the overridden curve
+  (`ClientSession::day_night_curve()`), not just server-side bookkeeping.
+  `vb.daynight.set_day_length(seconds)` (rejects `seconds <= 0`) overrides
+  the real seconds one in-game day takes, the same config-then-pack-override
+  shape as `gravity` (`server.toml`'s `day_length_seconds` is the base a pack
+  override wins over).
 
 ## Client UI API — `vb::script::UiRuntime` (`inc/vb/script/ui_runtime.hpp`, implemented, `VB_WITH_LUA`)
 

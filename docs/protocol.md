@@ -4,8 +4,19 @@
 > as any change to a struct in `inc/vb/protocol/`, and bump
 > `kEngineProtocolVersion` in `cmake/version.hpp.in`.
 
-Current `ENGINE_PROTOCOL_VERSION`: **14**.
+Current `ENGINE_PROTOCOL_VERSION`: **15**.
 
+- **15** — `S2C_DayNightCurve` (51) payload defined (Phase 6.8, spec §5.4):
+  `varint n` + `n × {u32 tick, f64 brightness, u8 r, u8 g, u8 b}`, mirroring
+  `vb::world::DayNightKeyframe` flat (protocol/ never depends on world/, same
+  posture as `S2C_MoveParams`). Sent between `C2S_Ready` and `S2C_JoinAccept`
+  alongside `S2C_BlockRegistry`/`S2C_MoveParams` only if
+  `HandshakeServerHost::day_night_curve` returns a value; `nullopt` default =
+  no frame, so a host/test that never opts in leaves the client on
+  `vb::world::default_day_night_curve()`, unchanged. `PackRuntime::
+  effective_day_night_curve()` returns the raw keyframe list a pack passed to
+  `vb.daynight.set_curve{keyframes = {...}}`, or `nullopt` if no pack ever
+  called it.
 - **14** — `S2C_MoveParams` (50) payload defined (Phase 6.7, spec §7.3): a
   flat snapshot of `vb::physics::MoveParams` (`f64×13` tunables + `bool fly`)
   mirroring `vb::protocol::BlockRegistryRecord`'s posture of duplicating
@@ -221,6 +232,21 @@ swaps this straight into the same `physics::MoveParams` its local prediction
 already runs (`ClientSession::set_move_params`), so a pack's
 `vb.physics.set_params{...}` override (or the operator's `server.toml`
 `gravity`) reaches client-side prediction exactly, not just server authority.
+
+### Day/night curve — `inc/vb/protocol/world.hpp` (implemented)
+
+| Type (id)                | Fields                                                        |
+| ------------------------- | ------------------------------------------------------------ |
+| `S2C_DayNightCurve` (51) | `varint n` + `n × {u32 tick, f64 brightness, u8 r, u8 g, u8 b}` |
+
+Sent between `C2S_Ready` and `S2C_JoinAccept` (Phase 6.8) only if
+`HandshakeServerHost::day_night_curve` returns a value; `nullopt` (default)
+sends nothing, so a host/test that never opts in leaves the client on
+`vb::world::default_day_night_curve()`, unchanged. The client rebuilds a
+`world::DayNightCurve` from the records (in wire order) and uses it for both
+`sky_brightness()`/`sky_color_for_time()` in place of the built-in default —
+a pack's `vb.daynight.set_curve{keyframes = {...}}` reaches the actual
+rendered sky, not just server-side bookkeeping.
 
 ### World editing — `inc/vb/protocol/world.hpp` (implemented)
 

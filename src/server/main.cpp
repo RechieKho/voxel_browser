@@ -194,6 +194,23 @@ int main(int argc, char **argv) {
 			move_params.gravity, move_params.jump_speed, move_params.terminal_velocity,
 			move_params.step_height, move_params.fly_speed, move_params.fly };
 	};
+	// Phase 6.8: advertise a pack's vb.daynight.set_curve{...} override the
+	// same way -- nullopt (no pack ever called it) sends no frame, leaving
+	// every client on vb::world::default_day_night_curve() unchanged.
+	const std::optional<vb::world::DayNightCurve> day_night_curve =
+			pack_runtime.effective_day_night_curve();
+	host.day_night_curve =
+			[day_night_curve]() -> std::optional<std::vector<vb::protocol::DayNightKeyframeRecord>> {
+		if (!day_night_curve) {
+			return std::nullopt;
+		}
+		std::vector<vb::protocol::DayNightKeyframeRecord> out;
+		out.reserve(day_night_curve->keyframes.size());
+		for (const auto &k : day_night_curve->keyframes) {
+			out.push_back({ k.tick, k.brightness, k.color.r, k.color.g, k.color.b });
+		}
+		return out;
+	};
 	host.asset_manifest = [manifest_ptr] { return manifest_ptr; };
 	host.asset_file_bytes = [manifest_ptr, content_pack = config.content_pack](
 			vb::core::AssetHash h) -> std::optional<std::vector<std::byte>> {
@@ -227,6 +244,11 @@ int main(int argc, char **argv) {
 
 	session.set_move_params(move_params);
 	session.set_void_kill_y(config.void_kill_y);
+	// Phase 6.8: fold server.toml's day_length_seconds in as the base, then
+	// let a pack's vb.daynight.set_day_length(...) override on top of it --
+	// mirrors move_params.gravity's config-then-pack-override precedent.
+	session.set_day_length_seconds(
+			pack_runtime.effective_day_length_seconds(config.day_length_seconds));
 
 	std::signal(SIGINT, handle_signal);
 	std::signal(SIGTERM, handle_signal);

@@ -28,6 +28,12 @@ void PackRuntime::attach_session(net::ServerSession &) {}
 physics::MoveParams PackRuntime::effective_move_params(physics::MoveParams base) const {
 	return base;
 }
+std::optional<world::DayNightCurve> PackRuntime::effective_day_night_curve() const {
+	return std::nullopt;
+}
+double PackRuntime::effective_day_length_seconds(double base) const {
+	return base;
+}
 void PackRuntime::dispatch_player_join_completed(const net::SessionPlayerJoined &) {}
 void PackRuntime::dispatch_player_leave(const net::SessionPlayerLeft &) {}
 void PackRuntime::dispatch_tick(double) {}
@@ -312,6 +318,15 @@ struct PackRuntime::Impl {
 	// pack didn't set naturally falls back to whatever base MoveParams the
 	// caller passes in at that point -- not a fixed literal baked in here.
 	std::optional<sol::table> move_params_table;
+
+	// Phase 6.8: the raw table passed to vb.daynight.set_curve{keyframes =
+	// {...}}, if a pack ever calls it. Parsed into a world::DayNightCurve in
+	// effective_day_night_curve() rather than eagerly, matching
+	// move_params_table's posture above.
+	std::optional<sol::table> day_night_curve_table;
+	// Phase 6.8: the value passed to vb.daynight.set_day_length(seconds), if
+	// a pack ever calls it.
+	std::optional<double> day_length_seconds_override;
 
 	// Phase 6.1: spawned vb.register_entity instances, keyed by the NetId
 	// ServerSession::spawn_script_entity handed back. entity_mt is the shared
@@ -723,6 +738,37 @@ void PackRuntime::Impl::install_bindings() {
 			throw sol::error("vb.physics.set_params: registry already frozen");
 		}
 		move_params_table = def;
+	};
+
+	// Phase 6.8: overrides the engine's default 4-keyframe day/night sky
+	// gradient (vb::world::default_day_night_curve()). `keyframes` is a plain
+	// array of {tick, brightness, color = {r, g, b}} tables, parsed lazily in
+	// effective_day_night_curve() -- calling this more than once replaces the
+	// whole curve, it doesn't merge with an earlier call (same posture as
+	// vb.physics.set_params above).
+	sol::table daynight_tbl = lua.create_table();
+	vb["daynight"] = daynight_tbl;
+	daynight_tbl["set_curve"] = [this](sol::table def) {
+		if (frozen) {
+			throw sol::error("vb.daynight.set_curve: registry already frozen");
+		}
+		sol::optional<sol::table> keyframes = def["keyframes"];
+		if (!keyframes || keyframes->size() == 0) {
+			throw sol::error(
+					"vb.daynight.set_curve: 'keyframes' must be a non-empty array");
+		}
+		day_night_curve_table = def;
+	};
+	// Phase 6.8: overrides the real seconds one in-game day/night cycle takes
+	// (ServerConfig::day_length_seconds is the base this stacks on top of).
+	daynight_tbl["set_day_length"] = [this](double seconds) {
+		if (frozen) {
+			throw sol::error("vb.daynight.set_day_length: registry already frozen");
+		}
+		if (!(seconds > 0.0)) {
+			throw sol::error("vb.daynight.set_day_length: 'seconds' must be > 0");
+		}
+		day_length_seconds_override = seconds;
 	};
 
 	sol::table world_tbl = lua.create_table();
@@ -1433,6 +1479,34 @@ physics::MoveParams PackRuntime::effective_move_params(physics::MoveParams base)
 	out.fly_speed = def.get_or("fly_speed", out.fly_speed);
 	out.fly = def.get_or("fly", out.fly);
 	return out;
+}
+
+std::optional<world::DayNightCurve> PackRuntime::effective_day_night_curve() const {
+	if (!impl_->day_night_curve_table) {
+		return std::nullopt;
+	}
+	const sol::table &def = *impl_->day_night_curve_table;
+	const sol::table keyframes = def["keyframes"];
+	world::DayNightCurve curve;
+	curve.keyframes.reserve(keyframes.size());
+	for (std::size_t i = 1; i <= keyframes.size(); ++i) {
+		const sol::table kf = keyframes[i];
+		world::DayNightKeyframe out;
+		out.tick = kf.get_or("tick", 0u);
+		out.brightness = kf.get_or("brightness", 1.0);
+		const sol::optional<sol::table> color = kf["color"];
+		if (color) {
+			out.color.r = color->get_or(1, std::uint8_t{ 0 });
+			out.color.g = color->get_or(2, std::uint8_t{ 0 });
+			out.color.b = color->get_or(3, std::uint8_t{ 0 });
+		}
+		curve.keyframes.push_back(out);
+	}
+	return curve;
+}
+
+double PackRuntime::effective_day_length_seconds(double base) const {
+	return impl_->day_length_seconds_override.value_or(base);
 }
 
 void PackRuntime::attach_session(net::ServerSession &session) {
