@@ -221,14 +221,33 @@ with *both* binaries (bundle/publish still merge by `voxel_browser-*` pattern).
   (`cmake --build`/`cmake --configure` from scratch); an already-built
   `.exe` runs fine without it. Also: `cmake --build . -- -j <N>` errors
   here (`ninja: fatal: invalid -j parameter`) — just omit `-j`.
-- Two pre-configured build directories exist in the repo root with real
-  binaries already built at least once — reuse rather than reconfiguring
-  from scratch: `build-net-lua/` (`VB_WITH_NET=ON`, `VB_WITH_LUA=ON` —
-  scripting/PackRuntime/GNS work) and `build-meshing/` (`VB_WITH_NET=ON`,
-  `VB_WITH_LUA=OFF`, **ASan-instrumented**, MSVC multi-config layout so
-  binaries land under `build-meshing/Debug/`, not the build root directly —
-  good for exercising the `#if !VB_WITH_LUA` stub path and catching memory
-  bugs at the same time).
+  **Two more landmines hit 2026-09-18, worth checking first next time:**
+  (1) `vcvars64.bat` is **not** under `C:\Program Files\Microsoft Visual
+  Studio\...` on this box — that tree exists but its `18\` subfolder is
+  empty (some kind of stub/placeholder, not a real install). The real
+  toolchain — matching what `build-net-lua/CMakeCache.txt`'s
+  `CMAKE_CXX_COMPILER` actually points at — lives on the **D: drive**:
+  `D:\Programs\Microsoft Visual Studio\VC\Auxiliary\Build\vcvars64.bat`.
+  Confirm by grepping `CMAKE_CXX_COMPILER:FILEPATH=` out of an existing
+  build dir's `CMakeCache.txt` before guessing a path.
+  (2) The **Bash tool's** `cmd /c '"<path>\vcvars64.bat" && <rest>'`
+  chaining silently does *nothing* here — it prints only the bare `cmd.exe`
+  banner (`Microsoft Windows [Version ...]` + a prompt line) and exits 0,
+  with the chained command never actually running (no build output, no
+  error either). The **PowerShell tool** running the exact same `cmd /c
+  '...'` string works correctly and streams real `vcvarsall.bat` +
+  `ninja`/`cmake` output. Use the PowerShell tool for this chain, not Bash,
+  on this machine.
+- One pre-configured build directory reliably exists in the repo root with
+  real binaries already built at least once — reuse rather than
+  reconfiguring from scratch: `build-net-lua/` (`VB_WITH_NET=ON`,
+  `VB_WITH_LUA=ON` — scripting/PackRuntime/GNS work). A second one,
+  `build-meshing/` (`VB_WITH_NET=ON`, `VB_WITH_LUA=OFF`,
+  **ASan-instrumented**, MSVC multi-config layout under `build-meshing/
+  Debug/`), was mentioned in earlier entries but **no longer exists on this
+  machine** as of 6.4's entry (§8) — confirmed still gone 2026-09-18; don't
+  assume it's there, re-configure fresh from `cmake/Sanitizers.cmake` if
+  that no-Lua/ASan coverage is needed again.
 
 ---
 
