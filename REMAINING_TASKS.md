@@ -1880,6 +1880,36 @@ windows, chatting, crafting, and seeing each other, all at once.
       needs a pack-driven pipeline case once this lands, alongside the
       existing hardcoded-pipeline golden.
 
+### 6.15 Example Lua script demonstrating the Phase 6 "default + override" features
+
+> Blocked on the rest of Phase 6 (6.9–6.14) landing — the "Lua overhaul": once
+> every default-with-a-pack-override surface this phase introduced (entity
+> kinds, reactive UI, custom keybinds, `vb.db`/`vb.crypto`, block damage,
+> player damage/death, physics params, day/night curve, inventory stacking,
+> chat transform, item-drop params, worldgen pipeline) is in place, write one
+> `content/base`-sibling example pack that actually exercises them together,
+> not just in isolation across scattered unit tests.
+
+- [ ] A standalone example content pack (e.g. `content/examples/kitchen_sink`
+      or a `content/base/examples/` script loaded only in a demo mode) that
+      calls each Phase 6 API at least once with a visible, in-game effect: a
+      custom entity kind with `on_tick`/`on_hit`/`on_death`, a `ui.define`
+      screen opened via `player:open_ui`, a custom keybind bound to an action,
+      `vb.db`/`vb.crypto.hash` used for a small persistent counter, a
+      `max_damage` block with a `block_break_tick` handler, a
+      `player_death` handler with custom respawn/drop behavior,
+      `vb.physics.set_params` tuning movement, `vb.daynight.set_curve`/
+      `set_day_length` for a non-default sky, and (once 6.9-6.11 land) a
+      stacking item, a chat filter, and tuned item-drop params.
+- [ ] Should double as living documentation: comment each block with which
+      `REMAINING_TASKS.md` phase/`docs/lua-api.md` section it demonstrates, so
+      it stays a working reference alongside the prose docs rather than
+      drifting out of sync with the actual API surface.
+- [ ] Not `content/base` itself — base pack content should stay minimal/
+      production-shaped (spec §5.1); this is a separate, clearly-labeled demo
+      pack an operator can point `--content-pack` at, or a devs-only mode, not
+      something a real server loads by default.
+
 ---
 
 ## Cross-Cutting / Continuous
