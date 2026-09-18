@@ -129,12 +129,22 @@ public:
 		on_ui_event_ = std::move(handler);
 	}
 
-	// Phase 5.4: routes a playing connection's C2S_Chat up to a script host as
-	// a veto (return false to suppress) before ServerSession broadcasts it.
-	// Unset (the default -- e.g. `--singleplayer`, which has no PackRuntime)
-	// means every chat line is allowed.
+	// Phase 6.10: veto-or-replace shape mirroring PlayerInputOverride/
+	// InputHookResult below -- a pack can suppress a chat line outright
+	// (`veto`) or rewrite its text (`replacement_text`, e.g. profanity
+	// filtering or custom formatting) before ServerSession broadcasts it.
+	struct ChatHookResult {
+		bool veto = false;
+		std::optional<std::string> replacement_text;
+	};
+
+	// Phase 5.4/6.10: routes a playing connection's C2S_Chat up to a script
+	// host before ServerSession broadcasts it. Unset (the default -- e.g.
+	// `--singleplayer`, which has no PackRuntime) means every chat line is
+	// broadcast unchanged, same "no handler, no side effect" posture as
+	// set_input_handler.
 	void set_chat_handler(
-			std::function<bool(core::NetId, std::string_view)> handler) {
+			std::function<ChatHookResult(core::NetId, std::string_view)> handler) {
 		on_chat_ = std::move(handler);
 	}
 
@@ -312,7 +322,7 @@ private:
 	replication::InterestGrid interest_;
 	std::unique_ptr<WorldReplicator> replicator_;
 	std::function<void(core::NetId, const protocol::C2SUiEvent &)> on_ui_event_;
-	std::function<bool(core::NetId, std::string_view)> on_chat_;
+	std::function<ChatHookResult(core::NetId, std::string_view)> on_chat_;
 	world::ItemDropSystem item_drops_;
 	std::function<void(core::NetId, core::BlockId, std::uint16_t)> on_item_pickup_;
 	world::BlockDamageSystem block_damage_;

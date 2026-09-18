@@ -13,7 +13,37 @@
 > instead of here** — see that file's own header for why. This file is for
 > gotchas that hold regardless of which machine an agent is running on.
 
-Last updated: 2026-09-18 (Phase 6.9 — inventory stacking: `BlockType::max_stack`
+Last updated: 2026-09-18 (Phase 6.10 — chat transform/moderation hook:
+`net::ServerSession::ChatHookResult{veto, replacement_text}` replaces the old
+bool-veto-only `set_chat_handler` signature — same veto-or-replace chaining
+shape 6.3 already established for `player_input`/`InputHookResult`, just one
+string field instead of a table. `PackRuntime::Impl::run_chat` (new, mirrors
+`run_player_input`) chains every `vb.on("chat", handler)`: `false` vetoes
+(first veto wins), a returned string replaces the text the *next* handler
+sees (and, if it's the last to touch it, what gets broadcast), anything else
+passes the current text through. `PackRuntime::dispatch_chat`'s return type
+changed from `bool` to `ChatHookResult` to carry this — broke 6 existing
+`CHECK(rt.dispatch_chat(...))` call sites in `pack_runtime_test.cpp` (that
+file reuses the chat event purely as a generic "run this Lua and tell me if
+it vetoed" RPC hook, not real chat), fixed to `CHECK_FALSE(...).veto`. No
+wire message changed — this is a server-side hook contract only, no
+`kEngineProtocolVersion` bump. New end-to-end test in
+`pack_runtime_integration_test.cpp` ("pack script rewrites chat text before
+it broadcasts") chains two handlers (uppercase, then append a tag) over a
+real `ServerSession`/`ClientSession`/`LoopbackTransport` to prove the
+replacement actually reaches the broadcast `S2C_Chat`, not just the binding
+in isolation. `content/base/crafting.lua`'s existing chat handler
+(veto-only, never returns a string) is unaffected. Rate limiting explicitly
+still not implemented — deferred to whatever pack wants one, per the task
+item's own framing; see `REMAINING_TASKS.md` 6.10. Full `vb_tests` green on
+`build-net-lua` (`VB_WITH_NET=ON`, `VB_WITH_LUA=ON`); all 4 CTest cases
+(`vb_tests`/`server_smoke`/`client_smoke`/`singleplayer_smoke`) pass. Not
+verified under a no-Lua/ASan config this session (no pre-built ASan dir
+remains on this machine, per 6.4's entry) — `run_chat` is entirely inside
+`pack_runtime.cpp`'s existing `#if VB_WITH_LUA` region (stub branch returns
+`ChatHookResult{}` unchanged), and `session.hpp`/`session.cpp`'s changes have
+no Lua dependency, so the no-Lua stub-build risk is low, just not
+re-confirmed here. Previous entry: Phase 6.9 — inventory stacking: `BlockType::max_stack`
 (default `world::kDefaultMaxStackSize` = 64) + `vb.register_block{max_stack=N}`
 override, same shape as 6.5's `max_damage`, not `register_item` (every holdable
 item is already a registered block, see `content/base/blocks/planks.lua`). New

@@ -131,7 +131,7 @@ rt.dispatch_tick(dt);
   "block_break_begin"|"block_break_tick"|"block_health_tick", handler)`,
   vetoable via `return false` (except `tick`/`ui_event`, which have
   no veto semantics; `player_death` is a *decision* hook, not a veto —
-  see below; `player_input` may veto *or* replace, see below;
+  see below; `player_input`/`chat` may veto *or* replace, see below;
   `block_break_tick`/`block_health_tick` return numbers, not booleans —
   see below).
   `player_join` fires from `install_join_veto`'s `authenticate` wrapper (a
@@ -141,10 +141,16 @@ rt.dispatch_tick(dt);
   apply_block_edit`'s `BlockEditHooks` seam with a real `Player` handle +
   position, and a block's own `on_break`/`on_place` callback (from
   `register_block`) fires separately, after the edit is applied. `chat`
-  fires from a real `C2S_Chat` (Phase 5.4) as a veto before `ServerSession`
-  broadcasts `S2C_Chat`; `content/base/crafting.lua` is the reference
-  example of building a whole feature (recipe parsing, ingredient checks)
-  entirely on top of this one event. `ui_event` fires from `C2S_UiEvent`
+  fires from a real `C2S_Chat` (Phase 5.4) as `function(player, text) ->
+  boolean|string?` before `ServerSession` broadcasts `S2C_Chat`: `return
+  false` vetoes the line outright, `return "new text"` (Phase 6.10) rewrites
+  it for the next handler in registration order and, if it's the last one to
+  touch it, for the broadcast itself, and `true`/`nil`/anything else passes
+  the current text through unchanged — the same veto-or-replace chaining
+  shape as `player_input` below, just for one string field instead of a
+  table. `content/base/crafting.lua` is the reference example of building a
+  whole feature (recipe parsing, ingredient checks) entirely on top of this
+  one event (veto-only, no text rewriting). `ui_event` fires from `C2S_UiEvent`
   (Phase 4.5). `player_interact` is still wired generically
   (`PackRuntime::dispatch_player_interact`) with nothing calling it — no
   interact wire message exists yet. `player_death` (Phase 6.6) fires once

@@ -606,6 +606,49 @@ TEST_CASE("pack script vetoes chat from a specific player") {
 	CHECK(blocked.take_chat_messages() == seen); // same broadcast, both see it
 }
 
+TEST_CASE("pack script rewrites chat text before it broadcasts (Phase 6.10)") {
+	LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("chat_rewrite"));
+	// Two handlers chained: the first uppercases, the second appends a tag --
+	// proves each handler sees the prior one's replacement, not the original
+	// C2S_Chat text, same chaining contract as run_player_input.
+	REQUIRE(rt.load_pack_file(R"(
+		vb.on("chat", function(player, text) return text:upper() end)
+		vb.on("chat", function(player, text) return text .. " [mod]" end)
+	)"));
+	rt.freeze();
+
+	HandshakeServerConfig cfg;
+	cfg.world_seed = 7;
+	ServerSession server(net.server(), cfg);
+	rt.attach_session(server);
+	REQUIRE(net.server().listen(0));
+
+	Transport &ta = net.create_client();
+	auto ida = ta.connect("x", 0);
+	REQUIRE(ida);
+	ClientSession client(ta, *ida, HandshakeClientConfig{ "A", "", "v", 1 });
+
+	auto pump = [&](int n) {
+		for (int i = 0; i < n; ++i) {
+			server.tick(0.05);
+			client.tick(0.05);
+		}
+	};
+	pump(16);
+	REQUIRE(client.joined());
+	client.take_chat_messages(); // drain join system line(s)
+
+	client.send_chat("hi everyone");
+	pump(4);
+
+	const auto seen = client.take_chat_messages();
+	REQUIRE(seen.size() == 1);
+	CHECK(seen[0] == "A: HI EVERYONE [mod]");
+}
+
 TEST_CASE("player:give() pushes a live S2C_Inventory to the client") {
 	LoopbackNetwork net;
 	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();

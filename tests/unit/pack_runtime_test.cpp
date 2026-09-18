@@ -286,11 +286,11 @@ TEST_CASE("player:take() removes items across slots, all-or-nothing") {
 	rt.freeze();
 
 	const vb::core::NetId id{ 1 };
-	CHECK(rt.dispatch_chat(id, "setup"));
-	CHECK_FALSE(rt.dispatch_chat(id, "take-too-many")); // over-request: false, no change
-	CHECK_FALSE(rt.dispatch_chat(id, "take-other-item")); // wrong item: false, no change
-	CHECK(rt.dispatch_chat(id, "take-some")); // 5 of 7 total across 2 slots
-	CHECK(rt.dispatch_chat(id, "check-remaining")); // 2 left
+	CHECK_FALSE(rt.dispatch_chat(id, "setup").veto);
+	CHECK(rt.dispatch_chat(id, "take-too-many").veto); // over-request: false, no change
+	CHECK(rt.dispatch_chat(id, "take-other-item").veto); // wrong item: false, no change
+	CHECK_FALSE(rt.dispatch_chat(id, "take-some").veto); // 5 of 7 total across 2 slots
+	CHECK_FALSE(rt.dispatch_chat(id, "check-remaining").veto); // 2 left
 }
 
 TEST_CASE("player:give() combines into existing slots up to max_stack, then starts new ones") {
@@ -320,8 +320,8 @@ TEST_CASE("player:give() combines into existing slots up to max_stack, then star
 	rt.freeze();
 
 	const vb::core::NetId id{ 1 };
-	CHECK(rt.dispatch_chat(id, "give"));
-	CHECK(rt.dispatch_chat(id, "check"));
+	CHECK_FALSE(rt.dispatch_chat(id, "give").veto);
+	CHECK_FALSE(rt.dispatch_chat(id, "check").veto);
 }
 
 TEST_CASE("register_block{max_stack=N} caps how many combine into one slot") {
@@ -349,8 +349,8 @@ TEST_CASE("register_block{max_stack=N} caps how many combine into one slot") {
 	rt.freeze();
 
 	const vb::core::NetId id{ 1 };
-	CHECK(rt.dispatch_chat(id, "give"));
-	CHECK(rt.dispatch_chat(id, "check"));
+	CHECK_FALSE(rt.dispatch_chat(id, "give").veto);
+	CHECK_FALSE(rt.dispatch_chat(id, "check").veto);
 }
 
 TEST_CASE("vb.world.get_block/set_block operate on the attached world") {

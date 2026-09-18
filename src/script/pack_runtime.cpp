@@ -37,7 +37,10 @@ double PackRuntime::effective_day_length_seconds(double base) const {
 void PackRuntime::dispatch_player_join_completed(const net::SessionPlayerJoined &) {}
 void PackRuntime::dispatch_player_leave(const net::SessionPlayerLeft &) {}
 void PackRuntime::dispatch_tick(double) {}
-bool PackRuntime::dispatch_chat(core::NetId, std::string_view) { return true; }
+net::ServerSession::ChatHookResult PackRuntime::dispatch_chat(
+		core::NetId, std::string_view) {
+	return {};
+}
 bool PackRuntime::dispatch_player_interact(core::NetId, core::IVec3) {
 	return true;
 }
@@ -393,6 +396,14 @@ struct PackRuntime::Impl {
 	// per handler call from the current working values.
 	net::ServerSession::InputHookResult run_player_input(
 			core::NetId id, const protocol::InputCmd &cmd);
+
+	// Phase 6.10: runs every vb.on("chat", handler) in registration order,
+	// same chaining shape as run_player_input but for a single string field
+	// instead of a table -- a handler returns `false` to veto, a string to
+	// replace the text seen by the next handler (and ultimately broadcast),
+	// or true/nil/anything else to pass the current text through unchanged.
+	net::ServerSession::ChatHookResult run_chat(
+			core::NetId sender, std::string_view text);
 
 	// Phase 6.5 (spec §10.7): shared block-damage breaking. See
 	// net::ServerSession::BlockBreakHooks for the calling contract each of
@@ -1350,6 +1361,45 @@ net::ServerSession::InputHookResult PackRuntime::Impl::run_player_input(
 	return result;
 }
 
+net::ServerSession::ChatHookResult PackRuntime::Impl::run_chat(
+		core::NetId sender, std::string_view text) {
+	net::ServerSession::ChatHookResult result;
+	auto it = handlers.find("chat");
+	if (it == handlers.end()) {
+		return result; // no handlers registered: pass through unchanged
+	}
+
+	std::string current(text);
+	bool changed = false;
+	PlayerHandle p{ sender, this };
+	for (auto &fn : it->second) {
+		if (!fn.valid()) {
+			continue;
+		}
+		vm.begin_call_budget();
+		sol::protected_function_result r = fn(p, current);
+		if (!r.valid()) {
+			const sol::error e = r;
+			VB_WARN("script", "vb.on('chat') handler error: ", e.what());
+			continue;
+		}
+		const sol::object ret = r;
+		if (ret.valid() && ret.get_type() == sol::type::boolean && !ret.as<bool>()) {
+			result.veto = true;
+			return result; // first veto wins, same as run_veto
+		}
+		if (ret.valid() && ret.get_type() == sol::type::string) {
+			current = ret.as<std::string>();
+			changed = true;
+		}
+	}
+
+	if (changed) {
+		result.replacement_text = current;
+	}
+	return result;
+}
+
 namespace {
 sol::table make_pos_table(sol::state &lua, core::IVec3 pos) {
 	sol::table t = lua.create_table();
@@ -1631,9 +1681,9 @@ void PackRuntime::dispatch_tick(double dt_seconds) {
 	impl_->dispatch_tick(dt_seconds);
 }
 
-bool PackRuntime::dispatch_chat(core::NetId sender, std::string_view text) {
-	PlayerHandle p{ sender, impl_.get() };
-	return impl_->run_veto("chat", p, std::string(text));
+net::ServerSession::ChatHookResult PackRuntime::dispatch_chat(
+		core::NetId sender, std::string_view text) {
+	return impl_->run_chat(sender, text);
 }
 
 void PackRuntime::dispatch_ui_event(core::NetId player,

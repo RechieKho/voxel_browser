@@ -111,11 +111,17 @@ public:
 	void dispatch_player_leave(const net::SessionPlayerLeft &l);
 	void dispatch_tick(double dt_seconds);
 
-	// Generic bus hooks for events with no C2S message yet (chat/interact) --
-	// exposed so a future message handler can call them without knowing
-	// anything about Lua. Returns false if any handler vetoed.
-	bool dispatch_chat(core::NetId sender, std::string_view text);
+	// Generic bus hook for player_interact (no C2S message yet) -- exposed so
+	// a future message handler can call it without knowing anything about
+	// Lua. Returns false if any handler vetoed.
 	bool dispatch_player_interact(core::NetId player, core::IVec3 target);
+
+	// Phase 5.4/6.10: runs every vb.on("chat", handler) in registration
+	// order, chaining text replacements (each handler sees the prior one's
+	// output) and short-circuiting on the first `false` veto -- same shape as
+	// run_player_input/ServerSession::InputHookResult.
+	net::ServerSession::ChatHookResult dispatch_chat(
+			core::NetId sender, std::string_view text);
 
 	// Wired automatically by attach_session() to ServerSession's
 	// C2S_UiEvent handler (Phase 4.5) -- fires vb.on("ui_event", handler)

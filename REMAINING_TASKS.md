@@ -1427,7 +1427,7 @@ windows, chatting, crafting, and seeing each other, all at once.
 
 ---
 
-## Phase 6 — Lua-Driven Extensibility (in progress — 6.1-6.9/6.16 done, 6.10-6.14 design only)
+## Phase 6 — Lua-Driven Extensibility (in progress — 6.1-6.10/6.16 done, 6.11-6.14 design only)
 
 > Design agreed in discussion on 2026-09-17: four systems that let content
 > packs override/extend engine defaults (biomes, entities, UI, input, data)
@@ -1824,15 +1824,26 @@ windows, chatting, crafting, and seeing each other, all at once.
       (how much fits in one slot), not a second cap on total slots; no
       evidence elsewhere of an intended max-slots limit.
 
-### 6.10 Chat transform/moderation hook
+### 6.10 Chat transform/moderation hook ✅ (2026-09-18, rate limiting still deferred)
 
-- [ ] `handle_chat()` (`src/net/session.cpp:185-204`) hardcodes the message
-      format (`name: text`), has no rate limit, and the existing
-      `vb.on("chat")` hook is veto-only (`return false` or nothing) — it
-      can't transform the text. Extend it to the same veto-or-replace shape
-      already designed for `player_input` (`ARCHITECTURE_SPEC.md` §10.6), so
-      a pack can do profanity filtering, custom formatting, or its own
-      rate-limit policy instead of the engine's none-at-all.
+- [x] `ServerSession::ChatHookResult{veto, replacement_text}` +
+      `set_chat_handler(std::function<ChatHookResult(NetId, string_view)>)`
+      (`inc/vb/net/session.hpp`) replace the old bool-veto-only handler type.
+      `PackRuntime::dispatch_chat` now returns `ChatHookResult` (was `bool`);
+      `PackRuntime::Impl::run_chat` chains every `vb.on("chat", handler)` in
+      registration order — `return false` vetoes (first veto wins, same as
+      `run_veto`), `return "text"` replaces what the *next* handler (and
+      ultimately the broadcast) sees, `true`/`nil`/anything else passes the
+      current text through unchanged. Same shape as `run_player_input`/
+      `InputHookResult`, just one string field instead of a table.
+      `handle_chat()` (`src/net/session.cpp`) applies the veto/replacement
+      before formatting `"name: text"` and broadcasting `S2C_Chat`. No wire
+      message changed — this is purely a server-side hook contract change,
+      no `kEngineProtocolVersion` bump needed.
+      Rate limiting still not implemented — a pack can build one on top of
+      this hook (e.g. via `vb.db`/`vb.storage` timestamps), but the engine
+      doesn't enforce one itself, matching the item's own framing ("or its
+      own rate-limit policy instead of the engine's none-at-all").
 
 ### 6.11 Item drop parameters (default + override)
 

@@ -255,11 +255,18 @@ void ServerSession::handle_chat(Conn &state, const protocol::Frame &frame) {
 	if (msg->text.empty()) {
 		return;
 	}
-	if (on_chat_ && !on_chat_(state.net_id, msg->text)) {
-		return; // vetoed by the pack (vb.on("chat"))
+	std::string text = msg->text;
+	if (on_chat_) {
+		const ChatHookResult result = on_chat_(state.net_id, text);
+		if (result.veto) {
+			return; // vetoed by the pack (vb.on("chat"))
+		}
+		if (result.replacement_text) {
+			text = *result.replacement_text;
+		}
 	}
 	const protocol::S2CChat out{
-		registry_.get<ecs::PlayerTag>(state.entity).name + ": " + msg->text
+		registry_.get<ecs::PlayerTag>(state.entity).name + ": " + text
 	};
 	for (auto &[other_conn, other] : conns_) {
 		if (other.playing) {
