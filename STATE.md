@@ -7,7 +7,14 @@
 > Companion docs: `ARCHITECTURE_SPEC.md` (target design) · `REMAINING_TASKS.md`
 > (implementation backlog). This file is for *traps and context*, not the plan.
 
-Last updated: 2026-09-18 (Phase 6.16 — client-local HUD mechanism:
+Last updated: 2026-09-18 (Phase 6.9 — inventory stacking: `BlockType::max_stack`
+(default `world::kDefaultMaxStackSize` = 64) + `vb.register_block{max_stack=N}`
+override, same shape as 6.5's `max_damage`, not `register_item` (every holdable
+item is already a registered block, see `content/base/blocks/planks.lua`). New
+`PackRuntime::Impl::give_item()` combines into existing under-cap slots before
+starting new ones; both `player:give()` and the item-pickup handler now share
+it (previously two separate `push_back` call sites). See §8's newest entry for
+detail. Previous entry: Phase 6.16 — client-local HUD mechanism:
 `ui.define_hud(render_fn)` + a new `client.*` raw-state table
 (`client.break_progress()`/`client.screen_size()`) let a pack render the
 hold-to-break progress bar in Lua instead of hardcoded `DrawRectangle` calls
@@ -368,6 +375,62 @@ Other undecided-but-not-yet-in-spec:
 ## 8. Done / resolved
 
 _(Move items here with a date + commit when fixed, so the history is visible.)_
+
+- **2026-09-18 — Phase 6.9 inventory stacking landed (uncommitted).**
+  `REMAINING_TASKS.md` 6.9: no max stack size existed anywhere —
+  `PlayerHandle::give()` always pushed a brand-new slot, never combined into
+  an existing one.
+  **Where the override lives, and why not `register_item`:** the task doc's
+  own suggestion was "let `register_item` override its own stack size," but
+  `vb.register_item` never allocates an id space at all (a known, already-
+  documented gap — see `content/base/blocks/planks.lua`'s comment) and
+  nothing holdable is ever actually a "registered item" in practice, only a
+  registered block. Added `BlockType::max_stack`
+  (`inc/vb/world/block.hpp`, default = a new `world::kDefaultMaxStackSize`
+  constant, 64) instead, overridable via `vb.register_block{max_stack = N}`
+  — identical def-parsing shape to 6.5's `max_damage` field
+  (`src/script/pack_runtime.cpp`'s `register_block` lambda).
+  **New shared helper, not just a `give()` rewrite:** `PackRuntime::Impl::
+  give_item(NetId, BlockId, count)` is now the one place that actually
+  credits an inventory — fills existing slots holding that item that are
+  under `max_stack` first (oldest slot first, first-fit, no attempt at
+  optimal packing), then keeps starting new slots sized up to `max_stack`
+  for whatever's left. `PlayerHandle::give()` (Lua `player:give()`) and the
+  item-pickup handler installed in `attach_session()` (a player walking over
+  a dropped item) both now call it — previously two separate hardcoded
+  `slots.push_back(...)` call sites that happened to do the same thing by
+  coincidence, even though the pickup handler's own existing comment
+  claimed pickup "credits their inventory exactly like player:give() does."
+  Neither `give_item()` nor its two callers call `sync_inventory()`
+  internally — each caller still pushes its own `S2C_Inventory` snapshot
+  once afterward, unchanged from before.
+  **`take()` untouched:** already worked across multiple slots correctly
+  (6.6-era code, see its own test); stacking only changes how slots are
+  *created*, not how they're consumed.
+  **Same idempotent-registration caveat 6.5 already documented for
+  `max_damage` applies here too, not re-litigated:** re-registering an
+  existing block name (e.g. one of the base 8) with a different `max_stack`
+  silently does nothing, since `BlockRegistry::add_or_get` is idempotent by
+  name and never updates an existing entry's properties.
+  **Scoped down, deliberately:** no cap on total inventory *slot count* —
+  the task item's "stack cap ... and slot count" phrasing reads as one
+  thing (how many items fit in one slot) rather than two, and there's no
+  other evidence in the spec of an intended separate max-slots limit; not
+  added.
+  **Verification:** 2 new `tests/unit/pack_runtime_test.cpp` cases — two
+  40-count `give()`s of a default-stack item combine into a 64 slot + a
+  16-count overflow slot (not four separate ones); a `max_stack = 1` block
+  registered via `register_block` keeps two single-item `give()`s as two
+  separate slots. Full `vb_tests` green on `build-net-lua`
+  (`VB_WITH_NET=ON`, `VB_WITH_LUA=ON`, 245/245 cases). All 4 CTest cases
+  (`vb_tests`/`server_smoke`/`client_smoke`/`singleplayer_smoke`) pass; both
+  binaries rebuild clean. Not verified under a no-Lua/ASan config this
+  session (no pre-built ASan dir remains on this machine, per 6.4's entry
+  above) — the Lua-specific binding (`register_block`'s `max_stack` field
+  parse) is entirely inside `pack_runtime.cpp`'s existing `#if VB_WITH_LUA`
+  region; `BlockType::max_stack`'s default member initializer and
+  `give_item()`'s logic have no Lua dependency, so the stub-build risk is
+  low, just not re-confirmed here.
 
 - **2026-09-18 — Phase 6.16 client-local HUD mechanism landed
   (uncommitted), user-requested.** The user noticed the hold-to-break

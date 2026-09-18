@@ -1427,7 +1427,7 @@ windows, chatting, crafting, and seeing each other, all at once.
 
 ---
 
-## Phase 6 — Lua-Driven Extensibility (in progress — 6.1/6.2/6.3/6.4/6.5/6.6 done, 6.7-6.14 design only)
+## Phase 6 — Lua-Driven Extensibility (in progress — 6.1-6.9/6.16 done, 6.10-6.14 design only)
 
 > Design agreed in discussion on 2026-09-17: four systems that let content
 > packs override/extend engine defaults (biomes, entities, UI, input, data)
@@ -1799,14 +1799,30 @@ windows, chatting, crafting, and seeing each other, all at once.
       non-piecewise-linear shape can still approximate it with more
       keyframes.
 
-### 6.9 Inventory stacking (default + override)
+### 6.9 Inventory stacking (default + override) ✅
 
-- [ ] No max stack size or slot cap exists anywhere; `PackRuntime::give()`
-      (`src/script/pack_runtime.cpp:346-352`) always pushes a new slot,
-      never combines. More a missing feature than a hardcode, but same
-      shape: ship a default stack cap (e.g. 64) and slot count, let
-      `register_item` override its own stack size (non-stackable tools vs.
-      stackable blocks), and let Lua opt into combining logic.
+- [x] `world::kDefaultMaxStackSize` (64, `inc/vb/world/block.hpp`) + a new
+      `BlockType::max_stack` field (default = that constant) —
+      `vb.register_block{max_stack = N}` overrides it per block, same
+      def-parsing shape as 6.5's `max_damage`. Not `register_item`: every
+      holdable item is already a registered block (see
+      `content/base/blocks/planks.lua`'s comment on why `register_item`
+      never allocates its own id space), so that's where the override
+      belongs today.
+      A new `PackRuntime::Impl::give_item(id, item, count)` is the one place
+      that actually adds to an inventory: fills existing under-cap slots for
+      that item first, then starts as many new slots as needed for the
+      remainder (each capped at `max_stack`). Both `player:give()` and the
+      item-pickup handler (`attach_session()`, previously two separate
+      `push_back` call sites) now call it, so picking a dropped item up
+      stacks identically to a script handing it to you — closing a
+      duplication the existing pickup-handler comment already claimed ("credits
+      their inventory exactly like give() does") but the code didn't actually
+      guarantee.
+      No slot-count cap on the inventory itself — re-reading the item that
+      opened this task, "stack cap ... and slot count" reads as one thing
+      (how much fits in one slot), not a second cap on total slots; no
+      evidence elsewhere of an intended max-slots limit.
 
 ### 6.10 Chat transform/moderation hook
 

@@ -293,6 +293,66 @@ TEST_CASE("player:take() removes items across slots, all-or-nothing") {
 	CHECK(rt.dispatch_chat(id, "check-remaining")); // 2 left
 }
 
+TEST_CASE("player:give() combines into existing slots up to max_stack, then starts new ones") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("give_stack"));
+
+	// base:water (id 5) keeps the engine default max_stack (64, no
+	// register_block override) -- two 40-count gives should merge into one
+	// 64-slot plus an 16-count overflow slot, not three/four separate slots.
+	REQUIRE(rt.load_pack_file(R"(
+		vb.on("chat", function(player, text)
+			if text == "give" then
+				player:give({ item = 5, count = 40 })
+				player:give({ item = 5, count = 40 })
+				return true
+			elseif text == "check" then
+				local counts = {}
+				for _, s in ipairs(player:get_inventory()) do
+					table.insert(counts, s.count)
+				end
+				return #counts == 2 and counts[1] == 64 and counts[2] == 16
+			end
+			return true
+		end)
+	)"));
+	rt.freeze();
+
+	const vb::core::NetId id{ 1 };
+	CHECK(rt.dispatch_chat(id, "give"));
+	CHECK(rt.dispatch_chat(id, "check"));
+}
+
+TEST_CASE("register_block{max_stack=N} caps how many combine into one slot") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("give_stack_override"));
+
+	REQUIRE(rt.load_pack_file(R"(
+		local tool_id = vb.register_block({ name = "test:pickaxe", max_stack = 1 })
+		vb.on("chat", function(player, text)
+			if text == "give" then
+				player:give({ item = tool_id, count = 1 })
+				player:give({ item = tool_id, count = 1 })
+				return true
+			elseif text == "check" then
+				local counts = {}
+				for _, s in ipairs(player:get_inventory()) do
+					table.insert(counts, s.count)
+				end
+				return #counts == 2 and counts[1] == 1 and counts[2] == 1
+			end
+			return true
+		end)
+	)"));
+	rt.freeze();
+
+	const vb::core::NetId id{ 1 };
+	CHECK(rt.dispatch_chat(id, "give"));
+	CHECK(rt.dispatch_chat(id, "check"));
+}
+
 TEST_CASE("vb.world.get_block/set_block operate on the attached world") {
 	Fixture f(temp_storage("world_blocks"));
 

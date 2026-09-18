@@ -15,6 +15,12 @@
 
 namespace vb::world {
 
+// Phase 6.9 (spec §11.1): engine-wide default cap on how many of one item
+// fit in a single inventory slot. `register_block{max_stack = N}` overrides
+// it per block; every holdable item is a registered block today (see
+// content/base/blocks/planks.lua's comment on why).
+inline constexpr std::uint16_t kDefaultMaxStackSize = 64;
+
 struct BlockType {
 	std::string name; // "base:stone"
 	bool solid = true; // AABB collision participation
@@ -26,6 +32,10 @@ struct BlockType {
 	// flow -- the engine ships no accrual/heal policy, that's entirely Lua's
 	// call via vb.on("block_break_tick"/"block_health_tick", ...).
 	std::uint16_t max_damage = 0;
+	// Phase 6.9 (spec §11.1): how many of this item combine into one
+	// inventory slot before player:give() starts a new one. Non-stackable
+	// items (tools) should override this to 1.
+	std::uint16_t max_stack = kDefaultMaxStackSize;
 };
 
 // Well-known ids in the Phase 2 base registry. Do not assume these hold once

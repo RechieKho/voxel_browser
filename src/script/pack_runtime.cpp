@@ -365,6 +365,15 @@ struct PackRuntime::Impl {
 	// one exists. No-op (not an error) if the session/connection isn't ready
 	// yet -- same posture as send_message/open_ui below.
 	void sync_inventory(core::NetId id);
+	// Phase 6.9: the one place that actually adds items to an inventory --
+	// fills existing under-cap slots for `item` first (registry's
+	// `max_stack`, or the engine default for an id the registry doesn't
+	// know), then starts as many new slots as needed for the remainder.
+	// Shared by PlayerHandle::give() and the item-pickup handler
+	// (attach_session()) so picking something up stacks identically to a
+	// script handing it to you directly. Does not call sync_inventory --
+	// callers push their own snapshot once, after any other bookkeeping.
+	void give_item(core::NetId id, core::BlockId item, std::uint16_t count);
 	// Phase 6.6: spawns every slot of `id`'s inventory as a dropped item at
 	// `pos` and empties it. Called by run_respawn_handler when a
 	// vb.on("player_death", ...) handler's returned table asks for
@@ -529,8 +538,7 @@ struct PlayerHandle {
 	void give(sol::table itemstack) const {
 		const auto item = itemstack.get_or("item", static_cast<std::uint16_t>(0));
 		const auto count = itemstack.get_or("count", static_cast<std::uint16_t>(0));
-		rt->inventories[net_id].slots.push_back(
-				{ static_cast<core::BlockId>(item), count });
+		rt->give_item(net_id, static_cast<core::BlockId>(item), count);
 		rt->sync_inventory(net_id);
 	}
 
@@ -641,6 +649,10 @@ void PackRuntime::Impl::install_bindings() {
 				static_cast<std::uint8_t>(def.get_or("light", 0));
 		// Phase 6.5 (spec §10.7): 0 (default) = today's instant break.
 		type.max_damage = static_cast<std::uint16_t>(def.get_or("max_damage", 0));
+		// Phase 6.9 (spec §11.1): stack cap for this item, engine default
+		// unless overridden.
+		type.max_stack = static_cast<std::uint16_t>(
+				def.get_or("max_stack", static_cast<int>(world::kDefaultMaxStackSize)));
 		const core::BlockId id = registry.add_or_get(name, type);
 		auto it = std::find_if(blocks.begin(), blocks.end(),
 				[&](const BlockDef &b) { return b.name == name; });
@@ -1179,6 +1191,36 @@ void PackRuntime::Impl::sync_inventory(core::NetId id) {
 	net::send_message(transport, conn, msg);
 }
 
+void PackRuntime::Impl::give_item(
+		core::NetId id, core::BlockId item, std::uint16_t count) {
+	if (count == 0) {
+		return;
+	}
+	const std::uint16_t max_stack = registry.contains(item)
+			? registry.get(item).max_stack
+			: world::kDefaultMaxStackSize;
+	std::vector<ecs::ItemStack> &slots = inventories[id].slots;
+	std::uint32_t remaining = count;
+	for (auto &s : slots) {
+		if (remaining == 0) {
+			break;
+		}
+		if (s.item != item || s.count >= max_stack) {
+			continue;
+		}
+		const auto added = static_cast<std::uint16_t>(
+				std::min<std::uint32_t>(max_stack - s.count, remaining));
+		s.count = static_cast<std::uint16_t>(s.count + added);
+		remaining -= added;
+	}
+	while (remaining > 0) {
+		const auto added = static_cast<std::uint16_t>(
+				std::min<std::uint32_t>(max_stack, remaining));
+		slots.push_back({ item, added });
+		remaining -= added;
+	}
+}
+
 void PackRuntime::Impl::drop_all_items(core::NetId id, core::Vec3d pos) {
 	if (session == nullptr) {
 		return;
@@ -1526,7 +1568,7 @@ void PackRuntime::attach_session(net::ServerSession &session) {
 	Impl *self = impl_.get();
 	session.set_item_pickup_handler(
 			[self](core::NetId player, core::BlockId item, std::uint16_t count) {
-		self->inventories[player].slots.push_back({ item, count });
+		self->give_item(player, item, count);
 		self->sync_inventory(player);
 	});
 	// Phase 6.6: only installed when a pack actually registered
