@@ -2029,3 +2029,17 @@ windows, chatting, crafting, and seeing each other, all at once.
   callback. Explicitly post-first-playable — depends on the Lua-driven
   worldgen pipeline itself (Phase 4.2/6) landing and settling first; noted
   now so the decoration-pass design leaves room for it.
+- CSS-like declarative layout for `vb::script::UiRuntime` widgets
+  (user-suggested, 2026-09-18): today every widget is placed with absolute
+  pixel `x`/`y`/`w`/`h` (`content/base/ui/*.lua`, `docs/lua-api.md`) — a pack
+  author does all positioning/responsiveness math by hand, including reading
+  `client.screen_size()` (Phase 6.16) themselves to center anything. A
+  flexbox/grid-flavored layout model (parent/child nesting, percentage or
+  `flex`-style sizing, anchors) would let Lua describe *intent* ("centered",
+  "fill remaining space", "bottom-right corner") instead of arithmetic,
+  and would resize correctly with the window without every screen
+  reimplementing that math. Explicitly post-first-playable — the current
+  absolute-position model is sufficient for the existing modal screens/HUD;
+  this is a bigger `UiRuntime`/`UiRenderer` redesign (a layout pass computing
+  final `x`/`y`/`w`/`h` before widgets reach the renderer, most likely) worth
+  doing once there's enough real UI content to justify it, not before.
