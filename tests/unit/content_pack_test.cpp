@@ -16,6 +16,12 @@
 #include "vb/script/pack_runtime.hpp"
 #include "vb/world/block.hpp"
 
+#if VB_WITH_COMPRESSION
+#include <vector>
+
+#include "vb/assetsync/manifest.hpp"
+#endif
+
 namespace {
 
 std::filesystem::path base_pack_dir() {
@@ -200,5 +206,139 @@ TEST_CASE("load_content_pack fails on a pack directory with a broken Lua file") 
 
 	std::filesystem::remove_all(broken);
 }
+
+#if VB_WITH_COMPRESSION
+
+// Regression for the 2026-09-18 bug: src/server/main.cpp's real sequence is
+// load_content_pack -> freeze -> flush_storage -> build_manifest. Without
+// that flush_storage() call, a pack whose init.lua writes vb.storage (like
+// content/base's own boot_count demo) leaves storage.json's on-disk bytes
+// stale at manifest-build time -- PackRuntime::Impl::dispatch_tick() (the
+// only other flush call site) doesn't run until the first server tick,
+// which is always after the manifest is already built. The manifest then
+// advertises a hash for bytes that get silently rewritten out from under it
+// before any client's asset_file_bytes() fetch, so every real connection's
+// asset-sync fails that one file's verification, deterministically, on
+// every machine (see STATE.md, REMAINING_TASKS.md 4.4's added bullet).
+TEST_CASE("server startup sequence: flush_storage before build_manifest keeps "
+		"storage.json's manifest hash matching its on-disk bytes") {
+	const std::filesystem::path pack =
+			std::filesystem::temp_directory_path() / "vb_content_pack_test_storage_race";
+	std::error_code ec;
+	std::filesystem::remove_all(pack, ec);
+	std::filesystem::create_directories(pack);
+	{
+		std::ofstream out(pack / "init.lua");
+		out << "vb.storage.boot_count = (vb.storage.boot_count or 0) + 1\n";
+	}
+
+	vb::core::AssetHash entry_hash{};
+	bool found_entry = false;
+	{
+		// Scoped so `rt` (and its open `vb.db`/storage handles) are torn down
+		// before the trailing cleanup below tries to delete `pack` -- Windows
+		// refuses to remove a directory containing a file another handle in
+		// this same process still has open.
+		vb::net::LoopbackNetwork net;
+		vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+		vb::script::PackRuntime rt(net.server(), registry, pack / "storage.json");
+		REQUIRE(vb::script::load_content_pack(rt, pack));
+		rt.freeze();
+		CHECK(rt.storage_dirty()); // init.lua's write hasn't hit disk yet
+		rt.flush_storage(); // src/server/main.cpp's fix: flush before manifest build
+		CHECK_FALSE(rt.storage_dirty());
+
+		auto manifest_result = vb::assetsync::build_manifest(pack);
+		REQUIRE(manifest_result);
+		for (const auto &e : manifest_result->entries) {
+			if (e.path == "storage.json") {
+				entry_hash = e.hash;
+				found_entry = true;
+				break;
+			}
+		}
+	}
+	REQUIRE(found_entry);
+
+	// Simulate the real handshake's asset_file_bytes(): re-read fresh from
+	// disk, exactly as src/server/main.cpp's host.asset_file_bytes does, and
+	// confirm it still matches what the manifest promised.
+	std::ifstream f(pack / "storage.json", std::ios::binary);
+	REQUIRE(f);
+	std::vector<char> bytes((std::istreambuf_iterator<char>(f)),
+			std::istreambuf_iterator<char>());
+	CHECK(entry_hash == vb::assetsync::hash_bytes(
+			{ reinterpret_cast<const std::byte *>(bytes.data()), bytes.size() }));
+
+	std::filesystem::remove_all(pack, ec);
+}
+
+// Companion to the test above: proves the *old* (buggy) ordering --
+// build_manifest() before flush_storage() -- really does produce a mismatch,
+// so a future reordering of src/server/main.cpp's two calls back to the
+// wrong sequence gets caught here instead of only surfacing as a live
+// "asset transfer failed" report from a real connecting client.
+TEST_CASE("server startup sequence: building the manifest BEFORE flushing "
+		"storage reproduces the hash mismatch (guards the fix's ordering)") {
+	const std::filesystem::path pack = std::filesystem::temp_directory_path() /
+			"vb_content_pack_test_storage_race_unfixed";
+	std::error_code ec;
+	std::filesystem::remove_all(pack, ec);
+	std::filesystem::create_directories(pack);
+	{
+		std::ofstream out(pack / "init.lua");
+		out << "vb.storage.boot_count = (vb.storage.boot_count or 0) + 1\n";
+	}
+	// Simulate a second server boot: storage.json already exists on disk
+	// with a stale value (matching production, where content/base's
+	// storage.json persists across restarts) -- a brand-new pack with no
+	// storage.json at all wouldn't even have an entry for build_manifest to
+	// find yet, which would mask the bug rather than reproduce it.
+	{
+		std::ofstream out(pack / "storage.json");
+		out << R"({"boot_count":0.0})";
+	}
+
+	vb::core::AssetHash entry_hash{};
+	bool found_entry = false;
+	{
+		vb::net::LoopbackNetwork net;
+		vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+		vb::script::PackRuntime rt(net.server(), registry, pack / "storage.json");
+		REQUIRE(vb::script::load_content_pack(rt, pack));
+		rt.freeze();
+
+		// The bug: manifest built while init.lua's increment is still only
+		// in memory -- storage.json on disk is still the stale
+		// pre-increment bytes seeded above.
+		auto manifest_result = vb::assetsync::build_manifest(pack);
+		REQUIRE(manifest_result);
+		for (const auto &e : manifest_result->entries) {
+			if (e.path == "storage.json") {
+				entry_hash = e.hash;
+				found_entry = true;
+				break;
+			}
+		}
+		REQUIRE(found_entry);
+
+		// Only now does the write actually reach disk -- exactly what
+		// dispatch_tick() would do on the first server tick, which for a
+		// real connection always happens after the manifest above is
+		// already built and handed out.
+		rt.flush_storage();
+	}
+
+	std::ifstream f(pack / "storage.json", std::ios::binary);
+	REQUIRE(f);
+	std::vector<char> bytes((std::istreambuf_iterator<char>(f)),
+			std::istreambuf_iterator<char>());
+	CHECK(entry_hash != vb::assetsync::hash_bytes(
+			{ reinterpret_cast<const std::byte *>(bytes.data()), bytes.size() }));
+
+	std::filesystem::remove_all(pack, ec);
+}
+
+#endif // VB_WITH_COMPRESSION
 
 #endif

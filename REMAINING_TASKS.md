@@ -782,6 +782,36 @@ Lua-defined UI.
       caps) and `tests/unit/assetsync_cache_test.cpp` (missing-hash
       computation, hash-mismatch rejection leaves no stray file, LRU
       eviction under a tiny cap).
+- [x] **Real bug found and fixed (2026-09-18):** the manifest is a
+      startup-time snapshot (`src/server/main.cpp`'s `build_manifest` call,
+      once), but `vb.storage`'s writes are deferred to the first
+      `dispatch_tick()` (Phase 4.2's dirty-flag design) — which runs
+      *after* the manifest is already built. Any pack that writes
+      `vb.storage` during `load_content_pack` (both `content/base` and
+      `content/examples/kitchen_sink` do, in their own `init.lua`'s
+      boot-counter demo) hit a **guaranteed, first-connect asset-sync
+      failure**: the manifest hashed `storage.json`'s stale pre-write bytes,
+      then the first tick silently rewrote the file out from under that
+      hash before any client's `asset_file_bytes` fetch, so verification
+      failed with `"asset transfer failed (hash mismatch or size cap)"` —
+      every time, on every machine, completely independent of build config
+      (initially misdiagnosed as a `VB_WITH_COMPRESSION` mismatch across
+      machines before being traced to this). Fixed with a single
+      `pack_runtime.flush_storage()` call between `freeze()` and
+      `build_manifest()`.
+- [ ] **Not fixed, same class of bug, lower priority:** the manifest is
+      still only ever built once at startup — if a pack writes `vb.storage`
+      again *after* that point (a chat command, a timer, anything during
+      normal play, not just load-time) its manifest entry goes stale for
+      the remainder of that server process's lifetime; a client connecting
+      afterward gets the *old* hash but the *new* bytes on the next resync
+      of the same connection, or simply a permanently-wrong (but
+      consistent, since neither side updates) hash that no current pack
+      happens to trigger. No shipped pack does this today, so left
+      unaddressed; would need either re-hashing just that one manifest
+      entry on every `flush_storage()` call (cheap, targeted) or accepting
+      that `vb.storage`/`vb.db` shouldn't live inside the asset-synced pack
+      root at all (a bigger, unscoped redesign).
 
 ### 4.5 Client UI VM + raygui (§10.4)  ✅ (item grid + base pack deferred)
 

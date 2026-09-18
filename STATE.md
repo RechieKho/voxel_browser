@@ -601,6 +601,39 @@ with *both* binaries (bundle/publish still merge by `voxel_browser-*` pattern).
   build intended for real multiplayer likely wants
   `-DVB_WITH_COMPRESSION=ON` from the start on every machine involved, not
   just one side.
+- **A second, independent bug produces this exact same
+  `"asset transfer failed (hash mismatch or size cap)"` text even with
+  matching `VB_WITH_COMPRESSION` on both ends** — found 2026-09-18
+  immediately after the note above, when the same user hit it again
+  connecting a Mac client to their own Mac server (same build, same
+  machine, so the compression-flag theory above was already ruled out).
+  Root cause: `src/server/main.cpp` called `build_manifest()` (hashes
+  `storage.json` on disk) before `PackRuntime`'s `vb.storage` write from
+  `load_content_pack`'s `init.lua` (both `content/base` and
+  `content/examples/kitchen_sink` write `vb.storage.boot_count` at load) had
+  actually reached disk — that write only flushes on the *first server
+  tick* (`PackRuntime::Impl::dispatch_tick`,
+  `storage_dirty_flag`/`flush_storage()`, Phase 4.2's deferred-write
+  design), which always happens *after* the manifest is already built and
+  handed to every connecting client. The manifest hashes the stale
+  pre-write bytes; the first tick then silently rewrites the file to the
+  post-write bytes before any real client's `asset_file_bytes()` fetch —
+  guaranteed mismatch, on every connect, on every machine, regardless of
+  build flags, for any pack that touches `vb.storage` at load time (which
+  both shipped packs do). **Fixed** by calling
+  `pack_runtime.flush_storage()` between `freeze()` and `build_manifest()`
+  in `src/server/main.cpp` — forces the write to disk before the manifest
+  hashes it. Regression coverage: `tests/unit/content_pack_test.cpp`'s two
+  new `VB_WITH_COMPRESSION`-gated cases (one proving the fixed ordering
+  keeps the hash consistent, one proving the old ordering really does
+  reproduce the mismatch). See `REMAINING_TASKS.md` 4.4's added bullets for
+  the still-open, lower-priority follow-on (a pack writing `vb.storage`
+  again *after* startup, not just at load, still goes stale for that
+  server's remaining lifetime — no shipped pack does this today).
+  **Lesson for next time:** this exact error string has (at least) two
+  unrelated root causes — don't stop investigating after ruling out the
+  compression-flag mismatch above; check whether the content pack writes
+  `vb.storage` at load time next.
 
 ---
 

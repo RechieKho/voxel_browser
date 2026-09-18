@@ -125,6 +125,20 @@ int main(int argc, char **argv) {
 		return EXIT_FAILURE;
 	}
 	pack_runtime.freeze();
+	// Flush any vb.storage write load_content_pack's init.lua made (e.g.
+	// content/base's own boot_count demo) to disk *before* the manifest
+	// below hashes storage.json's on-disk bytes -- otherwise storage_dirty
+	// stays true until the first PackRuntime::dispatch_tick() (Phase 4.2's
+	// deferred-flush design), which lands *after* the manifest is already
+	// built. That flush then silently rewrites storage.json out from under
+	// the just-hashed manifest entry: the next asset_file_bytes() read for
+	// it returns the new bytes, but the manifest still advertises the old
+	// (pre-flush) hash, so every connecting client's asset-sync fails that
+	// one file's verification with "hash mismatch" -- deterministically, on
+	// every connect, on every machine, for any pack that writes vb.storage
+	// at load time. Found 2026-09-18 while investigating exactly that
+	// report; see STATE.md.
+	pack_runtime.flush_storage();
 
 	// Asset manifest (Phase 4.4): built once at startup from the content
 	// pack, handed to every connection by reference. A build without
