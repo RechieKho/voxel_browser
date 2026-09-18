@@ -187,7 +187,12 @@ if(VB_WITH_WORLDGEN)
   if(NOT FastNoise2_FOUND)
     set(FASTNOISE2_NOISETOOL OFF CACHE INTERNAL "")
     set(FASTNOISE2_TESTS OFF CACHE INTERNAL "")
-    vb_fetch(fastnoise2 TAG v0.10.0 REPO https://github.com/Auburn/FastNoise2.git)
+    # NOTE: the real tag is "v0.10.0-alpha" -- there is no plain "v0.10.0" in
+    # Auburn/FastNoise2 (confirmed via `git ls-remote --tags`, Phase 6.14).
+    # The bare "v0.10.0" pin was apparently never actually exercised before
+    # this phase (VB_WITH_WORLDGEN had zero call sites anywhere until now),
+    # so the typo went unnoticed.
+    vb_fetch(fastnoise2 TAG v0.10.0-alpha REPO https://github.com/Auburn/FastNoise2.git)
   endif()
 endif()
 

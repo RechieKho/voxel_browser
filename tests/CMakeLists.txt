@@ -5,6 +5,7 @@ add_executable(vb_tests
   main.cpp
   unit/assetsync_cache_test.cpp
   unit/assetsync_manifest_test.cpp
+  unit/biome_selector_test.cpp
   unit/blockedit_test.cpp
   unit/block_damage_test.cpp
   unit/block_registry_test.cpp
@@ -20,6 +21,7 @@ add_executable(vb_tests
   unit/lighting_test.cpp
   unit/mesher_test.cpp
   unit/netcode_test.cpp
+  unit/noise_graph_test.cpp
   unit/pack_runtime_integration_test.cpp
   unit/pack_runtime_test.cpp
   unit/physics_test.cpp

@@ -13,7 +13,136 @@
 > instead of here** — see that file's own header for why. This file is for
 > gotchas that hold regardless of which machine an agent is running on.
 
-Last updated: 2026-09-18 (Phase 6.13 — read-only server config visibility:
+Last updated: 2026-09-18 (Phase 6.14 — Lua-driven worldgen pipeline,
+FastNoise2 backend: the last unstarted Phase 6 item, and by far the
+biggest — four new headers/sources under `vb/worldgen/`
+(`noise_graph.hpp/.cpp`, `biome_selector.hpp/.cpp`, `pipeline.hpp`,
+`fastnoise2_compile.hpp/.cpp`), plus `PackRuntime::build_worldgen_pipeline`
+(`src/script/pack_runtime.cpp`) and `WorldGenerator`'s new optional
+`std::shared_ptr<const PackWorldGenPipeline>` constructor param
+(`inc/vb/worldgen/generator.hpp`/`.cpp`). Full design writeup (this
+session's exploration + the resulting plan) lives in this session's own
+transcript; the durable facts:
+
+**API shape deliberately deviates from `REMAINING_TASKS.md`'s original
+`vb.worldgen.set_pipeline(fn)` wording** — Lua/sol2 is strictly
+single-threaded and `WorldGenWorkerPool` calls `WorldGenerator::generate()`
+from N worker threads with zero locking (confirmed: no prior code anywhere
+touches a `sol::state` off the main thread), so a literal per-chunk Lua
+callback was never viable. Shipped as `set_pipeline(table)` instead: a raw
+`sol::table` captured at call time (frozen-guard, same as every other
+registration function; `height` is validated non-null eagerly, same
+"validate at the call site" posture 6.8's `set_curve` uses for its own
+required `keyframes` field), compiled exactly once — main thread, right
+after `freeze()`, before constructing `WorldGenerator`/`WorldGenWorkerPool`
+— into an immutable `worldgen::PackWorldGenPipeline`. No call at all (the
+overwhelming common case) leaves `WorldGenerator` on its byte-identical
+pre-6.14 fixed path; `tests/unit/worldgen_test.cpp`'s original golden-hash
+test is completely untouched and still passes unmodified.
+
+**`vb.noise.*`** builds a small portable node-graph IR
+(`worldgen::NoiseNode` — `constant`/`value`/`cellular`/`fbm`/`remap`/
+`combine`) as plain tagged Lua tables (not opaque handles) — the real work
+is `PackRuntime::Impl::parse_noise_node`'s recursive parse into pure C++,
+done once, not per-voxel. Two evaluators exist for the *same* IR: the
+always-available one (`src/worldgen/noise_graph.cpp`, `NoiseNode::eval2/
+eval3`) built on `vb/core/noise.hpp` extended this session with `hash3`/
+`value3`/`cellular2` (F1 jittered-grid Voronoi noise); and, when
+`VB_WITH_WORLDGEN` links real FastNoise2, a compiler
+(`src/worldgen/fastnoise2_compile.cpp`, `#if VB_WITH_WORLDGEN`-gated) that
+translates the same tree into an actual FastNoise2 `SmartNode` graph
+(`Value`/`CellularValue`/`FractalFBm`/`Remap`/`DomainScale`/`Add`/
+`Multiply`/`Min`/`Max`, `New<T>()`-constructed). The two backends are **not**
+expected to produce bit-identical output (different noise algorithms
+entirely) — both just need to be deterministic and reasonably shaped for
+the same graph description; `PackRuntime`'s own `build_worldgen_pipeline`
+picks the backend via `#if VB_WITH_WORLDGEN` at the two call sites
+(`height_field`, each carver's `density`).
+
+**FastNoise2 was actually fetched, linked, and exercised this session** —
+attempted per explicit user choice over the safer hand-rolled-only
+fallback. Found and fixed a real pre-existing bug while doing it:
+`cmake/Dependencies.cmake` pinned FastNoise2 to tag `v0.10.0`, which does
+not exist in `Auburn/FastNoise2` (confirmed via `git ls-remote --tags`) —
+the real tag is `v0.10.0-alpha`. Went unnoticed since Phase 0 because
+nothing had ever actually triggered the fetch before this item (`VB_WITH_
+WORLDGEN` was OFF everywhere, zero FastNoise2 call sites anywhere in the
+codebase until now). Fixed to `v0.10.0-alpha`. A **new build dir,
+`build-worldgen/`**, was configured this session specifically to verify
+this (`-DVB_WITH_NET=OFF -DVB_WITH_LUA=ON -DVB_WITH_WORLDGEN=ON` — `VB_
+WITH_NET=OFF` only because a *fresh* GameNetworkingSockets fetch hit a
+missing system Protobuf that `build-net-lua`'s already-built cache happens
+to route around; unrelated to worldgen, not investigated further since net
++ worldgen together was never necessary to prove this item works). See
+`STATE.md.local` for the full FastNoise2-fetch/build note. `vb_tests`
+(266/266) and all 4 CTest cases pass in **both** configs
+(`build-net-lua`, `VB_WITH_WORLDGEN=OFF`, hand-rolled backend; and
+`build-worldgen`, `VB_WITH_WORLDGEN=ON`, real FastNoise2 backend) —
+confirmed by actually building and running both this session, not assumed.
+
+**Biome selection** (`worldgen::BiomeSelector`,
+`inc/vb/worldgen/biome_selector.hpp`/`.cpp`) implements the Voronoi-cell,
+adjacency-weighted design finalized 2026-09-17 (quoted in this file's own
+history below): a jittered grid (`core::noise::cellular2`) partitions the
+world; `resolve_cell` recurses only into neighbor cells whose
+`hash(seed, neighbor)` sorts before the current cell's own key (bounded,
+per the design note), then draws a biome weighted by
+`probability * product(adjacency multiplier vs. each resolved neighbor)`,
+floor-clamped (`kAdjacencyFloor = 1e-3`) so no candidate ever hits exactly
+0 (spec: soft multipliers, never hard exclusions). **Deliberately not
+globally memoized or locked** — recomputes its recursion from scratch on
+every `resolve()` call using a purely local, stack-only memo, trading
+cache-hit-rate across repeated nearby queries for zero shared mutable
+state/locking across `WorldGenWorkerPool` worker threads. Flagged in
+`REMAINING_TASKS.md`'s Deferred section as a future perf follow-up if it
+ever actually matters (not observed to, this session).
+
+**Carvers/veins/decoration** run as sequential passes inside
+`WorldGenerator::generate()`'s new pipeline branch
+(`src/worldgen/generator.cpp`) after the per-column height/biome pass, all
+seeded from a deterministic per-chunk hash (`core::noise::hash3(seed,
+coord)`) via a small counter-based `DetRng` (dependency-free, same
+determinism posture as `vb/core/noise.hpp` itself — no `<random>`, whose
+engines aren't guaranteed bit-identical in spirit even where the standard
+pins their formulas). **Decoration is schematic-only** (a fixed
+block-offset list scattered per chunk, `worldgen::DecorationEntry`), not
+the spec's "procedural callbacks" — same single-threaded-Lua constraint as
+`set_pipeline` itself; a callback per decoration site can't run on a
+worker thread either. Offsets landing outside the originating chunk are
+silently skipped — **no cross-chunk decoration** (spec's stage 6 wants
+trees/structures able to straddle chunk borders; not attempted). Both
+narrowings are recorded in `REMAINING_TASKS.md`'s Deferred section,
+folded into the existing "rule-based decorative structure placement" entry
+that was already waiting on this pipeline landing.
+
+**New determinism test**
+(`tests/unit/worldgen_test.cpp`, "worldgen determinism gate, pack-driven
+pipeline (golden value)") builds a `PackWorldGenPipeline` directly in C++
+(constructing `NoiseNode`/`BiomeEntry`/`CarverDef`/`VeinDef` by hand, not
+through Lua) so it stays pinned to the hand-rolled evaluator regardless of
+which backend a given build links — confirmed identical golden digest
+(`0x33CA94E677AF7922`) under both `VB_WITH_WORLDGEN` on and off this
+session. A second, Lua-driven test in `tests/unit/pack_runtime_test.cpp`
+("vb.worldgen.set_pipeline + vb.register_biome produce a working
+pack-driven pipeline...") goes through the real `PackRuntime` parse path
+and therefore *does* exercise whichever backend is linked (no literal
+golden hash there — just "differs from the fixed default, reproducible
+across two builds of the same pipeline" checks, since the FastNoise2
+backend's exact numeric output was never meant to match the hand-rolled
+one bit-for-bit).
+
+`content/base`'s existing `biomes/plains.lua`/`forest.lua` are unchanged —
+`content/base` itself deliberately never calls `vb.worldgen.set_pipeline`
+(stays on the base package's spec §5.1 "minimal/production-shaped" posture;
+a worked pipeline example is explicitly 6.15's job, a separate demo pack).
+`decoration = "trees"` (a plain string, `forest.lua`'s pre-6.14 usage)
+stays captured-but-inert by design — `vb.register_biome`'s `decoration`
+field only becomes a real schematic when it's a *table*, unchanged
+behavior for every existing string usage.
+
+Previous entry: Phase 6.13 — read-only server config visibility:
+`PackRuntime::set_server_config(const core::ServerConfig&)`
+(`inc/vb/script/pack_runtime.hpp`/`src/script/pack_runtime.cpp`) stores a
 `PackRuntime::set_server_config(const core::ServerConfig&)`
 (`inc/vb/script/pack_runtime.hpp`/`src/script/pack_runtime.cpp`) stores a
 copy on `Impl` and backs a new `vb.config.get(key)` binding — deliberately

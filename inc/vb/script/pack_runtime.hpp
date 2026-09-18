@@ -16,6 +16,7 @@
 #include "vb/script/vm.hpp"
 #include "vb/world/block.hpp"
 #include "vb/world/daynight.hpp"
+#include "vb/worldgen/generator.hpp"
 
 // Server-side Lua registration + runtime API (spec §10.3, Phase 4.2). Owns a
 // Vm, the frozen-after-load content registries, the event bus, and
@@ -116,6 +117,19 @@ public:
 	// pack ever calls it, same "engine/operator default, pack overrides on
 	// top" shape as effective_move_params()/ServerConfig::gravity.
 	double effective_day_length_seconds(double base) const;
+
+	// Phase 6.14: compiles a pack's `vb.worldgen.set_pipeline{...}` call (plus
+	// every `vb.register_biome` entry) into an immutable
+	// `worldgen::PackWorldGenPipeline` on top of `base` (the operator/engine
+	// default `WorldGenParams` -- only `seed` is ever externally overridden
+	// today). Returns `nullptr` if no pack ever called `set_pipeline`, same
+	// "no call, no pipeline, generator keeps its fixed default" opt-in shape
+	// as `effective_day_night_curve`. Call once, main thread, after
+	// `freeze()`, before constructing `WorldGenerator`/`WorldGenWorkerPool` --
+	// the returned pipeline is immutable and safe to share across worker
+	// threads from then on.
+	std::shared_ptr<const worldgen::PackWorldGenPipeline> build_worldgen_pipeline(
+			const worldgen::WorldGenParams &base) const;
 
 	// Drive from the main loop, once per tick, after ServerSession::tick():
 	void dispatch_player_join_completed(const net::SessionPlayerJoined &j);

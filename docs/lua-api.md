@@ -71,8 +71,21 @@ rt.dispatch_tick(dt);
   them yet — no EnTT registry exists, Phase 3.1; its `visual = {...}`
   sub-table — spritesheet variant/facings/origin/clips grid, schema finalized
   2026-09-17 in `ARCHITECTURE_SPEC.md` §11.3 — isn't read yet either, see
-  `REMAINING_TASKS.md` 4.2), `vb.register_biome(def)`
-  (captured, no consumer this phase) / `vb.register_craft(def)` (captured;
+  `REMAINING_TASKS.md` 4.2), `vb.register_biome(def)` (Phase 6.14: `name`
+  (idempotent-by-name, mirrors every other registration function),
+  `surface`/`filler`/`stone` (block *names*, resolved to `BlockId`s via the
+  registry when a pipeline is compiled), `probability` (base Voronoi-cell
+  draw weight, default `1.0`), `adjacency = {["other:biome"] = weight, ...}`
+  (soft multiplier vs. an already-resolved neighbor cell, default `1.0` for
+  an unlisted pair, engine-floor-clamped so it's never a hard exclusion —
+  see `vb.worldgen.set_pipeline` below), and `decoration` — a *table* of
+  `{spawn_rate=, blocks={{x=,y=,z=,block=},...}}` schematic entries is a real
+  consumer (Phase 6.14); a plain *string* (`content/base`'s pre-6.14 usage,
+  e.g. `decoration = "trees"`) stays captured-but-inert, unchanged behavior.
+  Every `vb.register_biome` call becomes one Voronoi-cell candidate only once
+  a pack also calls `vb.worldgen.set_pipeline` — with no such call, biomes
+  stay captured exactly like before this phase, since `WorldGenerator` keeps
+  running its fixed single-biome-shaped default. / `vb.register_craft(def)` (captured;
   the engine itself doesn't read it back, but `content/base/crafting.lua`
   is a real, working example built on top of it — see below).
   `vb.register_keybind(name) -> index` (Phase 6.3, idempotent by `name`)
@@ -84,8 +97,43 @@ rt.dispatch_tick(dt);
   `PackRuntime::install_keybind_registry(host)` is called (`src/server/
   main.cpp` does, right alongside `install_join_veto`), same opt-in shape as
   `block_registry`.
-  `vb.worldgen.set_pipeline` is **not implemented** — the worldgen pipeline
-  swap is out of this phase's scope; calling it errors as a nil call.
+  `vb.worldgen.set_pipeline{height=, base_height=, amplitude=, sea_level=,
+  soil_depth=, cell_size=, carvers={{noise=, threshold=, y_min=, y_max=},
+  ...}, veins={{block=, target_rock=, height_min=, height_max=, vein_size=,
+  spawn_rate=}, ...}}` (Phase 6.14, pack-load-time only) replaces
+  `WorldGenerator`'s fixed fBm-heightmap default with a pack-driven pipeline
+  — `height` (required, a `vb.noise.*`-built node) plus every registered
+  biome are compiled *once*, on the main thread, into an immutable
+  `worldgen::PackWorldGenPipeline` (`PackRuntime::build_worldgen_pipeline`,
+  called right after `freeze()`, before constructing `WorldGenerator`/
+  `WorldGenWorkerPool` — same call-site shape as `effective_move_params`).
+  **Deliberate deviation from this item's original `set_pipeline(fn)`
+  phrasing:** Lua/sol2 is strictly single-threaded and
+  `WorldGenWorkerPool` calls `WorldGenerator::generate()` from N worker
+  threads with no locking, so the pipeline can't literally be "a Lua
+  callback run per chunk" — it's data, compiled once into plain C++ (and,
+  when `VB_WITH_WORLDGEN` links real FastNoise2, into an actual FastNoise2
+  `SmartNode` graph — see `vb/worldgen/fastnoise2_compile.hpp`; the
+  dependency-free `vb/core/noise.hpp` evaluator is what runs otherwise, same
+  "zero-dependency default, optional backend on top" posture as every other
+  `VB_WITH_*` flag). No call at all (the common case) leaves
+  `WorldGenerator` on its exact pre-6.14 fixed path — byte-identical output,
+  `tests/unit/worldgen_test.cpp`'s golden-hash gate for the default path is
+  unaffected.
+  `vb.noise.*` builds the node-graph description `set_pipeline`'s `height`
+  and each carver's `noise` field expect — plain tagged Lua tables, not
+  opaque handles: `vb.noise.constant(v)`, `vb.noise.value{frequency=}`,
+  `vb.noise.cellular{frequency=}`, `vb.noise.fbm{source=, octaves=,
+  lacunarity=, gain=, frequency=}`, `vb.noise.remap{source=, in_min=,
+  in_max=, out_min=, out_max=}`, `vb.noise.combine{a=, b=,
+  op="add"|"multiply"|"min"|"max"}`.
+  **Decoration is schematic-only, not procedural** (explicit scope
+  narrowing, same threading reasoning as above): a per-site Lua callback
+  can't run on a worker thread either, so `vb.register_biome`'s `decoration`
+  table is a pure-data offset list, not a callback — see that entry above
+  and `REMAINING_TASKS.md`'s Deferred section for what's intentionally not
+  attempted here (cross-chunk decoration, procedural/callback schematics,
+  Voronoi cell resolution result caching).
   A pack registering blocks beyond the Phase 2 `base()` set logs an info
   line; those ids reach the client if (and only if) the host wires
   `HandshakeServerHost::block_registry` from this same registry
@@ -373,7 +421,7 @@ than as a black box — every file is commented explaining *why*, not just
 | `blocks/planks.lua`, `sticks.lua`     | Registering genuinely new, crafted-only blocks (not a re-declaration) |
 | `crafting.lua`                        | A full, working game system (recipes, ingredient checks, a `/craft` chat command) built entirely in content on top of `vb.register_craft` + `player:give`/`take` — **the reference example of "game rules belong in a pack, not the engine"** |
 | `entities/dropped_item.lua`           | `vb.register_entity`'s current limit: declarative only, nothing dispatches `on_spawn`/`on_tick` yet (waits on Phase 3.1) — contrast with `vb.world.spawn_item_drop` above, a separate, already-working hardcoded path |
-| `biomes/plains.lua`, `forest.lua`     | `vb.register_biome`: also declarative-only today, no worldgen pipeline reads it back |
+| `biomes/plains.lua`, `forest.lua`     | `vb.register_biome`: has a real consumer as of Phase 6.14 (`vb.worldgen.set_pipeline`), but `content/base` itself still never calls `set_pipeline` — these stay declarative-only *in this pack*, kept minimal/production-shaped per spec §5.1; a worked pipeline example belongs to 6.15's separate demo pack |
 | `ui/inventory.lua`, `ui/pause.lua`    | `ui.define`, real screens loaded by every connecting client |
 | `ui/hud.lua`                          | `ui.define_hud` + the `client.*` raw-state table (Phase 6.16) — the always-on hold-to-break progress bar |
 | `init.lua`                            | Pack-wide setup that isn't a single registration — `vb.storage` persisting a boot counter across restarts |

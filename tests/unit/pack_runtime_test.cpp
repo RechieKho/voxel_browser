@@ -201,6 +201,112 @@ TEST_CASE("vb.config.get returns nil for every key when set_server_config "
 	REQUIRE(r);
 }
 
+TEST_CASE("vb.worldgen.set_pipeline requires 'height', rejected after "
+		"freeze (Phase 6.14)") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("worldgen_missing_height"));
+
+	const auto r = rt.load_pack_file(R"(vb.worldgen.set_pipeline({}))");
+	CHECK_FALSE(r);
+
+	vb::script::PackRuntime rt2(net.server(), registry, temp_storage("worldgen_frozen"));
+	const auto r2 = rt2.load_pack_file(R"(vb.worldgen.set_pipeline({ height = vb.noise.value() }))");
+	REQUIRE(r2);
+	rt2.freeze();
+	const auto r3 = rt2.load_pack_file(
+			R"(vb.worldgen.set_pipeline({ height = vb.noise.value() }))");
+	CHECK_FALSE(r3);
+}
+
+TEST_CASE("without a vb.worldgen.set_pipeline call, build_worldgen_pipeline "
+		"returns nullptr (Phase 6.14)") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("worldgen_unset"));
+	rt.freeze();
+
+	vb::worldgen::WorldGenParams base;
+	base.seed = 123;
+	CHECK(rt.build_worldgen_pipeline(base) == nullptr);
+}
+
+TEST_CASE("vb.worldgen.set_pipeline + vb.register_biome produce a working "
+		"pack-driven pipeline distinct from the fixed default (Phase 6.14)") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("worldgen_pipeline"));
+
+	const auto r = rt.load_pack_file(R"(
+		vb.register_biome({
+			name = "test:plains",
+			surface = "base:grass",
+			filler = "base:dirt",
+			stone = "base:stone",
+			probability = 5.0,
+			adjacency = { ["test:desert"] = 1.0 },
+		})
+		vb.register_biome({
+			name = "test:desert",
+			surface = "base:sand",
+			filler = "base:sand",
+			stone = "base:stone",
+			probability = 1.0,
+			adjacency = { ["test:plains"] = 0.02 },
+		})
+		vb.worldgen.set_pipeline({
+			height = vb.noise.fbm({
+				source = vb.noise.value({ frequency = 1 / 64 }),
+				octaves = 4,
+				frequency = 1 / 64,
+			}),
+			base_height = 64,
+			amplitude = 20,
+			sea_level = 62,
+			cell_size = 96,
+			veins = {
+				{ block = "base:sand", target_rock = "base:stone",
+				  height_min = 0, height_max = 60, vein_size = 5, spawn_rate = 1.0 },
+			},
+		})
+	)");
+	REQUIRE(r);
+	rt.freeze();
+
+	vb::worldgen::WorldGenParams base;
+	base.seed = 0xC0FFEEULL;
+	const auto pipeline = rt.build_worldgen_pipeline(base);
+	REQUIRE(pipeline != nullptr);
+	CHECK_FALSE(pipeline->biomes.empty());
+	CHECK(pipeline->biomes.biome_count() == 2);
+	CHECK(pipeline->veins.size() == 1);
+
+	const vb::worldgen::WorldGenerator pack_gen(base, registry, pipeline);
+	const vb::worldgen::WorldGenerator default_gen(base, registry);
+
+	vb::world::Chunk pack_chunk({ 0, 1, 0 });
+	pack_gen.generate(pack_chunk);
+	vb::world::Chunk default_chunk({ 0, 1, 0 });
+	default_gen.generate(default_chunk);
+
+	bool any_block_differs = false;
+	for (std::size_t i = 0; i < vb::world::kChunkVolume; ++i) {
+		if (pack_chunk.blocks().get(i) != default_chunk.blocks().get(i)) {
+			any_block_differs = true;
+			break;
+		}
+	}
+	CHECK(any_block_differs);
+
+	// Deterministic: regenerating with the same pipeline gives the same
+	// blocks.
+	vb::world::Chunk pack_chunk2({ 0, 1, 0 });
+	pack_gen.generate(pack_chunk2);
+	for (std::size_t i = 0; i < vb::world::kChunkVolume; ++i) {
+		CHECK(pack_chunk.blocks().get(i) == pack_chunk2.blocks().get(i));
+	}
+}
+
 TEST_CASE("vb.daynight.set_curve overrides the default gradient, rejected "
 		"after freeze (Phase 6.8)") {
 	vb::net::LoopbackNetwork net;

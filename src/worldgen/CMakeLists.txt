@@ -3,7 +3,10 @@
 # fixed base pipeline uses the deterministic hand-rolled noise in vb/core.
 
 target_sources(vb_core PRIVATE
+  biome_selector.cpp
+  fastnoise2_compile.cpp
   generator.cpp
+  noise_graph.cpp
   worker_pool.cpp
 )
 

@@ -1,16 +1,25 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 
 #include "vb/core/ids.hpp"
 #include "vb/core/math.hpp"
 #include "vb/core/noise.hpp"
 #include "vb/world/block.hpp"
 #include "vb/world/chunk.hpp"
+#include "vb/worldgen/pipeline.hpp"
 
-// The fixed base worldgen pipeline (spec §6, steps 1–3 + basic lighting hook).
-// Deterministic from (seed, chunk coord). Phase 4 replaces this with a
-// Lua-configured FastNoise2 pipeline; the interface (generate one chunk) stays.
+// The fixed base worldgen pipeline (spec §6, steps 1-3 + basic lighting hook)
+// PLUS, as of Phase 6.14, an optional pack-driven pipeline on top of it.
+// Deterministic from (seed, chunk coord). When `WorldGenerator` is
+// constructed without a `PackWorldGenPipeline` (the common case -- no pack
+// ever calls `vb.worldgen.set_pipeline`), `generate()` runs the exact same
+// hardcoded fBm-heightmap body it always has (byte-identical output,
+// `tests/unit/worldgen_test.cpp`'s golden-hash gate is unaffected). With one
+// attached, `generate()` instead samples the pipeline's height field, resolves
+// a biome per column (Voronoi/adjacency-weighted, see
+// vb/worldgen/biome_selector.hpp), then runs carver/vein/decoration passes.
 
 namespace vb::worldgen {
 
@@ -26,7 +35,15 @@ struct WorldGenParams {
 
 class WorldGenerator {
 public:
-	WorldGenerator(WorldGenParams params, const world::BlockRegistry &registry);
+	// `pipeline` is nullptr for the fixed default path (the overwhelming
+	// common case). Non-null when a pack called `vb.worldgen.set_pipeline`
+	// -- see PackRuntime::build_worldgen_pipeline
+	// (src/script/pack_runtime.cpp), which is the only place that builds
+	// one. Shared (not owned uniquely) because both the server's
+	// WorldGenWorkerPool and its own construction path may want the same
+	// immutable pipeline.
+	WorldGenerator(WorldGenParams params, const world::BlockRegistry &registry,
+			std::shared_ptr<const PackWorldGenPipeline> pipeline = nullptr);
 
 	// Fills `chunk` with terrain and marks it Generated. `chunk` must already
 	// carry its ChunkCoord.
@@ -37,6 +54,7 @@ public:
 	int surface_height(int world_x, int world_z) const;
 
 	const WorldGenParams &params() const { return params_; }
+	const PackWorldGenPipeline *pipeline() const { return pipeline_.get(); }
 
 private:
 	WorldGenParams params_;
@@ -46,6 +64,7 @@ private:
 	core::BlockId grass_;
 	core::BlockId sand_;
 	core::BlockId water_;
+	std::shared_ptr<const PackWorldGenPipeline> pipeline_;
 };
 
 // A safe default spawn point for this generator: standing on the surface at

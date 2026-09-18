@@ -14,6 +14,7 @@
 #include "vb/world/chunk.hpp"
 #include "vb/world/paletted_chunk_store.hpp"
 #include "vb/worldgen/generator.hpp"
+#include "vb/worldgen/noise_graph.hpp"
 #include "vb/worldgen/worker_pool.hpp"
 
 using namespace vb::worldgen;
@@ -105,6 +106,103 @@ TEST_CASE("worldgen determinism gate (cross-platform golden value)") {
 	WorldGenParams other = params;
 	other.seed = 1;
 	CHECK(hash_region(WorldGenerator(other, registry), region) != digest);
+}
+
+namespace {
+
+// Builds a small pack-driven pipeline directly in C++ (no Lua involved --
+// PackRuntime::build_worldgen_pipeline's own parsing is covered by
+// pack_runtime_integration_test.cpp's end-to-end case). Exercises height
+// (fbm-over-value), one biome, one carver, and one vein, so this golden case
+// actually walks every branch of WorldGenerator::generate()'s pipeline path.
+std::shared_ptr<const PackWorldGenPipeline> make_test_pipeline(
+		const vb::world::BlockRegistry &registry, std::uint64_t seed) {
+	auto height_source = std::make_shared<NoiseNode>();
+	height_source->type = NoiseNodeType::kValue;
+	height_source->salt = 0;
+	height_source->frequency = 1.0 / 64.0;
+
+	auto height_fbm = std::make_shared<NoiseNode>();
+	height_fbm->type = NoiseNodeType::kFbm;
+	height_fbm->salt = 1;
+	height_fbm->frequency = 1.0 / 64.0;
+	height_fbm->octaves = 4;
+	height_fbm->lacunarity = 2.0;
+	height_fbm->gain = 0.5;
+	height_fbm->source = height_source;
+
+	auto carver_node = std::make_shared<NoiseNode>();
+	carver_node->type = NoiseNodeType::kValue;
+	carver_node->salt = 2;
+	carver_node->frequency = 1.0 / 20.0;
+
+	auto pipeline = std::make_shared<PackWorldGenPipeline>();
+	pipeline->height_field = [height_fbm, seed](double x, double z) {
+		const double n = height_fbm->eval2(seed, x, z);
+		return 64.0 + (n * 2.0 - 1.0) * 20.0;
+	};
+	pipeline->sea_level = 62;
+	pipeline->soil_depth = 3;
+
+	std::vector<BiomeEntry> entries(1);
+	entries[0].name = "test:plains";
+	entries[0].probability = 1.0;
+	entries[0].surface = registry.find("base:grass");
+	entries[0].filler = registry.find("base:dirt");
+	entries[0].stone = registry.find("base:stone");
+	entries[0].adjacency = { 1.0 };
+	pipeline->biomes = BiomeSelector(seed, 128.0, entries);
+	pipeline->decoration.push_back({});
+
+	CarverDef carver;
+	carver.threshold = 0.82;
+	carver.y_min = 0;
+	carver.y_max = 60;
+	carver.density = [carver_node, seed](double x, double y, double z) {
+		return carver_node->eval3(seed, x, y, z);
+	};
+	pipeline->carvers.push_back(std::move(carver));
+
+	VeinDef vein;
+	vein.block = registry.find("base:sand"); // stand-in "ore" for this test
+	vein.target_rock = registry.find("base:stone");
+	vein.height_min = 0;
+	vein.height_max = 60;
+	vein.vein_size = 5;
+	vein.spawn_rate = 0.5;
+	pipeline->veins.push_back(vein);
+
+	return pipeline;
+}
+
+} // namespace
+
+TEST_CASE("worldgen determinism gate, pack-driven pipeline (golden value)") {
+	auto registry = vb::world::BlockRegistry::base();
+	WorldGenParams params;
+	params.seed = 0x5DEECE66DULL;
+	WorldGenerator gen(params, registry, make_test_pipeline(registry, params.seed));
+
+	const std::array<ChunkCoord, 4> region{ { { 0, 1, 0 }, { 1, 1, 0 }, { 0, 1, 1 }, { -1, 2, -1 } } };
+	const std::uint64_t digest = hash_region(gen, region);
+
+	// Golden, same posture as the fixed-pipeline gate above: if this line
+	// ever needs updating, the pack-driven pipeline's output changed --
+	// bump pack_version and note why.
+	CHECK(digest == 0x33CA94E677AF7922ull);
+
+	WorldGenerator gen2(params, registry, make_test_pipeline(registry, params.seed));
+	CHECK(hash_region(gen2, region) == digest);
+
+	WorldGenParams other = params;
+	other.seed = 1;
+	CHECK(hash_region(WorldGenerator(other, registry, make_test_pipeline(registry, other.seed)),
+				region) != digest);
+
+	// And the pack-driven digest differs from the fixed default path's own
+	// golden value -- the pipeline branch in generate() is actually taken,
+	// not silently falling back.
+	CHECK(digest != 0x021BB3847413D8A5ull);
 }
 
 TEST_CASE("worker pool generates submitted chunks, dedupes, drains") {

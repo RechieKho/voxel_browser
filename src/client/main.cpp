@@ -80,10 +80,11 @@ void print_usage() {
 }
 
 vb::worldgen::WorldGenerator make_generator(
-		std::uint64_t seed, const vb::world::BlockRegistry &registry) {
+		std::uint64_t seed, const vb::world::BlockRegistry &registry,
+		std::shared_ptr<const vb::worldgen::PackWorldGenPipeline> pipeline = nullptr) {
 	vb::worldgen::WorldGenParams p;
 	p.seed = seed;
-	return vb::worldgen::WorldGenerator(p, registry);
+	return vb::worldgen::WorldGenerator(p, registry, std::move(pipeline));
 }
 
 // The spawn-position calculation only needs the well-known base block ids
@@ -229,7 +230,13 @@ struct Singleplayer {
 			: pack_runtime(make_singleplayer_pack_runtime(net.server(), registry)),
 			  move_params(pack_runtime.effective_move_params(vb::physics::MoveParams{})),
 			  world(registry),
-			  pool(make_generator(seed, registry)),
+			  // Phase 6.14: mirrors src/server/main.cpp's own
+			  // build_worldgen_pipeline call -- nullptr unless a pack called
+			  // vb.worldgen.set_pipeline, in which case --singleplayer's
+			  // terrain matches a dedicated server's.
+			  pool(make_generator(seed, registry,
+					  pack_runtime.build_worldgen_pipeline(
+							  vb::worldgen::WorldGenParams{ seed }))),
 			  server(net.server(), sp_server_config(seed),
 					  make_singleplayer_host(seed, pack_runtime, registry, move_params)) {
 		server.set_move_params(move_params);

@@ -148,7 +148,11 @@ int main(int argc, char **argv) {
 	vb::world::World world(registry);
 	vb::worldgen::WorldGenParams gen_params;
 	gen_params.seed = seed;
-	const vb::worldgen::WorldGenerator generator(gen_params, registry);
+	// Phase 6.14: nullptr unless a pack ever called vb.worldgen.set_pipeline,
+	// in which case WorldGenerator uses the pack-driven pipeline instead of
+	// its fixed default -- same opt-in shape as effective_move_params above.
+	const auto worldgen_pipeline = pack_runtime.build_worldgen_pipeline(gen_params);
+	const vb::worldgen::WorldGenerator generator(gen_params, registry, worldgen_pipeline);
 	vb::worldgen::WorldGenWorkerPool pool(generator); // copies into the pool
 
 	vb::net::HandshakeServerConfig hs_config;

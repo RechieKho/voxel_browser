@@ -19,6 +19,7 @@ inline constexpr std::uint64_t kMixA = 0xff51afd7ed558ccdULL;
 inline constexpr std::uint64_t kMixB = 0xc4ceb9fe1a85ec53ULL;
 inline constexpr std::uint64_t kHashX = 0x9E3779B97F4A7C15ULL;
 inline constexpr std::uint64_t kHashY = 0xC2B2AE3D27D4EB4FULL;
+inline constexpr std::uint64_t kHashZ = 0x165667B19E3779F9ULL;
 inline constexpr std::uint64_t kOctaveSalt = 0x9E3779B97F4A7C15ULL;
 
 constexpr std::uint64_t mix64(std::uint64_t x) {
@@ -34,6 +35,13 @@ inline std::uint64_t hash2(std::uint64_t seed, std::int64_t x, std::int64_t y) {
 	const std::uint64_t ux = static_cast<std::uint64_t>(x);
 	const std::uint64_t uy = static_cast<std::uint64_t>(y);
 	return mix64(seed ^ mix64(ux * kHashX) ^ mix64(uy * kHashY));
+}
+
+inline std::uint64_t hash3(std::uint64_t seed, std::int64_t x, std::int64_t y, std::int64_t z) {
+	const std::uint64_t ux = static_cast<std::uint64_t>(x);
+	const std::uint64_t uy = static_cast<std::uint64_t>(y);
+	const std::uint64_t uz = static_cast<std::uint64_t>(z);
+	return mix64(seed ^ mix64(ux * kHashX) ^ mix64(uy * kHashY) ^ mix64(uz * kHashZ));
 }
 
 // Hash -> double in [0, 1).
@@ -61,6 +69,74 @@ inline double value2(std::uint64_t seed, double x, double y) {
 	const double v01 = to_unit(hash2(seed, ix, iy + 1));
 	const double v11 = to_unit(hash2(seed, ix + 1, iy + 1));
 	return lerp(lerp(v00, v10, tx), lerp(v01, v11, tx), ty);
+}
+
+// Value noise in [0, 1), 3D (trilinear).
+inline double value3(std::uint64_t seed, double x, double y, double z) {
+	const double fx = std::floor(x);
+	const double fy = std::floor(y);
+	const double fz = std::floor(z);
+	const auto ix = static_cast<std::int64_t>(fx);
+	const auto iy = static_cast<std::int64_t>(fy);
+	const auto iz = static_cast<std::int64_t>(fz);
+	const double tx = smoothstep5(x - fx);
+	const double ty = smoothstep5(y - fy);
+	const double tz = smoothstep5(z - fz);
+
+	const double v000 = to_unit(hash3(seed, ix, iy, iz));
+	const double v100 = to_unit(hash3(seed, ix + 1, iy, iz));
+	const double v010 = to_unit(hash3(seed, ix, iy + 1, iz));
+	const double v110 = to_unit(hash3(seed, ix + 1, iy + 1, iz));
+	const double v001 = to_unit(hash3(seed, ix, iy, iz + 1));
+	const double v101 = to_unit(hash3(seed, ix + 1, iy, iz + 1));
+	const double v011 = to_unit(hash3(seed, ix, iy + 1, iz + 1));
+	const double v111 = to_unit(hash3(seed, ix + 1, iy + 1, iz + 1));
+
+	const double x00 = lerp(v000, v100, tx);
+	const double x10 = lerp(v010, v110, tx);
+	const double x01 = lerp(v001, v101, tx);
+	const double x11 = lerp(v011, v111, tx);
+	return lerp(lerp(x00, x10, ty), lerp(x01, x11, ty), tz);
+}
+
+// F1 cellular (Voronoi) noise in 2D: jitters one site per unit cell (jitter in
+// [0,1) of the cell's own width, deterministic from (seed, cell)) and returns
+// the normalized distance to the nearest site over the 3x3 neighborhood, plus
+// a hash identifying which cell owns it -- the latter is what a Voronoi-cell
+// partition (e.g. biome selection) keys off, the former is what a "cellular"
+// noise node samples as a scalar field.
+struct Cellular2Result {
+	double distance; // to nearest site, roughly [0, ~1.5]
+	std::int64_t cell_x;
+	std::int64_t cell_y;
+};
+
+inline Cellular2Result cellular2(std::uint64_t seed, double x, double y) {
+	const auto cx = static_cast<std::int64_t>(std::floor(x));
+	const auto cy = static_cast<std::int64_t>(std::floor(y));
+	double best_dist = 1e18;
+	std::int64_t best_x = cx;
+	std::int64_t best_y = cy;
+	for (std::int64_t oy = -1; oy <= 1; ++oy) {
+		for (std::int64_t ox = -1; ox <= 1; ++ox) {
+			const std::int64_t nx = cx + ox;
+			const std::int64_t ny = cy + oy;
+			const std::uint64_t h = hash2(seed, nx, ny);
+			const double jx = to_unit(h);
+			const double jy = to_unit(mix64(h));
+			const double sx = static_cast<double>(nx) + jx;
+			const double sy = static_cast<double>(ny) + jy;
+			const double dx = sx - x;
+			const double dy = sy - y;
+			const double d = std::sqrt(dx * dx + dy * dy);
+			if (d < best_dist) {
+				best_dist = d;
+				best_x = nx;
+				best_y = ny;
+			}
+		}
+	}
+	return { best_dist, best_x, best_y };
 }
 
 struct FbmParams {

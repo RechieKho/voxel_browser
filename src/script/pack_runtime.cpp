@@ -35,6 +35,10 @@ std::optional<world::DayNightCurve> PackRuntime::effective_day_night_curve() con
 double PackRuntime::effective_day_length_seconds(double base) const {
 	return base;
 }
+std::shared_ptr<const worldgen::PackWorldGenPipeline> PackRuntime::build_worldgen_pipeline(
+		const worldgen::WorldGenParams &) const {
+	return nullptr;
+}
 void PackRuntime::dispatch_player_join_completed(const net::SessionPlayerJoined &) {}
 void PackRuntime::dispatch_player_leave(const net::SessionPlayerLeft &) {}
 void PackRuntime::dispatch_tick(double) {}
@@ -71,6 +75,8 @@ void PackRuntime::flush_storage() {}
 #include "vb/script/db.hpp"
 #include "vb/script/vm_internal.hpp"
 #include "vb/world/raycast.hpp"
+#include "vb/worldgen/fastnoise2_compile.hpp"
+#include "vb/worldgen/noise_graph.hpp"
 
 namespace vb::script {
 
@@ -338,6 +344,16 @@ struct PackRuntime::Impl {
 	// no setter is exposed to a pack, unlike 6.6-6.11's override tables above.
 	std::optional<core::ServerConfig> server_config;
 
+	// Phase 6.14: the raw table passed to vb.worldgen.set_pipeline{...}, if a
+	// pack ever calls it -- read once (not per-voxel) in
+	// build_worldgen_pipeline(), same "capture the table, parse lazily"
+	// posture as move_params_table/day_night_curve_table above.
+	// `set_pipeline` itself eagerly validates 'height' is present (same
+	// "validate at the call site" posture 6.8's set_curve uses for its own
+	// required 'keyframes' field) since a pack that opts in without a height
+	// field almost certainly has a bug, not an intentional no-op.
+	std::optional<sol::table> worldgen_pipeline_table;
+
 	// Phase 6.1: spawned vb.register_entity instances, keyed by the NetId
 	// ServerSession::spawn_script_entity handed back. entity_mt is the shared
 	// metatable (__index = entity_methods) applied to every spawned `self`.
@@ -427,6 +443,20 @@ struct PackRuntime::Impl {
 	void dispatch_entity_tick(double dt);
 	void dispatch_entity_hit(core::NetId id, double amount, std::string_view cause);
 	void despawn_entity(core::NetId id, std::string_view cause);
+
+	// Phase 6.14: parses one vb.noise.*-built node table (recursively, for
+	// fbm/remap/combine's nested `source`/`a`/`b` fields) into the pure-C++
+	// worldgen::NoiseNode IR. `salt` is a shared, ever-incrementing counter
+	// across one whole parse so no two nodes in the same graph sample
+	// identically (see NoiseNode::salt's own comment).
+	worldgen::NoiseNodePtr parse_noise_node(
+			const sol::table &t, std::uint64_t &salt) const;
+	// Phase 6.14: compiles worldgen_pipeline_table + every registered biome
+	// into an immutable worldgen::PackWorldGenPipeline, once. nullptr if
+	// set_pipeline was never called (caller keeps WorldGenerator on its fixed
+	// default path). See PackRuntime::build_worldgen_pipeline's own comment.
+	std::shared_ptr<const worldgen::PackWorldGenPipeline> build_worldgen_pipeline(
+			const worldgen::WorldGenParams &base) const;
 
 	template <typename... Args>
 	void fire(const std::string &event, Args &&...args) {
@@ -803,6 +833,81 @@ void PackRuntime::Impl::install_bindings() {
 			throw sol::error("vb.daynight.set_day_length: 'seconds' must be > 0");
 		}
 		day_length_seconds_override = seconds;
+	};
+
+	// Phase 6.14: vb.noise.* -- small builder functions that just stamp a
+	// `type` field onto a plain Lua table and return it. The real work (a
+	// recursive parse into the pure-C++ worldgen::NoiseNode IR) happens once,
+	// lazily, in build_worldgen_pipeline() -- not here -- so it's fine that
+	// these run at pack-load time and return ordinary tables rather than
+	// opaque handles.
+	sol::table noise_tbl = lua.create_table();
+	vb["noise"] = noise_tbl;
+	noise_tbl["constant"] = [this](double value) {
+		sol::table t = lua_state().create_table();
+		t["type"] = "constant";
+		t["value"] = value;
+		return t;
+	};
+	noise_tbl["value"] = [this](sol::optional<double> frequency) {
+		sol::table t = lua_state().create_table();
+		t["type"] = "value";
+		t["frequency"] = frequency.value_or(1.0);
+		return t;
+	};
+	noise_tbl["cellular"] = [this](sol::optional<double> frequency) {
+		sol::table t = lua_state().create_table();
+		t["type"] = "cellular";
+		t["frequency"] = frequency.value_or(1.0);
+		return t;
+	};
+	noise_tbl["fbm"] = [this](sol::table def) {
+		sol::table t = lua_state().create_table();
+		t["type"] = "fbm";
+		t["source"] = def.get_or("source", sol::object(sol::lua_nil));
+		t["frequency"] = def.get_or("frequency", 1.0);
+		t["octaves"] = def.get_or("octaves", 4);
+		t["lacunarity"] = def.get_or("lacunarity", 2.0);
+		t["gain"] = def.get_or("gain", 0.5);
+		return t;
+	};
+	noise_tbl["remap"] = [this](sol::table def) {
+		sol::table t = lua_state().create_table();
+		t["type"] = "remap";
+		t["source"] = def.get_or("source", sol::object(sol::lua_nil));
+		t["in_min"] = def.get_or("in_min", 0.0);
+		t["in_max"] = def.get_or("in_max", 1.0);
+		t["out_min"] = def.get_or("out_min", 0.0);
+		t["out_max"] = def.get_or("out_max", 1.0);
+		return t;
+	};
+	noise_tbl["combine"] = [this](sol::table def) {
+		sol::table t = lua_state().create_table();
+		t["type"] = "combine";
+		t["a"] = def.get_or("a", sol::object(sol::lua_nil));
+		t["b"] = def.get_or("b", sol::object(sol::lua_nil));
+		t["op"] = def.get_or("op", std::string("add"));
+		return t;
+	};
+
+	// Phase 6.14: vb.worldgen.set_pipeline{...} -- pack-load-time only
+	// (frozen guard, same as every other registration function). 'height' is
+	// validated eagerly (a vb.noise.* node is required) since opting in
+	// without one is almost certainly a bug, not an intentional no-op --
+	// same "validate at the call site" posture 6.8's set_curve uses for its
+	// own required 'keyframes' field.
+	sol::table worldgen_tbl = lua.create_table();
+	vb["worldgen"] = worldgen_tbl;
+	worldgen_tbl["set_pipeline"] = [this](sol::table def) {
+		if (frozen) {
+			throw sol::error("vb.worldgen.set_pipeline: registry already frozen");
+		}
+		const sol::optional<sol::table> height = def["height"];
+		if (!height) {
+			throw sol::error(
+					"vb.worldgen.set_pipeline: 'height' (a vb.noise.* node) is required");
+		}
+		worldgen_pipeline_table = def;
 	};
 
 	// Phase 6.13: read-only visibility into the operator's server.toml/CLI
@@ -1675,6 +1780,236 @@ std::optional<world::DayNightCurve> PackRuntime::effective_day_night_curve() con
 
 double PackRuntime::effective_day_length_seconds(double base) const {
 	return impl_->day_length_seconds_override.value_or(base);
+}
+
+worldgen::NoiseNodePtr PackRuntime::Impl::parse_noise_node(
+		const sol::table &t, std::uint64_t &salt) const {
+	auto node = std::make_shared<worldgen::NoiseNode>();
+	node->salt = salt++;
+	const std::string type = t.get_or("type", std::string("value"));
+	if (type == "constant") {
+		node->type = worldgen::NoiseNodeType::kConstant;
+		node->constant_value = t.get_or("value", 0.0);
+	} else if (type == "value") {
+		node->type = worldgen::NoiseNodeType::kValue;
+		node->frequency = t.get_or("frequency", 1.0);
+	} else if (type == "cellular") {
+		node->type = worldgen::NoiseNodeType::kCellular;
+		node->frequency = t.get_or("frequency", 1.0);
+	} else if (type == "fbm") {
+		node->type = worldgen::NoiseNodeType::kFbm;
+		node->frequency = t.get_or("frequency", 1.0);
+		node->octaves = t.get_or("octaves", 4);
+		node->lacunarity = t.get_or("lacunarity", 2.0);
+		node->gain = t.get_or("gain", 0.5);
+		const sol::optional<sol::table> src = t["source"];
+		if (src) {
+			node->source = parse_noise_node(*src, salt);
+		} else {
+			auto default_source = std::make_shared<worldgen::NoiseNode>();
+			default_source->salt = salt++;
+			default_source->type = worldgen::NoiseNodeType::kValue;
+			node->source = default_source;
+		}
+	} else if (type == "remap") {
+		node->type = worldgen::NoiseNodeType::kRemap;
+		node->in_min = t.get_or("in_min", 0.0);
+		node->in_max = t.get_or("in_max", 1.0);
+		node->out_min = t.get_or("out_min", 0.0);
+		node->out_max = t.get_or("out_max", 1.0);
+		const sol::optional<sol::table> src = t["source"];
+		if (!src) {
+			throw sol::error("vb.noise.remap: 'source' is required");
+		}
+		node->source = parse_noise_node(*src, salt);
+	} else if (type == "combine") {
+		node->type = worldgen::NoiseNodeType::kCombine;
+		const std::string op = t.get_or("op", std::string("add"));
+		node->op = op == "multiply" ? worldgen::NoiseCombineOp::kMultiply
+				: op == "min"		 ? worldgen::NoiseCombineOp::kMin
+				: op == "max"		 ? worldgen::NoiseCombineOp::kMax
+									 : worldgen::NoiseCombineOp::kAdd;
+		const sol::optional<sol::table> ta = t["a"];
+		const sol::optional<sol::table> tb = t["b"];
+		if (!ta || !tb) {
+			throw sol::error("vb.noise.combine: 'a' and 'b' are required");
+		}
+		node->a = parse_noise_node(*ta, salt);
+		node->b = parse_noise_node(*tb, salt);
+	} else {
+		throw sol::error("vb.noise: unknown node type '" + type + "'");
+	}
+	return node;
+}
+
+std::shared_ptr<const worldgen::PackWorldGenPipeline> PackRuntime::Impl::build_worldgen_pipeline(
+		const worldgen::WorldGenParams &base) const {
+	if (!worldgen_pipeline_table) {
+		return nullptr;
+	}
+	const sol::table &def = *worldgen_pipeline_table;
+	auto pipeline = std::make_shared<worldgen::PackWorldGenPipeline>();
+
+	// Height field: bakes base_height/amplitude in so WorldGenerator's own
+	// surface_height() doesn't need to know it's talking to a pack pipeline
+	// vs. the fixed default -- same centred-[-1,1)-then-scaled remap the
+	// fixed path already uses, for continuity of feel.
+	const sol::table height_def = def["height"]; // validated non-null at set_pipeline() call time
+	std::uint64_t salt = 0;
+	const worldgen::NoiseNodePtr height_node = parse_noise_node(height_def, salt);
+	const double base_height = def.get_or("base_height", base.base_height);
+	const double amplitude = def.get_or("amplitude", base.amplitude);
+	const std::uint64_t seed = base.seed;
+#if VB_WITH_WORLDGEN
+	// Real FastNoise2 backend (Phase 6.14): same IR, a different evaluator --
+	// see vb/worldgen/fastnoise2_compile.hpp's header comment.
+	std::function<double(double, double)> height_eval =
+			worldgen::compile_fastnoise2_2d(height_node, seed);
+#else
+	std::function<double(double, double)> height_eval =
+			[height_node, seed](double x, double z) { return height_node->eval2(seed, x, z); };
+#endif
+	pipeline->height_field = [height_eval, base_height, amplitude](double x, double z) {
+		const double n = height_eval(x, z);
+		return base_height + (n * 2.0 - 1.0) * amplitude;
+	};
+	pipeline->sea_level = def.get_or("sea_level", base.sea_level);
+	pipeline->soil_depth = def.get_or("soil_depth", base.soil_depth);
+
+	// Biomes: every vb.register_biome entry becomes a worldgen::BiomeEntry,
+	// resolved surface/filler/stone block ids and a same-order adjacency
+	// vector (missing pairs default to the neutral 1.0 multiplier).
+	std::vector<worldgen::BiomeEntry> entries;
+	entries.reserve(biomes.size());
+	for (const auto &b : biomes) {
+		worldgen::BiomeEntry e;
+		e.name = b.name;
+		e.probability = b.raw.get_or("probability", 1.0);
+		const std::string surface_name = b.raw.get_or("surface", std::string{});
+		const std::string filler_name = b.raw.get_or("filler", std::string{});
+		const std::string stone_name = b.raw.get_or("stone", std::string{});
+		e.surface = surface_name.empty() ? core::BlockId::kAir : registry.find(surface_name);
+		e.filler = filler_name.empty() ? core::BlockId::kAir : registry.find(filler_name);
+		e.stone = stone_name.empty() ? core::BlockId::kAir : registry.find(stone_name);
+		entries.push_back(std::move(e));
+	}
+	for (std::size_t i = 0; i < biomes.size(); ++i) {
+		entries[i].adjacency.assign(entries.size(), 1.0);
+		const sol::optional<sol::table> adjacency = biomes[i].raw["adjacency"];
+		if (!adjacency) {
+			continue;
+		}
+		for (const auto &kv : *adjacency) {
+			if (kv.first.get_type() != sol::type::string) {
+				continue;
+			}
+			const std::string other_name = kv.first.as<std::string>();
+			const double weight = kv.second.is<double>() ? kv.second.as<double>() : 1.0;
+			for (std::size_t j = 0; j < biomes.size(); ++j) {
+				if (biomes[j].name == other_name) {
+					entries[i].adjacency[j] = weight;
+					break;
+				}
+			}
+		}
+	}
+	const double cell_size = def.get_or("cell_size", 256.0);
+	pipeline->biomes = worldgen::BiomeSelector(base.seed, cell_size, entries);
+
+	// Decoration: index-aligned with `entries`/`pipeline->biomes` -- always
+	// push one (possibly empty) list per biome so decoration_for()'s index
+	// lookup stays valid. `decoration` may be a plain string (content/base's
+	// existing pre-6.14 usage, e.g. `decoration = "trees"`) -- captured but
+	// intentionally not a schematic, unchanged behavior from before this
+	// item landed.
+	for (const auto &b : biomes) {
+		std::vector<worldgen::DecorationEntry> out;
+		const sol::object deco_obj = b.raw["decoration"];
+		if (deco_obj.get_type() == sol::type::table) {
+			const sol::table deco_list = deco_obj.as<sol::table>();
+			for (const auto &kv : deco_list) {
+				if (kv.second.get_type() != sol::type::table) {
+					continue;
+				}
+				const sol::table entry_tbl = kv.second.as<sol::table>();
+				worldgen::DecorationEntry de;
+				de.spawn_rate = entry_tbl.get_or("spawn_rate", 0.0);
+				const sol::optional<sol::table> blocks_tbl = entry_tbl["blocks"];
+				if (blocks_tbl) {
+					for (const auto &bkv : *blocks_tbl) {
+						if (bkv.second.get_type() != sol::type::table) {
+							continue;
+						}
+						const sol::table bo = bkv.second.as<sol::table>();
+						worldgen::DecorationEntry::BlockOffset off;
+						off.offset = { bo.get_or("x", 0), bo.get_or("y", 0),
+							bo.get_or("z", 0) };
+						const std::string bname = bo.get_or("block", std::string{});
+						off.block = bname.empty() ? core::BlockId::kAir : registry.find(bname);
+						de.blocks.push_back(off);
+					}
+				}
+				out.push_back(std::move(de));
+			}
+		}
+		pipeline->decoration.push_back(std::move(out));
+	}
+
+	// Carvers (spec §6 stage 4) and veins (stage 5): top-level pipeline
+	// tables, not per-biome.
+	const sol::optional<sol::table> carvers_tbl = def["carvers"];
+	if (carvers_tbl) {
+		for (const auto &kv : *carvers_tbl) {
+			if (kv.second.get_type() != sol::type::table) {
+				continue;
+			}
+			const sol::table c = kv.second.as<sol::table>();
+			const sol::optional<sol::table> noise_def = c["noise"];
+			if (!noise_def) {
+				continue; // malformed entry, skip rather than fail the whole pipeline
+			}
+			const worldgen::NoiseNodePtr node = parse_noise_node(*noise_def, salt);
+			worldgen::CarverDef cd;
+			cd.threshold = c.get_or("threshold", 0.5);
+			cd.y_min = c.get_or("y_min", 0);
+			cd.y_max = c.get_or("y_max", 255);
+#if VB_WITH_WORLDGEN
+			cd.density = worldgen::compile_fastnoise2_3d(node, seed);
+#else
+			cd.density = [node, seed](double x, double y, double z) {
+				return node->eval3(seed, x, y, z);
+			};
+#endif
+			pipeline->carvers.push_back(std::move(cd));
+		}
+	}
+	const sol::optional<sol::table> veins_tbl = def["veins"];
+	if (veins_tbl) {
+		for (const auto &kv : *veins_tbl) {
+			if (kv.second.get_type() != sol::type::table) {
+				continue;
+			}
+			const sol::table v = kv.second.as<sol::table>();
+			worldgen::VeinDef vd;
+			const std::string block_name = v.get_or("block", std::string{});
+			const std::string target_name =
+					v.get_or("target_rock", std::string("base:stone"));
+			vd.block = block_name.empty() ? core::BlockId::kAir : registry.find(block_name);
+			vd.target_rock = registry.find(target_name);
+			vd.height_min = v.get_or("height_min", 0);
+			vd.height_max = v.get_or("height_max", 63);
+			vd.vein_size = v.get_or("vein_size", 6);
+			vd.spawn_rate = v.get_or("spawn_rate", 0.02);
+			pipeline->veins.push_back(vd);
+		}
+	}
+
+	return pipeline;
+}
+
+std::shared_ptr<const worldgen::PackWorldGenPipeline> PackRuntime::build_worldgen_pipeline(
+		const worldgen::WorldGenParams &base) const {
+	return impl_->build_worldgen_pipeline(base);
 }
 
 void PackRuntime::attach_session(net::ServerSession &session) {

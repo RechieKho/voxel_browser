@@ -1427,7 +1427,7 @@ windows, chatting, crafting, and seeing each other, all at once.
 
 ---
 
-## Phase 6 — Lua-Driven Extensibility (in progress — 6.1-6.11/6.13/6.16 done, 6.12 design-only, 6.14 not started)
+## Phase 6 — Lua-Driven Extensibility (essentially done — 6.1-6.14/6.16 done, 6.15 (kitchen-sink example pack) remaining)
 
 > Design agreed in discussion on 2026-09-17: four systems that let content
 > packs override/extend engine defaults (biomes, entities, UI, input, data)
@@ -1870,15 +1870,20 @@ windows, chatting, crafting, and seeing each other, all at once.
       `LoopbackTransport`). Full `vb_tests` green (248/248) + all 4 CTest
       cases pass on `build-net-lua`.
 
-### 6.12 Entity animation clip priority (cosmetic, low priority)
+### 6.12 Entity animation clip priority (cosmetic, low priority) ✅ (2026-09-18, no code change — decision already matches implementation)
 
-- [ ] `resolve_anim_clip()`'s fixed priority order (`kDead > kHurt > kActing
+- [x] `resolve_anim_clip()`'s fixed priority order (`kDead > kHurt > kActing
       > kJump/kFall > kRun > kWalk > kIdle`) and its speed thresholds
       (`AnimThresholds`, `inc/vb/render/entity_visual.hpp:44-48`) stay
       engine-fixed even once per-kind clip *assets* are pack-defined
       (already tracked separately under 4.2's `visual = {...}` sub-table) —
       *which* clip wins in a given state is a distinct, finer-grained
       concern. Cosmetic only; lowest priority in this section.
+      Verified 2026-09-18: `resolve_anim_clip()` (`inc/vb/render/
+      entity_visual.hpp:51-`) already implements exactly this fixed order
+      with no Lua hook of any kind — this item was a "leave it engine-fixed"
+      design decision that the code already matched, not a pending
+      implementation. No change made.
 
 ### 6.13 Read-only server config visibility (not a pack-override surface) ✅ (2026-09-18)
 
@@ -1891,7 +1896,7 @@ windows, chatting, crafting, and seeing each other, all at once.
       spawn density to view distance), not a full override registry like
       6.6-6.11 above.
 
-### 6.14 Lua-driven worldgen pipeline (FastNoise2 backend)
+### 6.14 Lua-driven worldgen pipeline (FastNoise2 backend) ✅ (2026-09-18)
 
 > Moved here from Phase 4.2 (2026-09-17) — it's the same "override an
 > engine default from a pack" shape as the rest of Phase 6, and `biomes`
@@ -1904,25 +1909,57 @@ windows, chatting, crafting, and seeing each other, all at once.
 > — the hand-rolled integer-hash noise in `vb/core/noise.hpp` is what
 > `WorldGenerator` actually uses today.
 
-- [ ] `vb.worldgen.set_pipeline(fn)` — a pack-supplied stage function (or
+- [x] `vb.worldgen.set_pipeline(fn)` — a pack-supplied stage function (or
       ordered list of stages) that replaces `WorldGenerator::generate`'s
       hardcoded body; falls back to the current hand-rolled fBm heightmap
       when no pack sets one, so an unmodified `content/base` keeps working.
-- [ ] Expose FastNoise2 node-graph construction to Lua (`vb.noise.*`) —
+      **Shipped as `set_pipeline(table)`, not `set_pipeline(fn)`** — Lua/
+      sol2 is strictly single-threaded and `WorldGenWorkerPool` calls
+      `generate()` from N worker threads with zero locking, so a literal
+      per-chunk Lua callback was never viable; the table is compiled once,
+      main thread, into an immutable `worldgen::PackWorldGenPipeline`. See
+      `docs/lua-api.md`'s `vb.worldgen.set_pipeline` entry for the full
+      writeup and `STATE.md` for the session notes.
+- [x] Expose FastNoise2 node-graph construction to Lua (`vb.noise.*`) —
       the natural backend for pack-defined pipelines; the hand-rolled
       `vb/core/noise.hpp` path stays as the deterministic zero-dependency
       default (`VB_WITH_WORLDGEN` off), same posture as every other
-      `VB_WITH_*`-gated optional backend.
-- [ ] Biome selection (`ARCHITECTURE_SPEC.md` §6 stage 2): Voronoi-cell
+      `VB_WITH_*`-gated optional backend. `vb.noise.*` builds a small
+      portable node-graph IR (`vb/worldgen/noise_graph.hpp`'s `NoiseNode`)
+      that compiles to either evaluator depending on the build flag —
+      confirmed working end-to-end under `VB_WITH_WORLDGEN=ON` this session
+      (real FastNoise2 v0.10.0-alpha fetched, linked, and exercised by the
+      full test suite; see STATE.md). Fixed a real pre-existing bug found
+      while wiring this: `cmake/Dependencies.cmake` pinned FastNoise2 to a
+      tag (`v0.10.0`) that doesn't exist in `Auburn/FastNoise2` — the real
+      tag is `v0.10.0-alpha` — unnoticed until now because nothing had ever
+      actually fetched/built it before this item.
+- [x] Biome selection (`ARCHITECTURE_SPEC.md` §6 stage 2): Voronoi-cell
       partitioning with adjacency-weighted probability (WFC-flavored,
       non-backtracking — design finalized 2026-09-17) reads `register_biome`
       entries (already captured by `PackRuntime`, 4.2) instead of nothing.
-- [ ] Carvers + vein/scatter (new stage 5, ore/valuable-block placement) +
+      `vb/worldgen/biome_selector.hpp`'s `BiomeSelector` implements this;
+      deliberately **not** globally memoized/locked (recomputes its bounded
+      neighbor recursion from scratch per query, trading cache-hit-rate for
+      zero shared mutable state across worker threads) — see that header's
+      own comment for the reasoning, and its Deferred-section entry below
+      for the follow-up if profiling ever shows this matters.
+- [x] Carvers + vein/scatter (new stage 5, ore/valuable-block placement) +
       decoration pass — each a pipeline stage a pack can plug in via the
-      same `set_pipeline` mechanism.
-- [ ] Determinism gate (`tests/unit/worldgen_test.cpp`'s golden-hash test)
+      same `set_pipeline` mechanism. **Decoration scope narrowed to
+      schematic-only** (pure data: a block-offset list scattered per chunk),
+      not the spec's "procedural callbacks" — same threading reasoning as
+      `set_pipeline` itself; see the Deferred section below.
+- [x] Determinism gate (`tests/unit/worldgen_test.cpp`'s golden-hash test)
       needs a pack-driven pipeline case once this lands, alongside the
-      existing hardcoded-pipeline golden.
+      existing hardcoded-pipeline golden. Added
+      ("worldgen determinism gate, pack-driven pipeline (golden value)"),
+      built directly against `worldgen::NoiseNode`/`PackWorldGenPipeline` in
+      C++ (not through Lua) so it stays backend-evaluator-pinned (always the
+      hand-rolled path) regardless of whether a given build links real
+      FastNoise2 — the fixed-default-path golden test is completely
+      untouched (byte-identical output confirmed both with and without
+      `VB_WITH_WORLDGEN`).
 
 ### 6.15 Example Lua script demonstrating the Phase 6 "default + override" features
 
@@ -2072,7 +2109,34 @@ windows, chatting, crafting, and seeing each other, all at once.
   weighting) rather than every structure needing a hand-written procedural
   callback. Explicitly post-first-playable — depends on the Lua-driven
   worldgen pipeline itself (Phase 4.2/6) landing and settling first; noted
-  now so the decoration-pass design leaves room for it.
+  now so the decoration-pass design leaves room for it. **Phase 6.14 landed
+  the dependency** (`vb.worldgen.set_pipeline` + `vb.register_biome`'s
+  `decoration` schematic entries, `vb/worldgen/pipeline.hpp`'s
+  `DecorationEntry`) — this item itself is still not attempted. Two
+  narrower gaps 6.14 left inside what it *did* ship, worth folding into
+  whichever future session tackles this:
+  - **Procedural/callback decoration.** 6.14's decoration is schematic-only
+    (a fixed block-offset list) — a per-site Lua callback (e.g. "grow a
+    randomized tree shape") can't run on a `WorldGenWorkerPool` worker
+    thread (Lua/sol2 is strictly single-threaded; see `set_pipeline`'s own
+    entry in Phase 6 above for the same constraint). Would need either a
+    main-thread deferred-apply pass after a chunk comes back from a worker,
+    or a per-worker `sol::state`, neither attempted.
+  - **Cross-chunk decoration.** 6.14's decoration offsets landing outside
+    the originating chunk are silently skipped (`WorldGenerator::generate`,
+    `src/worldgen/generator.cpp`) — no structure can straddle a chunk
+    boundary yet, unlike the spec's stage-6 framing ("runs once neighbors
+    are generated so trees/structures may cross chunk borders").
+- Voronoi biome-cell resolution result caching (`vb/worldgen/
+  biome_selector.hpp`'s `BiomeSelector::resolve`, Phase 6.14): deliberately
+  recomputes its bounded neighbor-adjacency recursion from scratch on every
+  call instead of memoizing across calls, trading cache-hit-rate for zero
+  shared mutable state across `WorldGenWorkerPool` worker threads (no lock
+  needed). If profiling ever shows this matters (repeated nearby-column
+  queries within the same cell redo the same cheap recursion every time),
+  a per-pipeline, mutex- or shard-guarded cache is the natural follow-up —
+  not attempted here since the recursion is "only a handful of neighbors"
+  per the design note and no perf problem has actually been observed.
 - CSS-like declarative layout for `vb::script::UiRuntime` widgets
   (user-suggested, 2026-09-18): today every widget is placed with absolute
   pixel `x`/`y`/`w`/`h` (`content/base/ui/*.lua`, `docs/lua-api.md`) — a pack
