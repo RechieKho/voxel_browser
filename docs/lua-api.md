@@ -263,6 +263,17 @@ rt.dispatch_tick(dt);
   the real seconds one in-game day takes, the same config-then-pack-override
   shape as `gravity` (`server.toml`'s `day_length_seconds` is the base a pack
   override wins over).
+- Read-only server config (Phase 6.13): `vb.config.get(key)` returns the
+  operator's `server.toml`/CLI value for `key` — `bind_address`, `port`,
+  `content_pack`, `max_players`, `view_distance`, `tick_rate`, `world_seed`,
+  `gravity`, `void_kill_y`, `day_length_seconds`, `asset_max_file_mb`,
+  `asset_max_total_mb`, `auth_mode` (`"none"`/`"token"`), or `motd`; `nil` for
+  any other key. Deliberately **not** an override surface like
+  `vb.physics.set_params`/`vb.daynight.set_curve` above — a pack can react to
+  these values (e.g. tune spawn density to `view_distance`) but can't change
+  what the operator running the server configured. `--singleplayer`'s
+  in-process `PackRuntime` has no `ServerConfig`/`server.toml`, so every key
+  returns `nil` there.
 
 ## Client UI API — `vb::script::UiRuntime` (`inc/vb/script/ui_runtime.hpp`, implemented, `VB_WITH_LUA`)
 

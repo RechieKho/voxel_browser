@@ -116,6 +116,9 @@ int main(int argc, char **argv) {
 	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
 	vb::script::PackRuntime pack_runtime(transport, registry,
 			std::filesystem::path(config.content_pack) / "storage.json");
+	// Phase 6.13: read-only vb.config.get(key) -- set before load_content_pack
+	// so it's already visible to registration-time (module-scope) pack code.
+	pack_runtime.set_server_config(config);
 	if (!vb::script::load_content_pack(pack_runtime, config.content_pack)) {
 		std::cerr << "server: content pack '" << config.content_pack
 				  << "' failed to load, aborting\n";

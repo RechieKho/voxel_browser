@@ -1427,7 +1427,7 @@ windows, chatting, crafting, and seeing each other, all at once.
 
 ---
 
-## Phase 6 — Lua-Driven Extensibility (in progress — 6.1-6.11/6.16 done, 6.12-6.14 design only)
+## Phase 6 — Lua-Driven Extensibility (in progress — 6.1-6.11/6.13/6.16 done, 6.12 design-only, 6.14 not started)
 
 > Design agreed in discussion on 2026-09-17: four systems that let content
 > packs override/extend engine defaults (biomes, entities, UI, input, data)
@@ -1880,9 +1880,9 @@ windows, chatting, crafting, and seeing each other, all at once.
       *which* clip wins in a given state is a distinct, finer-grained
       concern. Cosmetic only; lowest priority in this section.
 
-### 6.13 Read-only server config visibility (not a pack-override surface)
+### 6.13 Read-only server config visibility (not a pack-override surface) ✅ (2026-09-18)
 
-- [ ] `ServerConfig` (`tick_rate`, `view_distance`, `max_players`,
+- [x] `ServerConfig` (`tick_rate`, `view_distance`, `max_players`,
       `void_kill_y`, ...) are server-**operator** settings
       (`server.toml`/CLI), a different persona from a content-pack author —
       a pack should not be able to silently change `max_players` out from

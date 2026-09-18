@@ -5,6 +5,7 @@
 #include <optional>
 #include <string_view>
 
+#include "vb/core/config.hpp"
 #include "vb/core/ids.hpp"
 #include "vb/core/math.hpp"
 #include "vb/net/handshake.hpp"
@@ -81,6 +82,16 @@ public:
 	// on_place hooks and the entity/player runtime API respectively.
 	void attach_world(net::WorldReplicator &replicator);
 	void attach_session(net::ServerSession &session);
+
+	// Phase 6.13: makes the operator's server.toml/CLI settings readable via
+	// `vb.config.get(key)` -- read-only, deliberately not an override surface
+	// like 6.6-6.11 (a pack should not be able to silently change
+	// `max_players` out from under the operator running the server). Call any
+	// time before a pack might call vb.config.get, i.e. right after
+	// construction, before load_pack_file(). Never called at all (e.g.
+	// --singleplayer's in-process PackRuntime, which has no ServerConfig/
+	// server.toml) means vb.config.get returns nil for every key.
+	void set_server_config(const core::ServerConfig &config);
 
 	// Phase 6.7: applies a pack's `vb.physics.set_params{...}` on top of
 	// `base` -- only the fields the pack actually set replace `base`'s value,

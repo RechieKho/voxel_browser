@@ -25,6 +25,7 @@ void PackRuntime::install_join_veto(net::HandshakeServerHost &) {}
 void PackRuntime::install_keybind_registry(net::HandshakeServerHost &) {}
 void PackRuntime::attach_world(net::WorldReplicator &) {}
 void PackRuntime::attach_session(net::ServerSession &) {}
+void PackRuntime::set_server_config(const core::ServerConfig &) {}
 physics::MoveParams PackRuntime::effective_move_params(physics::MoveParams base) const {
 	return base;
 }
@@ -330,6 +331,12 @@ struct PackRuntime::Impl {
 	// Phase 6.8: the value passed to vb.daynight.set_day_length(seconds), if
 	// a pack ever calls it.
 	std::optional<double> day_length_seconds_override;
+
+	// Phase 6.13: the operator's ServerConfig, if set_server_config() was ever
+	// called (real servers call it; --singleplayer's in-process PackRuntime
+	// never does, so vb.config.get returns nil there). Read-only from Lua --
+	// no setter is exposed to a pack, unlike 6.6-6.11's override tables above.
+	std::optional<core::ServerConfig> server_config;
 
 	// Phase 6.1: spawned vb.register_entity instances, keyed by the NetId
 	// ServerSession::spawn_script_entity handed back. entity_mt is the shared
@@ -796,6 +803,67 @@ void PackRuntime::Impl::install_bindings() {
 			throw sol::error("vb.daynight.set_day_length: 'seconds' must be > 0");
 		}
 		day_length_seconds_override = seconds;
+	};
+
+	// Phase 6.13: read-only visibility into the operator's server.toml/CLI
+	// settings -- deliberately not an override surface like 6.6-6.11's
+	// set_params/set_curve tables above (a pack should not be able to
+	// silently change max_players out from under the operator running the
+	// server). Returns nil for every key when set_server_config() was never
+	// called (e.g. --singleplayer's in-process PackRuntime) or for an
+	// unrecognised key.
+	sol::table config_tbl = lua.create_table();
+	vb["config"] = config_tbl;
+	config_tbl["get"] = [this](const std::string &key) -> sol::object {
+		if (!server_config) {
+			return sol::lua_nil;
+		}
+		const core::ServerConfig &c = *server_config;
+		if (key == "bind_address") {
+			return sol::make_object(lua_state(), c.bind_address);
+		}
+		if (key == "port") {
+			return sol::make_object(lua_state(), c.port);
+		}
+		if (key == "content_pack") {
+			return sol::make_object(lua_state(), c.content_pack);
+		}
+		if (key == "max_players") {
+			return sol::make_object(lua_state(), c.max_players);
+		}
+		if (key == "view_distance") {
+			return sol::make_object(lua_state(), c.view_distance);
+		}
+		if (key == "tick_rate") {
+			return sol::make_object(lua_state(), c.tick_rate);
+		}
+		if (key == "world_seed") {
+			return sol::make_object(lua_state(), c.world_seed);
+		}
+		if (key == "gravity") {
+			return sol::make_object(lua_state(), c.gravity);
+		}
+		if (key == "void_kill_y") {
+			return sol::make_object(lua_state(), c.void_kill_y);
+		}
+		if (key == "day_length_seconds") {
+			return sol::make_object(lua_state(), c.day_length_seconds);
+		}
+		if (key == "asset_max_file_mb") {
+			return sol::make_object(lua_state(), c.asset_max_file_mb);
+		}
+		if (key == "asset_max_total_mb") {
+			return sol::make_object(lua_state(), c.asset_max_total_mb);
+		}
+		if (key == "auth_mode") {
+			return sol::make_object(lua_state(),
+					c.auth_mode == core::ConfigAuthMode::kToken ? std::string("token")
+																  : std::string("none"));
+		}
+		if (key == "motd") {
+			return sol::make_object(lua_state(), c.motd);
+		}
+		return sol::lua_nil;
 	};
 
 	sol::table world_tbl = lua.create_table();
@@ -1534,6 +1602,10 @@ void PackRuntime::install_keybind_registry(net::HandshakeServerHost &host) {
 		}
 		return self->keybind_names;
 	};
+}
+
+void PackRuntime::set_server_config(const core::ServerConfig &config) {
+	impl_->server_config = config;
 }
 
 void PackRuntime::attach_world(net::WorldReplicator &replicator) {

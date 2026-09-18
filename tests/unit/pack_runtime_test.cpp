@@ -163,6 +163,44 @@ TEST_CASE("without a vb.physics.set_params call, effective_move_params "
 	CHECK(effective.fly == base.fly);
 }
 
+TEST_CASE("vb.config.get exposes the operator's ServerConfig read-only "
+		"(Phase 6.13)") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("config"));
+
+	vb::core::ServerConfig cfg;
+	cfg.tick_rate = 30;
+	cfg.max_players = 42;
+	cfg.view_distance = 12;
+	cfg.void_kill_y = -128.0;
+	cfg.motd = "hello";
+	rt.set_server_config(cfg);
+
+	const auto r = rt.load_pack_file(R"(
+		assert(vb.config.get("tick_rate") == 30)
+		assert(vb.config.get("max_players") == 42)
+		assert(vb.config.get("view_distance") == 12)
+		assert(vb.config.get("void_kill_y") == -128.0)
+		assert(vb.config.get("motd") == "hello")
+		assert(vb.config.get("no_such_key") == nil)
+	)");
+	REQUIRE(r);
+}
+
+TEST_CASE("vb.config.get returns nil for every key when set_server_config "
+		"was never called (Phase 6.13)") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("config_unset"));
+
+	const auto r = rt.load_pack_file(R"(
+		assert(vb.config.get("tick_rate") == nil)
+		assert(vb.config.get("max_players") == nil)
+	)");
+	REQUIRE(r);
+}
+
 TEST_CASE("vb.daynight.set_curve overrides the default gradient, rejected "
 		"after freeze (Phase 6.8)") {
 	vb::net::LoopbackNetwork net;

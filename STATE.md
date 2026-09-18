@@ -13,7 +13,36 @@
 > instead of here** — see that file's own header for why. This file is for
 > gotchas that hold regardless of which machine an agent is running on.
 
-Last updated: 2026-09-18 (Phase 6.11 — item drop parameters (default +
+Last updated: 2026-09-18 (Phase 6.13 — read-only server config visibility:
+`PackRuntime::set_server_config(const core::ServerConfig&)`
+(`inc/vb/script/pack_runtime.hpp`/`src/script/pack_runtime.cpp`) stores a
+copy on `Impl` and backs a new `vb.config.get(key)` binding — deliberately
+read-only, no setter exposed to Lua, per this item's own framing ("a pack
+should not be able to silently change `max_players` out from under the
+operator running the server"), unlike 6.6-6.11's override tables. Exposed
+keys: `bind_address`, `port`, `content_pack`, `max_players`,
+`view_distance`, `tick_rate`, `world_seed`, `gravity`, `void_kill_y`,
+`day_length_seconds`, `asset_max_file_mb`, `asset_max_total_mb`,
+`auth_mode` (as `"none"`/`"token"`), `motd`; any other key (or the whole
+call, if `set_server_config` was never invoked) returns `nil`.
+`src/server/main.cpp` calls it right after constructing `pack_runtime`,
+before `load_content_pack`, so the value is visible even to registration-
+time (module-scope) pack code. `--singleplayer`'s in-process `PackRuntime`
+(`src/client/main.cpp`) has no `ServerConfig`/`server.toml` on that path
+(same gap 6.7's entry already noted for physics params) and was left
+un-wired — `vb.config.get` returns `nil` for every key there, which is
+itself the documented/tested behavior, not an oversight. New tests in
+`tests/unit/pack_runtime_test.cpp`: one sets a `ServerConfig` and checks
+several keys plus an unknown-key `nil`; one never calls
+`set_server_config` and checks every key comes back `nil`. Full `vb_tests`
+green on `build-net-lua` (`VB_WITH_NET=ON`, `VB_WITH_LUA=ON`, 250/250
+cases, up from 248). All 4 CTest cases (`vb_tests`/`server_smoke`/
+`client_smoke`/`singleplayer_smoke`) pass. Not verified under a no-Lua/ASan
+config this session (no pre-built ASan dir remains on this machine, see
+`STATE.md.local`) — the new binding is entirely inside `pack_runtime.cpp`'s
+`#if VB_WITH_LUA` region (the stub `set_server_config` is a no-op), so the
+stub-build risk is low, just not re-confirmed here.
+Previous entry: Phase 6.11 — item drop parameters (default +
 override): `ItemDropSystem::spawn()` (`inc/vb/world/item_drops.hpp`/`.cpp`)
 now takes optional per-drop `pickup_radius`/`lifetime_seconds`, falling back
 to the system's own construction-time defaults (1.5 / 120.0) when unset —
