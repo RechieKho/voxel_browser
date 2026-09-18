@@ -194,60 +194,12 @@ with *both* binaries (bundle/publish still merge by `voxel_browser-*` pattern).
   installs — hit on Homebrew's, not on vcpkg's — with "Some (but not all)
   targets in this export set were already defined." Fixed 2026-09-11 (§8) by
   deleting the redundant call; don't reintroduce it.
-- **macOS `VB_WITH_NET=ON` builds and passes tests locally (confirmed
-  2026-09-15)**, even though CI still doesn't build it there (see above —
-  that's unchanged, still a universal-binary-vs-single-arch-Homebrew-protobuf
-  problem, not a build-correctness one). A pre-existing local `build-net/`
-  tree on this Mac (Homebrew protobuf + OpenSSL, real `GameNetworkingSockets`
-  linked) configured, built `vb_core`/`vb_tests`/both binaries, and ran the
-  full suite clean under `-Werror` while investigating the §8 chunk-gap bug.
-  One test fails there —
-  `GnsTransport: connect, exchange a message, and disconnect over real UDP`
-  (`server.listen(0)` returns false) — but it reproduces identically on
-  unmodified HEAD too; looks like a local sandbox/environment UDP-bind
-  restriction (this agent's Bash tool runs sandboxed), not a real regression.
-  Don't assume that failure means something's broken; do treat any *other*
-  `VB_WITH_NET` test failure on this box as real.
-- **Agent shells (Bash/PowerShell tool) on this Windows dev machine do NOT
-  have MSVC's environment set up by default** — `cl.exe` is found on `PATH`
-  but `INCLUDE`/`LIB` aren't set, so even `#include <Windows.h>` fails
-  (`fatal error C1034: Windows.h: no include path set`), which in turn
-  breaks CMake's own `try_compile` checks (seen failing GNS's BCrypt
-  detection) as well as any real target build. Confirmed 2026-09-17: neither
-  the Bash tool nor a plain PowerShell tool call has it; running
-  `cmd /c '"...VC\Auxiliary\Build\vcvars64.bat" && <rest of the command>'`
-  (chained in one call, since env vars set by a `.bat` don't persist to the
-  next tool invocation) does. Needed before *building* anything
-  (`cmake --build`/`cmake --configure` from scratch); an already-built
-  `.exe` runs fine without it. Also: `cmake --build . -- -j <N>` errors
-  here (`ninja: fatal: invalid -j parameter`) — just omit `-j`.
-  **Two more landmines hit 2026-09-18, worth checking first next time:**
-  (1) `vcvars64.bat` is **not** under `C:\Program Files\Microsoft Visual
-  Studio\...` on this box — that tree exists but its `18\` subfolder is
-  empty (some kind of stub/placeholder, not a real install). The real
-  toolchain — matching what `build-net-lua/CMakeCache.txt`'s
-  `CMAKE_CXX_COMPILER` actually points at — lives on the **D: drive**:
-  `D:\Programs\Microsoft Visual Studio\VC\Auxiliary\Build\vcvars64.bat`.
-  Confirm by grepping `CMAKE_CXX_COMPILER:FILEPATH=` out of an existing
-  build dir's `CMakeCache.txt` before guessing a path.
-  (2) The **Bash tool's** `cmd /c '"<path>\vcvars64.bat" && <rest>'`
-  chaining silently does *nothing* here — it prints only the bare `cmd.exe`
-  banner (`Microsoft Windows [Version ...]` + a prompt line) and exits 0,
-  with the chained command never actually running (no build output, no
-  error either). The **PowerShell tool** running the exact same `cmd /c
-  '...'` string works correctly and streams real `vcvarsall.bat` +
-  `ninja`/`cmake` output. Use the PowerShell tool for this chain, not Bash,
-  on this machine.
-- One pre-configured build directory reliably exists in the repo root with
-  real binaries already built at least once — reuse rather than
-  reconfiguring from scratch: `build-net-lua/` (`VB_WITH_NET=ON`,
-  `VB_WITH_LUA=ON` — scripting/PackRuntime/GNS work). A second one,
-  `build-meshing/` (`VB_WITH_NET=ON`, `VB_WITH_LUA=OFF`,
-  **ASan-instrumented**, MSVC multi-config layout under `build-meshing/
-  Debug/`), was mentioned in earlier entries but **no longer exists on this
-  machine** as of 6.4's entry (§8) — confirmed still gone 2026-09-18; don't
-  assume it's there, re-configure fresh from `cmake/Sanitizers.cmake` if
-  that no-Lua/ASan coverage is needed again.
+- **Machine-local build/toolchain/agent-shell gotchas (vcvars64.bat path,
+  Bash-vs-PowerShell-tool quirks, which pre-built `build-*` dirs actually
+  exist, macOS-specific findings) live in `STATE.md.local`, not here** —
+  that file is `.gitignore`d (`*.local`) and specific to whatever physical
+  machine an agent session runs on; check it first when setting up a build
+  in an agent shell, and add to it rather than here when you hit a new one.
 
 ---
 
@@ -279,19 +231,13 @@ with *both* binaries (bundle/publish still merge by `voxel_browser-*` pattern).
   `std::erase(v, x)`. Haven't checked whether this is specific to 12-byte
   structs, this exact clang/MSVC-STL version pairing, or something else —
   just avoid `std::erase`/`std::remove` on small POD-struct vectors here.
-- **Local `clang-format --dry-run --Werror` on this Mac (brew's, v22.1.8) is
-  not trustworthy as-is** — it flags dozens of violations even on files
-  freshly checked out from `HEAD` with no edits at all (confirmed 2026-09-15:
-  ran it against an untouched `git show HEAD:...` copy of
-  `gns_transport.cpp` and got the same wall of "code should be
-  clang-formatted" noise as the edited version). This repo's `.clang-format`
-  was presumably validated against whatever version CI's `pip`/`pipx`
-  installs (§3), which isn't pinned to match Homebrew's latest — the two
-  disagree on enough column-wrap/brace decisions that a local diff full of
-  violations doesn't mean *your* edit broke formatting. To actually check
-  whether *your change* introduced a real violation: run it against the
-  unmodified file first (`git show HEAD:path | clang-format --dry-run
-  --Werror -`) and compare, don't trust a bare pass/fail on the edited file.
+- **A local `clang-format --dry-run --Werror` binary may not be trustworthy
+  as-is against this repo's `.clang-format`** — see `STATE.md.local` for a
+  machine where this was confirmed (a Homebrew clang-format flagging dozens
+  of violations even on an untouched `HEAD` file) and the general
+  workaround (diff against clang-format run on the unmodified file, don't
+  trust a bare pass/fail on the edited one). Re-verify on whichever machine
+  you're on before trusting either a pass or a wall of violations.
 - **`doctest`'s `--test-case=` filter is a glob pattern, not a substring
   match** — `--test-case="GnsTransport: connect, exchange a message..."`
   (the literal, full test name) matches *zero* cases silently (`0 passed | N
