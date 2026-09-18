@@ -433,6 +433,34 @@ only auto-loads `blocks/`, `entities/`, `biomes/`, and root-level `*.lua`
 files — anything under `ui/`/`textures/` is loaded client-side over Asset
 Sync instead, never by the server's `load_content_pack`.
 
+## Worked example — `content/examples/kitchen_sink` (Phase 6.15)
+
+A second, sibling worked example — **not** loaded by default by anything,
+point an operator's `--content-pack`/`server.toml` at
+`content/examples/kitchen_sink` to run it. Where `content/base` stays
+minimal/production-shaped (spec §5.1) and each Phase 6 feature it touches is
+demonstrated only incidentally, this pack's entire purpose is the opposite:
+exercise every Phase 6 "default + override" API at least once, each with a
+short comment naming the exact phase/section it demonstrates (see its
+`init.lua` for the full file-by-file index) — a working reference that
+`tests/unit/kitchen_sink_pack_test.cpp` regression-tests the same way
+`content_pack_test.cpp` protects `content/base`. Covers: `register_block`'s
+`max_damage`/`max_stack`/`pickup_radius`/`item_lifetime_seconds` together on
+one block (`blocks/unstable_ore.lua`), `register_entity` (`entities/
+sentry.lua`, staying honest that `on_tick`/`on_hit`/`on_death` are still
+inert — same limitation `content/base/entities/dropped_item.lua` documents),
+`register_biome` with real `probability`/`adjacency`
+(`biomes/savanna.lua`/`tundra.lua`) feeding a real `vb.worldgen.set_pipeline`
++ `vb.noise.*` graph with a carver and a vein (`worldgen.lua`) — the worked
+pipeline example `content/base`'s own biome files point to —
+`vb.physics.set_params` (`physics.lua`), `vb.daynight.set_curve`/
+`set_day_length` (`daynight.lua`), `vb.db`/`vb.crypto.hash` plus a
+`block_break_tick` handler (`mechanics.lua`), `player_death` with custom
+`heal`/`message`/`drop_inventory` (`death.lua`), chat text-rewriting
+(`chat.lua` — contrast with `content/base/crafting.lua`'s veto-only use of
+the same event), and `register_keybind` + `player_input` opening a
+`ui.define` screen via `player:open_ui` (`keybinds.lua` + `ui/status.lua`).
+
 ## Audio / sfx — not implemented (v0 has no audio subsystem)
 
 There is no sound/music API, client-side or server-side, and no engine code

@@ -13,7 +13,40 @@
 > instead of here** — see that file's own header for why. This file is for
 > gotchas that hold regardless of which machine an agent is running on.
 
-Last updated: 2026-09-18 (Phase 6.14 — Lua-driven worldgen pipeline,
+Last updated: 2026-09-18 (Phase 6.15 — kitchen-sink example pack: Phase 6 is
+now fully done. `content/examples/kitchen_sink/` (new pack directory,
+sibling to `content/base/`, never loaded by default) exercises every
+Phase 6 "default + override" API at least once with a real, running effect
+— `blocks/unstable_ore.lua` (max_damage/max_stack/pickup_radius/
+item_lifetime_seconds together on one block), `entities/sentry.lua`
+(register_entity, honestly left inert — same pre-existing limitation
+`content/base/entities/dropped_item.lua` already documents, no EnTT
+dispatch yet), `biomes/savanna.lua`/`tundra.lua` + `worldgen.lua`
+(register_biome with real probability/adjacency feeding a real
+vb.worldgen.set_pipeline + vb.noise.* graph, a carver, a vein — the worked
+pipeline example 6.14's own `content/base` biome files pointed to and never
+delivered themselves), `physics.lua`, `daynight.lua`, `mechanics.lua`
+(vb.db/vb.crypto.hash + a block_break_tick handler for unstable_ore's
+max_damage=6), `death.lua` (player_death with drop_inventory), `chat.lua`
+(text-rewriting, contrast with `crafting.lua`'s veto-only use of the same
+event), and `keybinds.lua` + `ui/status.lua` (register_keybind +
+player_input opening a ui.define screen via player:open_ui). Regression-
+tested by new `tests/unit/kitchen_sink_pack_test.cpp` (mirrors
+`content_pack_test.cpp`'s "load the real files" pattern for `content/base`)
+— confirms the block's fields, `effective_move_params`/
+`effective_day_night_curve`/`effective_day_length_seconds`, and
+`build_worldgen_pipeline`'s biome/carver/vein counts all actually took
+effect, plus a real block-output-differs-from-default check reusing 6.14's
+own pattern. Also manually ran `voxel_browser_server.exe --content-pack
+content/examples/kitchen_sink --ticks 5` this session to confirm it starts
+cleanly outside the test harness, not just inside doctest. Full `vb_tests`
+green (268/268, up from 266) in **both** `build-net-lua`
+(`VB_WITH_WORLDGEN=OFF`) and `build-worldgen` (`VB_WITH_WORLDGEN=ON`, real
+FastNoise2 — this is the first real, hand-authored Lua pack ever run
+through that backend, not just synthetic test tables); all 4 CTest cases
+pass in `build-net-lua`. `content/base` itself is completely untouched by
+this item.
+Previous entry: Phase 6.14 — Lua-driven worldgen pipeline,
 FastNoise2 backend: the last unstarted Phase 6 item, and by far the
 biggest — four new headers/sources under `vb/worldgen/`
 (`noise_graph.hpp/.cpp`, `biome_selector.hpp/.cpp`, `pipeline.hpp`,

@@ -18,6 +18,7 @@ add_executable(vb_tests
   unit/entity_visual_test.cpp
   unit/gns_transport_test.cpp
   unit/item_drops_test.cpp
+  unit/kitchen_sink_pack_test.cpp
   unit/lighting_test.cpp
   unit/mesher_test.cpp
   unit/netcode_test.cpp

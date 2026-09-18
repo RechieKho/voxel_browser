@@ -14,6 +14,11 @@ compile_commands.json
 /client.toml
 
 # vb.storage's JSON backing file (Phase 4.2) -- runtime state, not content.
-content/*/storage.json
+# `**` so this also covers nested demo packs (content/examples/<pack>/...,
+# Phase 6.15), not just content/<pack>/ directly.
+content/**/storage.json
+# vb.db's per-key store (Phase 6.4) -- same "runtime state, not content"
+# reasoning, content-addressed by sha256(key) under this directory.
+content/**/db/
 
 .cache/*

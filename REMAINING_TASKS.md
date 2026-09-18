@@ -1427,7 +1427,7 @@ windows, chatting, crafting, and seeing each other, all at once.
 
 ---
 
-## Phase 6 — Lua-Driven Extensibility (essentially done — 6.1-6.14/6.16 done, 6.15 (kitchen-sink example pack) remaining)
+## Phase 6 — Lua-Driven Extensibility  ✅ done (2026-09-18)
 
 > Design agreed in discussion on 2026-09-17: four systems that let content
 > packs override/extend engine defaults (biomes, entities, UI, input, data)
@@ -1961,7 +1961,7 @@ windows, chatting, crafting, and seeing each other, all at once.
       untouched (byte-identical output confirmed both with and without
       `VB_WITH_WORLDGEN`).
 
-### 6.15 Example Lua script demonstrating the Phase 6 "default + override" features
+### 6.15 Example Lua script demonstrating the Phase 6 "default + override" features ✅ (2026-09-18)
 
 > Blocked on the rest of Phase 6 (6.9–6.14) landing — the "Lua overhaul": once
 > every default-with-a-pack-override surface this phase introduced (entity
@@ -1971,7 +1971,7 @@ windows, chatting, crafting, and seeing each other, all at once.
 > `content/base`-sibling example pack that actually exercises them together,
 > not just in isolation across scattered unit tests.
 
-- [ ] A standalone example content pack (e.g. `content/examples/kitchen_sink`
+- [x] A standalone example content pack (e.g. `content/examples/kitchen_sink`
       or a `content/base/examples/` script loaded only in a demo mode) that
       calls each Phase 6 API at least once with a visible, in-game effect: a
       custom entity kind with `on_tick`/`on_hit`/`on_death`, a `ui.define`
@@ -1982,14 +1982,32 @@ windows, chatting, crafting, and seeing each other, all at once.
       `vb.physics.set_params` tuning movement, `vb.daynight.set_curve`/
       `set_day_length` for a non-default sky, and (once 6.9-6.11 land) a
       stacking item, a chat filter, and tuned item-drop params.
-- [ ] Should double as living documentation: comment each block with which
+      Shipped as `content/examples/kitchen_sink/` (the first-listed option).
+      `entities/sentry.lua`'s `on_tick`/`on_hit`/`on_death` stay honestly
+      documented as inert (same pre-existing limitation
+      `content/base/entities/dropped_item.lua` already notes — no EnTT
+      registry dispatches generic Lua entity kinds yet, Phase 3.1) rather
+      than faked; every other bullet has a real, running effect, confirmed by
+      `tests/unit/kitchen_sink_pack_test.cpp` and a manual
+      `voxel_browser_server --content-pack content/examples/kitchen_sink` run
+      this session. Also folds in Phase 6.14's own worked-example gap
+      (`vb.worldgen.set_pipeline` + `vb.register_biome` with real
+      `probability`/`adjacency`, plus a carver and a vein) since 6.14 landed
+      earlier this same session.
+- [x] Should double as living documentation: comment each block with which
       `REMAINING_TASKS.md` phase/`docs/lua-api.md` section it demonstrates, so
       it stays a working reference alongside the prose docs rather than
-      drifting out of sync with the actual API surface.
-- [ ] Not `content/base` itself — base pack content should stay minimal/
+      drifting out of sync with the actual API surface. `init.lua` carries a
+      file-by-file index; every individual file's own header comment names
+      the exact phase/doc section and, where relevant, contrasts with how
+      `content/base` already demonstrates a *different* facet of the same
+      API (e.g. `chat.lua`'s text-rewriting vs. `crafting.lua`'s veto-only
+      chat use).
+- [x] Not `content/base` itself — base pack content should stay minimal/
       production-shaped (spec §5.1); this is a separate, clearly-labeled demo
       pack an operator can point `--content-pack` at, or a devs-only mode, not
-      something a real server loads by default.
+      something a real server loads by default. `content/base` itself is
+      completely untouched by this item.
 
 ### 6.16 Client-local HUD mechanism (engine raw state, Lua presentation) ✅
 

@@ -1,0 +1,34 @@
+-- content/examples/kitchen_sink -- REMAINING_TASKS.md 6.15: a standalone
+-- demo pack (NOT content/base -- that stays minimal/production-shaped per
+-- spec §5.1) exercising every Phase 6 "default + override" API at least
+-- once, with comments tying each block back to the phase/docs section it
+-- demonstrates, so this stays a working reference alongside the prose docs
+-- (docs/lua-api.md) rather than drifting out of sync with the real API
+-- surface. Point an operator's `--content-pack` at this directory (or
+-- `server.toml`'s `content_pack`) to run it for real; it's not loaded by
+-- default by anything.
+--
+-- Load order (src/script/pack_loader.cpp): blocks/*.lua -> entities/*.lua ->
+-- biomes/*.lua -> every other root-level *.lua file (sorted) -> this file,
+-- last.
+--
+-- File-by-file index (see each file's own header comment for the details):
+--   blocks/unstable_ore.lua  -- 6.5 max_damage, 6.9 max_stack, 6.11 item-drop params
+--   entities/sentry.lua      -- 6.1 register_entity (on_tick/on_hit/on_death)
+--   biomes/savanna.lua,
+--   biomes/tundra.lua        -- 6.14 register_biome (probability/adjacency)
+--   chat.lua                 -- 6.10 chat text rewriting (vs. crafting.lua's veto-only example)
+--   daynight.lua             -- 6.8 set_curve / set_day_length
+--   death.lua                -- 6.6 player_death (custom heal/message/drop_inventory)
+--   keybinds.lua             -- 6.3 register_keybind + player_input -> 6.2 player:open_ui
+--   mechanics.lua            -- 6.4 vb.db/vb.crypto.hash, 6.5 block_break_tick
+--   physics.lua              -- 6.7 vb.physics.set_params
+--   worldgen.lua             -- 6.14 vb.worldgen.set_pipeline + vb.noise.*
+--   ui/status.lua            -- 6.2 ui.define (client-side only, see that file)
+--
+-- This file itself: pack-wide setup that isn't a single registration, same
+-- role content/base/init.lua plays -- vb.storage (distinct from vb.db above:
+-- one pack-global JSON blob, not a per-key store) persisting a boot counter
+-- across restarts.
+vb.storage.boot_count = (vb.storage.boot_count or 0) + 1
+print(string.format("[kitchen_sink] content pack loaded (boot #%d)", vb.storage.boot_count))
