@@ -264,6 +264,11 @@ int main(int argc, char **argv) {
 	pack_runtime.attach_session(session);
 
 	session.set_move_params(move_params);
+	// Phase 6.18: a pack's vb.combat.set_params{...} overrides player:punch()'s
+	// reach/hit_radius/player_damage defaults, same config-then-pack-override
+	// shape as move_params above.
+	session.set_punch_params(pack_runtime.effective_punch_params(
+			vb::net::ServerSession::PunchParams{}));
 	session.set_void_kill_y(config.void_kill_y);
 	// §8.3 hardening: 0 (server.toml's own default) means unlimited, same as
 	// today's unset behavior -- only bites once an operator opts in.

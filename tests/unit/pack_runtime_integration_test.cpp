@@ -133,6 +133,106 @@ TEST_CASE("pack script vetoes a block break and observes on_break") {
 	CHECK(world.solid_at(deep)); // vetoed: unchanged
 }
 
+// Phase 6.17: block breaking is no longer an engine default (the old
+// hardcoded client-side hold-to-break timer is gone). The client only ever
+// reports raw input (InputCmd::buttons's kInputPrimary bit, "LMB held");
+// this proves (a) holding it does nothing at all without any pack policy,
+// and (b) a minimal vb.on("player_input", ...) handler calling the new
+// player:break_block() is enough for a pack to implement breaking itself,
+// through the exact same validated pipeline a real C2S_BlockEdit uses.
+TEST_CASE("block breaking is opt-in content, not an engine default: "
+		  "buttons.primary alone does nothing until a pack calls "
+		  "player:break_block()") {
+	LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::world::World world(registry);
+	wg::WorldGenWorkerPool pool(
+			wg::WorldGenerator(wg::WorldGenParams{}, registry),
+			wg::WorldGenWorkerPool::kSynchronous);
+
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("break_block"));
+	rt.freeze();
+
+	HandshakeServerConfig cfg;
+	cfg.world_seed = 7;
+	ServerSession server(net.server(), cfg);
+	auto replicator = std::make_unique<WorldReplicator>(world, pool, registry,
+			/*view*/ 1, /*vview*/ 2);
+	rt.attach_world(*replicator);
+	server.set_world_replicator(std::move(replicator));
+	rt.attach_session(server);
+	REQUIRE(net.server().listen(0));
+
+	Transport &ta = net.create_client();
+	auto ida = ta.connect("x", 0);
+	REQUIRE(ida);
+	ClientSession client(ta, *ida, HandshakeClientConfig{ "A", "", "v", 1 });
+
+	auto pump = [&](int n) {
+		for (int i = 0; i < n; ++i) {
+			server.tick(0.05);
+			client.tick(0.05);
+			rt.dispatch_tick(0.05);
+		}
+	};
+
+	pump(20);
+	REQUIRE(client.joined());
+	const NetId a_id = client.join_accept()->your_net_id;
+
+	const IVec3 target = surface_voxel(world, 4, 4);
+	REQUIRE(target.y > 0);
+	pump(6);
+	REQUIRE(world.solid_at(target));
+
+	// Holding "primary" every cmd, with no pack handler registered at all,
+	// must not break anything -- breaking has to be something a pack opts
+	// into, not a side effect the engine produces on its own. Note this
+	// deliberately does *not* call server.set_player_state() to line the
+	// player up with `target` first: sending a real InputCmd (unlike
+	// pack_runtime_integration_test.cpp's veto test above, which only ever
+	// sends a single C2S_BlockEdit) marks the connection input-driven, and
+	// handle_input_batch's post-loop interest_.upsert() then overwrites the
+	// interest-grid position with the ECS-authoritative one every tick
+	// regardless -- there'd be nothing left to assert about reach.
+	vb::protocol::InputCmd held;
+	held.buttons = vb::protocol::kInputPrimary;
+	for (std::uint32_t i = 1; i <= 5; ++i) {
+		held.seq = i;
+		client.push_input(held);
+		pump(1);
+	}
+	CHECK(world.solid_at(target)); // untouched: no pack policy at all
+
+	// Now install a minimal player_input handler that breaks the exact
+	// target the instant it sees buttons.primary held. ServerSession only
+	// wires its input handler at attach_session() time, gated on whether a
+	// "player_input" handler was registered *by then* (Phase 6.3's "packs
+	// that never use this channel pay zero extra cost" posture) -- since
+	// this test registers one only now, well after the first attach_session()
+	// call, it must call attach_session() again to actually pick it up.
+	REQUIRE(rt.load_pack_file(
+			"vb.on('player_input', function(player, input) "
+			"if input.buttons.primary then player:break_block(" +
+			std::to_string(target.x) + ", " + std::to_string(target.y) + ", " +
+			std::to_string(target.z) + ") end end)"));
+	rt.attach_session(server);
+
+	// set_player_state() right before the triggering cmd, not earlier: the
+	// player_input hook fires *inside* handle_input_batch's per-cmd loop,
+	// before that same call's post-loop interest_.upsert() overwrite (see
+	// the comment above) -- so this position is exactly what the hook (and
+	// therefore break_block's reach check) sees for this one cmd.
+	server.set_player_state(
+			a_id, Vec3d{ target.x + 0.5, target.y + 2.0, target.z + 0.5 });
+	held.seq = 100;
+	client.push_input(held);
+	pump(3);
+
+	CHECK_FALSE(world.solid_at(target));
+	CHECK_FALSE(client.chunk_store().solid_at(target));
+}
+
 TEST_CASE("shared block-damage breaking: begin -> tick -> completes the break "
 		  "(Phase 6.5)") {
 	// Registry must be frozen (pack loaded) *before* World copies it (matches

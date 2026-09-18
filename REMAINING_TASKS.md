@@ -2161,7 +2161,79 @@ windows, chatting, crafting, and seeing each other, all at once.
       draw_overlay entirely) is a natural, larger follow-up, not attempted
       here.
 
-### 6.17 Movement/break-place bindings and hold-to-break timing as default + override
+### 6.17 Movement/break-place bindings and hold-to-break timing as default + override  ✅ landed with a different shape (2026-09-18) — see note below
+
+> **Direction actually taken deviates from the plan below.** A later
+> 2026-09-18 request explicitly reversed this item's original framing: rather
+> than giving breaking an engine-level *default* damage/duration policy
+> (this section's first bullet, as originally planned), the user asked to
+> "make block breaking not the default" at all — the engine should have
+> **zero** built-in breaking behavior, full stop, with a content pack
+> required to implement it in Lua. That's what shipped. The bullets below are
+> kept for the historical record of what was originally scoped; treat only
+> this note + the "what actually shipped" summary as current.
+>
+> **What shipped:**
+> - `src/client/main.cpp`'s hardcoded hold-to-break timer
+>   (`breaking`/`break_target`/`break_progress`/`kBreakSeconds`, the whole
+>   5.2-era block) is gone outright, not replaced with another client-side
+>   timer. The client now only ever reports raw held-button state —
+>   `InputCmd::buttons`' pre-existing-but-previously-unused `kInputPrimary`/
+>   `kInputSecondary` bits (LMB/RMB), already round-tripped to Lua via
+>   `input.buttons.primary`/`.secondary` in `vb.on("player_input", ...)`
+>   (Phase 6.3's table shape, unchanged). No new keybind names were
+>   registered for this — `kInputPrimary`/`kInputSecondary` already existed
+>   in the wire protocol and were simply never set by the client before now.
+> - New `PlayerHandle::break_block(x, y, z)` (bound as `player:break_block()`,
+>   `src/script/pack_runtime.cpp`) and a new public
+>   `ServerSession::apply_script_block_edit(editor, action, pos, block)`
+>   (`inc/vb/net/session.hpp` + `src/net/session.cpp`) let Lua trigger a
+>   block edit exactly as if a real `C2S_BlockEdit` had arrived — same reach
+>   check, same `block_break`/`on_break` hooks, same item-drop/relight/
+>   fan-out pipeline — without a wire frame. This is the one new engine
+>   primitive; everything else is content.
+> - `content/base/mechanics.lua` (new file, picked up automatically by
+>   `pack_loader.cpp`'s "any other root-level `.lua`" pass) is content/base's
+>   own hold-to-break implementation: a `vb.on("player_input", ...)` handler
+>   tracks per-player hold time (keyed by `player:get_name()`, same
+>   convention `content/examples/kitchen_sink/keybinds.lua` already used),
+>   does its own `vb.world.raycast` from the player's position + yaw/pitch,
+>   and calls `player:break_block()` once `BREAK_SECONDS` (0.35, matching the
+>   old constant) elapses on the same target. A pack that never loads this
+>   file sees `buttons.primary` do precisely nothing — proven by
+>   `tests/unit/pack_runtime_integration_test.cpp`'s new "block breaking is
+>   opt-in content, not an engine default" case.
+> - `InputCmd`'s Lua-facing table (`build_input_table`,
+>   `src/script/pack_runtime.cpp`) gained a `dt` field (the wall-clock time
+>   that cmd covers) — needed by `mechanics.lua`'s hold-time accrual, since a
+>   pack has no other way to know real elapsed time per `player_input` call.
+>   Backward compatible (an additive table field).
+> - Movement's WASD/jump/sprint keys were pulled out of `sample_input_cmd`'s
+>   inline branching into a small `MovementBindings` struct (`src/client/
+>   main.cpp`) with the exact same default keys — a client-local
+>   physical-key-to-axis table, not a network-visible one. What the resulting
+>   `InputCmd.move`/`buttons` *do* was already fully pack-overridable
+>   server-side via `vb.on("player_input", ...)` before this change (see
+>   `ServerSession::handle_input_batch`'s existing `hook.replacement`
+>   handling) — this only removes the "which raylib key means what" literal
+>   duplication, it doesn't add a new wire mechanism. The plan's "open design
+>   question" about continuous movement axes not fitting the boolean keybind
+>   registry is sidestepped entirely: movement never went through
+>   `vb.register_keybind` and still doesn't.
+> - **Known regression, deliberately accepted:** `client.break_progress()`
+>   (6.16's HUD hook) now always returns `nil` — the old local timer it read
+>   from is gone, and the real replacement (server-replicated damage
+>   *value*, this section's original second bullet's prerequisite) is still
+>   not implemented. `content/base/ui/hud.lua` simply draws no progress bar
+>   until that lands. `BlockDamageSystem`/`C2S_BlockBreakBegin`/`Stop` (6.5)
+>   are untouched and still unused by `content/base` (every shipped block
+>   still has the implicit `max_damage = 0`) — `mechanics.lua`'s hold timer
+>   is a Lua-side clock, not a `BlockDamageSystem` consumer, same one-flat-
+>   duration-for-every-block posture the old C++ timer had.
+> - Full `vb_tests` green (283/283, up from 282) on `build-net-lua`; all 4
+>   CTest cases pass.
+>
+> Original plan (superseded, kept for context):
 
 > User-requested (2026-09-18), after being surprised that (a) WASD/LMB-break/
 > RMB-place are 100% hardcoded C++ with no pack involvement at all, and (b)
@@ -2250,6 +2322,114 @@ windows, chatting, crafting, and seeing each other, all at once.
       retains damage and heals over multiple attempts on one block; update
       `content_pack_test.cpp` if `content/base`'s shipped blocks' effective
       `max_damage` changes as a result.
+
+### 6.18 Growtopia-style combat: discrete punching replaces hold-to-break  ✅ done (2026-09-18)
+
+> User-requested pivot (2026-09-18), immediately after 6.17 landed: rather
+> than Minecraft-style continuous holding (even the Lua-side hold timer
+> 6.17 shipped in `content/base/mechanics.lua`), attack should be a discrete
+> "punch" — one per click, Growtopia-style — that can land on either a block
+> or a player (PvP), whichever is in front. Explicit design constraints from
+> that discussion: (1) movement must **not** move to a raw-key-event model —
+> it stays exactly as 6.17 left it (continuous `InputCmd.move`/`buttons`,
+> already fully pack-overridable via `vb.on("player_input", ...)`, so
+> client-side prediction is untouched); (2) the engine, not Lua, resolves
+> *what* a punch hits — a pack only decides *when* to call `player:punch()`.
+>
+> **What shipped:**
+> - New public `ServerSession::punch(NetId puncher) -> PunchResult`
+>   (`inc/vb/net/session.hpp` + `src/net/session.cpp`) is the one new engine
+>   primitive. It raycasts blocks (`world::raycast_voxel`, reused as-is) and
+>   nearby players — modeled as a vertical cylinder (feet at their tracked
+>   position, top at `MoveParams::height` above it, radius
+>   `PunchParams::hit_radius`) that the puncher's look-ray passes through, not
+>   a single point — along the puncher's own authoritative yaw/pitch
+>   (`replication::EntityState::rot`, not anything client-reported), and
+>   picks whichever candidate is closer along the ray. A player hit calls
+>   the existing `damage_player()` (Phase 6.6, unchanged); a block hit
+>   increments a new sparse `unordered_map<IVec3, uint16_t>
+>   block_punch_counts_` and, once it reaches the target's
+>   `BlockType::max_damage` (0 still means "break on the first punch", same
+>   meaning it always had), commits the break through the `apply_script_
+>   block_edit()` primitive 6.17 already added (reach check, hooks, drops,
+>   relight, fan-out — unchanged, unaware punching exists at all). A veto'd
+>   break (a pack's `block_break` hook returns false) leaves the punch count
+>   at `max_damage` rather than resetting it, so the very next punch retries
+>   instead of needing `max_damage + 1` hits.
+> - `vb.combat.set_params{reach=, hit_radius=, player_damage=}` (new
+>   `PackRuntime::effective_punch_params()`, mirrors `vb.physics.set_params`'s
+>   exact "override individual fields on top of a built-in default" shape)
+>   lets a pack tune the defaults (`reach = 5.5`, `hit_radius = 0.6`,
+>   `player_damage = 1.0`) without touching engine code. Wired into both
+>   `src/server/main.cpp` and `--singleplayer`'s `Singleplayer` constructor
+>   (`src/client/main.cpp`), same two call sites `effective_move_params`
+>   already has.
+> - `player:punch()` (`PlayerHandle::punch`, `src/script/pack_runtime.cpp`)
+>   is the Lua-facing wrapper — returns a table (`hit_player`, `target`,
+>   `hit_block`, `x`/`y`/`z`, `punches`, `broken`) so a pack can react (swing
+>   VFX, a hit-marker) without being required to.
+> - `content/base/mechanics.lua` was rewritten (no longer a hold-timer at
+>   all): a `vb.on("player_input", ...)` handler tracks the previous tick's
+>   `buttons.primary` per player (same `was_down`/edge-detection idiom
+>   `content/examples/kitchen_sink/keybinds.lua` already established) and
+>   calls `player:punch()` exactly once per rising edge — click once, punch
+>   once, regardless of how long the button stays held afterward. `BREAK_
+>   SECONDS`/the per-position hold-time table from 6.17's version are gone;
+>   there is no "holding" concept left in this file at all.
+> - New shared math helper `core::forward_from_yaw_pitch(yaw_deg, pitch_deg)`
+>   (`inc/vb/core/math.hpp`) — the same trig `FirstPersonController::
+>   forward()` already had inline, now also used server-side (no camera
+>   object exists there) to compute a puncher's look direction from their
+>   authoritative yaw/pitch. `camera.hpp`'s `forward()` now delegates to it
+>   instead of duplicating the formula.
+> - Movement is untouched, as scoped: `MovementBindings`
+>   (`src/client/main.cpp`, 6.17) and the underlying `InputCmd.move`/
+>   `buttons` pipeline are exactly as they were.
+> - New tests (`tests/unit/blockedit_test.cpp`, plain-`ServerSession` style,
+>   no Lua/PackRuntime involved — this file already had that pattern for
+>   block edits): a `max_damage == 0` block breaks on the first punch; a
+>   custom `max_damage = 3` block (built via `BlockRegistry::add_or_get`, not
+>   through Lua) takes exactly three punches, reporting an accurate running
+>   count each time; punch() prefers a closer player over a block further
+>   along the same ray; punch() hits nothing when both are out of reach.
+>   6.17's own `pack_runtime_integration_test.cpp` case (proving
+>   `buttons.primary` alone does nothing without a pack handler, and that a
+>   minimal handler calling `player:break_block()` works end-to-end) is
+>   untouched and still passes — `break_block()` itself wasn't removed, it's
+>   just no longer what `content/base` calls directly.
+> - **Follow-up, same day:** block self-heal. A block that stops taking
+>   punches now heals back to full over time instead of an accumulated
+>   count sitting there forever — `PunchParams` gained `heal_after_seconds`
+>   (default 4.0: idle time since the last landed punch before healing
+>   starts) and `heal_interval_seconds` (default 1.5: -1 punch every this
+>   many seconds once eligible), both pack-overridable via
+>   `vb.combat.set_params{heal_after_seconds=, heal_interval_seconds=}`
+>   alongside `reach`/`hit_radius`/`player_damage`. Unlike 6.5's
+>   `BlockDamageSystem` (which ships *zero* heal policy until a pack
+>   supplies one), this is a real engine default — only the rate is a
+>   pack-facing knob, not whether healing happens at all, since punching has
+>   no begin/stop lifecycle for a pack to hang a policy off of the way
+>   holding a target did. `block_punch_counts_`'s value type grew from a
+>   bare `uint16_t` into `PunchDamageState{punches, idle_seconds,
+>   heal_progress}`; a new per-tick `ServerSession::
+>   update_block_punch_healing(dt)` (called from `tick()` right after the
+>   unrelated `update_block_damage()`) decrements idle entries and erases
+>   ones that fully heal. Landing a punch resets both timers on that block
+>   (a fresh hit un-does any partial healing progress, it doesn't add to
+>   it); a negative `heal_after_seconds` disables healing entirely. Three
+>   new `blockedit_test.cpp` cases: an idle block heals fully back to 0 and
+>   the next punch starts fresh from 1; a punch landing again resets the
+>   idle clock instead of the heal continuing to count from before it; the
+>   existing "N punches to break" case is unaffected (no idle gap, no
+>   healing kicks in). Full `vb_tests` green (289/289, up from 287).
+>
+> **Known simplifications, not attempted:** no punch-rate cooldown enforced
+> engine-side (a pack that doesn't edge-detect, or a macro, could call
+> `punch()` every tick — left as the calling pack's responsibility, same
+> "engine provides the primitive, doesn't guess at abuse policy" posture as
+> everywhere else); no swing animation/cooldown-visual on the client; PvP
+> damage has no armor/cooldown/knockback, just a flat `player_damage` per
+> landed punch.
 
 ---
 

@@ -103,6 +103,13 @@ public:
 	// HandshakeServerHost::move_params so the client mirrors it exactly).
 	physics::MoveParams effective_move_params(physics::MoveParams base) const;
 
+	// Phase 6.18: applies a pack's `vb.combat.set_params{...}` on top of
+	// `base` -- same "only the fields the pack actually set replace base's
+	// value" shape as effective_move_params() above. Call after freeze(),
+	// once, before wiring the result onto ServerSession::set_punch_params().
+	net::ServerSession::PunchParams effective_punch_params(
+			net::ServerSession::PunchParams base) const;
+
 	// Phase 6.8: a pack's `vb.daynight.set_curve{keyframes = {...}}`, if it
 	// ever called it -- `nullopt` (default) means no pack ever overrode the
 	// curve, so the caller should send no S2C_DayNightCurve frame at all and

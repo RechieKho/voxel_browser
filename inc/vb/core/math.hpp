@@ -62,6 +62,22 @@ constexpr T clamp(T v, T lo, T hi) {
 	return v < lo ? lo : (v > hi ? hi : v);
 }
 
+// Unit look-direction vector from yaw/pitch degrees, y-up (matches raylib's
+// convention). Shared by vb::render::FirstPersonController::forward() (client
+// camera) and any server-side code that needs the same look direction from a
+// player's authoritative yaw/pitch (Phase 6.18's player:punch(), which has no
+// camera object at all) -- one formula instead of three copies.
+inline Vec3d forward_from_yaw_pitch(double yaw_deg, double pitch_deg) {
+	constexpr double kPi = 3.14159265358979323846;
+	const double yaw = yaw_deg * (kPi / 180.0);
+	const double pitch = pitch_deg * (kPi / 180.0);
+	const double cy = std::cos(yaw);
+	const double sy = std::sin(yaw);
+	const double cp = std::cos(pitch);
+	const double sp = std::sin(pitch);
+	return { sy * cp, sp, -cy * cp };
+}
+
 // Euclidean floor-division / modulo — used for world<->chunk<->local coords so
 // negative coordinates map correctly.
 constexpr std::int32_t floor_div(std::int32_t a, std::int32_t b) {

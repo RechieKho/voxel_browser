@@ -110,6 +110,18 @@ public:
 	// (chat / open_ui) without ServerSession knowing their contents.
 	ConnId conn_for_player(core::NetId id) const;
 
+	// Phase 6.17: performs a block edit exactly as if it had arrived as a
+	// real C2S_BlockEdit from `editor`, without a wire frame -- lets a script
+	// host implement its own breaking/placing policy (e.g. content/base's
+	// Lua hold-to-break; the engine no longer has a built-in one) while
+	// reusing the one validated pipeline (reach check, block-edit hooks,
+	// drops, relight, delta fan-out to every mirroring client, including
+	// the editor's own). Returns the resulting S2C_BlockEditResult's
+	// `accepted` flag; false (no-op) without a WorldReplicator attached.
+	bool apply_script_block_edit(core::NetId editor,
+			protocol::BlockEditAction action, core::IVec3 pos,
+			core::BlockId block = core::BlockId::kAir);
+
 	// Display name of a playing net id ("" if not found/not playing).
 	std::string_view player_name(core::NetId id) const;
 
@@ -277,6 +289,58 @@ public:
 			core::Vec2f rot = {}, core::Vec3f vel = {});
 	void remove_script_entity(core::NetId id);
 
+	// Phase 6.18 (Growtopia-style combat): tunables for punch() below. One
+	// discrete swing per call -- edge-triggering (only calling punch() on a
+	// rising "attack key" edge, not every tick it's held) is entirely the
+	// caller's job, same posture as every other "engine ships a default,
+	// pack can override individual fields" knob (vb.physics.set_params,
+	// 6.7). Global, not per-entity-kind, since no entity kind besides the
+	// player throws punches today.
+	struct PunchParams {
+		double reach = 5.5; // matches WorldReplicator's own block-edit reach
+		float hit_radius = 0.6f; // capsule radius around a player's torso point
+		float player_damage = 1.0f; // PvP damage per punch landing on a player
+		// Self-heal (spec-equivalent to 6.5's BlockDamageSystem heal hook, but
+		// a built-in engine default here instead of "zero policy until a pack
+		// supplies one" -- punching has no begin/stop lifecycle for a pack to
+		// hang a heal policy off of, so the engine ships one directly).
+		// A block with no punches landed on it idles indefinitely; once one
+		// exists, `heal_after_seconds` of no *new* punches lets it start
+		// healing, then it loses one punch every `heal_interval_seconds`
+		// until back to 0 (fully repaired) or hit again (resets both timers).
+		// A negative `heal_after_seconds` disables healing entirely -- punch
+		// counts then only ever go away by actually breaking the block.
+		double heal_after_seconds = 4.0;
+		double heal_interval_seconds = 1.5;
+	};
+	void set_punch_params(PunchParams p) { punch_params_ = p; }
+	const PunchParams &punch_params() const { return punch_params_; }
+
+	struct PunchResult {
+		bool hit_player = false;
+		core::NetId target = core::NetId::kInvalid; // valid iff hit_player
+		bool hit_block = false;
+		core::IVec3 block_pos{}; // valid iff hit_block
+		std::uint16_t block_punches = 0; // accumulated hits, iff hit_block
+		bool block_broken = false; // iff hit_block and this punch broke it
+	};
+
+	// Resolves one discrete punch from `puncher`: raycasts blocks and nearby
+	// players along `puncher`'s current look direction (authoritative
+	// yaw/pitch + eye position, not anything client-reported) and picks
+	// whichever is closer -- "hit whatever's directly in front of you,"
+	// same as the real client's own crosshair raycast, just without a
+	// camera object. A player hit applies instant PvP damage
+	// (damage_player()); a block hit increments a sparse per-position punch
+	// counter and, once it reaches the target's BlockType::max_damage
+	// (0 = break on the very first punch, same "unset" meaning it always
+	// had), commits the break through apply_script_block_edit() below --
+	// the exact same validated pipeline (reach check, hooks, drops, relight,
+	// fan-out) a real C2S_BlockEdit uses. Returns a default/empty
+	// PunchResult (both `hit_player`/`hit_block` false) if `puncher` isn't a
+	// playing connection or nothing is within reach.
+	PunchResult punch(core::NetId puncher);
+
 private:
 	struct Conn {
 		explicit Conn(ServerHandshake hs) : handshake(std::move(hs)) {}
@@ -316,6 +380,7 @@ private:
 	void check_respawns();
 	void update_item_drops(double dt_seconds);
 	void update_block_damage();
+	void update_block_punch_healing(double dt_seconds);
 	void broadcast_snapshots();
 	void broadcast_world();
 	void broadcast_time_of_day();
@@ -341,6 +406,25 @@ private:
 	std::function<void(core::NetId, core::BlockId, std::uint16_t)> on_item_pickup_;
 	world::BlockDamageSystem block_damage_;
 	BlockBreakHooks block_break_hooks_;
+	// Phase 6.18: sparse pos -> punch/heal state, distinct from
+	// world::BlockDamageSystem above -- that system's begin/tick/stop
+	// lifecycle models a *held*, continuous action across many ticks (5.2's
+	// original hold-to-break); a punch is one atomic event with no "holding"
+	// concept at all, so it needs no begin/stop, just "add one, check the
+	// threshold" plus this struct's own idle-based self-heal. An entry is
+	// removed the instant it breaks (apply_script_block_edit erases the
+	// world entry, this map along with it), heals fully back to 0 (nothing
+	// left to track), or never added in the first place for a max_damage ==
+	// 0 (instant-break) block.
+	struct PunchDamageState {
+		std::uint16_t punches = 0;
+		double idle_seconds = 0.0; // time since the last punch landed here
+		// Seconds accumulated toward the next -1 heal step, only once
+		// idle_seconds has crossed PunchParams::heal_after_seconds.
+		double heal_progress = 0.0;
+	};
+	std::unordered_map<core::IVec3, PunchDamageState> block_punch_counts_;
+	PunchParams punch_params_;
 	physics::MoveParams move_params_;
 	int interest_radius_cells_ = 2;
 	double time_of_day_ticks_ = 0.0;

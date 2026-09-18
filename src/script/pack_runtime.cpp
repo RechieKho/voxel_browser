@@ -29,6 +29,10 @@ void PackRuntime::set_server_config(const core::ServerConfig &) {}
 physics::MoveParams PackRuntime::effective_move_params(physics::MoveParams base) const {
 	return base;
 }
+net::ServerSession::PunchParams PackRuntime::effective_punch_params(
+		net::ServerSession::PunchParams base) const {
+	return base;
+}
 std::optional<world::DayNightCurve> PackRuntime::effective_day_night_curve() const {
 	return std::nullopt;
 }
@@ -165,7 +169,7 @@ constexpr int kMaxTimerCatchUpFires = 8; // anti-stall guard for vb.every after 
 // only registered keybind names ever appear as `keybinds` keys.
 sol::table build_input_table(sol::state &lua, core::Vec3f move, float yaw,
 		float pitch, std::uint8_t buttons, std::uint32_t keybinds,
-		const std::vector<std::string> &keybind_names) {
+		const std::vector<std::string> &keybind_names, double dt) {
 	sol::table t = lua.create_table();
 	sol::table move_t = lua.create_table();
 	move_t["x"] = move.x;
@@ -174,6 +178,13 @@ sol::table build_input_table(sol::state &lua, core::Vec3f move, float yaw,
 	t["move"] = move_t;
 	t["yaw"] = yaw;
 	t["pitch"] = pitch;
+	// The wall-clock time this cmd covers -- needed by any pack-side policy
+	// that accrues something (e.g. hold-to-break progress) per real second
+	// rather than per tick, since a client can batch/resend multiple cmds
+	// per server tick. Read-only in practice: nothing in run_player_input
+	// reconstructs InputCmd::dt from a handler's returned table, unlike
+	// move/yaw/pitch/buttons/keybinds below.
+	t["dt"] = dt;
 
 	sol::table buttons_t = lua.create_table();
 	buttons_t["jump"] = (buttons & protocol::kInputJump) != 0;
@@ -328,6 +339,11 @@ struct PackRuntime::Impl {
 	// pack didn't set naturally falls back to whatever base MoveParams the
 	// caller passes in at that point -- not a fixed literal baked in here.
 	std::optional<sol::table> move_params_table;
+
+	// Phase 6.18: the raw table passed to vb.combat.set_params{...}, if a
+	// pack ever calls it -- same "capture the table, parse lazily" posture
+	// as move_params_table above.
+	std::optional<sol::table> combat_params_table;
 
 	// Phase 6.8: the raw table passed to vb.daynight.set_curve{keyframes =
 	// {...}}, if a pack ever calls it. Parsed into a world::DayNightCurve in
@@ -647,6 +663,59 @@ struct PlayerHandle {
 		}
 		rt->session->damage_player(net_id, amount, cause.value_or(std::string{}));
 	}
+
+	// Phase 6.17: breaking a block is no longer something the engine does on
+	// its own -- the client only ever reports raw input (buttons.primary,
+	// where it's looking via yaw/pitch); a pack decides whether/when that
+	// actually removes a block. This runs the exact same validated pipeline
+	// a real C2S_BlockEdit would (reach check, before/after block-edit hooks,
+	// per-block on_break, item drops, relight, delta fan-out to every
+	// mirroring client) instead of a shortcut -- it's just triggered from
+	// Lua instead of decoded off the wire. Returns whether the edit was
+	// actually accepted (false on an out-of-reach/invalid target, same as a
+	// rejected C2S_BlockEdit).
+	bool break_block(int x, int y, int z) const {
+		if (rt->session == nullptr) {
+			throw sol::error("entity:break_block(): session not attached yet");
+		}
+		return rt->session->apply_script_block_edit(
+				net_id, protocol::BlockEditAction::kBreak, { x, y, z });
+	}
+
+	// Phase 6.18 (Growtopia-style combat): the one call a pack needs to
+	// throw a discrete punch -- call it once per rising edge of whatever key
+	// a pack binds to "attack" (a vb.on("player_input", ...) handler
+	// deciding *when*, exactly like content/base/mechanics.lua does); the
+	// engine decides *what got hit* (raycasts blocks and nearby players
+	// along this player's authoritative look direction, picks whichever is
+	// closer) and applies the default policy (instant PvP damage, or an
+	// accumulating per-block punch count that breaks the block once it
+	// reaches BlockType::max_damage -- 0 there still means "one punch").
+	// Returns a table describing what happened: {hit_player=bool,
+	// target=<Player>|nil, hit_block=bool, x=,y=,z=, punches=, broken=bool}
+	// -- a pack that wants swing VFX/sound or a hit-marker reads this;
+	// one that doesn't can ignore the return value entirely.
+	sol::table punch(sol::this_state ts) const {
+		sol::state_view lua(ts);
+		if (rt->session == nullptr) {
+			throw sol::error("entity:punch(): session not attached yet");
+		}
+		const auto r = rt->session->punch(net_id);
+		sol::table t = lua.create_table();
+		t["hit_player"] = r.hit_player;
+		if (r.hit_player) {
+			t["target"] = PlayerHandle{ r.target, rt };
+		}
+		t["hit_block"] = r.hit_block;
+		if (r.hit_block) {
+			t["x"] = r.block_pos.x;
+			t["y"] = r.block_pos.y;
+			t["z"] = r.block_pos.z;
+			t["punches"] = r.block_punches;
+			t["broken"] = r.block_broken;
+		}
+		return t;
+	}
 };
 
 PackRuntime::Impl::Impl(net::Transport &t, world::BlockRegistry &reg,
@@ -677,7 +746,8 @@ void PackRuntime::Impl::install_bindings() {
 			"send_message", &PlayerHandle::send_message, "open_ui",
 			&PlayerHandle::open_ui, "give", &PlayerHandle::give, "take",
 			&PlayerHandle::take, "get_name", &PlayerHandle::get_name, "damage",
-			&PlayerHandle::damage);
+			&PlayerHandle::damage, "break_block", &PlayerHandle::break_block,
+			"punch", &PlayerHandle::punch);
 
 	sol::table vb = lua.create_named_table("vb");
 
@@ -802,6 +872,22 @@ void PackRuntime::Impl::install_bindings() {
 			throw sol::error("vb.physics.set_params: registry already frozen");
 		}
 		move_params_table = def;
+	};
+
+	// Phase 6.18: overrides player:punch()'s default reach/hit_radius/
+	// player_damage/heal_after_seconds/heal_interval_seconds
+	// (ServerSession::PunchParams) -- same "override individual fields on
+	// top of a built-in default" shape as vb.physics.set_params above.
+	// Unlike 6.5's BlockDamageSystem (which ships zero heal policy until a
+	// pack supplies one), punching's self-heal is a real engine default --
+	// only its rate is a pack-facing knob, not whether it exists at all.
+	sol::table combat_tbl = lua.create_table();
+	vb["combat"] = combat_tbl;
+	combat_tbl["set_params"] = [this](sol::table def) {
+		if (frozen) {
+			throw sol::error("vb.combat.set_params: registry already frozen");
+		}
+		combat_params_table = def;
 	};
 
 	// Phase 6.8: overrides the engine's default 4-keyframe day/night sky
@@ -1491,8 +1577,8 @@ net::ServerSession::InputHookResult PackRuntime::Impl::run_player_input(
 		if (!fn.valid()) {
 			continue;
 		}
-		sol::table input_t = build_input_table(
-				lua_state(), move, yaw, pitch, buttons, keybinds, keybind_names);
+		sol::table input_t = build_input_table(lua_state(), move, yaw, pitch,
+				buttons, keybinds, keybind_names, static_cast<double>(cmd.dt));
 		vm.begin_call_budget();
 		sol::protected_function_result r = fn(p, input_t);
 		if (!r.valid()) {
@@ -1754,6 +1840,23 @@ physics::MoveParams PackRuntime::effective_move_params(physics::MoveParams base)
 	out.step_height = def.get_or("step_height", out.step_height);
 	out.fly_speed = def.get_or("fly_speed", out.fly_speed);
 	out.fly = def.get_or("fly", out.fly);
+	return out;
+}
+
+net::ServerSession::PunchParams PackRuntime::effective_punch_params(
+		net::ServerSession::PunchParams base) const {
+	if (!impl_->combat_params_table) {
+		return base;
+	}
+	const sol::table &def = *impl_->combat_params_table;
+	net::ServerSession::PunchParams out = base;
+	out.reach = def.get_or("reach", out.reach);
+	out.hit_radius = def.get_or("hit_radius", out.hit_radius);
+	out.player_damage = def.get_or("player_damage", out.player_damage);
+	out.heal_after_seconds =
+			def.get_or("heal_after_seconds", out.heal_after_seconds);
+	out.heal_interval_seconds =
+			def.get_or("heal_interval_seconds", out.heal_interval_seconds);
 	return out;
 }
 

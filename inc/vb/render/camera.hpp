@@ -40,11 +40,7 @@ public:
 
 	// Unit forward vector (where the camera looks), y-up to match raylib.
 	core::Vec3d forward() const {
-		const double cy = std::cos(radians(yaw_));
-		const double sy = std::sin(radians(yaw_));
-		const double cp = std::cos(radians(pitch_));
-		const double sp = std::sin(radians(pitch_));
-		return { sy * cp, sp, -cy * cp };
+		return core::forward_from_yaw_pitch(yaw_, pitch_);
 	}
 
 	// Point the camera targets, one unit ahead of the eye.

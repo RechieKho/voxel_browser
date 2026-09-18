@@ -1,6 +1,7 @@
 #include "vb/net/session.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <optional>
 #include <span>
 #include <utility>
@@ -11,6 +12,7 @@
 #include "vb/protocol/world.hpp"
 #include "vb/world/block.hpp"
 #include "vb/world/daynight.hpp"
+#include "vb/world/raycast.hpp"
 
 namespace vb::net {
 
@@ -201,6 +203,188 @@ void ServerSession::handle_block_edit(ConnId conn, Conn &state,
 				send_frames(transport_, other_conn, pf.frames);
 				break;
 			}
+		}
+	}
+}
+
+bool ServerSession::apply_script_block_edit(core::NetId editor,
+		protocol::BlockEditAction action, core::IVec3 pos, core::BlockId block) {
+	if (!replicator_) {
+		return false;
+	}
+	const replication::EntityState *e = interest_.get(editor);
+	core::Vec3d eye = e ? e->pos : core::Vec3d{};
+	eye.y += move_params_.eye_height;
+
+	protocol::C2SBlockEdit edit;
+	edit.action = action;
+	edit.pos = pos;
+	edit.block = block;
+
+	protocol::S2CBlockEditResult result;
+	auto per_player = replicator_->apply_block_edit(editor, eye, edit, result);
+	for (auto &[other_conn, other] : conns_) {
+		if (other.playing && other.net_id == editor) {
+			send_message(transport_, other_conn, result);
+			break;
+		}
+	}
+	for (auto &pf : per_player) {
+		for (auto &[other_conn, other] : conns_) {
+			if (other.playing && other.net_id == pf.id) {
+				send_frames(transport_, other_conn, pf.frames);
+				break;
+			}
+		}
+	}
+	return result.accepted;
+}
+
+ServerSession::PunchResult ServerSession::punch(core::NetId puncher) {
+	PunchResult result;
+	bool is_playing = false;
+	for (auto &[conn, state] : conns_) {
+		(void)conn;
+		if (state.playing && state.net_id == puncher) {
+			is_playing = true;
+			break;
+		}
+	}
+	const replication::EntityState *pe = interest_.get(puncher);
+	if (!is_playing || !pe) {
+		return result;
+	}
+	core::Vec3d eye = pe->pos;
+	eye.y += move_params_.eye_height;
+	const core::Vec3d dir = core::forward_from_yaw_pitch(
+			static_cast<double>(pe->rot.x), static_cast<double>(pe->rot.y));
+
+	// Nearest other player modeled as a vertical cylinder (feet at their
+	// tracked position, top at move_params_.height above it, radius
+	// hit_radius) that the puncher's look-ray passes through, capped at
+	// `reach`. A cylinder rather than a single torso point so a punch lands
+	// regardless of exact pitch -- aiming anywhere between another player's
+	// feet and head at reasonable range should register, the same forgiving
+	// hitbox any FPS gives a standing target, not a single point a puncher's
+	// eye line has to intersect exactly.
+	double best_player_t = punch_params_.reach;
+	core::NetId best_player = core::NetId::kInvalid;
+	for (auto &[conn, other] : conns_) {
+		(void)conn;
+		if (!other.playing || other.net_id == puncher) {
+			continue;
+		}
+		const replication::EntityState *oe = interest_.get(other.net_id);
+		if (!oe) {
+			continue;
+		}
+		const double denom = dir.x * dir.x + dir.z * dir.z;
+		double t = 0.0;
+		if (denom > 1e-9) {
+			t = ((oe->pos.x - eye.x) * dir.x + (oe->pos.z - eye.z) * dir.z) / denom;
+		}
+		t = core::clamp(t, 0.0, punch_params_.reach);
+		const double px = eye.x + dir.x * t;
+		const double py = eye.y + dir.y * t;
+		const double pz = eye.z + dir.z * t;
+		const double dx = px - oe->pos.x;
+		const double dz = pz - oe->pos.z;
+		const double horiz_dist = std::sqrt(dx * dx + dz * dz);
+		const double hr = static_cast<double>(punch_params_.hit_radius);
+		const bool vertical_ok = py >= oe->pos.y - hr &&
+				py <= oe->pos.y + move_params_.height + hr;
+		if (horiz_dist <= hr && vertical_ok && t < best_player_t) {
+			best_player_t = t;
+			best_player = other.net_id;
+		}
+	}
+
+	world::VoxelRayHit block_hit;
+	double block_t = punch_params_.reach;
+	if (replicator_) {
+		block_hit =
+				world::raycast_voxel(world_query(), eye, dir, punch_params_.reach);
+		if (block_hit.hit) {
+			const core::Vec3d center{ static_cast<double>(block_hit.voxel.x) + 0.5,
+				static_cast<double>(block_hit.voxel.y) + 0.5,
+				static_cast<double>(block_hit.voxel.z) + 0.5 };
+			block_t = (center - eye).length();
+		}
+	}
+
+	// Whichever is closer along the ray wins -- a player standing in front
+	// of a wall gets hit instead of the wall behind them, and vice versa.
+	if (best_player != core::NetId::kInvalid &&
+			(!block_hit.hit || best_player_t <= block_t)) {
+		result.hit_player = true;
+		result.target = best_player;
+		damage_player(best_player, punch_params_.player_damage, "pvp");
+		return result;
+	}
+
+	if (block_hit.hit && replicator_) {
+		result.hit_block = true;
+		result.block_pos = block_hit.voxel;
+		const core::BlockId existing = replicator_->world().get_block(block_hit.voxel);
+		const world::BlockRegistry &reg = replicator_->world().registry();
+		std::uint16_t max_damage = 0;
+		if (reg.contains(existing)) {
+			max_damage = reg.get(existing).max_damage;
+		}
+		if (max_damage == 0) {
+			// Unset max_damage always meant "instant break" pre-6.18 (the
+			// continuous-hold BlockDamageSystem skipped it outright); one
+			// punch keeps that meaning.
+			result.block_punches = 1;
+			result.block_broken = apply_script_block_edit(
+					puncher, protocol::BlockEditAction::kBreak, block_hit.voxel);
+		} else {
+			PunchDamageState &state = block_punch_counts_[block_hit.voxel];
+			++state.punches;
+			state.idle_seconds = 0.0; // a landed punch resets the heal clock
+			state.heal_progress = 0.0;
+			result.block_punches = state.punches;
+			if (state.punches >= max_damage) {
+				if (apply_script_block_edit(puncher,
+							protocol::BlockEditAction::kBreak, block_hit.voxel)) {
+					block_punch_counts_.erase(block_hit.voxel);
+					result.block_broken = true;
+				}
+				// A veto (apply_script_block_edit returned false) leaves the
+				// count at max_damage -- the very next punch retries the
+				// break rather than needing max_damage+1 hits.
+			}
+		}
+	}
+	return result;
+}
+
+// Phase 6.18: idle-based self-heal for punch()'s block_punch_counts_ --
+// distinct from update_block_damage() above, which drives the unrelated
+// continuous-hold BlockDamageSystem (6.5). A block that hasn't been punched
+// in PunchParams::heal_after_seconds loses one punch every heal_interval_
+// seconds until it's back to full health (erased from the map) or hit
+// again (both timers reset in punch() itself). A negative heal_after_
+// seconds disables this entirely -- every entry just idles forever.
+void ServerSession::update_block_punch_healing(double dt_seconds) {
+	if (punch_params_.heal_after_seconds < 0.0) {
+		return;
+	}
+	for (auto it = block_punch_counts_.begin(); it != block_punch_counts_.end();) {
+		PunchDamageState &state = it->second;
+		state.idle_seconds += dt_seconds;
+		if (state.idle_seconds >= punch_params_.heal_after_seconds) {
+			state.heal_progress += dt_seconds;
+			while (state.heal_progress >= punch_params_.heal_interval_seconds &&
+					state.punches > 0) {
+				state.heal_progress -= punch_params_.heal_interval_seconds;
+				--state.punches;
+			}
+		}
+		if (state.punches == 0) {
+			it = block_punch_counts_.erase(it);
+		} else {
+			++it;
 		}
 	}
 }
@@ -509,6 +693,7 @@ void ServerSession::tick(double dt_seconds) {
 	check_respawns();
 	update_item_drops(dt_seconds);
 	update_block_damage();
+	update_block_punch_healing(dt_seconds);
 
 	++server_tick_;
 	broadcast_snapshots();

@@ -240,6 +240,9 @@ struct Singleplayer {
 			  server(net.server(), sp_server_config(seed),
 					  make_singleplayer_host(seed, pack_runtime, registry, move_params)) {
 		server.set_move_params(move_params);
+		// Phase 6.18: mirrors src/server/main.cpp's own set_punch_params call.
+		server.set_punch_params(pack_runtime.effective_punch_params(
+				vb::net::ServerSession::PunchParams{}));
 		// Phase 6.8: no server.toml on this in-process path either, so
 		// ServerSession's own hardcoded default (kDefaultDayLengthSeconds,
 		// matching its member initializer) is the base a pack's
@@ -340,31 +343,65 @@ struct RemoteConnection {
 	}
 };
 
+// Phase 6.17: physical-key-to-action mapping for the axes/buttons the engine
+// itself always understands (InputCmd::move/buttons -- distinct from
+// vb.register_keybind's pack-defined slots, Phase 6.3, which cover only
+// discrete named actions a pack invents). These used to be raylib key
+// literals mixed directly into sample_input_cmd's branching with no seam at
+// all; pulling them into one small table is the actual "decouple hardcoded
+// movement" -- sample_input_cmd itself no longer hardcodes which physical
+// key means what, and a future client settings screen (Phase 5.3, still not
+// attempted) has exactly one place to rebind. Note this is a *client-local*
+// physical-key mapping, not a network-visible one -- what the resulting
+// InputCmd.move/buttons/yaw/pitch actually *do* is already fully
+// pack-overridable server-side via vb.on("player_input", ...), independent
+// of which key produced them.
+struct MovementBindings {
+	int forward = KEY_W;
+	int back = KEY_S;
+	int left = KEY_A;
+	int right = KEY_D;
+	int jump = KEY_SPACE;
+	int sprint = KEY_LEFT_SHIFT;
+};
+
 vb::protocol::InputCmd sample_input_cmd(std::uint32_t seq, double dt, double yaw,
-		double pitch, bool mouse_captured) {
+		double pitch, bool mouse_captured, const MovementBindings &bindings) {
 	vb::protocol::InputCmd cmd;
 	cmd.seq = seq;
 	cmd.dt = static_cast<float>(dt);
 	cmd.yaw = static_cast<float>(yaw);
 	cmd.pitch = static_cast<float>(pitch);
 	if (mouse_captured) {
-		if (IsKeyDown(KEY_W)) {
+		if (IsKeyDown(bindings.forward)) {
 			cmd.move.z += 1.0f;
 		}
-		if (IsKeyDown(KEY_S)) {
+		if (IsKeyDown(bindings.back)) {
 			cmd.move.z -= 1.0f;
 		}
-		if (IsKeyDown(KEY_D)) {
+		if (IsKeyDown(bindings.right)) {
 			cmd.move.x += 1.0f;
 		}
-		if (IsKeyDown(KEY_A)) {
+		if (IsKeyDown(bindings.left)) {
 			cmd.move.x -= 1.0f;
 		}
-		if (IsKeyDown(KEY_SPACE)) {
+		if (IsKeyDown(bindings.jump)) {
 			cmd.buttons |= vb::protocol::kInputJump;
 		}
-		if (IsKeyDown(KEY_LEFT_SHIFT)) {
+		if (IsKeyDown(bindings.sprint)) {
 			cmd.buttons |= vb::protocol::kInputSprint;
+		}
+		// Phase 6.17: block breaking/placing is no longer an engine default
+		// (see the removed hold-to-break timer further below in this file) --
+		// the client's only job is to report these as raw held-button state,
+		// exactly like jump/sprint above. Whether holding "primary" over a
+		// voxel does anything at all is entirely up to a content pack's
+		// vb.on("player_input", ...) handler (content/base/mechanics.lua).
+		if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+			cmd.buttons |= vb::protocol::kInputPrimary;
+		}
+		if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT)) {
+			cmd.buttons |= vb::protocol::kInputSecondary;
 		}
 	}
 	return cmd;
@@ -540,7 +577,7 @@ int run_headless(const vb::core::ClientConfig &config, const vb::core::Args &arg
 
 		{
 			const vb::protocol::InputCmd cmd = sample_input_cmd(++input_seq, dt,
-					controller.yaw(), controller.pitch(), false);
+					controller.yaw(), controller.pitch(), false, MovementBindings{});
 			client->push_input(cmd);
 			if (sp) {
 				sp->tick(dt);
@@ -647,15 +684,11 @@ int main(int argc, char **argv) {
 	std::unique_ptr<vb::render::EntityRenderer> entity_renderer;
 	bool mouse_captured = false;
 
-	// Hold-to-break (spec §5.2, "Break progress (hold-to-break): not yet"):
-	// LMB must be held on the same voxel for kBreakSeconds before the edit is
-	// actually sent. No per-block hardness/tool system exists yet (still a
-	// separately-tracked REMAINING_TASKS.md gap) -- one flat duration for
-	// every block is the whole feature this pass adds.
-	constexpr double kBreakSeconds = 0.35;
-	bool breaking = false;
-	vb::core::IVec3 break_target{};
-	double break_progress = 0.0;
+	// Phase 6.17: the client-local physical-key-to-action map for movement +
+	// break/place (see MovementBindings' own comment above). One instance,
+	// same defaults every frame -- a future settings screen would mutate
+	// this instead of inventing a second mechanism.
+	MovementBindings movement_bindings;
 
 	// HUD chat (spec §5.4): a small scrolling log + an Enter-to-open text
 	// box, plain raygui like MainMenu -- no Lua, no dependency on the pack's
@@ -930,7 +963,8 @@ int main(int argc, char **argv) {
 
 				{
 					const vb::protocol::InputCmd cmd = sample_input_cmd(++input_seq, dt,
-							controller.yaw(), controller.pitch(), mouse_captured);
+							controller.yaw(), controller.pitch(), mouse_captured,
+							movement_bindings);
 					client->push_input(cmd);
 					// Singleplayer ticks the whole embedded game (client + server,
 					// over loopback); a real connection just pumps this client's
@@ -945,33 +979,19 @@ int main(int argc, char **argv) {
 							{ feet.x, feet.y + move_params.eye_height, feet.z });
 				}
 
-				// Block break / place: raycast from the eye, act on click
-				// (spec §5.2). Breaking requires holding LMB on the same
-				// voxel for kBreakSeconds; placing stays an instant click.
+				// Phase 6.17: breaking is no longer a client-authoritative
+				// hardcoded timer -- the client only reports raw input
+				// (buttons.primary, set above in sample_input_cmd) and does
+				// its own raycast purely for the crosshair-highlight visual
+				// below; content/base/mechanics.lua does the actual hold-
+				// timing and calls player:break_block() server-side once a
+				// pack decides breaking should happen at all (it's opt-in,
+				// not an engine default). Placing stays an instant,
+				// client-driven edit, unaffected by this.
 				vb::world::VoxelRayHit look_hit;
 				if (mouse_captured) {
 					look_hit = vb::world::raycast_voxel(client->chunk_store(),
 							controller.position(), controller.forward(), 5.0);
-					if (look_hit.hit && IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
-						if (!breaking || break_target != look_hit.voxel) {
-							breaking = true;
-							break_target = look_hit.voxel;
-							break_progress = 0.0;
-						}
-						break_progress += dt;
-						if (break_progress >= kBreakSeconds) {
-							vb::protocol::C2SBlockEdit e;
-							e.predicted_seq = ++edit_seq;
-							e.action = vb::protocol::BlockEditAction::kBreak;
-							e.pos = look_hit.voxel;
-							client->push_block_edit(e);
-							breaking = false;
-							break_progress = 0.0;
-						}
-					} else {
-						breaking = false;
-						break_progress = 0.0;
-					}
 					if (look_hit.hit && IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) {
 						vb::protocol::C2SBlockEdit e;
 						e.predicted_seq = ++edit_seq;
@@ -982,20 +1002,16 @@ int main(int argc, char **argv) {
 						e.block = vb::world::base_block::stone;
 						client->push_block_edit(e);
 					}
-				} else {
-					breaking = false;
-					break_progress = 0.0;
 				}
 
 				// Raw state only -- "engine provides raw state, Lua deals
-				// with presentation" (the hold-to-break timing/reach logic
-				// above stays engine-side, it's gameplay, not cosmetics).
-				// Whether/how to show this is entirely up to whatever a
-				// pack's ui.define_hud renders from client.break_progress().
-				ui_runtime.set_break_progress(breaking
-						? std::optional<float>(static_cast<float>(
-								  std::min(break_progress / kBreakSeconds, 1.0)))
-						: std::nullopt);
+				// with presentation". client.break_progress() now awaits the
+				// still-deferred damage-*value* replication half of Phase 6.5
+				// (REMAINING_TASKS.md 6.17): the engine no longer runs its
+				// own local hold timer to approximate this from, so there's
+				// nothing authoritative to report yet -- content/base/ui/
+				// hud.lua simply won't draw a bar until that lands.
+				ui_runtime.set_break_progress(std::nullopt);
 				ui_runtime.set_screen_size(GetScreenWidth(), GetScreenHeight());
 
 				std::size_t chunk_count = 0;

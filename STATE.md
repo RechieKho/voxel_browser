@@ -13,7 +13,119 @@
 > instead of here** — see that file's own header for why. This file is for
 > gotchas that hold regardless of which machine an agent is running on.
 
-Last updated: 2026-09-18 (Phase 1.3 networking polish, post-Phase-6: three
+Last updated: 2026-09-18 (Phase 6.18 follow-up -- block self-heal: a block
+that stops taking punches now heals back to full over time instead of
+keeping an accumulated punch count forever. `ServerSession::PunchParams`
+gained `heal_after_seconds` (default 4.0, idle time since the last landed
+punch before healing starts) and `heal_interval_seconds` (default 1.5,
+-1 punch every this many seconds once eligible) -- both overridable via
+`vb.combat.set_params{heal_after_seconds=, heal_interval_seconds=}`
+alongside the fields already there. Unlike 6.5's `BlockDamageSystem` (zero
+built-in heal policy until a pack supplies one -- there's no begin/stop
+lifecycle for punching to hang a policy off of the same way), this is a
+real engine default; only the *rate* is pack-facing, not whether healing
+happens at all. `block_punch_counts_`'s value type is now `PunchDamageState
+{punches, idle_seconds, heal_progress}` instead of a bare count; a new
+`ServerSession::update_block_punch_healing(dt)`, called from `tick()`
+right after the unrelated `update_block_damage()`, decrements idle entries
+and erases ones that fully heal. Landing a punch resets both timers on
+that position -- a fresh hit undoes partial heal progress rather than
+adding to it. Negative `heal_after_seconds` disables healing outright.
+Three new `blockedit_test.cpp` cases (idle-heals-to-full-then-fresh-punch-
+starts-at-1; a punch resets the idle clock instead of heal continuing from
+before it; the pre-existing N-punches-to-break case unaffected since it
+never idles). Full `vb_tests` green (289/289, up from 287); all 4 CTest
+cases pass.
+Previous entry: 2026-09-18 (Phase 6.18 -- Growtopia-style combat: attack is now
+a discrete "punch" per click, not Minecraft-style holding; see
+`REMAINING_TASKS.md` 6.18 for the full writeup, this is a summary). New
+public `ServerSession::punch(NetId)` (`inc/vb/net/session.hpp`+`src/net/
+session.cpp`) raycasts blocks and nearby players (a vertical cylinder --
+feet to `MoveParams::height`, radius `PunchParams::hit_radius` -- not a
+single point, so aiming anywhere along a standing player's body registers)
+along the puncher's authoritative yaw/pitch and resolves to whichever is
+closer: a player hit calls the existing `damage_player()`; a block hit
+increments a new `block_punch_counts_` map and breaks it via 6.17's
+`apply_script_block_edit()` once `BlockType::max_damage` punches land (0
+still means "first punch breaks it"). `vb.combat.set_params{reach=,
+hit_radius=, player_damage=}` overrides the defaults, mirroring
+`vb.physics.set_params` exactly, wired into both `src/server/main.cpp` and
+`--singleplayer`. `player:punch()` is the Lua-facing wrapper (returns a
+`{hit_player, target, hit_block, x,y,z, punches, broken}` table).
+`content/base/mechanics.lua` was rewritten to edge-detect `buttons.primary`
+(same `was_down` idiom `kitchen_sink/keybinds.lua` uses) and call
+`player:punch()` once per rising edge -- no hold-timer concept left in it at
+all, unlike 6.17's version of this same file. New shared `core::
+forward_from_yaw_pitch()` (`inc/vb/core/math.hpp`) replaces the trig that
+used to live only inside `FirstPersonController::forward()`, now also used
+server-side (no camera object exists there) -- `camera.hpp` delegates to it.
+Movement is explicitly untouched (user constraint going in: don't move
+movement to a raw-key-event model, keep client-side prediction intact) --
+6.17's `MovementBindings`/continuous `InputCmd.move` pipeline is unchanged.
+New tests in `tests/unit/blockedit_test.cpp` (plain `ServerSession`, no
+Lua) cover: instant break at `max_damage == 0`; exactly N punches to break
+a custom `max_damage = N` block (built via `BlockRegistry::add_or_get`, not
+Lua); player-over-block precedence when both are candidates; a clean no-hit
+result when nothing is in reach. Full `vb_tests` green (287/287, up from
+283); all 4 CTest cases pass. **Known simplification, not attempted:** no
+engine-side punch-rate cooldown -- a pack that doesn't edge-detect (or a
+macro) could call `punch()` every tick; left as the calling pack's own
+responsibility, same posture as every other "engine provides the primitive"
+seam in this codebase.
+Previous entry: 2026-09-18 (Phase 6.17, shipped with a different shape than
+`REMAINING_TASKS.md` originally planned — see that section's own note for the
+full writeup). Summary: block breaking is no longer an engine default at all.
+`src/client/main.cpp`'s hardcoded 5.2-era hold-to-break timer (`breaking`/
+`break_target`/`break_progress`/`kBreakSeconds`) is deleted outright, not
+replaced by another client-side timer -- the client now only reports raw
+`buttons.primary`/`.secondary` (the wire protocol's pre-existing, previously-
+unused `kInputPrimary`/`kInputSecondary` bits) through the same
+`vb.on("player_input", ...)` channel Phase 6.3 already built. New engine
+primitive: `player:break_block(x,y,z)` (`PlayerHandle`, `src/script/
+pack_runtime.cpp`) backed by a new public `ServerSession::
+apply_script_block_edit(editor, action, pos, block)` (`inc/vb/net/
+session.hpp`+`src/net/session.cpp`) that runs the *exact* `C2S_BlockEdit`
+pipeline (reach check, `block_break`/`on_break` hooks, drops, relight,
+fan-out) without a wire frame -- extracted verbatim from `handle_block_edit`'s
+body, now shared by both the real network path and this script-triggered one.
+`content/base/mechanics.lua` (new file, auto-loaded by `pack_loader.cpp`'s
+generic "any other root-level `.lua`" pass, no engine change needed) is
+content/base's own hold-to-break: a `player_input` handler keyed by
+`player:get_name()` (matches `kitchen_sink/keybinds.lua`'s existing
+convention), does its own `vb.world.raycast` from yaw/pitch, and calls
+`break_block()` after 0.35s -- a pack that never loads this file gets zero
+breaking behavior from holding LMB, proven by a new `pack_runtime_
+integration_test.cpp` case. `build_input_table`'s Lua-facing input table
+gained a `dt` field (additive, backward compatible) since a pack has no other
+way to measure real elapsed time per `player_input` call for its own hold
+timer. Movement's WASD/jump/sprint keys were pulled out of
+`sample_input_cmd`'s inline branching into a `MovementBindings` struct
+(same file) with identical default keys -- purely a client-local
+"one table instead of scattered literals" refactor, since movement was
+already fully pack-overridable server-side via `vb.on("player_input", ...)`
+returning a replacement table (pre-existing `ServerSession::
+handle_input_batch` behavior, unchanged); movement was deliberately kept off
+`vb.register_keybind` entirely, sidestepping 6.17's original "does a
+continuous axis fit the boolean keybind registry" open question rather than
+answering it.
+
+**Known regression, deliberately accepted, not yet fixed:** `client.
+break_progress()` (6.16's HUD hook) now always returns `nil` -- the local
+timer it used to read is gone, and it was never wired to anything
+server-authoritative (that needs the still-unimplemented "replicate
+`BlockDamageSystem`'s damage *value*, not just begin/stop/complete" half of
+Phase 6.5 -- `BlockDamageTickResult::changed`/`cleared` are computed and
+thrown away today, same gap 6.5's own original entry already flagged).
+`content/base/ui/hud.lua` silently draws no progress bar until that lands --
+this is a real, visible UX regression from before this session, traded
+deliberately for "breaking is opt-in content" per explicit user direction.
+`BlockDamageSystem`/`C2S_BlockBreakBegin`/`Stop` (6.5) remain completely
+unused by `content/base` (every shipped block still has the implicit
+`max_damage = 0`); `mechanics.lua`'s hold timer is a pack-side Lua clock, not
+a `BlockDamageSystem` consumer -- same one-flat-duration-for-every-block
+posture the old hardcoded C++ timer had, just relocated. Full `vb_tests`
+green (283/283, up from 282) on `build-net-lua`; all 4 CTest cases pass.
+Previous entry: 2026-09-18 (Phase 1.3 networking polish, post-Phase-6: three
 items from §1.3's leftover bullet list. (1) **Manual two-process smoke
 test** — `voxel_browser_server.exe --port 27099` in one background process,
 `voxel_browser.exe --headless --frames 5 --server 127.0.0.1 --port 27099`
