@@ -576,6 +576,31 @@ with *both* binaries (bundle/publish still merge by `voxel_browser-*` pattern).
   pack_runtime.cpp`'s `world_tbl["spawn"]`/`entity_methods[...]`) rather
   than trusting the comment — a comment describing a limitation is a claim
   about the state *when it was written*, not a live fact.
+- **A client built without `VB_WITH_COMPRESSION` can never successfully
+  asset-sync against a server built with it on, and fails with a deterministic,
+  first-asset `"asset transfer failed (hash mismatch or size cap)"` on
+  every single connect** — not intermittent, not a real corrupted transfer.
+  Root cause: `hash_bytes()` (`src/assetsync/manifest.cpp`) is stubbed to
+  always return an all-zero `AssetHash{}` in the `#if !VB_WITH_COMPRESSION`
+  build, and `ClientAssetCache::ingest_chunk` (`src/assetsync/cache.cpp`)
+  verifies every received file by comparing its own `hash_bytes(received
+  bytes)` against the hash the server sent — a disabled-compression client
+  always computes `{}` regardless of what it actually received, which can
+  never equal a real server-computed hash. Hit 2026-09-18: server built
+  fresh on a Mac with `VB_WITH_COMPRESSION=ON`, client run from this
+  project's existing `build-net-lua` on Windows, which had never had
+  compression turned on (see `STATE.md.local`) — reconfiguring that one
+  build dir with `-DVB_WITH_COMPRESSION=ON` and rebuilding fixed it (280/280
+  `vb_tests` still green). **Both the client and server binaries in a real
+  (non-`--singleplayer`) connection need matching `VB_WITH_COMPRESSION`
+  settings** — there's no runtime negotiation/fallback for this mismatch,
+  the failure mode gives no hint that compression flags differ, and
+  `content/base/ui/*.lua` (the HUD, inventory, pause screens) silently never
+  loads for *any* real connection at all when compression is off on the
+  server (see this same section's asset-sync note) — so a from-scratch
+  build intended for real multiplayer likely wants
+  `-DVB_WITH_COMPRESSION=ON` from the start on every machine involved, not
+  just one side.
 
 ---
 
