@@ -420,7 +420,7 @@ than as a black box — every file is commented explaining *why*, not just
 | `blocks/dirt.lua`, `grass.lua`, etc.  | `vb.register_block`, idempotent re-declaration of the Phase 2 base set, `on_break` calling `vb.world.spawn_item_drop` |
 | `blocks/planks.lua`, `sticks.lua`     | Registering genuinely new, crafted-only blocks (not a re-declaration) |
 | `crafting.lua`                        | A full, working game system (recipes, ingredient checks, a `/craft` chat command) built entirely in content on top of `vb.register_craft` + `player:give`/`take` — **the reference example of "game rules belong in a pack, not the engine"** |
-| `entities/dropped_item.lua`           | `vb.register_entity`'s current limit: declarative only, nothing dispatches `on_spawn`/`on_tick` yet (waits on Phase 3.1) — contrast with `vb.world.spawn_item_drop` above, a separate, already-working hardcoded path |
+| `entities/dropped_item.lua`           | `vb.register_entity` — real dispatch since Phase 6.1 (`vb.world.spawn`/`on_spawn`/`on_tick`/`on_hit`/`on_death` all fire, no EnTT registry involved), but nothing in `content/base` itself ever calls `vb.world.spawn("base:dropped_item", ...)` — real block drops still go through the separate, already-working `vb.world.spawn_item_drop` hardcoded path above instead. `content/examples/kitchen_sink/entities/sentry.lua` (Phase 6.15) is the worked example of a pack actually spawning/hitting/killing one of these |
 | `biomes/plains.lua`, `forest.lua`     | `vb.register_biome`: has a real consumer as of Phase 6.14 (`vb.worldgen.set_pipeline`), but `content/base` itself still never calls `set_pipeline` — these stay declarative-only *in this pack*, kept minimal/production-shaped per spec §5.1; a worked pipeline example belongs to 6.15's separate demo pack |
 | `ui/inventory.lua`, `ui/pause.lua`    | `ui.define`, real screens loaded by every connecting client |
 | `ui/hud.lua`                          | `ui.define_hud` + the `client.*` raw-state table (Phase 6.16) — the always-on hold-to-break progress bar |
@@ -446,10 +446,13 @@ short comment naming the exact phase/section it demonstrates (see its
 `tests/unit/kitchen_sink_pack_test.cpp` regression-tests the same way
 `content_pack_test.cpp` protects `content/base`. Covers: `register_block`'s
 `max_damage`/`max_stack`/`pickup_radius`/`item_lifetime_seconds` together on
-one block (`blocks/unstable_ore.lua`), `register_entity` (`entities/
-sentry.lua`, staying honest that `on_tick`/`on_hit`/`on_death` are still
-inert — same limitation `content/base/entities/dropped_item.lua` documents),
-`register_biome` with real `probability`/`adjacency`
+one block (`blocks/unstable_ore.lua`), `register_entity` +
+`vb.world.spawn` — real and dispatched since Phase 6.1 (2026-09-17), a
+`/sentry` chat command actually spawns one and `on_tick`/`on_hit`/`on_death`
+all really fire (`entities/sentry.lua`; `content/base/entities/
+dropped_item.lua`'s own "nothing calls them" comment predates 6.1 and is now
+stale — not this pack's file to fix), `register_biome` with real
+`probability`/`adjacency`
 (`biomes/savanna.lua`/`tundra.lua`) feeding a real `vb.worldgen.set_pipeline`
 + `vb.noise.*` graph with a carver and a vein (`worldgen.lua`) — the worked
 pipeline example `content/base`'s own biome files point to —

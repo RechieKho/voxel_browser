@@ -265,12 +265,17 @@ Goal: server generates terrain, streams chunks, client meshes and renders them.
       tick thread (mutex+CV queue; "lock-free" is aspirational, correctness first).
 - [x] Determinism gate: `tests/unit/worldgen_test.cpp` hashes a fixed 4-chunk
       region (FNV-1a) against a committed golden — CI runs it on all 3 platforms.
-- [ ] Biome selection (2.2 step 2) + carvers + vein/scatter + decoration pass
+- [x] Biome selection (2.2 step 2) + carvers + vein/scatter + decoration pass
       — deferred to the Lua pipeline (Phase 4); base pipeline is
       heightmap-only for now. Biome selection design updated 2026-09-17 to
       Voronoi-cell partitioning with adjacency-weighted probability
       (WFC-flavored, non-backtracking — see `ARCHITECTURE_SPEC.md` §6 stage
       2), not the originally-sketched continuous temperature/humidity noise.
+      Landed 2026-09-18 as Phase 6.14 (`vb.worldgen.set_pipeline` +
+      `vb.register_biome` + `vb/worldgen/biome_selector.hpp`) — see that
+      item for the full writeup. The fixed base pipeline itself stays
+      heightmap-only exactly as this bullet always said; the Lua pipeline is
+      the opt-in layer on top, per 6.14's own "no call, no pipeline" posture.
 
 ### 2.3 Lighting  ✅ (per-chunk)
 
@@ -627,9 +632,9 @@ Lua-defined UI.
 - [ ] `EntityKind` tick/spawn/hit/death callbacks wired into `ScriptPreTick` /
       `ScriptPostTick` systems — waits on 3.1's EnTT registry; `register_entity`
       already captures the callbacks, nothing iterates entities to call them.
-- [ ] Lua-driven worldgen pipeline replaces the Phase 2 hardcoded one —
+- [x] Lua-driven worldgen pipeline replaces the Phase 2 hardcoded one —
       moved to Phase 6.14 (extensibility push, FastNoise2 backend); tracked
-      there now instead of here.
+      there now instead of here. Landed 2026-09-18 — see that item.
 - [ ] `register_entity`'s `visual = {...}` sub-table (`variant` frame-size
       lookup, `texture`, `facings`, `origin`, `clips` grid) for 3.5's
       `entity_renderer`, schema finalized 2026-09-17 — see `ARCHITECTURE_SPEC.md`
@@ -1983,11 +1988,14 @@ windows, chatting, crafting, and seeing each other, all at once.
       `set_day_length` for a non-default sky, and (once 6.9-6.11 land) a
       stacking item, a chat filter, and tuned item-drop params.
       Shipped as `content/examples/kitchen_sink/` (the first-listed option).
-      `entities/sentry.lua`'s `on_tick`/`on_hit`/`on_death` stay honestly
-      documented as inert (same pre-existing limitation
-      `content/base/entities/dropped_item.lua` already notes — no EnTT
-      registry dispatches generic Lua entity kinds yet, Phase 3.1) rather
-      than faked; every other bullet has a real, running effect, confirmed by
+      `entities/sentry.lua`'s `on_tick`/`on_hit`/`on_death` are real and
+      dispatched (Phase 6.1, landed 2026-09-17 — no EnTT registry involved,
+      still doesn't exist, Phase 3.1) — a `/sentry` chat command spawns,
+      hits, and kills one for real. Corrected two stale docs found while
+      verifying this: `content/base/entities/dropped_item.lua`'s own comment
+      and `docs/lua-api.md`'s worked-example table both still claimed
+      `vb.world.spawn` "just logs and returns nil", predating 6.1 — fixed
+      both. Every 6.15 bullet has a real, running effect, confirmed by
       `tests/unit/kitchen_sink_pack_test.cpp` and a manual
       `voxel_browser_server --content-pack content/examples/kitchen_sink` run
       this session. Also folds in Phase 6.14's own worked-example gap

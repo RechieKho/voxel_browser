@@ -11,6 +11,7 @@
 #include <string>
 
 #include "vb/net/loopback.hpp"
+#include "vb/net/session.hpp"
 #include "vb/physics/movement.hpp"
 #include "vb/script/pack_loader.hpp"
 #include "vb/script/pack_runtime.hpp"
@@ -111,6 +112,67 @@ TEST_CASE("content/examples/kitchen_sink's Phase 6 overrides all take effect") {
 		}
 	}
 	CHECK(any_block_differs);
+}
+
+TEST_CASE("content/examples/kitchen_sink: /sentry spawns, hits, and kills a "
+		"real dispatched entity (Phase 6.1 + 6.15)") {
+	using namespace vb::net;
+
+	LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("sentry"));
+	REQUIRE(vb::script::load_content_pack(rt, kitchen_sink_pack_dir()));
+	rt.freeze();
+
+	HandshakeServerConfig cfg;
+	cfg.world_seed = 7;
+	ServerSession server(net.server(), cfg);
+	rt.attach_session(server);
+	REQUIRE(net.server().listen(0));
+
+	Transport &ta = net.create_client();
+	auto ida = ta.connect("x", 0);
+	REQUIRE(ida);
+	ClientSession client(ta, *ida, HandshakeClientConfig{ "A", "", "v", 1 });
+
+	auto pump = [&](int n) {
+		for (int i = 0; i < n; ++i) {
+			server.tick(0.05);
+			client.tick(0.05);
+			rt.dispatch_tick(0.05);
+		}
+	};
+	pump(16);
+	REQUIRE(client.joined());
+
+	client.send_chat("/sentry");
+	pump(4);
+	{
+		const auto msgs = client.take_chat_messages();
+		REQUIRE_FALSE(msgs.empty());
+		CHECK(msgs.back() == "[kitchen_sink] sentry spawned");
+	}
+
+	// Fresh sentry has 10 hp; three hits of 4 damage each brings it to
+	// 10 -> 6 -> 2 -> destroyed (real dispatch: on_hit really runs and
+	// really calls self:remove() once hp <= 0, Phase 6.1).
+	client.send_chat("/sentry hit");
+	pump(2);
+	CHECK(client.take_chat_messages().back() == "[kitchen_sink] sentry hit (6 hp left)");
+
+	client.send_chat("/sentry hit");
+	pump(2);
+	CHECK(client.take_chat_messages().back() == "[kitchen_sink] sentry hit (2 hp left)");
+
+	client.send_chat("/sentry hit");
+	pump(2);
+	CHECK(client.take_chat_messages().back() == "[kitchen_sink] sentry hit -- destroyed");
+
+	// No active sentry left -- confirms the previous hit really despawned it
+	// rather than this test racing ahead of a still-alive instance.
+	client.send_chat("/sentry hit");
+	pump(2);
+	CHECK(client.take_chat_messages().back() == "[kitchen_sink] no active sentry");
 }
 
 #endif // VB_WITH_LUA
