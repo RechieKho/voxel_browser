@@ -546,6 +546,36 @@ with *both* binaries (bundle/publish still merge by `voxel_browser-*` pattern).
   quote it — zsh glob-expands an unquoted `*UDP*` itself before doctest ever
   sees it, and errors with "no matches found" if nothing in the CWD happens
   to match.
+- **MSVC (`cl.exe`) rejects a ternary between two different instantiations
+  of a templated smart-pointer type with converting constructors** — e.g.
+  `FastNoise::SmartNode<Value>` vs. `FastNoise::SmartNode<Constant>` in
+  `node.a ? compile_node(*node.a) : FastNoise::New<FastNoise::Constant>();`
+  fails with `C2445: result type of conditional expression is ambiguous:
+  ... can be converted to multiple common types` (seen 2026-09-18,
+  `src/worldgen/fastnoise2_compile.cpp`, Phase 6.14) — MSVC can't pick
+  between converting each side to the other's type. Clang/GCC may well
+  accept the same ternary (not cross-checked here, MSVC is this project's
+  only currently-verified toolchain per `STATE.md.local`); don't assume a
+  ternary between two related-but-distinct template instantiations compiles
+  portably. Workaround: plain `if`/`else` (or a small helper function that
+  does the branching and returns one common type) instead of the ternary.
+- **A sibling file's comment claiming something "isn't implemented yet" /
+  "nothing calls this" can go stale the moment a later phase actually lands
+  it, without that comment ever being updated** — this repo's convention is
+  heavy in-line prose explaining *why*, which is valuable but rots exactly
+  like this. Concretely hit 2026-09-18: `content/base/entities/
+  dropped_item.lua`'s comment said `vb.world.spawn()` "just logs and
+  returns nil" — true when written, false since Phase 6.1 (2026-09-17)
+  actually wired real entity dispatch, but the comment was never touched
+  when 6.1 landed. A newly-written file (`content/examples/kitchen_sink/
+  entities/sentry.lua`, Phase 6.15) copied that same stale framing without
+  checking, and had to be corrected afterward (see that phase's `STATE.md`
+  entry and `REMAINING_TASKS.md` 6.15 for the fix). **Before reusing a
+  sibling file's "this doesn't work yet" framing in new code, grep the
+  actual current binding implementation** (e.g. `src/script/
+  pack_runtime.cpp`'s `world_tbl["spawn"]`/`entity_methods[...]`) rather
+  than trusting the comment — a comment describing a limitation is a claim
+  about the state *when it was written*, not a live fact.
 
 ---
 
