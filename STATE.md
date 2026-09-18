@@ -6,6 +6,12 @@
 >
 > Companion docs: `ARCHITECTURE_SPEC.md` (target design) · `REMAINING_TASKS.md`
 > (implementation backlog). This file is for *traps and context*, not the plan.
+>
+> **If what you learned is tied to a specific physical machine** (a tool
+> path, an agent-shell/Bash-vs-PowerShell quirk, which pre-built `build-*`
+> dirs exist, a local toolchain oddity) **write it to `STATE.md.local`
+> instead of here** — see that file's own header for why. This file is for
+> gotchas that hold regardless of which machine an agent is running on.
 
 Last updated: 2026-09-18 (Phase 6.9 — inventory stacking: `BlockType::max_stack`
 (default `world::kDefaultMaxStackSize` = 64) + `vb.register_block{max_stack=N}`
