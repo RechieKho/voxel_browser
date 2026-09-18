@@ -1466,7 +1466,7 @@ windows, chatting, crafting, and seeing each other, all at once.
 
 ---
 
-## Phase 6 — Lua-Driven Extensibility  ✅ done (2026-09-18)
+## Phase 6 — Lua-Driven Extensibility  ✅ 6.1–6.16 done (2026-09-18); 6.17 planned
 
 > Design agreed in discussion on 2026-09-17: four systems that let content
 > packs override/extend engine defaults (biomes, entities, UI, input, data)
@@ -2130,6 +2130,96 @@ windows, chatting, crafting, and seeing each other, all at once.
       Migrating the rest to `ui.define_hud` (a "real" Lua HUD replacing
       draw_overlay entirely) is a natural, larger follow-up, not attempted
       here.
+
+### 6.17 Movement/break-place bindings and hold-to-break timing as default + override
+
+> User-requested (2026-09-18), after being surprised that (a) WASD/LMB-break/
+> RMB-place are 100% hardcoded C++ with no pack involvement at all, and (b)
+> the hold-to-break duration doesn't persist/heal across repeated attempts on
+> the same block. Both trace back to the same root cause: `content/base`
+> ships every block with `max_damage = 0`, so `src/client/main.cpp`'s
+> original 5.2 hold-to-break timer — a fixed, local-only, non-authoritative
+> `kBreakSeconds = 0.35` constant — is still what governs breaking for every
+> block in the game today, and the real, already-built, already-overridable
+> `vb::world::BlockDamageSystem` (6.5) never gets consulted at all. This is
+> the exact gap 6.5's own last bullet already flagged ("the existing 5.2
+> hold-to-break timer is untouched and still governs every `max_damage == 0`
+> block, which is every block in `content/base` today") — this item is where
+> that finally gets closed, plus the separate, never-before-tracked input-
+> binding gap. Matches the project's stated core philosophy (`ARCHITECTURE_SPEC.md`
+> §7/§17): engine ships a sane default, a pack can override as much of it as
+> it wants, same shape as `vb.physics.set_params` (6.7) and
+> `vb.daynight.set_curve` (6.8).
+
+- [ ] **Give breaking a real, overridable default duration+retention+heal
+      policy instead of nothing.** `block_damage.hpp` is explicit that the
+      engine "ships zero built-in accrual/heal policy" — that's the actual
+      bug the user hit ("I don't feel like the block is retaining the break
+      value... duration is still the same across multiple attempts"): with
+      no pack `block_break_tick`/`block_health_tick` handlers registered
+      (true for `content/base`), and `max_damage == 0` on every block, there
+      is no damage value at all to retain — every hold is an independent
+      local timer, by design, not a bug in `BlockDamageSystem` itself.
+      Two changes needed together:
+    - Engine-level **default** `max_damage` (e.g. derived from a new
+      `vb.blocks.set_break_defaults{seconds = 0.35, ...}` global, applied to
+      any block that doesn't explicitly set its own `max_damage`) instead of
+      today's implicit 0 — so out-of-the-box breaking already goes through
+      `BlockDamageSystem`, not the parallel client timer.
+    - Engine-level **default** `damage_tick_fn`/`health_tick_fn` policy
+      (currently only ever pack-supplied): a straightforward "1/`seconds`
+      damage per contributing-player-tick; after `heal_after_seconds` idle,
+      heal back at `heal_rate` per tick" default, overridable exactly like
+      today by registering `vb.on("block_break_tick"/"block_health_tick",
+      ...)` (pack handler replaces the default entirely, same "no built-in
+      policy once you opt in" semantics already documented for those hooks).
+      `vb.blocks.set_break_defaults{...}` is the pack-facing knob for tuning
+      the default without writing full tick handlers, mirroring
+      `vb.physics.set_params`'s "override individual fields on top of a
+      built-in default" shape.
+- [ ] **Wire the client to the real system instead of the parallel timer.**
+      `ClientSession::send_block_break_begin`/`send_block_break_stop`
+      (6.5) already exist, tested, unused. Replace `src/client/main.cpp`'s
+      local `breaking`/`break_target`/`break_progress`/`kBreakSeconds` block
+      with: send `C2S_BlockBreakBegin` on first LMB-down over a voxel /
+      `C2S_BlockBreakStop` on release-or-retarget, and read progress back
+      from server-replicated damage state rather than a local clock — which
+      needs the still-deferred "replicate the damage *value*, not just
+      begin/stop/complete" half of 6.5 (`BlockDamageTickResult::changed`/
+      `cleared`, currently computed and thrown away) finished as a
+      prerequisite. `client.break_progress()` (6.16) keeps its exact same
+      signature (nil | 0..1) so `content/base/ui/hud.lua` needs no changes.
+      Placing (RMB, always instant) is unaffected.
+- [ ] **Movement/action key bindings as a pack-overridable default**, not
+      just a client-local rebind (5.3's still-"not attempted" keybindings
+      screen is a *different*, complementary gap — physical-key-to-action
+      storage/UI on one player's machine; this item is the pack/engine
+      default those local rebinds would apply on top of). Today WASD
+      (`sample_input_cmd`, `src/client/main.cpp:351-360`) and LMB-break/
+      RMB-place (same file, the block-edit input block) are compiled-in
+      constants with no pack seam at all — unlike literally every other
+      Phase 6 system, a pack cannot change what triggers movement or
+      breaking/placing. Proposed shape, following 6.3's existing
+      `vb.register_keybind`/`S2C_KeybindRegistry` substrate rather than
+      inventing a second mechanism: extend that registry to cover the
+      engine's own built-in core actions (`move_forward`, `move_back`,
+      `move_left`, `move_right`, `jump`, `sprint`, `sneak`, `break`,
+      `place`) with their current hardcoded keys as the pre-registered
+      defaults, so `vb.rebind_keybind("break", key)`-style pack overrides
+      and (later, 5.3) a real settings-screen UI both write into the one
+      registry instead of two separate ones. **Open design question, not
+      resolved here:** whether core movement axes (continuous, analog-ish)
+      fit the existing keybind registry's boolean-per-tick shape at all, or
+      need their own parallel `vb.movement.set_bindings{...}` — decide
+      during implementation, not speculatively here.
+- [ ] Tests: extend `tests/unit/block_damage_test.cpp` for the new default
+      policy (accrual without any registered handler, heal-after-idle
+      without any registered handler, a pack override replacing just the
+      default cleanly); a `pack_runtime_integration_test.cpp` case proving a
+      `content/base`-equivalent pack (no handlers registered at all) now
+      retains damage and heals over multiple attempts on one block; update
+      `content_pack_test.cpp` if `content/base`'s shipped blocks' effective
+      `max_damage` changes as a result.
 
 ---
 

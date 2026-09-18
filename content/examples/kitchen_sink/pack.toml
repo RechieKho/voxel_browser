@@ -7,5 +7,6 @@ engine_version_req = "*"
 # doesn't exist yet (REMAINING_TASKS.md 4.1), so src/script/pack_loader.cpp
 # loads blocks/*.lua -> entities/*.lua -> biomes/*.lua -> every other
 # root-level *.lua file (sorted) -> init.lua, in that fixed order, not
-# whatever this file's `entry` implies.
+# whatever this file's `entry` implies. (ui/*.lua is loaded separately, into
+# the client's own UiRuntime.)
 entry = "init.lua"

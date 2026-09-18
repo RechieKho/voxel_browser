@@ -10,5 +10,7 @@ engine_version_req = "*"
 # in that fixed order -- `require` isn't implemented yet (REMAINING_TASKS.md
 # 4.1), so init.lua can't pull the others in itself. Kept here anyway as the
 # spec-documented, forward-compatible field (§16) for whenever real `require`
-# lands and a pack can choose its own load order.
+# lands and a pack can choose its own load order. (ui/*.lua is separate --
+# loaded into the client's own UiRuntime, not this PackRuntime walk; see
+# inc/vb/script/pack_loader.hpp.)
 entry = "init.lua"
