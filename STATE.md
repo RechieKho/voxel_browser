@@ -13,7 +13,38 @@
 > instead of here** — see that file's own header for why. This file is for
 > gotchas that hold regardless of which machine an agent is running on.
 
-Last updated: 2026-09-18 (Phase 6.10 — chat transform/moderation hook:
+Last updated: 2026-09-18 (Phase 6.11 — item drop parameters (default +
+override): `ItemDropSystem::spawn()` (`inc/vb/world/item_drops.hpp`/`.cpp`)
+now takes optional per-drop `pickup_radius`/`lifetime_seconds`, falling back
+to the system's own construction-time defaults (1.5 / 120.0) when unset —
+every pre-6.11 caller/test is byte-identical. `BlockType` gains
+`pickup_radius`/`drop_lifetime_seconds` (`inc/vb/world/block.hpp`, both
+`-1.0` sentinel = "no override" since 0 is a real, if odd, radius value);
+`vb.register_block{pickup_radius=..., item_lifetime_seconds=...}`
+(`src/script/pack_runtime.cpp`) sets them — not `register_item`, same
+"every holdable item is a registered block" reasoning 6.9 already
+established. `ServerSession::spawn_item_drop` (`src/net/session.cpp`) is the
+one new lookup site: it reads the dropped item's `BlockType` out of the live
+`WorldReplicator`'s registry (falls through to the engine defaults when
+there's no `replicator_` at all, e.g. a bare test harness, or the id isn't
+registered) and threads any override into `item_drops_.spawn(...)`. New
+tests: `tests/unit/item_drops_test.cpp` (a wide `pickup_radius` override
+collects from outside the 1.5 system default; an overridden
+`lifetime_seconds` survives well past the 120s default) and one
+`pack_runtime_integration_test.cpp` end-to-end case (`register_block{
+pickup_radius=10}` picked up 8 blocks away over a real `ServerSession`/
+`ClientSession`/`LoopbackTransport`, following the item_drop_test's own
+World-constructed-after-`freeze()` pattern so the new block name is actually
+in the copy `World` holds — see this file's existing Phase 6.5 entry for why
+that ordering matters). Full `vb_tests` green on `build-net-lua`
+(`VB_WITH_NET=ON`, `VB_WITH_LUA=ON`, 248/248 cases). All 4 CTest cases
+(`vb_tests`/`server_smoke`/`client_smoke`/`singleplayer_smoke`) pass. Not
+verified under a no-Lua/ASan config this session (no pre-built ASan dir
+remains on this machine) — the Lua binding is entirely inside
+`pack_runtime.cpp`'s existing `#if VB_WITH_LUA` region;
+`item_drops.{hpp,cpp}`/`block.hpp`/`session.cpp`'s changes have no Lua
+dependency, so the stub-build risk is low, just not re-confirmed here.
+Previous entry: Phase 6.10 — chat transform/moderation hook:
 `net::ServerSession::ChatHookResult{veto, replacement_text}` replaces the old
 bool-veto-only `set_chat_handler` signature — same veto-or-replace chaining
 shape 6.3 already established for `player_input`/`InputHookResult`, just one
@@ -376,6 +407,12 @@ Other undecided-but-not-yet-in-spec:
 ## 8. Done / resolved
 
 _(Move items here with a date + commit when fixed, so the history is visible.)_
+
+- **2026-09-18 — Phase 6.11 item drop parameters landed (uncommitted).**
+  See this file's header entry above for the full writeup; summary: no wire
+  message changed, no `kEngineProtocolVersion` bump — this is a pure
+  server-side default+override, same shape as 6.7/6.8/6.9's "default +
+  override" items. `REMAINING_TASKS.md` 6.11 marked done.
 
 - **2026-09-18 — Phase 6.9 inventory stacking landed (uncommitted).**
   `REMAINING_TASKS.md` 6.9: no max stack size existed anywhere —

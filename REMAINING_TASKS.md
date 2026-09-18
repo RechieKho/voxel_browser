@@ -1427,7 +1427,7 @@ windows, chatting, crafting, and seeing each other, all at once.
 
 ---
 
-## Phase 6 — Lua-Driven Extensibility (in progress — 6.1-6.10/6.16 done, 6.11-6.14 design only)
+## Phase 6 — Lua-Driven Extensibility (in progress — 6.1-6.11/6.16 done, 6.12-6.14 design only)
 
 > Design agreed in discussion on 2026-09-17: four systems that let content
 > packs override/extend engine defaults (biomes, entities, UI, input, data)
@@ -1845,13 +1845,30 @@ windows, chatting, crafting, and seeing each other, all at once.
       doesn't enforce one itself, matching the item's own framing ("or its
       own rate-limit policy instead of the engine's none-at-all").
 
-### 6.11 Item drop parameters (default + override)
+### 6.11 Item drop parameters (default + override) ✅ (2026-09-18)
 
-- [ ] `pickup_radius` (default 1.5) and `lifetime_seconds` (default 120.0)
-      on `world::ItemDropTickResult` (`inc/vb/world/item_drops.hpp:63-67`)
-      are fixed at C++ construction, uniform across every item type, no Lua
-      reach at all. Expose as engine defaults, let `register_item` override
-      per-item (a magnet-radius power-up, a rare drop that never despawns).
+- [x] `ItemDropSystem::spawn()` now takes optional per-drop
+      `pickup_radius`/`lifetime_seconds` overrides (`inc/vb/world/item_drops.hpp`);
+      unset falls back to the system's own construction-time defaults (1.5 /
+      120.0), byte-identical to every pre-6.11 caller. `BlockType` gains
+      `pickup_radius`/`drop_lifetime_seconds` (both `-1.0` = "no override" —
+      0 is a plausible real radius, so it can't double as the sentinel).
+      `vb.register_block{pickup_radius=..., item_lifetime_seconds=...}`
+      (`src/script/pack_runtime.cpp`) sets them; not `register_item` as
+      originally sketched, same reasoning 6.9 already established — every
+      holdable item is a registered block today.
+      `ServerSession::spawn_item_drop` (`src/net/session.cpp`) looks the
+      dropped item's id up in the live `WorldReplicator`'s registry and
+      passes any override through; no `replicator_` (a bare test harness) or
+      an unknown id both fall through to the engine defaults unchanged.
+      Tests: 1 new `item_drops_test.cpp` case (a wide `pickup_radius`
+      override collects from outside the system default; an overridden
+      `lifetime_seconds` survives well past the system default) + 1 new
+      `pack_runtime_integration_test.cpp` end-to-end case (a
+      `register_block{pickup_radius=10}` item is picked up 8 blocks away, well
+      outside the 1.5 default, over a real `ServerSession`/`ClientSession`/
+      `LoopbackTransport`). Full `vb_tests` green (248/248) + all 4 CTest
+      cases pass on `build-net-lua`.
 
 ### 6.12 Entity animation clip priority (cosmetic, low priority)
 

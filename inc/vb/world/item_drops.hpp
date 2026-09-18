@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -41,6 +42,10 @@ struct ItemDrop {
 	std::uint16_t count = 0;
 	core::Vec3d pos{};
 	double age = 0.0; // seconds since spawn
+	// Phase 6.11: resolved at spawn() time (the caller's per-item override, or
+	// the system's own engine-default), not looked up again on every tick.
+	double pickup_radius = 0.0;
+	double lifetime_seconds = 0.0;
 };
 
 struct ItemPickup {
@@ -70,7 +75,14 @@ public:
 	// interest-grid upsert -- ItemDropSystem doesn't know about replication).
 	// Ids come from a high, non-overlapping range so they can never collide
 	// with a player's NetId (players start at 1 and count up).
-	core::NetId spawn(core::Vec3d pos, core::BlockId item, std::uint16_t count);
+	//
+	// `pickup_radius`/`lifetime_seconds`, if set, override this system's own
+	// construction-time defaults for this one drop (Phase 6.11: a pack's
+	// per-item `register_block{pickup_radius=..., item_lifetime_seconds=...}`)
+	// -- resolved once here and stored on the drop, not re-read every tick.
+	core::NetId spawn(core::Vec3d pos, core::BlockId item, std::uint16_t count,
+			std::optional<double> pickup_radius = std::nullopt,
+			std::optional<double> lifetime_seconds = std::nullopt);
 
 	// Ages every drop, checks each given player position against every drop
 	// for pickup (nearest player wins if more than one is in range this

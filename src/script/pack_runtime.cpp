@@ -664,6 +664,10 @@ void PackRuntime::Impl::install_bindings() {
 		// unless overridden.
 		type.max_stack = static_cast<std::uint16_t>(
 				def.get_or("max_stack", static_cast<int>(world::kDefaultMaxStackSize)));
+		// Phase 6.11: per-item dropped-instance overrides, ItemDropSystem's own
+		// construction-time defaults unless set (negative = no override).
+		type.pickup_radius = def.get_or("pickup_radius", -1.0);
+		type.drop_lifetime_seconds = def.get_or("item_lifetime_seconds", -1.0);
 		const core::BlockId id = registry.add_or_get(name, type);
 		auto it = std::find_if(blocks.begin(), blocks.end(),
 				[&](const BlockDef &b) { return b.name == name; });

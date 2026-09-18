@@ -36,6 +36,12 @@ struct BlockType {
 	// inventory slot before player:give() starts a new one. Non-stackable
 	// items (tools) should override this to 1.
 	std::uint16_t max_stack = kDefaultMaxStackSize;
+	// Phase 6.11: per-item overrides for a dropped instance of this block
+	// (vb::world::ItemDropSystem's own construction-time defaults otherwise
+	// apply). Negative = "no override, use the engine default" -- 0 is a
+	// valid (if strange) pickup radius, so it can't double as the sentinel.
+	double pickup_radius = -1.0;
+	double drop_lifetime_seconds = -1.0;
 };
 
 // Well-known ids in the Phase 2 base registry. Do not assume these hold once

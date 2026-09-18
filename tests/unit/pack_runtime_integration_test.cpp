@@ -757,6 +757,66 @@ TEST_CASE("vb.world.spawn_item_drop replicates to a client and is picked up on a
 	CHECK(inv[0].count == 2);
 }
 
+TEST_CASE("vb.register_block{pickup_radius=...} widens a dropped item's "
+		  "pickup range beyond the engine default") {
+	LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("item_drop_radius"));
+	REQUIRE(rt.load_pack_file(R"(
+		magnet_id = vb.register_block({ name = "test:magnet", pickup_radius = 10 })
+		vb.on("chat", function(player, text)
+			vb.world.spawn_item_drop({ x = 5, y = 5, z = 5 }, magnet_id, 1)
+			return true
+		end)
+	)"));
+	rt.freeze();
+
+	// Constructed after freeze() so its registry copy includes "test:magnet"
+	// (see STATE.md's construction-order note -- World copies BlockRegistry
+	// by value at construction time).
+	vb::world::World world(registry);
+	wg::WorldGenWorkerPool pool(
+			wg::WorldGenerator(wg::WorldGenParams{}, registry),
+			wg::WorldGenWorkerPool::kSynchronous);
+
+	HandshakeServerConfig cfg;
+	cfg.world_seed = 7;
+	ServerSession server(net.server(), cfg);
+	auto replicator = std::make_unique<WorldReplicator>(world, pool, registry, 1, 2);
+	rt.attach_world(*replicator);
+	server.set_world_replicator(std::move(replicator));
+	rt.attach_session(server);
+	REQUIRE(net.server().listen(0));
+
+	Transport &ta = net.create_client();
+	auto ida = ta.connect("x", 0);
+	REQUIRE(ida);
+	ClientSession client(ta, *ida, HandshakeClientConfig{ "A", "", "v", 1 });
+
+	auto pump = [&](int n) {
+		for (int i = 0; i < n; ++i) {
+			server.tick(0.05);
+			client.tick(0.05);
+			rt.dispatch_tick(0.05);
+		}
+	};
+	pump(16);
+	REQUIRE(client.joined());
+	const NetId a_id = client.join_accept()->your_net_id;
+
+	client.send_chat("drop it");
+	pump(6);
+
+	// 8m away: well outside ItemDropSystem's 1.5m engine default, but inside
+	// this block's own pickup_radius = 10 override.
+	server.set_player_state(a_id, Vec3d{ 13, 5, 5 });
+	pump(6);
+	const auto &inv = client.inventory();
+	REQUIRE(inv.size() == 1);
+	CHECK(inv[0].count == 1);
+}
+
 TEST_CASE(
 		"player:damage() + vb.on('player_death') drives a custom respawn "
 		"(heal/pos/message/drop_inventory)") {

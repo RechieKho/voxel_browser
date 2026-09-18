@@ -1,5 +1,7 @@
 #include <doctest/doctest.h>
 
+#include <optional>
+
 #include "vb/world/item_drops.hpp"
 
 using namespace vb::world;
@@ -53,6 +55,27 @@ TEST_CASE("ItemDropSystem: an untouched drop despawns after its lifetime") {
 	REQUIRE(expired.removed.size() == 1);
 	CHECK(expired.removed[0] == drop_id);
 	CHECK(sys.count() == 0);
+}
+
+TEST_CASE("ItemDropSystem: a per-drop override wins over the system default") {
+	ItemDropSystem sys(/*pickup_radius*/ 1.0, /*lifetime*/ 120.0);
+	// A magnet-radius drop: overrides the 1.0 default up to 10.0.
+	const NetId wide = sys.spawn(
+			{ 0, 0, 0 }, BlockId{ 1 }, 1, /*pickup_radius*/ 10.0);
+	// A never-despawns rare drop: overrides the 120s default lifetime.
+	const NetId eternal = sys.spawn({ 50, 0, 0 }, BlockId{ 2 }, 1,
+			/*pickup_radius*/ std::nullopt, /*lifetime_seconds*/ 99999.0);
+
+	// Far outside the *default* radius but inside the override.
+	auto picked = sys.tick(0.05, { { NetId{ 1 }, Vec3d{ 5, 0, 0 } } });
+	REQUIRE(picked.pickups.size() == 1);
+	CHECK(picked.removed[0] == wide);
+
+	// Way past the system's 120s default lifetime, but not the override.
+	auto survived = sys.tick(200.0, {});
+	CHECK(survived.removed.empty());
+	CHECK(sys.count() == 1);
+	CHECK(sys.drops().at(eternal).item == BlockId{ 2 });
 }
 
 TEST_CASE("ItemDropSystem: multiple drops tracked independently") {

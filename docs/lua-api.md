@@ -105,6 +105,12 @@ rt.dispatch_tick(dt);
   wire message — a nearby player auto-collects it into their inventory. Not
   routed through `vb.register_entity`/`vb.world.spawn` at all; see
   `content/base/blocks/*.lua`'s `on_break` handlers for the intended usage.
+  Phase 6.11: `vb.register_block{pickup_radius=..., item_lifetime_seconds=...}`
+  overrides `ItemDropSystem`'s own construction-time defaults (1.5 blocks /
+  120s) for drops of that specific block — e.g. a magnet-radius power-up or a
+  rare item that never despawns. Unset (or negative) means "use the engine
+  default"; same idempotent-registration caveat as `max_damage`/`max_stack`
+  applies — re-registering an existing block name doesn't update it.
 - Entity / player Lua object (needs `attach_session()`; one merged usertype
   today since no non-player entity exists): `:get_pos() -> {x,y,z}`,
   `:set_velocity(x,y,z)`, `:remove()` (no-op, logged — nothing to remove

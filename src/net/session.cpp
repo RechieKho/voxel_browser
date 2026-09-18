@@ -1,6 +1,7 @@
 #include "vb/net/session.hpp"
 
 #include <algorithm>
+#include <optional>
 #include <span>
 #include <utility>
 
@@ -8,6 +9,7 @@
 #include "vb/core/math.hpp"
 #include "vb/protocol/message.hpp"
 #include "vb/protocol/world.hpp"
+#include "vb/world/block.hpp"
 #include "vb/world/daynight.hpp"
 
 namespace vb::net {
@@ -647,7 +649,26 @@ void ServerSession::check_respawns() {
 
 core::NetId ServerSession::spawn_item_drop(
 		core::Vec3d pos, core::BlockId item, std::uint16_t count) {
-	const core::NetId id = item_drops_.spawn(pos, item, count);
+	// Phase 6.11: a registered block can override the engine-default pickup
+	// radius / despawn lifetime for its own dropped instances. No `replicator_`
+	// (a test harness with no world attached) or an id the registry doesn't
+	// know about both fall through to ItemDropSystem's own defaults.
+	std::optional<double> pickup_radius;
+	std::optional<double> lifetime_seconds;
+	if (replicator_ != nullptr) {
+		const world::BlockRegistry &registry = replicator_->world().registry();
+		if (registry.contains(item)) {
+			const world::BlockType &type = registry.get(item);
+			if (type.pickup_radius >= 0.0) {
+				pickup_radius = type.pickup_radius;
+			}
+			if (type.drop_lifetime_seconds >= 0.0) {
+				lifetime_seconds = type.drop_lifetime_seconds;
+			}
+		}
+	}
+	const core::NetId id =
+			item_drops_.spawn(pos, item, count, pickup_radius, lifetime_seconds);
 	interest_.upsert(replication::EntityState{
 			id, world::kItemDropKind, pos, {}, {} });
 	return id;
