@@ -238,13 +238,14 @@ Full detail: `remaining_tasks/phase6.md`.
       exists anywhere yet for a pack to read from.
 - [ ] **6.21 (planned):** block-edit reach (`WorldReplicator::
       kMaxReachBlocks`) is hardcoded and non-overridable, unlike combat
-      reach; no `vb.physics.get_params()`/`vb.combat.get_params()`
-      read-back exists, so `content/base/mechanics.lua`'s placing raycast
-      hardcodes `EYE_HEIGHT`/reach constants that can silently drift from a
-      pack's own override. Decided direction: default + pre-freeze override
-      (same shape as `set_params` elsewhere) + a read-back accessor; open
-      sub-question on whether block-edit reach gets its own knob or reuses
-      `vb.combat.set_params`'s `reach` — see `remaining_tasks/phase6.md`.
+      reach; no read-back exists, so `content/base/mechanics.lua`'s placing
+      raycast hardcodes `EYE_HEIGHT`/reach constants that can silently drift
+      from a pack's own override. Decided: block-edit reach and punch reach
+      unify into one value under a new generic `vb.action.set_params{reach=}`
+      / `vb.action.get_params()` (deliberately not under `vb.combat`, so a
+      pack author looking for the mining-reach knob doesn't have to think to
+      search "combat" for it) — pre-freeze override, same shape as
+      `set_params` elsewhere; see `remaining_tasks/phase6.md`.
 
 ---
 
