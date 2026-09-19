@@ -2,6 +2,7 @@
 
 #include <ostream>
 
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -101,6 +102,29 @@ TEST_CASE("client config: reads values and recent servers list") {
 	CHECK(c->player_name == "Ada");
 	REQUIRE(c->recent_servers.size() == 2);
 	CHECK(c->recent_servers[1] == "b.example:27016");
+}
+
+TEST_CASE("client config: keybindings default and round-trip through TOML") {
+	auto defaults = parse_client_config("");
+	REQUIRE(defaults);
+	CHECK(defaults->key_forward == 87); // KEY_W
+	CHECK(defaults->key_back == 83); // KEY_S
+	CHECK(defaults->key_left == 65); // KEY_A
+	CHECK(defaults->key_right == 68); // KEY_D
+	CHECK(defaults->key_jump == 32); // KEY_SPACE
+	CHECK(defaults->key_sprint == 340); // KEY_LEFT_SHIFT
+
+	ClientConfig cfg = *defaults;
+	cfg.key_forward = 265; // KEY_UP
+	cfg.key_jump = 341; // KEY_LEFT_CONTROL
+	REQUIRE(save_client_config("test_keybinds.toml", cfg));
+	auto loaded = load_client_config("test_keybinds.toml");
+	REQUIRE(loaded);
+	CHECK(loaded->key_forward == 265);
+	CHECK(loaded->key_back == 83);
+	CHECK(loaded->key_jump == 341);
+	CHECK(loaded->key_sprint == 340);
+	std::filesystem::remove("test_keybinds.toml");
 }
 
 TEST_CASE("CLI overrides win over the file") {

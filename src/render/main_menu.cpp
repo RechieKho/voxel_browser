@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 #include <raygui.h>
 #include <raylib.h>
@@ -28,6 +29,42 @@ bool text_box(Rectangle bounds, std::string &s, bool &edit) {
 Rectangle centered(float w, float h, float y) {
 	const float x = (static_cast<float>(GetScreenWidth()) - w) * 0.5f;
 	return Rectangle{ x, y, w, h };
+}
+
+constexpr const char *kKeybindLabels[6] = { "Move forward", "Move back",
+	"Move left", "Move right", "Jump", "Sprint" };
+
+// Display-only lookup for the keybindings screen -- covers every key a
+// player would plausibly rebind movement to (letters, digits, space, arrows,
+// modifiers). Anything outside this set still binds and works correctly
+// (the raw keycode round-trips through config just fine); it just prints as
+// "Key <n>" rather than a friendly name.
+std::string key_display_name(int key) {
+	if (key >= KEY_A && key <= KEY_Z) {
+		return std::string(1, static_cast<char>(key));
+	}
+	if (key >= KEY_ZERO && key <= KEY_NINE) {
+		return std::string(1, static_cast<char>(key));
+	}
+	switch (key) {
+		case KEY_SPACE: return "Space";
+		case KEY_ENTER: return "Enter";
+		case KEY_TAB: return "Tab";
+		case KEY_ESCAPE: return "Escape";
+		case KEY_UP: return "Up";
+		case KEY_DOWN: return "Down";
+		case KEY_LEFT: return "Left";
+		case KEY_RIGHT: return "Right";
+		case KEY_LEFT_SHIFT: return "Left Shift";
+		case KEY_RIGHT_SHIFT: return "Right Shift";
+		case KEY_LEFT_CONTROL: return "Left Ctrl";
+		case KEY_RIGHT_CONTROL: return "Right Ctrl";
+		case KEY_LEFT_ALT: return "Left Alt";
+		case KEY_RIGHT_ALT: return "Right Alt";
+		case KEY_CAPS_LOCK: return "Caps Lock";
+		default: break;
+	}
+	return "Key " + std::to_string(key);
 }
 
 } // namespace
@@ -173,7 +210,10 @@ MainMenu::SettingsResult MainMenu::draw_settings(core::ClientConfig &config) {
 	}
 	y += 44.0f;
 
-	if (GuiButton(Rectangle{ x, y, field_w * 0.48f, 32.0f }, "Save")) {
+	if (GuiButton(Rectangle{ x, y, field_w * 0.3f, 32.0f }, "Keybindings")) {
+		result.open_keybindings = true;
+	}
+	if (GuiButton(Rectangle{ x + field_w * 0.34f, y, field_w * 0.3f, 32.0f }, "Save")) {
 		config.window_width = static_cast<std::uint32_t>(s_width_);
 		config.window_height = static_cast<std::uint32_t>(s_height_);
 		config.vsync = s_vsync_;
@@ -181,6 +221,66 @@ MainMenu::SettingsResult MainMenu::draw_settings(core::ClientConfig &config) {
 		config.render_distance = static_cast<std::uint32_t>(s_render_distance_);
 		config.mouse_sensitivity = static_cast<double>(s_sensitivity_);
 		config.asset_cache_mb = static_cast<std::uint32_t>(s_cache_mb_);
+		result.save = true;
+	}
+	if (GuiButton(Rectangle{ x + field_w * 0.68f, y, field_w * 0.32f, 32.0f }, "Back")) {
+		result.back = true;
+	}
+
+	return result;
+}
+
+void MainMenu::open_keybindings(const core::ClientConfig &config) {
+	k_keys_[0] = config.key_forward;
+	k_keys_[1] = config.key_back;
+	k_keys_[2] = config.key_left;
+	k_keys_[3] = config.key_right;
+	k_keys_[4] = config.key_jump;
+	k_keys_[5] = config.key_sprint;
+	k_rebinding_ = -1;
+}
+
+MainMenu::KeybindingsResult MainMenu::draw_keybindings(core::ClientConfig &config) {
+	KeybindingsResult result;
+
+	const float panel_w = 420.0f;
+	GuiPanel(centered(panel_w, 380.0f, 80.0f), "Keybindings");
+
+	float y = 130.0f;
+	const float x = (static_cast<float>(GetScreenWidth()) - panel_w) * 0.5f + 20.0f;
+	const float field_w = panel_w - 40.0f;
+
+	if (k_rebinding_ >= 0) {
+		const int pressed = GetKeyPressed();
+		if (pressed == KEY_ESCAPE) {
+			k_rebinding_ = -1;
+		} else if (pressed != 0) {
+			k_keys_[k_rebinding_] = pressed;
+			k_rebinding_ = -1;
+		}
+	}
+
+	for (int i = 0; i < 6; ++i) {
+		GuiLabel(Rectangle{ x, y, field_w * 0.45f, 28.0f }, kKeybindLabels[i]);
+		const std::string label = (k_rebinding_ == i)
+				? "Press any key... (Esc to cancel)"
+				: key_display_name(k_keys_[i]);
+		if (GuiButton(Rectangle{ x + field_w * 0.48f, y, field_w * 0.52f, 28.0f },
+					label.c_str()) &&
+				k_rebinding_ < 0) {
+			k_rebinding_ = i;
+		}
+		y += 34.0f;
+	}
+	y += 10.0f;
+
+	if (GuiButton(Rectangle{ x, y, field_w * 0.48f, 32.0f }, "Save")) {
+		config.key_forward = k_keys_[0];
+		config.key_back = k_keys_[1];
+		config.key_left = k_keys_[2];
+		config.key_right = k_keys_[3];
+		config.key_jump = k_keys_[4];
+		config.key_sprint = k_keys_[5];
 		result.save = true;
 	}
 	if (GuiButton(Rectangle{ x + field_w * 0.52f, y, field_w * 0.48f, 32.0f }, "Back")) {

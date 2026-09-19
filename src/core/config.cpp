@@ -105,6 +105,12 @@ ClientConfig client_from_table(const toml::table &tbl) {
 	read_uint(tbl, "asset_cache_mb", c.asset_cache_mb);
 	read_string(tbl, "asset_cache_dir", c.asset_cache_dir);
 	read_string(tbl, "player_name", c.player_name);
+	read_uint(tbl, "key_forward", c.key_forward);
+	read_uint(tbl, "key_back", c.key_back);
+	read_uint(tbl, "key_left", c.key_left);
+	read_uint(tbl, "key_right", c.key_right);
+	read_uint(tbl, "key_jump", c.key_jump);
+	read_uint(tbl, "key_sprint", c.key_sprint);
 	if (auto arr = tbl["recent_servers"].as_array()) {
 		c.recent_servers.clear();
 		for (const auto &node : *arr) {
@@ -174,6 +180,12 @@ Result<void, CoreError> save_client_config(const std::string &path, const Client
 		tbl.insert_or_assign("asset_cache_dir", config.asset_cache_dir);
 	}
 	tbl.insert_or_assign("player_name", config.player_name);
+	tbl.insert_or_assign("key_forward", static_cast<std::int64_t>(config.key_forward));
+	tbl.insert_or_assign("key_back", static_cast<std::int64_t>(config.key_back));
+	tbl.insert_or_assign("key_left", static_cast<std::int64_t>(config.key_left));
+	tbl.insert_or_assign("key_right", static_cast<std::int64_t>(config.key_right));
+	tbl.insert_or_assign("key_jump", static_cast<std::int64_t>(config.key_jump));
+	tbl.insert_or_assign("key_sprint", static_cast<std::int64_t>(config.key_sprint));
 	toml::array recent;
 	for (const auto &s : config.recent_servers) {
 		recent.push_back(s);

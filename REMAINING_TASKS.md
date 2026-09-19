@@ -161,10 +161,20 @@ Full detail: `remaining_tasks/phase5.md`.
 - [ ] Per-block hardness/tool break-time variation — one flat duration today
       (superseded in direction by Phase 6.17/6.18's punch-based combat, but
       the "vary by block/tool" idea itself is still open).
-- [ ] Keybindings screen (5.3 Settings) — WASD/jump/sprint/break/place are
-      still hardcoded in `sample_input_cmd()`; no rebind storage or UI exists.
-      (Phase 6.17's "movement/action bindings as pack-overridable default" is
-      the same gap from the engine side — still open, see Phase 6 detail.)
+- [x] Keybindings screen (5.3 Settings) — a new Settings -> Keybindings
+      raygui screen (`MainMenu::draw_keybindings`) lets a player click an
+      action's key and press any physical key to rebind it, for the 6
+      `MovementBindings` axes (forward/back/left/right/jump/sprint — mouse
+      break/place buttons are left alone, matching the read-only
+      `MOUSE_BUTTON_LEFT`/`RIGHT` convention elsewhere). Persisted as 6 new
+      `key_*` int fields on `ClientConfig`/`client.toml`
+      (`vb::core::save_client_config`/`load_client_config`), applied to
+      `src/client/main.cpp`'s live `MovementBindings` immediately on Save —
+      no restart needed, unlike window size/vsync. **Note:** this rebinds
+      the *physical key*, distinct from Phase 6.19's `vb.register_keybind`
+      name registry (which is about a pack reading `input.keybinds["jump"]`
+      by name, not which key produces it) — the two compose: rebinding
+      "Jump" here still shows up as the same `keybinds["jump"]` bit to Lua.
 - [ ] No connect-screen byte-progress bar (status-text-only) — asset-sync
       never grew progress-fraction accounting.
 - [ ] Live two-window manual playtest (chat + crafting + seeing each other,
@@ -209,12 +219,10 @@ Full detail: `remaining_tasks/phase6.md`.
       `input.keybinds["jump"]` etc. exactly like a custom keybind. Resolves
       the open design question: keyboard/mouse movement axes are already
       boolean (held/not-held), so they fit the existing boolean-keybind
-      shape with no format change. **Still open:** this doesn't let a pack
-      or player change *which physical key* drives an action — the client's
-      WASD/Space/Shift/mouse mapping (`MovementBindings`,
-      `src/client/main.cpp`) stays hardcoded; actual rebinding still needs
-      Phase 5.3's keybindings screen (client-local UI + persisted config,
-      not a network-visible change).
+      shape with no format change. Physical-key rebinding (the WASD/Space/
+      Shift mapping) landed separately as Phase 5.3's keybindings screen,
+      below — this item's own scope (name registry, not physical keys)
+      is fully closed.
 - [ ] HUD widgets aren't wired to `report_click`/`report_change` (display-only
       for now) — 6.16.
 - [ ] Player list / chat box / hotbar are still hardcoded C++, not migrated

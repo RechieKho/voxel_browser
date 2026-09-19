@@ -55,6 +55,21 @@ struct ClientConfig {
 	std::string asset_cache_dir; // empty = vb::core::user_cache_dir() / "assets"
 	std::string player_name = "Player";
 	std::vector<std::string> recent_servers;
+
+	// Phase 5.3: physical-key bindings for the client-local movement/action
+	// axes (MovementBindings in src/client/main.cpp) that the Settings ->
+	// Keybindings screen rebinds. Stored as raw raylib KEY_* integer values --
+	// vb_core doesn't depend on raylib, but these are stable, public,
+	// GLFW-derived constants, so hardcoding their current values here (rather
+	// than pulling in raylib.h) is safe. Distinct from Phase 6.19's
+	// vb.register_keybind name registry, which is server-driven and unrelated
+	// to which physical key a player presses.
+	std::int32_t key_forward = 87; // KEY_W
+	std::int32_t key_back = 83; // KEY_S
+	std::int32_t key_left = 65; // KEY_A
+	std::int32_t key_right = 68; // KEY_D
+	std::int32_t key_jump = 32; // KEY_SPACE
+	std::int32_t key_sprint = 340; // KEY_LEFT_SHIFT
 };
 
 // Parse from an in-memory TOML document (used by tests and callers that already

@@ -20,8 +20,28 @@
 
 ## Current status (2026-09-19)
 
-Phase 6 ("Lua-Driven Extensibility") is in progress; most recent landed item
-is **6.19: engine-default keybind pre-registration** — `PackRuntime`'s
+Most recent landed item is **Phase 5.3: keybindings screen** — a new
+Settings -> Keybindings raygui screen (`MainMenu::open_keybindings`/
+`draw_keybindings` in `src/render/main_menu.{hpp,cpp}`) lets a player click
+an action's current key and press any physical key to rebind it, for the 6
+`MovementBindings` axes (forward/back/left/right/jump/sprint; mouse
+primary/secondary are left alone). Rebind capture is `GetKeyPressed()`
+polled only while a row is "listening" (Esc cancels without changing it).
+Persisted as 6 new `std::int32_t key_*` fields on `vb::core::ClientConfig`
+(raw raylib `KEY_*` values, hardcoded as plain ints since `vb_core` doesn't
+depend on raylib — see the field comments), read/written in
+`src/core/config.cpp` alongside the existing fields, round-trip tested in
+`tests/unit/config_test.cpp`. `src/client/main.cpp` builds its live
+`MovementBindings` from config at startup and rebuilds it immediately on
+Keybindings-screen Save (no restart needed, unlike window size/vsync).
+Distinct from and composes with Phase 6.19 below (that's a pack-visible
+*name* registry; this is which *physical key* produces the held/not-held
+state Phase 6.19 exposes by name) — resolves the last open half of
+REMAINING_TASKS' "Keybindings screen (5.3 Settings)" item. Full `vb_tests`
+green (290/290) on `build-net-lua`.
+
+Before that, most recent landed item was **6.19: engine-default keybind
+pre-registration** — `PackRuntime`'s
 constructor now seeds 8 fixed names (`move_forward`, `move_back`,
 `move_left`, `move_right`, `jump`, `sprint`, `primary`, `secondary`) into
 the same Phase 6.3 `keybind_names` registry `vb.register_keybind` writes

@@ -11,3 +11,12 @@ mouse_sensitivity = 0.12        # degrees of look per pixel of mouse motion
 asset_cache_mb    = 512
 player_name       = "Player"
 recent_servers    = []          # e.g. ["play.example.com:27015"]
+
+# Movement keybindings (Phase 5.3), raw raylib KEY_* codes. Easiest to edit
+# via the client's Settings -> Keybindings screen rather than by hand.
+key_forward       = 87          # KEY_W
+key_back          = 83          # KEY_S
+key_left          = 65          # KEY_A
+key_right         = 68          # KEY_D
+key_jump          = 32          # KEY_SPACE
+key_sprint        = 340         # KEY_LEFT_SHIFT

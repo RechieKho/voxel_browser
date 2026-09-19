@@ -695,6 +695,7 @@ int main(int argc, char **argv) {
 
 	enum class AppState { kMenu,
 		kSettings,
+		kKeybindings,
 		kConnecting,
 		kPlaying,
 		kError };
@@ -731,7 +732,8 @@ int main(int argc, char **argv) {
 	// break/place (see MovementBindings' own comment above). One instance,
 	// same defaults every frame -- a future settings screen would mutate
 	// this instead of inventing a second mechanism.
-	MovementBindings movement_bindings;
+	MovementBindings movement_bindings{ config.key_forward, config.key_back,
+		config.key_left, config.key_right, config.key_jump, config.key_sprint };
 
 	// HUD chat (spec §5.4): a small scrolling log + an Enter-to-open text
 	// box, plain raygui like MainMenu -- no Lua, no dependency on the pack's
@@ -903,6 +905,22 @@ int main(int argc, char **argv) {
 					state = AppState::kMenu;
 				} else if (result.back) {
 					state = AppState::kMenu;
+				} else if (result.open_keybindings) {
+					menu.open_keybindings(config);
+					state = AppState::kKeybindings;
+				}
+				break;
+			}
+			case AppState::kKeybindings: {
+				const auto result = menu.draw_keybindings(config);
+				if (result.save) {
+					movement_bindings = MovementBindings{ config.key_forward,
+						config.key_back, config.key_left, config.key_right,
+						config.key_jump, config.key_sprint };
+					vb::core::save_client_config(config_path, config);
+					state = AppState::kSettings;
+				} else if (result.back) {
+					state = AppState::kSettings;
 				}
 				break;
 			}

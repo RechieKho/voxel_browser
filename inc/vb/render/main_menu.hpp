@@ -43,11 +43,25 @@ public:
 	struct SettingsResult {
 		bool save = false;
 		bool back = false;
+		bool open_keybindings = false;
 	};
 	// `config` is read on entry (call once when opening the screen) and, on
 	// `save`, filled in with the edited values for the caller to persist.
 	void open_settings(const core::ClientConfig &config);
 	SettingsResult draw_settings(core::ClientConfig &config);
+
+	// --- keybindings screen (5.3) ----------------------------------------
+	struct KeybindingsResult {
+		bool save = false;
+		bool back = false;
+	};
+	// Reached from Settings. `config` is read on entry the same way
+	// open_settings() is; on `save`, the 6 MovementBindings-equivalent
+	// key_* fields are filled in with the edited values for the caller to
+	// persist. Rebinding is "click the action's key button, then press any
+	// physical key" -- Esc cancels a rebind in progress without changing it.
+	void open_keybindings(const core::ClientConfig &config);
+	KeybindingsResult draw_keybindings(core::ClientConfig &config);
 
 	// --- connecting screen -------------------------------------------------
 	struct ConnectingResult {
@@ -83,6 +97,12 @@ private:
 	bool s_width_edit_ = false;
 	bool s_height_edit_ = false;
 	bool s_cache_edit_ = false;
+
+	// Keybindings screen staging values, in the same order the screen draws
+	// them (forward/back/left/right/jump/sprint).
+	int k_keys_[6] = { 87, 83, 65, 68, 32, 340 };
+	// Index into k_keys_ currently waiting for a key press, or -1 if none.
+	int k_rebinding_ = -1;
 };
 
 } // namespace vb::render
