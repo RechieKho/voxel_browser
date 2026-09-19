@@ -365,44 +365,87 @@ struct MovementBindings {
 	int sprint = KEY_LEFT_SHIFT;
 };
 
+// Phase 6.19: the engine pre-registers 8 action names ("move_forward",
+// "move_back", "move_left", "move_right", "jump", "sprint", "primary",
+// "secondary") into the same Phase 6.3 keybind registry every pack-custom
+// vb.register_keybind() name goes into (see PackRuntime::Impl::Impl in
+// src/script/pack_runtime.cpp) -- so they're enumerable via
+// S2C_KeybindRegistry like any other keybind, and a pack's
+// vb.on("player_input", ...) can read e.g. input.keybinds["move_forward"]
+// the same way it reads a custom one. This is purely additive:
+// InputCmd::move/buttons (and MovementBindings' physical keys) are
+// unchanged, so physics/movement code isn't affected. Lookup is by name in
+// whatever S2C_KeybindRegistry the server actually sent, never assumed to
+// be bits 0-7.
+void set_engine_keybind(vb::protocol::InputCmd &cmd, const char *name,
+		bool held, const std::vector<std::string> &keybind_names) {
+	for (std::size_t i = 0; i < keybind_names.size(); ++i) {
+		if (keybind_names[i] == name) {
+			if (held) {
+				cmd.keybinds |= (1u << i);
+			}
+			return;
+		}
+	}
+}
+
 vb::protocol::InputCmd sample_input_cmd(std::uint32_t seq, double dt, double yaw,
-		double pitch, bool mouse_captured, const MovementBindings &bindings) {
+		double pitch, bool mouse_captured, const MovementBindings &bindings,
+		const std::vector<std::string> &keybind_names = {}) {
 	vb::protocol::InputCmd cmd;
 	cmd.seq = seq;
 	cmd.dt = static_cast<float>(dt);
 	cmd.yaw = static_cast<float>(yaw);
 	cmd.pitch = static_cast<float>(pitch);
 	if (mouse_captured) {
-		if (IsKeyDown(bindings.forward)) {
-			cmd.move.z += 1.0f;
-		}
-		if (IsKeyDown(bindings.back)) {
-			cmd.move.z -= 1.0f;
-		}
-		if (IsKeyDown(bindings.right)) {
-			cmd.move.x += 1.0f;
-		}
-		if (IsKeyDown(bindings.left)) {
-			cmd.move.x -= 1.0f;
-		}
-		if (IsKeyDown(bindings.jump)) {
-			cmd.buttons |= vb::protocol::kInputJump;
-		}
-		if (IsKeyDown(bindings.sprint)) {
-			cmd.buttons |= vb::protocol::kInputSprint;
-		}
+		const bool forward = IsKeyDown(bindings.forward);
+		const bool back = IsKeyDown(bindings.back);
+		const bool right = IsKeyDown(bindings.right);
+		const bool left = IsKeyDown(bindings.left);
+		const bool jump = IsKeyDown(bindings.jump);
+		const bool sprint = IsKeyDown(bindings.sprint);
 		// Phase 6.17: block breaking/placing is no longer an engine default
 		// (see the removed hold-to-break timer further below in this file) --
 		// the client's only job is to report these as raw held-button state,
 		// exactly like jump/sprint above. Whether holding "primary" over a
 		// voxel does anything at all is entirely up to a content pack's
 		// vb.on("player_input", ...) handler (content/base/mechanics.lua).
-		if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+		const bool primary = IsMouseButtonDown(MOUSE_BUTTON_LEFT);
+		const bool secondary = IsMouseButtonDown(MOUSE_BUTTON_RIGHT);
+
+		if (forward) {
+			cmd.move.z += 1.0f;
+		}
+		if (back) {
+			cmd.move.z -= 1.0f;
+		}
+		if (right) {
+			cmd.move.x += 1.0f;
+		}
+		if (left) {
+			cmd.move.x -= 1.0f;
+		}
+		if (jump) {
+			cmd.buttons |= vb::protocol::kInputJump;
+		}
+		if (sprint) {
+			cmd.buttons |= vb::protocol::kInputSprint;
+		}
+		if (primary) {
 			cmd.buttons |= vb::protocol::kInputPrimary;
 		}
-		if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT)) {
+		if (secondary) {
 			cmd.buttons |= vb::protocol::kInputSecondary;
 		}
+
+		set_engine_keybind(cmd, "move_forward", forward, keybind_names);
+		set_engine_keybind(cmd, "move_back", back, keybind_names);
+		set_engine_keybind(cmd, "move_left", left, keybind_names);
+		set_engine_keybind(cmd, "move_right", right, keybind_names);
+		set_engine_keybind(cmd, "jump", jump, keybind_names);
+		set_engine_keybind(cmd, "sprint", sprint, keybind_names);
+		set_engine_keybind(cmd, "primary", primary, keybind_names);
+		set_engine_keybind(cmd, "secondary", secondary, keybind_names);
 	}
 	return cmd;
 }
@@ -964,7 +1007,7 @@ int main(int argc, char **argv) {
 				{
 					const vb::protocol::InputCmd cmd = sample_input_cmd(++input_seq, dt,
 							controller.yaw(), controller.pitch(), mouse_captured,
-							movement_bindings);
+							movement_bindings, client->registered_keybinds());
 					client->push_input(cmd);
 					// Singleplayer ticks the whole embedded game (client + server,
 					// over loopback); a real connection just pumps this client's

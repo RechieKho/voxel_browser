@@ -202,12 +202,19 @@ Full detail: `remaining_tasks/phase6.md`.
       players — 6.5, prerequisite for a crack overlay.
 - [ ] Default generic crack overlay + `crack_texture` override — 6.5, blocked
       on the real texture/atlas system (4.3/5.1).
-- [ ] Movement/action key bindings as a pack-overridable default (extend the
-      6.3 keybind registry to cover `move_forward`/`jump`/`break`/`place` with
-      today's hardcoded keys as pre-registered defaults) — open design
-      question on whether continuous movement axes fit the boolean-keybind
-      shape; not resolved. Same underlying gap as Phase 5.3's keybindings
-      screen.
+- [x] Movement/action key bindings extended into the 6.3 keybind registry
+      (6.19) — `move_forward`/`move_back`/`move_left`/`move_right`/`jump`/
+      `sprint`/`primary`/`secondary` are pre-registered by every
+      `PackRuntime` before any pack script runs, so a pack can read
+      `input.keybinds["jump"]` etc. exactly like a custom keybind. Resolves
+      the open design question: keyboard/mouse movement axes are already
+      boolean (held/not-held), so they fit the existing boolean-keybind
+      shape with no format change. **Still open:** this doesn't let a pack
+      or player change *which physical key* drives an action — the client's
+      WASD/Space/Shift/mouse mapping (`MovementBindings`,
+      `src/client/main.cpp`) stays hardcoded; actual rebinding still needs
+      Phase 5.3's keybindings screen (client-local UI + persisted config,
+      not a network-visible change).
 - [ ] HUD widgets aren't wired to `report_click`/`report_change` (display-only
       for now) — 6.16.
 - [ ] Player list / chat box / hotbar are still hardcoded C++, not migrated

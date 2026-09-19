@@ -18,10 +18,30 @@
 
 ---
 
-## Current status (2026-09-18)
+## Current status (2026-09-19)
 
 Phase 6 ("Lua-Driven Extensibility") is in progress; most recent landed item
-is **6.18: Growtopia-style discrete punch combat** — attack is a single
+is **6.19: engine-default keybind pre-registration** — `PackRuntime`'s
+constructor now seeds 8 fixed names (`move_forward`, `move_back`,
+`move_left`, `move_right`, `jump`, `sprint`, `primary`, `secondary`) into
+the same Phase 6.3 `keybind_names` registry `vb.register_keybind` writes
+into, before any pack script runs. `src/client/main.cpp`'s
+`sample_input_cmd()` now sets the matching `InputCmd::keybinds` bits (found
+by name in `ClientSession::registered_keybinds()`) alongside the existing
+`cmd.move`/`cmd.buttons` it already set from `MovementBindings` — purely
+additive, no wire-format or physics change. This resolves REMAINING_TASKS'
+open "do movement axes fit the boolean-keybind shape" question (yes —
+keyboard/mouse input is already boolean) but does **not** add key
+rebinding: `MovementBindings`' WASD/Space/Shift/mouse mapping is still
+hardcoded client-side; a real rebind UI is still Phase 5.3's keybindings
+screen, untouched by this. Bumped 2 tests that assumed a bare
+`keybind_names`/`registered_keybinds()` size or index (`pack_runtime_test.cpp`'s
+cap test, `pack_runtime_integration_test.cpp`'s "dash" test) to account for
+the 8 pre-registered slots. Full `vb_tests` green (289/289) on
+`build-net-lua`.
+
+Before that, most recent landed item was **6.18: Growtopia-style discrete
+punch combat** — attack is a single
 "punch" per click (not hold-to-mine), resolved server-side via
 `ServerSession::punch(NetId)` against a vertical-cylinder hit-test over
 blocks and nearby players, exposed to Lua as `player:punch()`. Right after

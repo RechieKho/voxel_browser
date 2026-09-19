@@ -107,10 +107,11 @@ TEST_CASE("vb.register_keybind is idempotent, capped, and rejected after freeze"
 	)");
 	REQUIRE(r1);
 
-	// 2 registered above (dash, interact) + 30 here = 32 (the cap); the 33rd
-	// registration attempt must be rejected.
+	// 8 engine-default names (Phase 6.19, pre-registered before this pack
+	// script ever ran) + 2 registered above (dash, interact) + 22 here = 32
+	// (the cap); the 33rd registration attempt must be rejected.
 	const auto r_cap = rt.load_pack_file(R"(
-		for i = 1, 30 do
+		for i = 1, 22 do
 			vb.register_keybind("bind_" .. i)
 		end
 		local ok, err = pcall(vb.register_keybind, "one_too_many")

@@ -735,6 +735,22 @@ PackRuntime::Impl::Impl(net::Transport &t, world::BlockRegistry &reg,
 		storage = nlohmann::json::object();
 	}
 	install_bindings();
+
+	// Phase 6.19: pre-register the engine's own movement/action names into
+	// the same Phase 6.3 keybind registry vb.register_keybind() writes into,
+	// before any pack script runs -- so client/src/client/main.cpp's
+	// sample_input_cmd() can find them by name in the S2C_KeybindRegistry
+	// this pushes out, and any pack's vb.on("player_input", ...) can read
+	// e.g. input.keybinds["jump"] the same way it reads a custom keybind.
+	// Purely additive: InputCmd::buttons/move (and their input.buttons/move
+	// Lua exposure) are unchanged, so nothing that already reads those
+	// breaks. A pack calling vb.register_keybind() with one of these names
+	// just gets the same index back (register_keybind is idempotent by
+	// name), it can't shadow or duplicate these.
+	for (const char *name : { "move_forward", "move_back", "move_left",
+				 "move_right", "jump", "sprint", "primary", "secondary" }) {
+		keybind_names.emplace_back(name);
+	}
 }
 
 void PackRuntime::Impl::install_bindings() {

@@ -96,7 +96,17 @@ rt.dispatch_tick(dt);
   wire. Reaches joining clients as `S2C_KeybindRegistry` when
   `PackRuntime::install_keybind_registry(host)` is called (`src/server/
   main.cpp` does, right alongside `install_join_veto`), same opt-in shape as
-  `block_registry`.
+  `block_registry`. Phase 6.19: every `PackRuntime` pre-registers 8 engine
+  names — `move_forward`, `move_back`, `move_left`, `move_right`, `jump`,
+  `sprint`, `primary`, `secondary` — before any pack script runs, so they're
+  always present in `S2C_KeybindRegistry` and readable via
+  `input.keybinds["jump"]` etc. just like a custom keybind. This is purely
+  additive: `input.buttons`/`input.move` (and the client's hardcoded WASD/
+  Space/Shift/mouse physical keys) are unchanged — it just makes these
+  actions *discoverable* the same way a custom keybind is, for a future
+  rebind-UI to enumerate. Calling `vb.register_keybind` with one of these
+  names returns the same pre-assigned index (idempotent-by-name already
+  covers it); it does not let a pack change which physical key drives it.
   `vb.worldgen.set_pipeline{height=, base_height=, amplitude=, sea_level=,
   soil_depth=, cell_size=, carvers={{noise=, threshold=, y_min=, y_max=},
   ...}, veins={{block=, target_rock=, height_min=, height_max=, vein_size=,

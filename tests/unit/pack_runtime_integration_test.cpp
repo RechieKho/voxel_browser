@@ -2,6 +2,7 @@
 
 #include <ostream>
 
+#include <algorithm>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -453,9 +454,15 @@ TEST_CASE("pack script vetoes and replaces player input via a handler chain") {
 	REQUIRE(client.joined());
 	const NetId a_id = client.join_accept()->your_net_id;
 
-	// The registered keybind reached the client as S2C_KeybindRegistry.
-	REQUIRE(client.registered_keybinds().size() == 1);
-	CHECK(client.registered_keybinds()[0] == "dash");
+	// The registered keybind reached the client as S2C_KeybindRegistry,
+	// alongside the engine's 8 pre-registered move/action names (Phase
+	// 6.19) that every PackRuntime now seeds before any pack script runs.
+	REQUIRE(client.registered_keybinds().size() == 9);
+	const auto &names = client.registered_keybinds();
+	const auto dash_it = std::find(names.begin(), names.end(), "dash");
+	REQUIRE(dash_it != names.end());
+	const std::size_t dash_bit =
+			static_cast<std::size_t>(dash_it - names.begin());
 
 	const Vec3d pos_at_join = server.player_move_state(a_id)->position;
 
@@ -482,7 +489,7 @@ TEST_CASE("pack script vetoes and replaces player input via a handler chain") {
 	dash_cmd.seq = 2;
 	dash_cmd.dt = 0.05f;
 	dash_cmd.move = { 1.0f, 0.0f, 7.0f };
-	dash_cmd.keybinds = 0b1u; // "dash" is bit 0
+	dash_cmd.keybinds = 1u << dash_bit;
 	client.push_input(dash_cmd);
 	pump(4);
 
