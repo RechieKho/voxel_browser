@@ -44,8 +44,8 @@ std::size_t resolve_cell(std::uint64_t seed, double cell_size,
 	if (const auto it = memo.find({ cx, cy }); it != memo.end()) {
 		return it->second;
 	}
-	if (std::find(in_progress.begin(), in_progress.end(), CellKey{ cx, cy }) !=
-			in_progress.end()) {
+	if (std::any_of(in_progress.begin(), in_progress.end(),
+				[cx, cy](const CellKey &k) { return k.x == cx && k.y == cy; })) {
 		// Defensive only: a genuine cycle would require two neighboring
 		// cells to hash to the exact same order key, which never happens in
 		// practice with a 64-bit hash. Break it by picking biome 0.
