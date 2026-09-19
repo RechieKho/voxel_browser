@@ -69,7 +69,7 @@ them. `PalettedChunkStore`, `World`, fBm heightmap worldgen (determinism gate
 green on all 3 platforms), per-chunk `LightEngine` + cross-chunk vertical
 sky occlusion, chunk replication + `ClientChunkStore`, hand-rolled
 face-culled mesher with a background mesh worker pool (Cellulose/greedy-merge
-was tried and reverted — see `ARCHITECTURE_SPEC.md` §19 Q2 — hand-rolled
+was tried and reverted — see `ARCHITECTURE_SPEC.md` §18 Q2 — hand-rolled
 meshing is permanent).
 Full detail: `remaining_tasks/phase2.md`.
 
@@ -182,7 +182,7 @@ Full detail: `remaining_tasks/phase5.md`.
 
 ---
 
-## Phase 6 — Lua-Driven Extensibility ✅ 6.1–6.16, 6.18, 6.20 done; 6.17 superseded
+## Phase 6 — Lua-Driven Extensibility ✅ 6.1–6.16, 6.18, 6.20 done; 6.17 superseded; 6.21 planned
 
 Goal: content packs override/extend engine defaults the way block
 registration already does — biomes, entities, UI, input, data. Landed:
@@ -236,6 +236,15 @@ Full detail: `remaining_tasks/phase6.md`.
       `content/base/mechanics.lua`, not read from a selected hotbar/
       inventory slot — 6.20; no "held item"/hotbar-selection primitive
       exists anywhere yet for a pack to read from.
+- [ ] **6.21 (planned):** block-edit reach (`WorldReplicator::
+      kMaxReachBlocks`) is hardcoded and non-overridable, unlike combat
+      reach; no `vb.physics.get_params()`/`vb.combat.get_params()`
+      read-back exists, so `content/base/mechanics.lua`'s placing raycast
+      hardcodes `EYE_HEIGHT`/reach constants that can silently drift from a
+      pack's own override. Decided direction: default + pre-freeze override
+      (same shape as `set_params` elsewhere) + a read-back accessor; open
+      sub-question on whether block-edit reach gets its own knob or reuses
+      `vb.combat.set_params`'s `reach` — see `remaining_tasks/phase6.md`.
 
 ---
 
@@ -260,18 +269,34 @@ Full detail: `remaining_tasks/phase6.md`.
       accounting") is very likely a shared prerequisite; likewise chunk-load
       completion needs some "how many of my initial view-distance chunks are
       in" signal that doesn't currently exist as a queryable fraction.
+      **Decided (2026-09-19), two stages, not one:** stage 1 is a fully
+      generic bar (no data dependency at all) drawn the instant the loading
+      window opens, so it never waits on anything network-derived; stage 2
+      overlays lightweight **operator**-level branding (title text/color)
+      read from `server.toml` once that config actually arrives, the same
+      "operator, not pack, persona" split 6.13 already drew for
+      `ServerConfig`. Deliberately **not** a pack/Lua-themeable surface at
+      all, and not going any further than text+color — the point of this
+      screen is getting out of the way of loading the real content quickly,
+      not hosting a themable UI system.
 - [ ] **7.2 — Distance fog, adjustable from Lua.** A `raylib`/shader-level
-      fog effect (color + start/end distance, Minecraft-style) blending chunk
-      geometry into the sky color at the edge of view distance. "Adjustable
-      from Lua" should follow the established Phase 6 shape: an engine
-      default (matching current `view_distance`/sky color) plus a
-      `vb.render.set_fog{...}`-style override, replicated to the client the
-      same way `S2C_MoveParams`/`S2C_DayNightCurve` are (6.7/6.8) so a
-      dedicated-server pack's choice reaches every client, not just
-      `--singleplayer`. Likely wants to read the existing day/night sky color
-      (6.8) so fog tints correctly at night, not just at noon.
+      fog effect blending chunk geometry into the sky color at the edge of
+      view distance (Minecraft-style, and the reason 6.16-style Lua
+      presentation doesn't fit here either — this runs inside the chunk
+      render pass itself, not a HUD overlay). **Decided (2026-09-19): fog
+      color is never an independent Lua-settable field** — it's always
+      whatever the current day/night sky color already is (6.8's
+      `sky_color_for_time()`), so fog reads as "distance to the same sky,"
+      not a separate tint that can drift out of sync with it (e.g. green fog
+      under a red sunset sky). Only the **distance** parameters are
+      Lua-adjustable: an engine default (matching current `view_distance`)
+      plus a `vb.render.set_fog{start=, end=}`-style override, following the
+      same pre-freeze "default + override" shape and replication path as
+      `S2C_MoveParams`/`S2C_DayNightCurve` (6.7/6.8) so a dedicated-server
+      pack's choice reaches every client, not just `--singleplayer`.
 - [ ] **7.3 — Walkable "liquid" blocks (water): collision, underwater
-      rendering, and a Lua region-enter/exit hook for entity effects.**
+      rendering (same sky-color fog mechanism, tighter distance), and a
+      generic region-enter/exit hook for entity effects.**
       `BlockType::liquid` (`inc/vb/world/block.hpp`) already exists and
       `base:water` is already registered non-`solid` (Phase 2's base set) —
       collision is presumably already correct (`is_solid` gates
@@ -279,27 +304,33 @@ Full detail: `remaining_tasks/phase6.md`.
       scratch. What's actually broken/missing:
     - Rendering: standing/swimming with the camera's eye point inside a
       water voxel currently renders the world past it undistorted (the bug
-      the user calls "able to see underwater") — needs an underwater visual
-      state (tint/fog-color swap, fog-distance shrink) triggered whenever the
-      camera's voxel position is a liquid block, checked client-side each
-      frame (`ClientChunkStore` already exposes block lookups).
+      the user calls "able to see underwater"). **Decided (2026-09-19): no
+      separate underwater tint/color** — being underwater is just 7.2's same
+      sky-color fog mechanism with a much closer `end` distance (murky,
+      short visibility), triggered client-side whenever the camera's voxel
+      position is a liquid block (`ClientChunkStore` already exposes block
+      lookups). One fog mechanism, one color source (the sky), two distance
+      presets (normal view distance, underwater), not two independent visual
+      systems.
     - **Explicitly out of scope, per user instruction:** no flowing-liquid
       physics/spread (Minecraft's water-source/flow-level simulation) — the
       block stays static once placed, only collision + visuals are in scope.
-    - New Lua hook: a region-enter/exit primitive so a pack can react to an
-      entity (starting with players) entering/leaving a liquid volume — e.g.
-      `vb.on("region_enter"/"region_exit", handler(entity, block))` fired
-      from server-side per-tick liquid-occupancy tracking (a pack registers
-      no handler = zero behavior, same "engine provides the hook, content
-      decides the policy" posture as every other Phase 6 system) — a pack
-      then calls `player:set_velocity`/a future speed-modifier API to
-      implement "slow down in water" itself, the engine never hardcodes a
-      swim-speed constant. Needs deciding whether "region" is liquid-blocks-
-      only for v1 (simplest, matches the user's water-specific ask) or a
-      generically-flagged block property another pack could reuse for
-      non-liquid trigger volumes (lava, a poison gas block, ...) — leaning
-      toward the latter since it's barely more work and avoids a
-      liquid-specific hook name.
+    - **Decided (2026-09-19): the region-enter/exit hook is generic, not
+      liquid-specific** — liquid is just the built-in example/first user of
+      it, not a special case with its own hook name. Shape: a block-level
+      flag (independent of `liquid`, though every liquid block defaults to
+      opting in) marks a block as a "region" block; server-side per-tick
+      occupancy tracking (whatever entity — starting with players — has its
+      position/AABB inside such a block) fires
+      `vb.on("region_enter"/"region_exit", handler(entity, pos, block))`. No
+      handler registered = zero behavior, same "engine provides the hook,
+      content decides the policy" posture as every other Phase 6 system — a
+      pack implements "slow down in water" itself (`player:set_velocity`/a
+      future speed-modifier API) from this, the engine never hardcodes a
+      swim-speed constant. Exact field name/API not pinned yet — decide
+      during implementation — but the *shape* (generic flag + generic hook,
+      liquid is just one instance) is settled, so a future lava/gas/
+      poison-cloud block reuses the same mechanism with zero engine changes.
 - [ ] **7.4 — Wire `content/base`'s existing UI screens to a real trigger, as
       a working example.** `ui/pause.lua` and `ui/inventory.lua` are fully
       defined but their own header comments already flag that **nothing
@@ -341,8 +372,11 @@ Full detail: `remaining_tasks/phase6.md`.
 - [ ] Perf budget checks: chunk mesh time, snapshot size, frame time — track in a
       simple benchmark harness.
 - [ ] `--headless` stays functional for both binaries (CI + integration tests).
-- [ ] Address the 6 open questions in `ARCHITECTURE_SPEC.md` §19 as their blocking
-      phase arrives; record decisions in that section.
+- [ ] Address the remaining open item(s) in `ARCHITECTURE_SPEC.md` §18 as
+      their blocking phase arrives (renumbered from §19; most rows are
+      already resolved or have a noted direction — Q4 chunk compression is
+      the one still fully open; Q5 persistence and Q6 auth have a direction
+      set but aren't implemented yet); record decisions in that section.
 
 ---
 

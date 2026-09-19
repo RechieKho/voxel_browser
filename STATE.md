@@ -268,7 +268,7 @@ once doctest ships a fix). Full detail in `state/changelog-part1.md`'s
 
 ## 6. Design decisions still open
 
-Tracked in `ARCHITECTURE_SPEC.md` §19, repeated here for visibility:
+Tracked in `ARCHITECTURE_SPEC.md` §18, repeated here for visibility:
 
 1. ~~Lua binding layer: `sol2` vs. raw C API.~~ **Resolved: sol2.**
 2. ~~Cellulose meshing API shape.~~ **Resolved and reverted** (2026-09-16)

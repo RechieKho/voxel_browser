@@ -78,12 +78,12 @@ Goal: server generates terrain, streams chunks, client meshes and renders them.
 
 ### 2.5 Client meshing  ✅ (hand-rolled, permanent — Cellulose evaluated and reverted)
 
-- [x] **(spike)** Cellulose API — resolved in `ARCHITECTURE_SPEC.md §19 Q2`.
+- [x] **(spike)** Cellulose API — resolved in `ARCHITECTURE_SPEC.md §18 Q2`.
       Emits vertex data (`ChunkMesh`); reusable seam is `greedy_mesh(vector<
       MeshSample>, …)`. Wired in behind `VB_WITH_MESHING` (2026-09-16), but
       reverted after its more volatile greedy-merged vertex/index counts
       reproduced the NVIDIA VAO/VBO-churn crash documented in `STATE.md`
-      §1/§8 — see §19 Q2's updated resolution note and `STATE.md` §8's 15th
+      §1/§8 — see §18 Q2's updated resolution note and `STATE.md` §8's 15th
       entry. The `VB_WITH_MESHING` flag and Cellulose `FetchContent` block
       were later removed outright (2026-09-17); not a planned swap-in
       anymore.

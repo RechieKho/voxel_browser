@@ -41,7 +41,7 @@
    lean toward an LMDB-backed store keyed by `ChunkCoord`, reusing the
    existing `vb/world/chunk_codec` palette+RLE serialization (the same
    format `S2C_ChunkAdd` already uses) as the on-disk chunk payload, with
-   LZ4 (§19 Q4) as the compression layer on top. LMDB avoids reinventing
+   LZ4 (§18 Q4) as the compression layer on top. LMDB avoids reinventing
    sector allocation and crash-safety that a hand-rolled Anvil-style region
    file would require; a per-chunk-file or Anvil-style layout remains the
    fallback if a zero-extra-dependency approach is preferred later.

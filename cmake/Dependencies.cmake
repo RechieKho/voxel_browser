@@ -164,7 +164,7 @@ if(VB_WITH_NET)
 endif()
 
 # ===========================================================================
-# librg — interest management / entity streaming (spec §19 Q3, docs/replication.md)
+# librg — interest management / entity streaming (spec §18 Q3, docs/replication.md)
 #   v7.4.0 is a single self-contained header (code/librg.h bundles its own zpl —
 #   no separate zpl dependency). LIBRG_IMPL goes in exactly one TU, built as its
 #   own target so the project warning flags don't touch the C code.
@@ -223,7 +223,7 @@ if(VB_WITH_COMPRESSION)
 endif()
 
 # ===========================================================================
-# Lua 5.4 + sol2 — scripting (Phase 4). Binding layer decision: sol2 (§19 Q1).
+# Lua 5.4 + sol2 — scripting (Phase 4). Binding layer decision: sol2 (§18 Q1).
 #   PUC-Lua ships no CMake, so cmake/lua/CMakeLists.txt wraps it into a
 #   static `lua_static` target with a `lua::lua` alias.
 # ===========================================================================

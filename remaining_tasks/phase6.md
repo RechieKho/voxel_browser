@@ -7,7 +7,7 @@
 > the way the register-by-name registries already let blocks be overridden
 > today. Builds on 3.1's EnTT wiring, 4.2's registration API, and 4.2's
 > still-open "wire `register_entity` callbacks" item — see
-> `ARCHITECTURE_SPEC.md` §7.1-7.2, §10.3-10.6, §17, §19 Q6 for the design.
+> `ARCHITECTURE_SPEC.md` §7.1-7.2, §10.3-10.6, §17, §18 Q6 for the design.
 
 ### 6.1 Entity kinds as classes, spawned entities as objects  ✅ (2026-09-17)
 
@@ -168,7 +168,7 @@
       packs implementing their own login don't roll credential hashing in
       pure Lua — the sandbox strips `os`/`io` deliberately (§10.2), and
       pure-Lua hashing is slow and easy to get wrong. The engine still takes
-      no position on auth as a concept — see `ARCHITECTURE_SPEC.md` §19 Q6.
+      no position on auth as a concept — see `ARCHITECTURE_SPEC.md` §18 Q6.
       Also used internally by `ScriptDb` for its key-to-filename hashing.
 
 ### 6.5 Shared block-damage breaking (default + override crack texture) ✅ (2026-09-18, crack rendering deferred)
@@ -987,4 +987,66 @@
       slot "selected"). A real "place whatever's in your hand" mechanic needs
       that primitive first; out of scope here, same as the old hardcoded
       C++ path also always placing stone regardless of inventory contents.
+
+### 6.21 Interaction reach + eye-height: default + override + read-back (planned, not started)
+
+> Found while reviewing 6.20 (2026-09-19): `content/base/mechanics.lua`'s new
+> placing raycast hardcodes `EYE_HEIGHT = 1.62` to mirror
+> `physics::MoveParams::eye_height`'s engine default, and a `max_dist = 5.0`
+> to mirror the old hardcoded C++ path — but the block-edit reach actually
+> enforced server-side, `WorldReplicator::kMaxReachBlocks`
+> (`src/net/world_replicator.cpp`), is a *different*, non-pack-overridable
+> hardcoded constant (5.5), unlike `PunchParams::reach` (also 5.5 by default,
+> but real pack-overridable via `vb.combat.set_params`). Two inconsistencies
+> at once: (1) a Lua script has no way to read back an *effective*
+> pack-overridden physics value it needs for its own raycast, so an override
+> can silently desync Lua's target-selection from the engine's actual
+> validation; (2) block-edit reach follows a different rule (hardcoded, no
+> override) than combat reach (default + override) for what is conceptually
+> the same "how far can this player interact" number.
+>
+> **User-directed resolution (2026-09-19):** stay consistent with the
+> established Phase 6 shape — give it a real default, make it overridable,
+> *unless* the runtime cost of allowing a live override is too high, in which
+> case restrict the override to init time only. In practice that's a
+> non-issue: every existing `set_params`-style override (`vb.physics`,
+> `vb.combat`, `vb.daynight`) already only applies **before**
+> `PackRuntime::freeze()` (`"registry already frozen"` once a pack tries
+> after load) — reach/eye-height would use the exact same mechanism, so
+> there's no new hot-path cost versus what gravity/walk-speed/punch-reach
+> already pay (one extra struct field read per interaction, not a per-tick
+> cost). A read-back accessor is also wanted regardless of the override
+> question, specifically so Lua never has to hardcode/guess an engine
+> constant that might not match a pack's own override.
+
+- [ ] Make `WorldReplicator::kMaxReachBlocks` (block break/place reach) a
+      real default-then-override value, following the exact shape
+      `vb.physics.set_params`/`vb.combat.set_params` already established
+      (pre-freeze only). **Open sub-question, not yet decided — ask before
+      implementing:** should this become its own knob (e.g.
+      `vb.world.set_reach(blocks)` or folded into `vb.physics.set_params`),
+      or should it simply reuse `vb.combat.set_params`'s existing `reach`
+      field (both default to the same 5.5 today — possibly intentional,
+      possibly coincidental)? Unifying avoids two near-duplicate "how far
+      can I interact" constants; keeping them separate lets a pack tune
+      mining reach independently from combat reach. The user's 2026-09-19
+      guidance settled *that it must be overridable*, not *which* knob it
+      becomes.
+- [ ] Add a read-back accessor (e.g. `vb.physics.get_params()` and/or
+      `vb.combat.get_params()`) returning the *effective* values (post
+      pack-override) as a plain Lua table — `eye_height`, and whichever
+      reach field(s) 6.21's first bullet lands on — so
+      `content/base/mechanics.lua`'s placing raycast (and any future
+      Lua-side raycast) reads the real numbers instead of hardcoding
+      `EYE_HEIGHT = 1.62`/`max_dist = 5.0`. Cheap even called every
+      `player_input` tick (returns a handful of doubles, no different in
+      cost from `build_input_table`'s existing per-tick table construction).
+- [ ] Update `content/base/mechanics.lua`'s placing handler to call the new
+      read-back instead of its own hardcoded constants once both land.
+- [ ] Tests: a pack overriding reach pre-freeze changes what
+      `apply_script_block_edit`/`WorldReplicator::in_reach` actually accepts
+      (extend `blockedit_test.cpp`/`world_replicator_test.cpp`-equivalent
+      coverage, whichever exists); `vb.physics.get_params()`/
+      `vb.combat.get_params()` round-trip what `set_params` just set, and
+      report the built-in default when no pack has overridden anything.
 

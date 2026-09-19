@@ -144,7 +144,7 @@ network space; client window + render loop alive.
 
 ### 1.4 Replication bootstrap (`vb_core/replication`)
 
-- [x] **(spike)** librg v7.4.0 API investigated — findings + the §19 Q3 decision
+- [x] **(spike)** librg v7.4.0 API investigated — findings + the §18 Q3 decision
       in `docs/replication.md` (use librg for culling + create/update/remove
       framing; keep our own payload codec). Pin fixed in `Dependencies.cmake`
       (self-contained header, no separate zpl).

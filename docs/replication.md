@@ -1,7 +1,7 @@
 # Voxel Browser — Replication & Interest Management
 
 > Companion to `docs/protocol.md`. Covers entity replication: interest
-> management, the snapshot message, and the librg spike (spec §19 Q3).
+> management, the snapshot message, and the librg spike (spec §18 Q3).
 
 ## Model (spec §8.4)
 
@@ -63,7 +63,7 @@ Define `LIBRG_IMPL` in exactly one TU.
 - Does **not** touch sockets — it is middleware. We take the blob from
   `librg_world_write` and send it as our `S2C_EntitySnapshot` payload on lane 2.
 
-### Decision (§19 Q3)
+### Decision (§18 Q3)
 
 **Adopt librg for interest culling + create/update/remove framing; keep our own
 codec for the per-entity payload and our own envelope/lane routing.** Rationale:

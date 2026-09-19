@@ -8,7 +8,7 @@
 
 `raylib` owns the window, GL context, input, and 2D/UI draw. A hand-rolled
 face-culled mesher (`vb::world::chunk_mesher` / `chunk_mesh_snapshot`) owns
-voxel meshing and chunk mesh management — see §19 Q2 for why this is the
+voxel meshing and chunk mesh management — see §18 Q2 for why this is the
 permanent choice rather than a placeholder for a greedy-mesh library.
 `raygui` draws menus/HUD as an immediate-mode overlay.
 
@@ -27,7 +27,7 @@ permanent choice rather than a placeholder for a greedy-mesh library.
 
 ### 11.3 Entity rendering — billboard sprites
 
-**Decided (2026-09-11, §19 Q7): players and Lua entity kinds are 2D sprites, not
+**Decided (2026-09-11, §18 Q7): players and Lua entity kinds are 2D sprites, not
 3D blocky models** — a *Don't Starve*-style presentation: a single flat billboard
 per entity, with a handful of directional poses and per-state animation clips
 standing in for full 3D animation, inside an otherwise fully 3D, free-look

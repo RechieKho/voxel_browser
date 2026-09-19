@@ -14,7 +14,7 @@
 //
 // Without VB_WITH_REPLICATION: a hand-rolled linear scan over a coarse grid.
 // With VB_WITH_REPLICATION: `visible_from` is backed by librg's chunk-radius
-// query (§19 Q3) -- librg owns entity tracking + the culling query, we keep
+// query (§18 Q3) -- librg owns entity tracking + the culling query, we keep
 // our own EntityState payload and diff/snapshot code untouched either way.
 // Same public interface, same diff semantics, in both configurations.
 

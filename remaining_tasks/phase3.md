@@ -113,7 +113,7 @@ with prediction/interpolation.
 `remote_entities()`/`interpolated_pos()` (3.4) gave correct positions, but the
 client only rendered terrain. Design: `ARCHITECTURE_SPEC.md` §11.3 (Don't
 Starve-style Y-axis-billboarded, directionally-animated sprites, decided
-2026-09-11 — see §19 Q7).
+2026-09-11 — see §18 Q7).
 
 - [x] `vb/render/entity_renderer.{hpp,cpp}` (sibling to `chunk_renderer`):
       per-`NetId` render state (current clip, elapsed time, direction bucket +

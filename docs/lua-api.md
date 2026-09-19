@@ -13,7 +13,7 @@
 ## Binding layer
 
 `sol2` (v3.5.0), header-only, over PUC-Lua 5.4 — decision recorded in
-`ARCHITECTURE_SPEC.md` §19 Q1. (v3.3.0's bundled optional does not compile under
+`ARCHITECTURE_SPEC.md` §18 Q1. (v3.3.0's bundled optional does not compile under
 Clang ≥ 18.)
 
 ## Runtime — `vb::script::Vm` (`inc/vb/script/vm.hpp`, implemented, `VB_WITH_LUA`)
@@ -296,7 +296,7 @@ rt.dispatch_tick(dt);
   (`vb::core::sha256_hex`, `inc/vb/core/sha256.hpp`) — so a pack implementing
   its own login doesn't have to roll credential hashing in pure Lua (the
   sandbox strips `os`/`io`, §10.2). The engine still takes no position on
-  auth as a concept (spec §19 Q6).
+  auth as a concept (spec §18 Q6).
 - Physics tunables (Phase 6.7): `vb.physics.set_params{gravity=..,
   walk_speed=.., sprint_speed=.., jump_speed=.., accel=.., air_accel=..,
   friction=.., step_height=.., fly_speed=.., fly=.., half_width=..,
