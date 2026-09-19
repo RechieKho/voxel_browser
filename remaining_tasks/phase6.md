@@ -795,7 +795,9 @@
       `cleared`, currently computed and thrown away) finished as a
       prerequisite. `client.break_progress()` (6.16) keeps its exact same
       signature (nil | 0..1) so `content/base/ui/hud.lua` needs no changes.
-      Placing (RMB, always instant) is unaffected.
+      Placing (RMB, always instant) is unaffected. **Update (6.20,
+      2026-09-19): placing was later decoupled the same way — see that
+      section.**
 - [ ] **Movement/action key bindings as a pack-overridable default**, not
       just a client-local rebind (5.3's still-"not attempted" keybindings
       screen is a *different*, complementary gap — physical-key-to-action
@@ -934,4 +936,55 @@
 > everywhere else); no swing animation/cooldown-visual on the client; PvP
 > damage has no armor/cooldown/knockback, just a flat `player_damage` per
 > landed punch.
+
+### 6.20 Right-click placing decoupled from the engine (last hardcoded block edit closed)  ✅ done (2026-09-19)
+
+> User-flagged (2026-09-19): right-click placing was still 100% hardcoded
+> C++ with no pack seam at all — 6.17/6.18 decoupled breaking, but their own
+> writeups explicitly noted "Placing (RMB, always instant) is unaffected."
+> `src/client/main.cpp` raycast on `MOUSE_BUTTON_RIGHT` press and sent a
+> `C2S_BlockEdit{kPlace, base_block::stone}` directly, bypassing the
+> `input.buttons.secondary` channel that was already being reported to Lua
+> (6.17 wired it up, nothing ever read it). Closed the same way breaking was:
+> the engine keeps only the validated primitive, a pack decides *when* and
+> *what*.
+
+- [x] New `player:place_block(x, y, z, block)` (`PlayerHandle::place_block`,
+      `src/script/pack_runtime.cpp`) — same shape as `break_block()`, just
+      calls the pre-existing `ServerSession::apply_script_block_edit()` with
+      `BlockEditAction::kPlace` and a caller-chosen block id instead of a
+      fixed one. No engine/session changes needed — `apply_script_block_edit`
+      already took an arbitrary `action`/`block` pair, breaking was just the
+      only caller.
+- [x] `src/client/main.cpp`'s hardcoded RMB block-edit send (raycast +
+      `client->push_block_edit(C2SBlockEdit{kPlace, base_block::stone})`) is
+      gone outright — the client still runs the same raycast for the
+      crosshair-highlight visual, but no longer acts on a right-click itself;
+      `input.buttons.secondary` (already round-tripped since 6.17) is the
+      only signal left. `edit_seq`/`client->push_block_edit()` are now dead
+      in the windowed client path (the dead `edit_seq` member was removed;
+      `push_block_edit` itself is left in place as a real, tested
+      `ClientSession` API other callers/tests use).
+- [x] `content/base/mechanics.lua` gained a second edge-detected handler
+      alongside the existing punch one: on a rising edge of
+      `input.buttons.secondary`, it raycasts from the player's authoritative
+      `get_pos()` + a hardcoded `EYE_HEIGHT = 1.62` (mirrors
+      `physics::MoveParams::eye_height`'s engine default — there's no
+      `vb.physics.get_params()` to read an override back) along
+      `input.yaw`/`input.pitch`, and calls `player:place_block()` with
+      `base_stone_id` (the global `content/base/blocks/stone.lua` sets,
+      loaded before this root-level file per `pack_loader.cpp`'s ordering) —
+      i.e. it places exactly what the old hardcoded path placed. A pack that
+      never loads this file now sees `buttons.secondary` do nothing, same
+      "opt-in content, not an engine default" posture 6.17 established for
+      breaking.
+- [x] Full `vb_tests` green (290/290) on `build-net-lua`; no protocol/wire
+      change needed (`apply_script_block_edit` was already generic).
+- [ ] **Not done, same gap as breaking:** placed block is still a hardcoded
+      `base_stone_id`, not read from a selected hotbar/inventory slot — no
+      "held item" or hotbar-selection concept exists anywhere in the engine
+      yet (`get_inventory()` returns the full inventory, nothing marks one
+      slot "selected"). A real "place whatever's in your hand" mechanic needs
+      that primitive first; out of scope here, same as the old hardcoded
+      C++ path also always placing stone regardless of inventory contents.
 

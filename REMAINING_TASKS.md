@@ -182,7 +182,7 @@ Full detail: `remaining_tasks/phase5.md`.
 
 ---
 
-## Phase 6 — Lua-Driven Extensibility ✅ 6.1–6.16, 6.18 done; 6.17 superseded
+## Phase 6 — Lua-Driven Extensibility ✅ 6.1–6.16, 6.18, 6.20 done; 6.17 superseded
 
 Goal: content packs override/extend engine defaults the way block
 registration already does — biomes, entities, UI, input, data. Landed:
@@ -192,10 +192,13 @@ player damage/death primitive (6.6), physics/day-night/inventory/chat/
 item-drop override surfaces (6.7-6.11), read-only config visibility (6.13),
 Lua-driven FastNoise2 worldgen pipeline + Voronoi biome selection (6.14), a
 `content/examples/kitchen_sink` pack exercising all of the above (6.15), an
-engine-neutral client HUD primitive (`ui.define_hud` + `kRect`, 6.16), and
+engine-neutral client HUD primitive (`ui.define_hud` + `kRect`, 6.16),
 Growtopia-style discrete punch combat with block self-heal (6.18 — this is
 the current shape of block breaking, **not** 6.17's original hold-to-break
-plan, which was superseded same-day and is kept only for historical record).
+plan, which was superseded same-day and is kept only for historical record),
+and right-click placing decoupled into content the same way (6.20 — closes
+6.17/6.18's own "Placing... unaffected" gap; `player:place_block()` is now
+the validated primitive, `content/base/mechanics.lua` decides when/what).
 Full detail: `remaining_tasks/phase6.md`.
 
 **Remaining:**
@@ -229,6 +232,100 @@ Full detail: `remaining_tasks/phase6.md`.
       to `ui.define_hud` — 6.16.
 - [ ] No punch-rate cooldown enforced engine-side; no swing animation; PvP has
       no armor/cooldown/knockback — 6.18, deliberate scope cuts.
+- [ ] Placed block is still a hardcoded `base_stone_id` in
+      `content/base/mechanics.lua`, not read from a selected hotbar/
+      inventory slot — 6.20; no "held item"/hotbar-selection primitive
+      exists anywhere yet for a pack to read from.
+
+---
+
+## Phase 7 — World & UX Polish (planned, not started)
+
+> User-requested (2026-09-19): four UX gaps, scoped as their own phase since
+> none of them extend Phase 6's "default + override" system pattern the way
+> 6.1-6.20 did — these are new engine surfaces (loading UI, fog, liquid
+> collision/vision/regions) plus closing a real content gap found while
+> reviewing Phase 6 (`ui/pause.lua`/`ui/inventory.lua`'s own "nothing opens
+> this yet" comments).
+
+- [ ] **7.1 — Engine-side loading screen with progress, during initial world
+      load.** Explicitly **not** Lua-driven (unlike 6.16's HUD/6.2's UI,
+      which deliberately pushed presentation into content) — this covers the
+      window between "connected" and "first playable frame" (asset sync +
+      first-chunk load), before any `PackRuntime`/`UiRuntime` content is even
+      guaranteed to have loaded, so it can't depend on a pack being present
+      to draw it. Needs a real progress fraction to report — the connect
+      screen's own still-open gap (Phase 5's "No connect-screen byte-progress
+      bar (status-text-only) — asset-sync never grew progress-fraction
+      accounting") is very likely a shared prerequisite; likewise chunk-load
+      completion needs some "how many of my initial view-distance chunks are
+      in" signal that doesn't currently exist as a queryable fraction.
+- [ ] **7.2 — Distance fog, adjustable from Lua.** A `raylib`/shader-level
+      fog effect (color + start/end distance, Minecraft-style) blending chunk
+      geometry into the sky color at the edge of view distance. "Adjustable
+      from Lua" should follow the established Phase 6 shape: an engine
+      default (matching current `view_distance`/sky color) plus a
+      `vb.render.set_fog{...}`-style override, replicated to the client the
+      same way `S2C_MoveParams`/`S2C_DayNightCurve` are (6.7/6.8) so a
+      dedicated-server pack's choice reaches every client, not just
+      `--singleplayer`. Likely wants to read the existing day/night sky color
+      (6.8) so fog tints correctly at night, not just at noon.
+- [ ] **7.3 — Walkable "liquid" blocks (water): collision, underwater
+      rendering, and a Lua region-enter/exit hook for entity effects.**
+      `BlockType::liquid` (`inc/vb/world/block.hpp`) already exists and
+      `base:water` is already registered non-`solid` (Phase 2's base set) —
+      collision is presumably already correct (`is_solid` gates
+      `step_movement`'s AABB checks) and needs verifying, not building from
+      scratch. What's actually broken/missing:
+    - Rendering: standing/swimming with the camera's eye point inside a
+      water voxel currently renders the world past it undistorted (the bug
+      the user calls "able to see underwater") — needs an underwater visual
+      state (tint/fog-color swap, fog-distance shrink) triggered whenever the
+      camera's voxel position is a liquid block, checked client-side each
+      frame (`ClientChunkStore` already exposes block lookups).
+    - **Explicitly out of scope, per user instruction:** no flowing-liquid
+      physics/spread (Minecraft's water-source/flow-level simulation) — the
+      block stays static once placed, only collision + visuals are in scope.
+    - New Lua hook: a region-enter/exit primitive so a pack can react to an
+      entity (starting with players) entering/leaving a liquid volume — e.g.
+      `vb.on("region_enter"/"region_exit", handler(entity, block))` fired
+      from server-side per-tick liquid-occupancy tracking (a pack registers
+      no handler = zero behavior, same "engine provides the hook, content
+      decides the policy" posture as every other Phase 6 system) — a pack
+      then calls `player:set_velocity`/a future speed-modifier API to
+      implement "slow down in water" itself, the engine never hardcodes a
+      swim-speed constant. Needs deciding whether "region" is liquid-blocks-
+      only for v1 (simplest, matches the user's water-specific ask) or a
+      generically-flagged block property another pack could reuse for
+      non-liquid trigger volumes (lava, a poison gas block, ...) — leaning
+      toward the latter since it's barely more work and avoids a
+      liquid-specific hook name.
+- [ ] **7.4 — Wire `content/base`'s existing UI screens to a real trigger, as
+      a working example.** `ui/pause.lua` and `ui/inventory.lua` are fully
+      defined but their own header comments already flag that **nothing
+      opens them** — `player:open_ui()` is server-push-only and no client
+      gesture (keybind, chat command) ever calls it for these two screens;
+      `content/examples/kitchen_sink/keybinds.lua` hit the exact same wall
+      for its own custom screen ("no base-pack/client UI wires these yet").
+      Root cause, one level deeper than "just add a keybind": Phase 6.3's
+      `vb.register_keybind`/`S2C_KeybindRegistry` gives a pack a *named* bit
+      in `InputCmd.keybinds`, but nothing on the client ever maps a **physical
+      key** to a pack-registered custom name — only the pre-registered
+      engine names (movement + `primary`/`secondary`, Phase 6.19) get a real
+      key via `MovementBindings`/`sample_input_cmd`. Two things needed
+      together, not just content:
+    - A client-side physical-key-to-custom-keybind mapping (even a minimal
+      hardcoded default table in `src/client/main.cpp` keyed by name would
+      close the gap; a real settings-screen UI for it is a further, separate
+      step past Phase 5.3's movement-only rebind screen).
+    - `content/base` itself registering a keybind per screen (e.g. `"Escape"`
+      → `base:pause`, `"E"` or similar → `base:inventory`) and a
+      `vb.on("player_input", ...)` rising-edge handler calling
+      `player:open_ui(...)` — the exact pattern
+      `kitchen_sink/keybinds.lua` already demonstrates, just applied to
+      `content/base`'s own screens instead of an example pack's.
+      `base:inventory` additionally needs `{ slots = player:get_inventory() }`
+      passed as `ctx`, matching its own doc comment.
 
 ---
 

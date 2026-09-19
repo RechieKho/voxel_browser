@@ -682,6 +682,24 @@ struct PlayerHandle {
 				net_id, protocol::BlockEditAction::kBreak, { x, y, z });
 	}
 
+	// Right-click placing used to be the one remaining hardcoded block edit
+	// (src/client/main.cpp sent a C2S_BlockEdit{kPlace, base_block::stone}
+	// directly off MOUSE_BUTTON_RIGHT, with no pack seam at all -- the exact
+	// gap 6.17's own writeup flagged as "Placing (RMB, always instant) is
+	// unaffected"). Same shape as break_block() above: the engine only
+	// exposes the validated primitive (reach check, hooks, fan-out), a pack
+	// decides *when* to place and *what* block (content/base/mechanics.lua
+	// does both from a rising edge of input.buttons.secondary, same
+	// was_down/edge-detect idiom the punch handler already uses).
+	bool place_block(int x, int y, int z, int block) const {
+		if (rt->session == nullptr) {
+			throw sol::error("entity:place_block(): session not attached yet");
+		}
+		return rt->session->apply_script_block_edit(net_id,
+				protocol::BlockEditAction::kPlace, { x, y, z },
+				static_cast<core::BlockId>(block));
+	}
+
 	// Phase 6.18 (Growtopia-style combat): the one call a pack needs to
 	// throw a discrete punch -- call it once per rising edge of whatever key
 	// a pack binds to "attack" (a vb.on("player_input", ...) handler
@@ -763,7 +781,8 @@ void PackRuntime::Impl::install_bindings() {
 			&PlayerHandle::open_ui, "give", &PlayerHandle::give, "take",
 			&PlayerHandle::take, "get_name", &PlayerHandle::get_name, "damage",
 			&PlayerHandle::damage, "break_block", &PlayerHandle::break_block,
-			"punch", &PlayerHandle::punch);
+			"place_block", &PlayerHandle::place_block, "punch",
+			&PlayerHandle::punch);
 
 	sol::table vb = lua.create_named_table("vb");
 

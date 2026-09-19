@@ -723,7 +723,6 @@ int main(int argc, char **argv) {
 	vb::render::FirstPersonController controller;
 	vb::physics::MoveParams move_params;
 	std::uint32_t input_seq = 0;
-	std::uint32_t edit_seq = 0;
 	std::unique_ptr<vb::render::ChunkRenderer> chunk_renderer;
 	std::unique_ptr<vb::render::EntityRenderer> entity_renderer;
 	bool mouse_captured = false;
@@ -850,7 +849,6 @@ int main(int argc, char **argv) {
 		move_params = client->move_params();
 		client->set_local_feet(spawn);
 		input_seq = 0;
-		edit_seq = 0;
 		chunk_renderer = std::make_unique<vb::render::ChunkRenderer>();
 		entity_renderer = std::make_unique<vb::render::EntityRenderer>();
 		mouse_captured = false;
@@ -1040,29 +1038,18 @@ int main(int argc, char **argv) {
 							{ feet.x, feet.y + move_params.eye_height, feet.z });
 				}
 
-				// Phase 6.17: breaking is no longer a client-authoritative
-				// hardcoded timer -- the client only reports raw input
-				// (buttons.primary, set above in sample_input_cmd) and does
-				// its own raycast purely for the crosshair-highlight visual
-				// below; content/base/mechanics.lua does the actual hold-
-				// timing and calls player:break_block() server-side once a
-				// pack decides breaking should happen at all (it's opt-in,
-				// not an engine default). Placing stays an instant,
-				// client-driven edit, unaffected by this.
+				// Phase 6.17/6.20: neither breaking nor placing is a client-
+				// authoritative hardcoded action any more -- the client only
+				// reports raw input (buttons.primary/secondary, set above in
+				// sample_input_cmd) and does its own raycast purely for the
+				// crosshair-highlight visual below; content/base/mechanics.lua
+				// decides *when* and *what* (player:break_block()/
+				// player:place_block()) server-side, once a pack opts in at
+				// all -- neither is an engine default any more.
 				vb::world::VoxelRayHit look_hit;
 				if (mouse_captured) {
 					look_hit = vb::world::raycast_voxel(client->chunk_store(),
 							controller.position(), controller.forward(), 5.0);
-					if (look_hit.hit && IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) {
-						vb::protocol::C2SBlockEdit e;
-						e.predicted_seq = ++edit_seq;
-						e.action = vb::protocol::BlockEditAction::kPlace;
-						e.pos = { look_hit.voxel.x + look_hit.normal.x,
-							look_hit.voxel.y + look_hit.normal.y,
-							look_hit.voxel.z + look_hit.normal.z };
-						e.block = vb::world::base_block::stone;
-						client->push_block_edit(e);
-					}
 				}
 
 				// Raw state only -- "engine provides raw state, Lua deals
