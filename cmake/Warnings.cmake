@@ -42,5 +42,10 @@ else()
     # Keep them as non-fatal warnings rather than gating CI on vendored code.
     $<$<BOOL:${VB_WARNINGS_AS_ERRORS}>:-Wno-error=conversion>
     $<$<BOOL:${VB_WARNINGS_AS_ERRORS}>:-Wno-error=sign-conversion>
+    # GCC's -Wall implies -Warray-bounds at -O2+, which false-positives
+    # inside sol2's stack_field.hpp string handling under release builds
+    # (known upstream sol2/GCC interaction, not a real out-of-bounds access
+    # in our code).
+    $<$<BOOL:${VB_WARNINGS_AS_ERRORS}>:-Wno-error=array-bounds>
   )
 endif()
