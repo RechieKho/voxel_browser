@@ -35,5 +35,12 @@ else()
     -Woverloaded-virtual
     -Wdouble-promotion
     $<$<BOOL:${VB_WARNINGS_AS_ERRORS}>:-Werror>
+    # sol2's proxy conversion operators (e.g. table_proxy -> object,
+    # load_result -> protected_function) trip -Wconversion/-Wsign-conversion
+    # at the call site even though sol2 itself is included as a system
+    # header; EnTT's dense_map internals do the same for -Wsign-conversion.
+    # Keep them as non-fatal warnings rather than gating CI on vendored code.
+    $<$<BOOL:${VB_WARNINGS_AS_ERRORS}>:-Wno-error=conversion>
+    $<$<BOOL:${VB_WARNINGS_AS_ERRORS}>:-Wno-error=sign-conversion>
   )
 endif()

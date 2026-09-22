@@ -84,6 +84,14 @@ endif() # VB_BUILD_CLIENT
 find_package(EnTT QUIET)
 if(NOT EnTT_FOUND AND NOT TARGET EnTT::EnTT)
   vb_fetch(entt TAG v3.13.2 REPO https://github.com/skypjack/entt.git)
+  if(TARGET EnTT)
+    get_target_property(_vb_entt_inc EnTT INTERFACE_INCLUDE_DIRECTORIES)
+    if(_vb_entt_inc)
+      set_target_properties(EnTT PROPERTIES
+        INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "${_vb_entt_inc}")
+    endif()
+    unset(_vb_entt_inc)
+  endif()
 endif()
 
 # ===========================================================================
