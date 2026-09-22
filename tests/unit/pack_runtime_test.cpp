@@ -164,6 +164,66 @@ TEST_CASE("without a vb.physics.set_params call, effective_move_params "
 	CHECK(effective.fly == base.fly);
 }
 
+TEST_CASE("vb.action.set_params overrides reach, rejected after freeze "
+		"(Phase 6.21)") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("action"));
+
+	const auto r = rt.load_pack_file(R"(
+		vb.action.set_params({ reach = 12.0 })
+	)");
+	REQUIRE(r);
+	rt.freeze();
+
+	const vb::net::ActionParams effective =
+			rt.effective_action_params(vb::net::ActionParams{});
+	CHECK(effective.reach == doctest::Approx(12.0));
+
+	const auto r2 = rt.load_pack_file(R"(vb.action.set_params({ reach = 1 }))");
+	CHECK_FALSE(r2);
+}
+
+TEST_CASE("without a vb.action.set_params call, effective_action_params "
+		"returns the built-in default (Phase 6.21)") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(
+			net.server(), registry, temp_storage("action_default"));
+	rt.freeze();
+
+	const vb::net::ActionParams effective =
+			rt.effective_action_params(vb::net::ActionParams{});
+	CHECK(effective.reach == doctest::Approx(vb::net::ActionParams{}.reach));
+}
+
+TEST_CASE("vb.physics.get_params()/vb.action.get_params() round-trip the "
+		"effective (post-override) values, and report engine defaults with "
+		"no override (Phase 6.21)") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(
+			net.server(), registry, temp_storage("get_params"));
+
+	const auto r = rt.load_pack_file(R"(
+		local defaults_physics = vb.physics.get_params()
+		local defaults_action = vb.action.get_params()
+		assert(defaults_action.reach == 5.5)
+
+		vb.physics.set_params({ eye_height = 1.5 })
+		vb.action.set_params({ reach = 9.0 })
+
+		local p = vb.physics.get_params()
+		local a = vb.action.get_params()
+		assert(p.eye_height == 1.5)
+		assert(a.reach == 9.0)
+		-- an untouched field still reports the same value get_params reported
+		-- before any override -- set_params only replaced the fields it set.
+		assert(p.walk_speed == defaults_physics.walk_speed)
+	)");
+	REQUIRE(r);
+}
+
 TEST_CASE("vb.config.get exposes the operator's ServerConfig read-only "
 		"(Phase 6.13)") {
 	vb::net::LoopbackNetwork net;

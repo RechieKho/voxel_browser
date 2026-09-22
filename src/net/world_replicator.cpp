@@ -15,8 +15,6 @@ namespace vb::net {
 
 namespace {
 
-constexpr double kMaxReachBlocks = 5.5;
-
 core::ChunkCoord chunk_of_pos(core::Vec3d p) {
 	return core::chunk_of({ static_cast<std::int32_t>(std::floor(p.x)),
 			static_cast<std::int32_t>(std::floor(p.y)),
@@ -155,7 +153,7 @@ bool WorldReplicator::player_has_chunk(core::NetId id, core::ChunkCoord c) const
 bool WorldReplicator::in_reach(core::Vec3d eye_pos, core::IVec3 pos) const {
 	const core::Vec3d center{ static_cast<double>(pos.x) + 0.5,
 		static_cast<double>(pos.y) + 0.5, static_cast<double>(pos.z) + 0.5 };
-	return (center - eye_pos).length() <= kMaxReachBlocks;
+	return (center - eye_pos).length() <= reach_;
 }
 
 std::vector<WorldReplicator::PlayerFrames> WorldReplicator::apply_block_edit(
@@ -172,7 +170,7 @@ std::vector<WorldReplicator::PlayerFrames> WorldReplicator::apply_block_edit(
 
 	const core::Vec3d center{ static_cast<double>(p.x) + 0.5,
 		static_cast<double>(p.y) + 0.5, static_cast<double>(p.z) + 0.5 };
-	if ((center - eye_pos).length() > kMaxReachBlocks) {
+	if ((center - eye_pos).length() > reach_) {
 		return {};
 	}
 	if (!world_.has_chunk(cc)) {

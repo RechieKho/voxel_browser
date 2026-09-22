@@ -988,7 +988,7 @@
       that primitive first; out of scope here, same as the old hardcoded
       C++ path also always placing stone regardless of inventory contents.
 
-### 6.21 Interaction reach + eye-height: default + override + read-back (planned, not started)
+### 6.21 Interaction reach + eye-height: default + override + read-back  ✅ done (2026-09-22)
 
 > Found while reviewing 6.20 (2026-09-19): `content/base/mechanics.lua`'s new
 > placing raycast hardcodes `EYE_HEIGHT = 1.62` to mirror
@@ -1019,43 +1019,58 @@
 > question, specifically so Lua never has to hardcode/guess an engine
 > constant that might not match a pack's own override.
 
-- [ ] **Sub-question resolved (2026-09-19): new `vb.action` namespace, not
-      `vb.combat`.** Block-edit reach and punch reach are unified into one
-      value (same reasoning as the raycast itself: both are "how far this
-      player's ray reaches," resolved by the same kind of lookup) — but it
-      lives under a new generic `vb.action.set_params{reach=...}` /
-      `vb.action.get_params()`, deliberately **not** `vb.combat.set_params`,
-      since a pack author hunting for "the block-mining-reach knob" has no
-      reason to look inside something named `combat` and would plausibly
-      miss it there. `vb.combat.set_params` keeps only what's genuinely
-      combat-specific (`hit_radius`, `player_damage`, `heal_after_seconds`,
-      `heal_interval_seconds`) — its `reach` field moves out to
-      `vb.action.set_params` instead of staying duplicated in both places.
-      `PunchParams::reach` and `WorldReplicator::kMaxReachBlocks` both go
-      away as independent values; `ServerSession::punch()` and
-      `WorldReplicator::apply_block_edit()`/`in_reach()` both read the one
-      shared `ActionParams::reach` (new small struct, same
-      `effective_*_params(base)` pattern 6.7/6.18 already use). No shipped
-      pack currently calls `vb.combat.set_params{reach=...}` (checked
-      2026-09-19 — only `content/base/mechanics.lua`'s own comment mentions
-      the name in passing), so there's no real migration to carry.
-      `vb.action` is left open as the natural home for any *other*
-      future cross-cutting "player action" primitive that isn't specific to
-      combat or block-editing either (not scoped further than `reach` here).
-- [ ] Add read-back accessors — `vb.physics.get_params()` (for `eye_height`)
-      and `vb.action.get_params()` (for the now-unified `reach`) — returning
-      the *effective* values (post pack-override) as a plain Lua table, so
-      `content/base/mechanics.lua`'s placing raycast (and any future
-      Lua-side raycast) reads the real numbers instead of hardcoding
-      `EYE_HEIGHT = 1.62`/`max_dist = 5.0`. Cheap even called every
-      `player_input` tick (returns a handful of doubles, no different in
-      cost from `build_input_table`'s existing per-tick table construction).
-- [ ] Update `content/base/mechanics.lua`'s placing handler to call the new
-      read-backs instead of its own hardcoded constants once both land.
-- [ ] Tests: a pack overriding `vb.action.set_params{reach=...}` pre-freeze
-      changes both what `apply_script_block_edit`/`WorldReplicator::in_reach`
-      accepts *and* what `ServerSession::punch()` can hit, from the same one
-      value (extend `blockedit_test.cpp`); `vb.physics.get_params()`/
-      `vb.action.get_params()` round-trip what `set_params` just set, and
-      report the built-in default when no pack has overridden anything.
+- [x] **Sub-question resolved (2026-09-19), implemented (2026-09-22): new
+      `vb.action` namespace, not `vb.combat`.** Block-edit reach and punch
+      reach are unified into one value under a new
+      `net::ActionParams` struct (`inc/vb/net/world_replicator.hpp`, sibling
+      to `BlockEditHooks`) — `WorldReplicator::set_reach()`/`reach()` hold it,
+      read by both `in_reach()`/`apply_block_edit()` and (via
+      `world_replicator()->reach()`) `ServerSession::punch()`
+      (`src/net/session.cpp`). `WorldReplicator`'s old hardcoded
+      `kMaxReachBlocks` constant and `ServerSession::PunchParams::reach` are
+      both gone as independent values. Exposed to Lua as
+      `vb.action.set_params{reach=...}` (new `sol::table` in `vb["action"]`,
+      `src/script/pack_runtime.cpp`, frozen-check same as every other
+      `set_params`) / `PackRuntime::effective_action_params(base)` (same
+      `effective_*_params(base)` pattern 6.7/6.18 already use) —
+      deliberately its own namespace, not `vb.combat.set_params`, since a
+      pack author hunting for "the block-mining-reach knob" has no reason to
+      look inside something named `combat`. `vb.combat.set_params` keeps
+      only what's genuinely combat-specific (`hit_radius`, `player_damage`,
+      `heal_after_seconds`, `heal_interval_seconds`) — `reach` was removed
+      from both `combat_tbl`'s handled fields and `effective_punch_params`.
+      No shipped pack called `vb.combat.set_params{reach=...}` before this
+      (verified 2026-09-19), so there was no real migration to carry.
+      `vb.action` is left open as the natural home for any *other* future
+      cross-cutting "player action" primitive.
+- [x] Read-back accessors added — `vb.physics.get_params()` (full effective
+      `physics::MoveParams` as a plain table, including `eye_height`) and
+      `vb.action.get_params()` (effective `reach`) — both in
+      `src/script/pack_runtime.cpp`, returning the *effective* (post
+      pack-override) values by applying the pack's captured override table
+      over an engine-default-constructed base, the same base every real call
+      site (`src/server/main.cpp`, `src/client/main.cpp`) starts from.
+- [x] `content/base/mechanics.lua`'s placing handler now calls
+      `vb.physics.get_params().eye_height` / `vb.action.get_params().reach`
+      instead of its own hardcoded `EYE_HEIGHT = 1.62` / `max_dist = 5.0`
+      constants (both removed).
+- [x] Wired into both binaries' startup: `src/server/main.cpp` calls
+      `session.world_replicator()->set_reach(pack_runtime
+      .effective_action_params(vb::net::ActionParams{}).reach)` right after
+      `set_punch_params`; `src/client/main.cpp`'s `--singleplayer` path calls
+      the equivalent on its own `replicator` before handing it to
+      `set_world_replicator`, mirroring `move_params`'s existing
+      config-then-pack-override precedent.
+- [x] Tests: a new `blockedit_test.cpp` case
+      ("`WorldReplicator::set_reach` widens both block-edit reach and
+      `punch()` reach from the same one value") proves a single
+      `set_reach()` call moves both `in_reach()`'s and `punch()`'s
+      accept/reject boundary together, with a real `EditWorld`/`ServerSession`
+      (no Lua). New `pack_runtime_test.cpp` cases cover
+      `vb.action.set_params` (override applied, rejected after `freeze()`),
+      the built-in default with no override, and
+      `vb.physics.get_params()`/`vb.action.get_params()` round-tripping the
+      effective values both before and after `set_params`. Full `vb_tests`
+      green (294/294) on `build-net-lua`; `voxel_browser`/
+      `voxel_browser_server` also rebuild clean.
 

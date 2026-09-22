@@ -426,3 +426,37 @@ TEST_CASE("punch() hits nothing when no block or player is within reach") {
 	CHECK_FALSE(result.hit_player);
 	CHECK_FALSE(result.hit_block);
 }
+
+// Phase 6.21: WorldReplicator::set_reach(...) is the one shared knob both
+// block-edit reach (WorldReplicator::apply_block_edit/in_reach) and combat
+// reach (ServerSession::punch(), which reads world_replicator()->reach())
+// now read -- widening it should widen both at once, from the same call,
+// with no separate PunchParams::reach left to independently override.
+TEST_CASE("WorldReplicator::set_reach widens both block-edit reach and "
+		  "punch() reach from the same one value") {
+	EditWorld w;
+	w.server->set_player_state(w.a_id, Vec3d{ 4, 40, 4 });
+	w.pump(6);
+
+	const IVec3 target =
+			surface_voxel(w.server->world_replicator()->world(), 4, 4);
+	// Far enough above to be outside the default 5.5 block reach, but well
+	// within a widened one.
+	const Vec3d far_above{
+		target.x + 0.5, target.y + 20.0, target.z + 0.5
+	};
+	w.server->set_player_state(w.a_id, far_above, vb::core::Vec2f{ 0.0f, -90.0f });
+	w.pump(3);
+
+	// Default reach: too far for either check to accept.
+	CHECK_FALSE(w.server->world_replicator()->in_reach(far_above, target));
+	CHECK_FALSE(w.server->punch(w.a_id).hit_block);
+
+	w.server->world_replicator()->set_reach(25.0);
+	w.pump(1);
+
+	CHECK(w.server->world_replicator()->in_reach(far_above, target));
+	const auto result = w.server->punch(w.a_id);
+	CHECK(result.hit_block);
+	CHECK(result.block_pos == target);
+}

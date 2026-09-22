@@ -110,6 +110,15 @@ public:
 	net::ServerSession::PunchParams effective_punch_params(
 			net::ServerSession::PunchParams base) const;
 
+	// Phase 6.21: applies a pack's `vb.action.set_params{reach=...}` on top of
+	// `base` -- same shape as effective_punch_params()/effective_move_params()
+	// above. Unifies what used to be WorldReplicator's own hardcoded, non-
+	// overridable reach constant and PunchParams::reach into the one value
+	// both WorldReplicator::set_reach() and ServerSession::punch() now read.
+	// Call after freeze(), once, before wiring the result onto
+	// WorldReplicator::set_reach().
+	net::ActionParams effective_action_params(net::ActionParams base) const;
+
 	// Phase 6.8: a pack's `vb.daynight.set_curve{keyframes = {...}}`, if it
 	// ever called it -- `nullopt` (default) means no pack ever overrode the
 	// curve, so the caller should send no S2C_DayNightCurve frame at all and

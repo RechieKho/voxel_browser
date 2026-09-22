@@ -182,7 +182,7 @@ Full detail: `remaining_tasks/phase5.md`.
 
 ---
 
-## Phase 6 — Lua-Driven Extensibility ✅ 6.1–6.16, 6.18, 6.20 done; 6.17 superseded; 6.21 planned
+## Phase 6 — Lua-Driven Extensibility ✅ 6.1–6.16, 6.18, 6.20–6.21 done; 6.17 superseded
 
 Goal: content packs override/extend engine defaults the way block
 registration already does — biomes, entities, UI, input, data. Landed:
@@ -196,9 +196,12 @@ engine-neutral client HUD primitive (`ui.define_hud` + `kRect`, 6.16),
 Growtopia-style discrete punch combat with block self-heal (6.18 — this is
 the current shape of block breaking, **not** 6.17's original hold-to-break
 plan, which was superseded same-day and is kept only for historical record),
-and right-click placing decoupled into content the same way (6.20 — closes
+right-click placing decoupled into content the same way (6.20 — closes
 6.17/6.18's own "Placing... unaffected" gap; `player:place_block()` is now
-the validated primitive, `content/base/mechanics.lua` decides when/what).
+the validated primitive, `content/base/mechanics.lua` decides when/what), and
+a unified, pack-overridable interaction reach + physics/action read-back
+surface (6.21 — `vb.action.set_params{reach=}`/`get_params()` and
+`vb.physics.get_params()`).
 Full detail: `remaining_tasks/phase6.md`.
 
 **Remaining:**
@@ -236,16 +239,32 @@ Full detail: `remaining_tasks/phase6.md`.
       `content/base/mechanics.lua`, not read from a selected hotbar/
       inventory slot — 6.20; no "held item"/hotbar-selection primitive
       exists anywhere yet for a pack to read from.
-- [ ] **6.21 (planned):** block-edit reach (`WorldReplicator::
-      kMaxReachBlocks`) is hardcoded and non-overridable, unlike combat
-      reach; no read-back exists, so `content/base/mechanics.lua`'s placing
-      raycast hardcodes `EYE_HEIGHT`/reach constants that can silently drift
-      from a pack's own override. Decided: block-edit reach and punch reach
-      unify into one value under a new generic `vb.action.set_params{reach=}`
-      / `vb.action.get_params()` (deliberately not under `vb.combat`, so a
-      pack author looking for the mining-reach knob doesn't have to think to
-      search "combat" for it) — pre-freeze override, same shape as
-      `set_params` elsewhere; see `remaining_tasks/phase6.md`.
+- [x] **6.21:** block-edit reach and punch reach unified into one
+      pack-overridable `net::ActionParams::reach` (`inc/vb/net/
+      world_replicator.hpp`), replacing both `WorldReplicator`'s old
+      hardcoded, non-overridable `kMaxReachBlocks` constant and
+      `ServerSession::PunchParams::reach` — `WorldReplicator::set_reach()`/
+      `reach()` hold the one value `in_reach()`/`apply_block_edit()` and
+      `ServerSession::punch()` (via `world_replicator()->reach()`) all read.
+      New `vb.action.set_params{reach=...}`/`vb.action.get_params()` Lua
+      binding (`PackRuntime::effective_action_params`,
+      `src/script/pack_runtime.cpp`) — deliberately its own namespace, not
+      `vb.combat`, so a pack author hunting for the mining-reach knob doesn't
+      have to think to search "combat" for it; `vb.combat.set_params` kept
+      only its genuinely combat-specific fields. Also added
+      `vb.physics.get_params()` (effective `MoveParams` as a plain table).
+      `content/base/mechanics.lua`'s placing raycast now calls
+      `vb.physics.get_params().eye_height`/`vb.action.get_params().reach`
+      instead of its own hardcoded `EYE_HEIGHT`/`max_dist` constants. Wired
+      into both `src/server/main.cpp` and `src/client/main.cpp`'s
+      `--singleplayer` path, same config-then-pack-override precedent as
+      `move_params`/`punch_params`. Tests: a new `blockedit_test.cpp` case
+      proves `WorldReplicator::set_reach()` widens both block-edit reach and
+      `punch()` reach from the same one call; new `pack_runtime_test.cpp`
+      cases cover `vb.action.set_params` (override + post-freeze rejection +
+      built-in default) and `vb.physics.get_params()`/`vb.action.get_params()`
+      round-tripping the effective values. Full `vb_tests` green (294/294)
+      on `build-net-lua`.
 
 ---
 

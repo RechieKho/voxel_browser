@@ -258,6 +258,12 @@ ServerSession::PunchResult ServerSession::punch(core::NetId puncher) {
 	eye.y += move_params_.eye_height;
 	const core::Vec3d dir = core::forward_from_yaw_pitch(
 			static_cast<double>(pe->rot.x), static_cast<double>(pe->rot.y));
+	// Phase 6.21: read the same shared reach WorldReplicator's block-edit path
+	// enforces, so punch reach and mining reach are always one value, not two
+	// independently pack-overridable numbers. Falls back to ActionParams's own
+	// built-in default if somehow called with no world attached (untested
+	// configuration -- punch() already no-ops without a replicator below).
+	const double reach = replicator_ ? replicator_->reach() : ActionParams{}.reach;
 
 	// Nearest other player modeled as a vertical cylinder (feet at their
 	// tracked position, top at move_params_.height above it, radius
@@ -267,7 +273,7 @@ ServerSession::PunchResult ServerSession::punch(core::NetId puncher) {
 	// feet and head at reasonable range should register, the same forgiving
 	// hitbox any FPS gives a standing target, not a single point a puncher's
 	// eye line has to intersect exactly.
-	double best_player_t = punch_params_.reach;
+	double best_player_t = reach;
 	core::NetId best_player = core::NetId::kInvalid;
 	for (auto &[conn, other] : conns_) {
 		(void)conn;
@@ -283,7 +289,7 @@ ServerSession::PunchResult ServerSession::punch(core::NetId puncher) {
 		if (denom > 1e-9) {
 			t = ((oe->pos.x - eye.x) * dir.x + (oe->pos.z - eye.z) * dir.z) / denom;
 		}
-		t = core::clamp(t, 0.0, punch_params_.reach);
+		t = core::clamp(t, 0.0, reach);
 		const double px = eye.x + dir.x * t;
 		const double py = eye.y + dir.y * t;
 		const double pz = eye.z + dir.z * t;
@@ -300,10 +306,10 @@ ServerSession::PunchResult ServerSession::punch(core::NetId puncher) {
 	}
 
 	world::VoxelRayHit block_hit;
-	double block_t = punch_params_.reach;
+	double block_t = reach;
 	if (replicator_) {
 		block_hit =
-				world::raycast_voxel(world_query(), eye, dir, punch_params_.reach);
+				world::raycast_voxel(world_query(), eye, dir, reach);
 		if (block_hit.hit) {
 			const core::Vec3d center{ static_cast<double>(block_hit.voxel.x) + 0.5,
 				static_cast<double>(block_hit.voxel.y) + 0.5,

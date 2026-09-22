@@ -22,6 +22,19 @@
 
 namespace vb::net {
 
+// Phase 6.21: the one shared "how far can this player interact" number,
+// unifying what used to be WorldReplicator's own hardcoded, non-overridable
+// kMaxReachBlocks constant and ServerSession::PunchParams::reach (which was
+// pack-overridable but independent, so a pack overriding punch reach could
+// silently desync from block-edit reach). Both WorldReplicator's block-edit
+// path and ServerSession::punch() now read this one value; a pack overrides
+// it via the new vb.action.set_params{reach=...} Lua binding
+// (PackRuntime::effective_action_params), same "engine default, optional
+// pre-freeze override" shape as physics::MoveParams/ServerSession::PunchParams.
+struct ActionParams {
+	double reach = 5.5; // matches the old kMaxReachBlocks/PunchParams::reach default
+};
+
 // Phase 4.2 seam: a script host may veto/observe block edits without
 // WorldReplicator depending on script types (pure std::function, no sol2).
 struct BlockEditHooks {
@@ -72,6 +85,13 @@ public:
 	// a target without duplicating the constant.
 	bool in_reach(core::Vec3d eye_pos, core::IVec3 pos) const;
 
+	// Phase 6.21: overrides the built-in 5.5-block reach default (see
+	// ActionParams above). Called once per tick from the effective_action_params
+	// result, same posture as ServerSession::set_punch_params -- cheap even if
+	// called every tick, no different from any other per-tick struct field set.
+	void set_reach(double blocks) { reach_ = blocks; }
+	double reach() const { return reach_; }
+
 	const world::World &world() const { return world_; }
 	world::World &world() { return world_; }
 	std::size_t requested_chunk_count() const {
@@ -87,6 +107,7 @@ private:
 	world::ChunkLifecycleSystem lifecycle_;
 	int view_distance_;
 	int vertical_view_;
+	double reach_ = 5.5;
 	std::unordered_map<core::NetId, std::vector<core::ChunkCoord>> last_sent_;
 	// The chunk revision most recently sent to each player, for each chunk
 	// they mirror. Presence/absence alone (last_sent_ above) only tells tick()

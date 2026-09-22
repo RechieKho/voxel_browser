@@ -256,6 +256,11 @@ struct Singleplayer {
 		auto replicator = std::make_unique<vb::net::WorldReplicator>(
 				world, pool, registry, view_distance, 3);
 		pack_runtime.attach_world(*replicator);
+		// Phase 6.21: mirrors src/server/main.cpp's own set_reach call -- the
+		// same value both this replicator's block-edit reach and
+		// server.punch()'s combat reach read.
+		replicator->set_reach(
+				pack_runtime.effective_action_params(vb::net::ActionParams{}).reach);
 		server.set_world_replicator(std::move(replicator));
 		pack_runtime.attach_session(server);
 

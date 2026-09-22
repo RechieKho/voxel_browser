@@ -38,13 +38,6 @@ local was_secondary_down = {}
 -- (apply_script_block_edit -- reach check, hooks, fan-out), same as
 -- break_block().
 --
--- 1.62 mirrors physics::MoveParams::eye_height's engine default (the same
--- value ServerSession::apply_script_block_edit's own reach check uses) --
--- there's no vb.physics.get_params() to read it back from a pack override,
--- so a pack that changes eye_height and wants placing's target-selection
--- ray to match would override this constant too.
-local EYE_HEIGHT = 1.62
-
 vb.on("player_input", function(player, input)
 	local name = player:get_name()
 	local down = input.buttons and input.buttons.primary or false
@@ -63,8 +56,14 @@ vb.on("player_input", function(player, input)
 			y = math.sin(pitch),
 			z = -math.cos(yaw) * math.cos(pitch),
 		}
-		local origin = { x = pos.x, y = pos.y + EYE_HEIGHT, z = pos.z }
-		local hit = vb.world.raycast(origin, dir, 5.0)
+		-- Phase 6.21: reads the engine's *effective* (post pack-override)
+		-- eye_height/reach instead of hardcoding a copy of them, so an
+		-- override (vb.physics.set_params/vb.action.set_params) can never
+		-- silently desync this raycast from the engine's own reach check.
+		local eye_height = vb.physics.get_params().eye_height
+		local reach = vb.action.get_params().reach
+		local origin = { x = pos.x, y = pos.y + eye_height, z = pos.z }
+		local hit = vb.world.raycast(origin, dir, reach)
 		if hit then
 			player:place_block(
 					hit.x + hit.nx, hit.y + hit.ny, hit.z + hit.nz, base_stone_id)

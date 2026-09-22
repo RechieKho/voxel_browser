@@ -18,9 +18,40 @@
 
 ---
 
-## Current status (2026-09-19)
+## Current status (2026-09-22)
 
-Most recent landed item is **Phase 5.3: keybindings screen** — a new
+Most recent landed item is **6.21: unified interaction reach + physics/action
+read-back** — `net::ActionParams` (new struct, `inc/vb/net/
+world_replicator.hpp`, sibling to `BlockEditHooks`) replaces both
+`WorldReplicator`'s old hardcoded, non-overridable `kMaxReachBlocks` constant
+and the separate `ServerSession::PunchParams::reach` with one shared value:
+`WorldReplicator::set_reach()`/`reach()` hold it, and both `in_reach()`/
+`apply_block_edit()` and `ServerSession::punch()` (via
+`world_replicator()->reach()`, `src/net/session.cpp`) read it. Exposed to Lua
+as `vb.action.set_params{reach=...}` / `vb.action.get_params()` (new
+`vb["action"]` table, `src/script/pack_runtime.cpp`,
+`PackRuntime::effective_action_params`, same "engine default, pre-freeze
+override" shape as `vb.physics`/`vb.combat`) — a new namespace, deliberately
+not folded into `vb.combat.set_params` (which keeps only `hit_radius`/
+`player_damage`/`heal_after_seconds`/`heal_interval_seconds`), so a pack
+author hunting for the mining-reach knob doesn't have to think to search
+"combat" for it. Also added `vb.physics.get_params()` (effective
+`physics::MoveParams` as a plain table). `content/base/mechanics.lua`'s
+placing raycast now reads `vb.physics.get_params().eye_height`/
+`vb.action.get_params().reach` instead of its own hardcoded `EYE_HEIGHT`/
+`max_dist` constants, so a pack override can never silently desync Lua's
+target-selection from the engine's own reach check. Wired into both
+`src/server/main.cpp` and `src/client/main.cpp`'s `--singleplayer` path right
+next to the existing `move_params`/`punch_params` wiring. New tests: a
+`blockedit_test.cpp` case proves one `WorldReplicator::set_reach()` call
+moves both the block-edit and `punch()` accept/reject boundary together; new
+`pack_runtime_test.cpp` cases cover `vb.action.set_params` (override +
+post-freeze rejection + built-in default) and
+`vb.physics.get_params()`/`vb.action.get_params()` round-tripping the
+effective values. Full `vb_tests` green (294/294) on `build-net-lua`;
+`voxel_browser`/`voxel_browser_server` also rebuild clean.
+
+Before that, most recent landed item was **Phase 5.3: keybindings screen** — a new
 Settings -> Keybindings raygui screen (`MainMenu::open_keybindings`/
 `draw_keybindings` in `src/render/main_menu.{hpp,cpp}`) lets a player click
 an action's current key and press any physical key to rebind it, for the 6

@@ -297,7 +297,11 @@ public:
 	// 6.7). Global, not per-entity-kind, since no entity kind besides the
 	// player throws punches today.
 	struct PunchParams {
-		double reach = 5.5; // matches WorldReplicator's own block-edit reach
+		// Phase 6.21: reach moved out to the shared ActionParams::reach
+		// (world_replicator.hpp) -- punch() reads world_replicator()->reach()
+		// so combat reach and block-edit reach are always the same one
+		// pack-overridable value (vb.action.set_params{reach=...}), not two
+		// independently-overridable numbers that could drift apart.
 		float hit_radius = 0.6f; // capsule radius around a player's torso point
 		float player_damage = 1.0f; // PvP damage per punch landing on a player
 		// Self-heal (spec-equivalent to 6.5's BlockDamageSystem heal hook, but

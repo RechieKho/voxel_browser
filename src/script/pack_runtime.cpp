@@ -345,6 +345,13 @@ struct PackRuntime::Impl {
 	// as move_params_table above.
 	std::optional<sol::table> combat_params_table;
 
+	// Phase 6.21: the raw table passed to vb.action.set_params{reach=...}, if
+	// a pack ever calls it -- same "capture the table, parse lazily" posture
+	// as move_params_table/combat_params_table above. Unifies what used to be
+	// combat_params_table's own 'reach' field and WorldReplicator's hardcoded
+	// constant into the one value effective_action_params() resolves.
+	std::optional<sol::table> action_params_table;
+
 	// Phase 6.8: the raw table passed to vb.daynight.set_curve{keyframes =
 	// {...}}, if a pack ever calls it. Parsed into a world::DayNightCurve in
 	// effective_day_night_curve() rather than eagerly, matching
@@ -908,14 +915,64 @@ void PackRuntime::Impl::install_bindings() {
 		}
 		move_params_table = def;
 	};
+	// Phase 6.21: read-back of the *effective* (post pack-override) values,
+	// so Lua-side code (e.g. content/base/mechanics.lua's placing raycast)
+	// never has to hardcode/guess an engine default that might not match
+	// what this same pack already overrode via set_params above. Applies
+	// move_params_table over the engine's own default-constructed
+	// physics::MoveParams, same base every real call site
+	// (src/server/main.cpp, src/client/main.cpp) starts from.
+	physics_tbl["get_params"] = [this]() -> sol::table {
+		const physics::MoveParams p = [this] {
+			physics::MoveParams out{};
+			if (move_params_table) {
+				const sol::table &def = *move_params_table;
+				out.half_width = def.get_or("half_width", out.half_width);
+				out.height = def.get_or("height", out.height);
+				out.eye_height = def.get_or("eye_height", out.eye_height);
+				out.walk_speed = def.get_or("walk_speed", out.walk_speed);
+				out.sprint_speed = def.get_or("sprint_speed", out.sprint_speed);
+				out.accel = def.get_or("accel", out.accel);
+				out.air_accel = def.get_or("air_accel", out.air_accel);
+				out.friction = def.get_or("friction", out.friction);
+				out.gravity = def.get_or("gravity", out.gravity);
+				out.jump_speed = def.get_or("jump_speed", out.jump_speed);
+				out.terminal_velocity =
+						def.get_or("terminal_velocity", out.terminal_velocity);
+				out.step_height = def.get_or("step_height", out.step_height);
+				out.fly_speed = def.get_or("fly_speed", out.fly_speed);
+				out.fly = def.get_or("fly", out.fly);
+			}
+			return out;
+		}();
+		sol::table t = lua_state().create_table();
+		t["half_width"] = p.half_width;
+		t["height"] = p.height;
+		t["eye_height"] = p.eye_height;
+		t["walk_speed"] = p.walk_speed;
+		t["sprint_speed"] = p.sprint_speed;
+		t["accel"] = p.accel;
+		t["air_accel"] = p.air_accel;
+		t["friction"] = p.friction;
+		t["gravity"] = p.gravity;
+		t["jump_speed"] = p.jump_speed;
+		t["terminal_velocity"] = p.terminal_velocity;
+		t["step_height"] = p.step_height;
+		t["fly_speed"] = p.fly_speed;
+		t["fly"] = p.fly;
+		return t;
+	};
 
-	// Phase 6.18: overrides player:punch()'s default reach/hit_radius/
+	// Phase 6.18: overrides player:punch()'s default hit_radius/
 	// player_damage/heal_after_seconds/heal_interval_seconds
 	// (ServerSession::PunchParams) -- same "override individual fields on
 	// top of a built-in default" shape as vb.physics.set_params above.
 	// Unlike 6.5's BlockDamageSystem (which ships zero heal policy until a
 	// pack supplies one), punching's self-heal is a real engine default --
 	// only its rate is a pack-facing knob, not whether it exists at all.
+	// Phase 6.21: `reach` moved out to vb.action.set_params below -- it isn't
+	// combat-specific (block-edit reach uses the exact same value), so a pack
+	// author hunting for the mining-reach knob shouldn't have to look here.
 	sol::table combat_tbl = lua.create_table();
 	vb["combat"] = combat_tbl;
 	combat_tbl["set_params"] = [this](sol::table def) {
@@ -923,6 +980,34 @@ void PackRuntime::Impl::install_bindings() {
 			throw sol::error("vb.combat.set_params: registry already frozen");
 		}
 		combat_params_table = def;
+	};
+
+	// Phase 6.21: the one shared "how far can this player interact" knob --
+	// unifies what used to be WorldReplicator's own hardcoded, non-overridable
+	// block-edit reach constant and vb.combat.set_params's independent (but
+	// pack-overridable) punch reach into a single value both
+	// WorldReplicator::in_reach()/apply_block_edit() and ServerSession::punch()
+	// read (net::ActionParams, effective_action_params()). Deliberately its
+	// own namespace, not folded into vb.combat, so a pack author looking for
+	// "the block-mining-reach knob" doesn't have to think to search "combat"
+	// for it -- vb.action is left open as the natural home for any other
+	// future cross-cutting player-action primitive.
+	sol::table action_tbl = lua.create_table();
+	vb["action"] = action_tbl;
+	action_tbl["set_params"] = [this](sol::table def) {
+		if (frozen) {
+			throw sol::error("vb.action.set_params: registry already frozen");
+		}
+		action_params_table = def;
+	};
+	action_tbl["get_params"] = [this]() -> sol::table {
+		net::ActionParams p{};
+		if (action_params_table) {
+			p.reach = action_params_table->get_or("reach", p.reach);
+		}
+		sol::table t = lua_state().create_table();
+		t["reach"] = p.reach;
+		return t;
 	};
 
 	// Phase 6.8: overrides the engine's default 4-keyframe day/night sky
@@ -1885,13 +1970,22 @@ net::ServerSession::PunchParams PackRuntime::effective_punch_params(
 	}
 	const sol::table &def = *impl_->combat_params_table;
 	net::ServerSession::PunchParams out = base;
-	out.reach = def.get_or("reach", out.reach);
 	out.hit_radius = def.get_or("hit_radius", out.hit_radius);
 	out.player_damage = def.get_or("player_damage", out.player_damage);
 	out.heal_after_seconds =
 			def.get_or("heal_after_seconds", out.heal_after_seconds);
 	out.heal_interval_seconds =
 			def.get_or("heal_interval_seconds", out.heal_interval_seconds);
+	return out;
+}
+
+net::ActionParams PackRuntime::effective_action_params(net::ActionParams base) const {
+	if (!impl_->action_params_table) {
+		return base;
+	}
+	const sol::table &def = *impl_->action_params_table;
+	net::ActionParams out = base;
+	out.reach = def.get_or("reach", out.reach);
 	return out;
 }
 
