@@ -53,8 +53,8 @@ bool ChunkMeshWorkerPool::submit(ChunkMeshSnapshot snapshot, BlockRegistry regis
 			return false;
 		}
 		if (std::find_if(queue_.begin(), queue_.end(), [&](const Job &j) {
-					return j.snapshot.coord == coord;
-				}) != queue_.end()) {
+				return j.snapshot.coord == coord;
+			}) != queue_.end()) {
 			return false;
 		}
 		if (synchronous_) {

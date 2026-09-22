@@ -94,7 +94,8 @@ std::size_t resolve_cell(std::uint64_t seed, double cell_size,
 	}
 
 	const double pick = core::noise::to_unit(
-			core::noise::hash2(seed ^ 0xB10E5E1EC7100002ULL, cx, cy)) * total;
+								core::noise::hash2(seed ^ 0xB10E5E1EC7100002ULL, cx, cy)) *
+			total;
 	double cursor = 0.0;
 	std::size_t chosen = biomes.size() - 1;
 	for (std::size_t i = 0; i < biomes.size(); ++i) {
@@ -113,9 +114,9 @@ std::size_t resolve_cell(std::uint64_t seed, double cell_size,
 } // namespace
 
 BiomeSelector::BiomeSelector(std::uint64_t seed, double cell_size,
-		std::vector<BiomeEntry> biomes)
-		: seed_(seed), cell_size_(cell_size > 0.0 ? cell_size : 256.0),
-		  biomes_(std::move(biomes)) {}
+		std::vector<BiomeEntry> biomes) : seed_(seed),
+										  cell_size_(cell_size > 0.0 ? cell_size : 256.0),
+										  biomes_(std::move(biomes)) {}
 
 std::size_t BiomeSelector::resolve(double world_x, double world_z) const {
 	if (biomes_.empty()) {

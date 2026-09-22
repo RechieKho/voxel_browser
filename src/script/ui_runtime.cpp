@@ -448,7 +448,7 @@ void UiRuntime::open(std::string_view name, std::string_view ctx_json) {
 	nlohmann::json parsed;
 	try {
 		parsed = ctx_json.empty() ? nlohmann::json::object()
-									: nlohmann::json::parse(ctx_json);
+								  : nlohmann::json::parse(ctx_json);
 	} catch (const nlohmann::json::parse_error &) {
 		parsed = nlohmann::json::object();
 	}

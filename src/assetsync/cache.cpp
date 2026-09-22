@@ -57,7 +57,7 @@ std::string hash_hex(core::AssetHash h) { return hex(h.hi) + hex(h.lo); }
 
 ClientAssetCache::ClientAssetCache(std::filesystem::path cache_root,
 		std::uint64_t cap_bytes) : cache_root_(std::move(cache_root)),
-									cap_bytes_(cap_bytes) {
+								   cap_bytes_(cap_bytes) {
 	std::error_code ec;
 	std::filesystem::create_directories(cache_root_, ec);
 	load_index();

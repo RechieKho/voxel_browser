@@ -2,8 +2,7 @@
 
 namespace vb::world {
 
-ItemDropSystem::ItemDropSystem(double pickup_radius, double lifetime_seconds)
-		: pickup_radius_(pickup_radius), lifetime_seconds_(lifetime_seconds) {}
+ItemDropSystem::ItemDropSystem(double pickup_radius, double lifetime_seconds) : pickup_radius_(pickup_radius), lifetime_seconds_(lifetime_seconds) {}
 
 core::NetId ItemDropSystem::spawn(core::Vec3d pos, core::BlockId item,
 		std::uint16_t count, std::optional<double> pickup_radius,

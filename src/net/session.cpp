@@ -1056,10 +1056,10 @@ HandshakeClientHost make_asset_host(assetsync::ClientAssetCache *cache) {
 } // namespace
 
 ClientSession::ClientSession(Transport &transport, ConnId conn,
-		HandshakeClientConfig config, assetsync::ClientAssetCache *cache)
-		: transport_(transport), conn_(conn),
-		  handshake_(std::move(config), make_asset_host(cache)),
-		  asset_cache_(cache) {}
+		HandshakeClientConfig config, assetsync::ClientAssetCache *cache) : transport_(transport),
+																			conn_(conn),
+																			handshake_(std::move(config), make_asset_host(cache)),
+																			asset_cache_(cache) {}
 
 const std::unordered_map<std::string, std::vector<std::byte>> &
 ClientSession::virtual_pack_fs() const {

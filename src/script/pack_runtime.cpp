@@ -10,8 +10,7 @@ namespace vb::script {
 struct PackRuntime::Impl {};
 
 PackRuntime::PackRuntime(net::Transport &, world::BlockRegistry &,
-		std::filesystem::path, VmLimits)
-		: impl_(nullptr) {}
+		std::filesystem::path, VmLimits) : impl_(nullptr) {}
 PackRuntime::~PackRuntime() = default;
 PackRuntime::PackRuntime(PackRuntime &&) noexcept = default;
 PackRuntime &PackRuntime::operator=(PackRuntime &&) noexcept = default;
@@ -561,8 +560,8 @@ struct PlayerHandle {
 
 	void remove() const {
 		VB_WARN("script", "entity:remove() is a no-op for player-backed "
-				"handles -- no generic entity registry exists yet "
-				"(Phase 3.1)");
+						  "handles -- no generic entity registry exists yet "
+						  "(Phase 3.1)");
 	}
 
 	sol::object get_inventory(sol::this_state ts) const {
@@ -744,9 +743,11 @@ struct PlayerHandle {
 };
 
 PackRuntime::Impl::Impl(net::Transport &t, world::BlockRegistry &reg,
-		std::filesystem::path path, VmLimits limits)
-		: transport(t), registry(reg), storage_path(std::move(path)),
-		  db(storage_path.parent_path() / "db"), vm(limits) {
+		std::filesystem::path path, VmLimits limits) : transport(t),
+													   registry(reg),
+													   storage_path(std::move(path)),
+													   db(storage_path.parent_path() / "db"),
+													   vm(limits) {
 	std::ifstream in(storage_path);
 	if (in) {
 		try {
@@ -1172,7 +1173,7 @@ void PackRuntime::Impl::install_bindings() {
 		if (key == "auth_mode") {
 			return sol::make_object(lua_state(),
 					c.auth_mode == core::ConfigAuthMode::kToken ? std::string("token")
-																  : std::string("none"));
+																: std::string("none"));
 		}
 		if (key == "motd") {
 			return sol::make_object(lua_state(), c.motd);
@@ -1206,8 +1207,8 @@ void PackRuntime::Impl::install_bindings() {
 	};
 
 	world_tbl["raycast"] = [this](sol::table origin, sol::table dir,
-									   double max_dist,
-									   sol::this_state ts) -> sol::object {
+								   double max_dist,
+								   sol::this_state ts) -> sol::object {
 		sol::state_view sv(ts);
 		if (replicator == nullptr) {
 			throw sol::error("vb.world.raycast: world not attached yet");
@@ -1238,7 +1239,7 @@ void PackRuntime::Impl::install_bindings() {
 	// since it isn't a `vb.register_entity` kind at all -- just a hardcoded
 	// ItemDropSystem entry (vb::world::ItemDropSystem, src/net/session.cpp).
 	world_tbl["spawn_item_drop"] = [this](sol::table pos, std::uint16_t item,
-											   std::uint16_t count) {
+										   std::uint16_t count) {
 		if (session == nullptr) {
 			throw sol::error("vb.world.spawn_item_drop: session not attached yet");
 		}
@@ -1286,7 +1287,7 @@ void PackRuntime::Impl::install_bindings() {
 	// -- this just fires the kind's on_hit so a pack can implement whatever
 	// health/aggro/knockback logic it wants.
 	entity_methods["damage"] = [this](sol::table self, double amount,
-											sol::optional<std::string> cause) {
+									   sol::optional<std::string> cause) {
 		dispatch_entity_hit(self_net_id(self), amount, cause.value_or(std::string{}));
 	};
 	entity_methods["remove"] = [this](sol::table self, sol::optional<std::string> cause) {
@@ -1296,7 +1297,7 @@ void PackRuntime::Impl::install_bindings() {
 	entity_mt["__index"] = entity_methods;
 
 	world_tbl["spawn"] = [this](const std::string &kind, sol::table pos,
-										sol::this_state ts) -> sol::object {
+								 sol::this_state ts) -> sol::object {
 		sol::state_view sv(ts);
 		auto kind_it = std::find_if(entity_kinds.begin(), entity_kinds.end(),
 				[&](const EntityKindDef &e) { return e.name == kind; });
@@ -1357,9 +1358,9 @@ void PackRuntime::Impl::install_bindings() {
 	};
 	storage_meta[sol::meta_function::new_index] =
 			[this](sol::table, const std::string &key, sol::object value) {
-		storage[key] = lua_to_json(value);
-		storage_dirty_flag = true;
-	};
+				storage[key] = lua_to_json(value);
+				storage_dirty_flag = true;
+			};
 	storage_proxy[sol::metatable_key] = storage_meta;
 	vb["storage"] = storage_proxy;
 
@@ -1566,7 +1567,7 @@ void PackRuntime::Impl::on_block_edit_after(core::NetId editor,
 			const sol::object ret = r;
 			if (ret.valid() && ret.get_type() != sol::type::lua_nil) {
 				VB_DEBUG("script", "block callback returned a value (drop) "
-						"-- not materialized yet, Phase 5.1 items");
+								   "-- not materialized yet, Phase 5.1 items");
 			}
 		}
 		break;
@@ -1869,9 +1870,8 @@ std::optional<float> PackRuntime::Impl::run_block_health_tick(core::IVec3 pos,
 
 PackRuntime::PackRuntime(net::Transport &transport,
 		world::BlockRegistry &registry, std::filesystem::path storage_path,
-		VmLimits limits)
-		: impl_(std::make_unique<Impl>(transport, registry,
-				  std::move(storage_path), limits)) {}
+		VmLimits limits) : impl_(std::make_unique<Impl>(transport, registry,
+								   std::move(storage_path), limits)) {}
 PackRuntime::~PackRuntime() = default;
 PackRuntime::PackRuntime(PackRuntime &&) noexcept = default;
 PackRuntime &PackRuntime::operator=(PackRuntime &&) noexcept = default;
@@ -1895,7 +1895,7 @@ void PackRuntime::install_join_veto(net::HandshakeServerHost &host) {
 	Impl *self = impl_.get();
 	auto user_auth = host.authenticate;
 	host.authenticate = [self, user_auth](std::string_view name,
-										  std::string_view token) -> net::AuthOutcome {
+								std::string_view token) -> net::AuthOutcome {
 		net::AuthOutcome outcome = user_auth(name, token);
 		if (!outcome.ok) {
 			return outcome;
@@ -1927,14 +1927,14 @@ void PackRuntime::attach_world(net::WorldReplicator &replicator) {
 	Impl *self = impl_.get();
 	net::BlockEditHooks hooks;
 	hooks.before_edit = [self](core::NetId editor, core::IVec3 pos,
-									core::BlockId existing,
-									core::BlockId new_block, bool is_break) {
+								core::BlockId existing,
+								core::BlockId new_block, bool is_break) {
 		return self->on_block_edit_before(editor, pos, existing, new_block,
 				is_break);
 	};
 	hooks.after_edit = [self](core::NetId editor, core::IVec3 pos,
-									core::BlockId removed, core::BlockId placed,
-									bool is_break) {
+							   core::BlockId removed, core::BlockId placed,
+							   bool is_break) {
 		self->on_block_edit_after(editor, pos, removed, placed, is_break);
 	};
 	replicator.set_block_edit_hooks(std::move(hooks));
@@ -2061,9 +2061,9 @@ worldgen::NoiseNodePtr PackRuntime::Impl::parse_noise_node(
 		node->type = worldgen::NoiseNodeType::kCombine;
 		const std::string op = t.get_or("op", std::string("add"));
 		node->op = op == "multiply" ? worldgen::NoiseCombineOp::kMultiply
-				: op == "min"		 ? worldgen::NoiseCombineOp::kMin
-				: op == "max"		 ? worldgen::NoiseCombineOp::kMax
-									 : worldgen::NoiseCombineOp::kAdd;
+				: op == "min"		? worldgen::NoiseCombineOp::kMin
+				: op == "max"		? worldgen::NoiseCombineOp::kMax
+									: worldgen::NoiseCombineOp::kAdd;
 		const sol::optional<sol::table> ta = t["a"];
 		const sol::optional<sol::table> tb = t["b"];
 		if (!ta || !tb) {
@@ -2251,8 +2251,8 @@ void PackRuntime::attach_session(net::ServerSession &session) {
 	impl_->session = &session;
 	session.set_ui_event_handler(
 			[this](core::NetId player, const protocol::C2SUiEvent &e) {
-		dispatch_ui_event(player, e);
-	});
+				dispatch_ui_event(player, e);
+			});
 	session.set_chat_handler([this](core::NetId sender, std::string_view text) {
 		return dispatch_chat(sender, text);
 	});
@@ -2264,9 +2264,9 @@ void PackRuntime::attach_session(net::ServerSession &session) {
 	Impl *self = impl_.get();
 	session.set_item_pickup_handler(
 			[self](core::NetId player, core::BlockId item, std::uint16_t count) {
-		self->give_item(player, item, count);
-		self->sync_inventory(player);
-	});
+				self->give_item(player, item, count);
+				self->sync_inventory(player);
+			});
 	// Phase 6.6: only installed when a pack actually registered
 	// vb.on("player_death", ...) (all pack loading finished before
 	// attach_session() runs, so `handlers` is already final) -- otherwise
@@ -2274,7 +2274,7 @@ void PackRuntime::attach_session(net::ServerSession &session) {
 	// pre-6.6 caller/test exactly.
 	if (self->handlers.count("player_death") != 0) {
 		session.set_respawn_handler([self](core::NetId id, std::string_view cause,
-											   float health_before) {
+											float health_before) {
 			return self->run_respawn_handler(id, cause, health_before);
 		});
 	}
@@ -2284,8 +2284,8 @@ void PackRuntime::attach_session(net::ServerSession &session) {
 	if (self->handlers.count("player_input") != 0) {
 		session.set_input_handler(
 				[self](core::NetId id, const protocol::InputCmd &cmd) {
-			return self->run_player_input(id, cmd);
-		});
+					return self->run_player_input(id, cmd);
+				});
 	}
 	// Phase 6.5: only installed when a pack registered at least one of the
 	// three block-damage events -- a pack that never opts in pays zero extra
@@ -2299,12 +2299,12 @@ void PackRuntime::attach_session(net::ServerSession &session) {
 			return self->run_block_break_begin(player, pos);
 		};
 		hooks.tick_damage = [self](core::NetId player, core::IVec3 pos,
-										  core::BlockId, std::uint16_t max_damage) {
+									core::BlockId, std::uint16_t max_damage) {
 			return self->run_block_break_tick(player, pos, max_damage);
 		};
 		hooks.health_tick = [self](core::IVec3 pos, core::BlockId, float damage,
-										  std::uint16_t max_damage,
-										  std::uint64_t idle) {
+									std::uint16_t max_damage,
+									std::uint64_t idle) {
 			return self->run_block_health_tick(pos, damage, max_damage, idle);
 		};
 		session.set_block_break_hooks(std::move(hooks));

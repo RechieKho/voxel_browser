@@ -25,10 +25,10 @@ DayNightCurve default_day_night_curve() {
 	// two parallel stop tables -- Phase 6.8's vb.daynight.set_curve overrides
 	// this same shape.
 	return DayNightCurve{ {
-		{ 0, 0.55, SkyColor{ 255, 170, 120 } }, // sunrise
-		{ kTicksPerDay / 4, 1.0, SkyColor{ 135, 206, 235 } }, // noon
-		{ kTicksPerDay / 2, 0.55, SkyColor{ 255, 130, 90 } }, // sunset
-		{ (kTicksPerDay * 3) / 4, 0.08, SkyColor{ 12, 14, 34 } }, // midnight
+			{ 0, 0.55, SkyColor{ 255, 170, 120 } }, // sunrise
+			{ kTicksPerDay / 4, 1.0, SkyColor{ 135, 206, 235 } }, // noon
+			{ kTicksPerDay / 2, 0.55, SkyColor{ 255, 130, 90 } }, // sunset
+			{ (kTicksPerDay * 3) / 4, 0.08, SkyColor{ 12, 14, 34 } }, // midnight
 	} };
 }
 
@@ -62,7 +62,7 @@ Bracket bracket_for(const DayNightCurve &curve, std::uint32_t ticks) {
 				(i + 1 == kf.size()) ? kTicksPerDay : next.tick;
 		if (ticks >= cur.tick && ticks < next_tick) {
 			const double t = next_tick == cur.tick ? 0.0
-													: static_cast<double>(ticks - cur.tick) /
+												   : static_cast<double>(ticks - cur.tick) /
 							static_cast<double>(next_tick - cur.tick);
 			return { &cur, &next, t };
 		}

@@ -112,10 +112,7 @@ core::BlockId ClientChunkStore::edit_block(core::IVec3 world_voxel,
 		// already-loaded chunk below, instead of just fixing this one chunk in
 		// isolation -- see lighting.hpp.
 		const LightEngine light_engine(registry_);
-		relight_column(light_engine, a.chunk,
-				[&](core::ChunkCoord c) { return find(c); },
-				[](core::ChunkCoord, const std::array<Light, kChunkVolume> &,
-						const Chunk &) {});
+		relight_column(light_engine, a.chunk, [&](core::ChunkCoord c) { return find(c); }, [](core::ChunkCoord, const std::array<Light, kChunkVolume> &, const Chunk &) {});
 		// A border edit changes the neighbour's culled faces too.
 		auto bump_neighbour = [&](int dx, int dy, int dz) {
 			const auto n = chunks_.find({ a.chunk.x + dx, a.chunk.y + dy,

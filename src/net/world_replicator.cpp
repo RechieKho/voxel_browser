@@ -249,11 +249,7 @@ std::vector<WorldReplicator::PlayerFrames> WorldReplicator::apply_block_edit(
 		}
 	};
 
-	world::relight_column(light_engine, cc,
-			[&](core::ChunkCoord c) { return world_.find_chunk(c); },
-			[&](core::ChunkCoord relit_coord,
-					const std::array<world::Light, world::kChunkVolume> &light_before,
-					const world::Chunk &after) {
+	world::relight_column(light_engine, cc, [&](core::ChunkCoord c) { return world_.find_chunk(c); }, [&](core::ChunkCoord relit_coord, const std::array<world::Light, world::kChunkVolume> &light_before, const world::Chunk &after) {
 				protocol::S2CChunkDelta delta;
 				delta.coord = relit_coord;
 				delta.new_revision = after.revision();
@@ -269,8 +265,7 @@ std::vector<WorldReplicator::PlayerFrames> WorldReplicator::apply_block_edit(
 								light_after[i].packed });
 					}
 				}
-				fan_out(delta);
-			});
+				fan_out(delta); });
 
 	out_result.accepted = true;
 
