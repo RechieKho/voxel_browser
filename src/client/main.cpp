@@ -700,6 +700,7 @@ int main(int argc, char **argv) {
 		kSettings,
 		kKeybindings,
 		kConnecting,
+		kLoading,
 		kPlaying,
 		kError };
 	AppState state = AppState::kMenu;
@@ -708,6 +709,11 @@ int main(int argc, char **argv) {
 	std::string connecting_target;
 	int connect_ticks = 0;
 	std::chrono::steady_clock::time_point connect_deadline;
+	// Phase 7.1: hard cap on how long kLoading waits for the initial view-box
+	// of chunks to stream in before letting the player through anyway (e.g. a
+	// server whose own view_distance is smaller than this client guessed, or
+	// a slow connection) -- getting out of the way beats blocking forever.
+	std::chrono::steady_clock::time_point loading_deadline;
 
 	std::unique_ptr<Singleplayer> sp;
 	std::unique_ptr<RemoteConnection> remote;
@@ -874,7 +880,12 @@ int main(int argc, char **argv) {
 					  << "': " << vb::core::message(saved.error()) << '\n';
 		}
 
-		state = AppState::kPlaying;
+		// Phase 7.1: a loading screen between "joined" and "first playable
+		// frame" instead of dropping straight into kPlaying -- the first
+		// frames after join are otherwise an emptier-than-usual world (chunks
+		// still streaming in), rendered with no indication that's expected.
+		loading_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+		state = AppState::kLoading;
 	};
 
 	while (!window.should_close()) {
@@ -963,6 +974,47 @@ int main(int argc, char **argv) {
 						client = nullptr;
 						state = AppState::kMenu;
 					}
+				}
+				break;
+			}
+			case AppState::kLoading: {
+				// Phase 7.1: keep pumping the session/server so the initial
+				// view-box of chunks actually streams in and gets meshed --
+				// this screen isn't a passive wait, it's what's advancing the
+				// load. A higher submit/upload budget than kPlaying's steady-
+				// state 8/frame (spec: get through this quickly).
+				if (connecting_singleplayer) {
+					sp->tick(dt);
+				} else {
+					client->tick(dt);
+				}
+				if (chunk_renderer) {
+					chunk_renderer->sync(client->chunk_store(), /*submit*/ 64, /*upload*/ 16);
+				}
+
+				// Expected chunk count mirrors WorldReplicator's own
+				// chunks_in_view box (radius=view_distance, vertical
+				// radius=3, see src/net/world_replicator.cpp /
+				// Singleplayer's own construction above) -- an approximation
+				// for a real server (whose own view_distance this client
+				// doesn't know ahead of time), clamped to 1.0 below so a
+				// smaller real box still reads as "done", not stuck.
+				const std::size_t expected = static_cast<std::size_t>(2 * view_distance + 1) *
+						static_cast<std::size_t>(2 * view_distance + 1) * 7u;
+				const std::size_t loaded_chunks = client->chunk_store().size();
+				const float fraction = expected == 0
+						? 1.0f
+						: static_cast<float>(loaded_chunks) / static_cast<float>(expected);
+
+				std::string operator_title;
+				if (const auto &info = client->server_info()) {
+					operator_title = info->motd;
+				}
+				menu.draw_loading(fraction, operator_title);
+
+				if (fraction >= 1.0f ||
+						std::chrono::steady_clock::now() > loading_deadline) {
+					state = AppState::kPlaying;
 				}
 				break;
 			}

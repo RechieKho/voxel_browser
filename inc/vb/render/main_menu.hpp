@@ -75,6 +75,16 @@ public:
 	};
 	ErrorResult draw_error(std::string_view reason);
 
+	// --- loading screen (Phase 7.1) ---------------------------------------
+	// The window between "joined" and "first playable frame" -- initial chunk
+	// streaming. `fraction` is [0,1] (clamp before calling); `operator_title`
+	// is stage 2's optional operator branding (server.toml's `motd`, once the
+	// handshake has actually delivered it -- empty until then, drawn under
+	// the generic bar rather than blocking it). Deliberately no Lua/pack
+	// involvement and no cancel button -- this screen's only job is getting
+	// out of the way quickly, not hosting interaction.
+	void draw_loading(float fraction, std::string_view operator_title);
+
 private:
 	std::string address_;
 	std::string port_text_;

@@ -20,7 +20,25 @@
 
 ## Current status (2026-09-22)
 
-Most recent landed item is **6.21: unified interaction reach + physics/action
+Most recent landed item is **Phase 7.1: engine-side loading screen** — a new
+`AppState::kLoading` in `src/client/main.cpp`, entered right after a
+successful join instead of dropping straight into `kPlaying`, left once the
+initial view-box of chunks has streamed in (`client->chunk_store().size()`
+over an expected count mirroring `WorldReplicator`'s `chunks_in_view` box
+shape, (2·view_distance+1)²·7) or an 8-second deadline elapses. Stage 1:
+`MainMenu::draw_loading()` (`src/render/main_menu.cpp`) — a generic
+`GuiProgressBar`, no data dependency. Stage 2: operator branding is text-only
+(`S2CServerInfo::motd`, already replicated during the handshake) — no color
+field was added (would need a protocol bump, left for a future pass, see
+REMAINING_TASKS.md 7.1's own note). `kLoading` also drives the load itself
+(pumps `sp->tick()`/`client->tick()` + `chunk_renderer->sync()` at a higher
+budget than `kPlaying`'s steady-state 8/frame) rather than passively waiting.
+Full `vb_tests` green (294/294) on `build-net-lua`; the windowed state
+machine itself wasn't manually eyeballed this pass (no GUI in this agent
+environment) — build + full test suite is the verification that exists.
+Full REMAINING_TASKS.md write-up under Phase 7's 7.1 entry.
+
+Before that, most recent landed item was **6.21: unified interaction reach + physics/action
 read-back** — `net::ActionParams` (new struct, `inc/vb/net/
 world_replicator.hpp`, sibling to `BlockEditHooks`) replaces both
 `WorldReplicator`'s old hardcoded, non-overridable `kMaxReachBlocks` constant

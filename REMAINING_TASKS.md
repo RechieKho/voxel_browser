@@ -268,7 +268,7 @@ Full detail: `remaining_tasks/phase6.md`.
 
 ---
 
-## Phase 7 — World & UX Polish (planned, not started)
+## Phase 7 — World & UX Polish (7.1 done, 7.2-7.4 planned)
 
 > User-requested (2026-09-19): four UX gaps, scoped as their own phase since
 > none of them extend Phase 6's "default + override" system pattern the way
@@ -277,8 +277,41 @@ Full detail: `remaining_tasks/phase6.md`.
 > reviewing Phase 6 (`ui/pause.lua`/`ui/inventory.lua`'s own "nothing opens
 > this yet" comments).
 
-- [ ] **7.1 — Engine-side loading screen with progress, during initial world
-      load.** Explicitly **not** Lua-driven (unlike 6.16's HUD/6.2's UI,
+- [x] **7.1 — Engine-side loading screen with progress, during initial world
+      load.** Landed 2026-09-22: a new `AppState::kLoading` in
+      `src/client/main.cpp`, entered right after a successful join (instead
+      of dropping straight into `kPlaying`) and left once the initial
+      view-box of chunks has streamed in (or an 8-second
+      `loading_deadline` elapses, so a server whose real `view_distance` is
+      smaller than this client guessed never gets stuck at <100%). Stage 1:
+      `MainMenu::draw_loading(fraction, operator_title)`
+      (`src/render/main_menu.cpp`) draws a generic `GuiProgressBar` the
+      instant the state is entered, no data dependency — `fraction` is
+      `client->chunk_store().size()` over an expected count mirroring
+      `WorldReplicator`'s own `chunks_in_view` box shape
+      ((2·view_distance+1)²·7, vertical radius 3 hardcoded both in
+      `src/net/world_replicator.cpp`'s `Singleplayer` construction and
+      `src/server/main.cpp`), clamped to 1.0 so a real server's smaller box
+      still reads "done". Stage 2: operator branding is **text only** — the
+      existing `S2CServerInfo::motd` (already replicated during the
+      handshake, `ClientSession::server_info()`) drawn above the bar once
+      non-empty; **no color knob** was added (would need a new
+      `ServerConfig`/`S2CServerInfo` field + protocol version bump, judged
+      out of scope for this pass — a real future addition, not a cut
+      corner). The `kLoading` state itself also pumps `sp->tick()`/
+      `client->tick()` and `chunk_renderer->sync()` every frame (higher
+      submit/upload budget than `kPlaying`'s steady-state 8/frame) — it's
+      what's actually driving the load, not a passive wait. Verified: full
+      `vb_tests` 294/294 green, clean `-Werror` build of both binaries on
+      `build-net-lua`; the windowed state-machine path itself (a human
+      watching the bar move) was **not** manually eyeballed this pass — see
+      Phase 5's still-open "Live two-window manual playtest" item, same
+      caveat applies here.
+      Previously planned scope, explicitly **not** covered by the above:
+      the connect-screen's own byte-progress bar (asset-sync fraction) is
+      still text-only — asset-sync never grew progress-fraction accounting,
+      so `kLoading`'s bar reads from *chunk* streaming only. Explicitly
+      **not** Lua-driven (unlike 6.16's HUD/6.2's UI,
       which deliberately pushed presentation into content) — this covers the
       window between "connected" and "first playable frame" (asset sync +
       first-chunk load), before any `PackRuntime`/`UiRuntime` content is even

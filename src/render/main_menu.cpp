@@ -331,4 +331,40 @@ MainMenu::ErrorResult MainMenu::draw_error(std::string_view reason) {
 	return result;
 }
 
+void MainMenu::draw_loading(float fraction, std::string_view operator_title) {
+	// Stage 1: a fully generic bar, no data dependency -- drawn every call
+	// regardless of whether stage 2's operator_title has arrived yet, so it
+	// never waits on anything network-derived.
+	if (fraction < 0.0f) {
+		fraction = 0.0f;
+	} else if (fraction > 1.0f) {
+		fraction = 1.0f;
+	}
+	const float panel_w = 460.0f;
+	const float screen_h = static_cast<float>(GetScreenHeight());
+	const float bar_y = screen_h * 0.5f;
+	const float x = (static_cast<float>(GetScreenWidth()) - panel_w) * 0.5f;
+
+	// Stage 2: operator branding (server.toml's `motd`), drawn above the bar
+	// only once the handshake has actually delivered it -- text only, no
+	// color knob exists yet (see REMAINING_TASKS.md Phase 7.1).
+	if (!operator_title.empty()) {
+		const int font_size = 28;
+		const int text_w = MeasureText(std::string(operator_title).c_str(), font_size);
+		DrawText(std::string(operator_title).c_str(),
+				(GetScreenWidth() - text_w) / 2, static_cast<int>(bar_y) - 60,
+				font_size, RAYWHITE);
+	}
+
+	float value = fraction;
+	GuiProgressBar(Rectangle{ x, bar_y, panel_w, 28.0f }, nullptr, nullptr,
+			&value, 0.0f, 1.0f);
+
+	char pct[16];
+	std::snprintf(pct, sizeof(pct), "%d%%", static_cast<int>(fraction * 100.0f + 0.5f));
+	const int pct_w = MeasureText(pct, 18);
+	DrawText(pct, (GetScreenWidth() - pct_w) / 2, static_cast<int>(bar_y) + 36, 18,
+			Color{ 200, 200, 210, 230 });
+}
+
 } // namespace vb::render
