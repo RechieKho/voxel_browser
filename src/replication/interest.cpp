@@ -29,8 +29,7 @@ std::int64_t librg_id_of(core::NetId id) {
 
 } // namespace
 
-InterestGrid::InterestGrid(double cell_size)
-		: cell_size_(cell_size > 0.0 ? cell_size : 32.0) {
+InterestGrid::InterestGrid(double cell_size) : cell_size_(cell_size > 0.0 ? cell_size : 32.0) {
 	librg_world_ = librg_world_create();
 	auto *world = static_cast<librg_world *>(librg_world_);
 	const auto size = static_cast<std::uint16_t>(
@@ -115,8 +114,7 @@ std::vector<core::NetId> InterestGrid::visible_from(
 
 #else // !VB_WITH_REPLICATION -- hand-rolled linear scan backend
 
-InterestGrid::InterestGrid(double cell_size)
-		: cell_size_(cell_size > 0.0 ? cell_size : 32.0) {}
+InterestGrid::InterestGrid(double cell_size) : cell_size_(cell_size > 0.0 ? cell_size : 32.0) {}
 
 InterestGrid::~InterestGrid() = default;
 

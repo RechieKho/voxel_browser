@@ -47,22 +47,38 @@ std::string key_display_name(int key) {
 		return std::string(1, static_cast<char>(key));
 	}
 	switch (key) {
-		case KEY_SPACE: return "Space";
-		case KEY_ENTER: return "Enter";
-		case KEY_TAB: return "Tab";
-		case KEY_ESCAPE: return "Escape";
-		case KEY_UP: return "Up";
-		case KEY_DOWN: return "Down";
-		case KEY_LEFT: return "Left";
-		case KEY_RIGHT: return "Right";
-		case KEY_LEFT_SHIFT: return "Left Shift";
-		case KEY_RIGHT_SHIFT: return "Right Shift";
-		case KEY_LEFT_CONTROL: return "Left Ctrl";
-		case KEY_RIGHT_CONTROL: return "Right Ctrl";
-		case KEY_LEFT_ALT: return "Left Alt";
-		case KEY_RIGHT_ALT: return "Right Alt";
-		case KEY_CAPS_LOCK: return "Caps Lock";
-		default: break;
+		case KEY_SPACE:
+			return "Space";
+		case KEY_ENTER:
+			return "Enter";
+		case KEY_TAB:
+			return "Tab";
+		case KEY_ESCAPE:
+			return "Escape";
+		case KEY_UP:
+			return "Up";
+		case KEY_DOWN:
+			return "Down";
+		case KEY_LEFT:
+			return "Left";
+		case KEY_RIGHT:
+			return "Right";
+		case KEY_LEFT_SHIFT:
+			return "Left Shift";
+		case KEY_RIGHT_SHIFT:
+			return "Right Shift";
+		case KEY_LEFT_CONTROL:
+			return "Left Ctrl";
+		case KEY_RIGHT_CONTROL:
+			return "Right Ctrl";
+		case KEY_LEFT_ALT:
+			return "Left Alt";
+		case KEY_RIGHT_ALT:
+			return "Right Alt";
+		case KEY_CAPS_LOCK:
+			return "Caps Lock";
+		default:
+			break;
 	}
 	return "Key " + std::to_string(key);
 }

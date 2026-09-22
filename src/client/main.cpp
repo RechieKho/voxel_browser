@@ -226,19 +226,18 @@ struct Singleplayer {
 	vb::net::ServerSession server;
 	std::optional<vb::net::ClientSession> client_session;
 
-	Singleplayer(std::uint64_t seed, const std::string &name, int view_distance)
-			: pack_runtime(make_singleplayer_pack_runtime(net.server(), registry)),
-			  move_params(pack_runtime.effective_move_params(vb::physics::MoveParams{})),
-			  world(registry),
-			  // Phase 6.14: mirrors src/server/main.cpp's own
-			  // build_worldgen_pipeline call -- nullptr unless a pack called
-			  // vb.worldgen.set_pipeline, in which case --singleplayer's
-			  // terrain matches a dedicated server's.
-			  pool(make_generator(seed, registry,
-					  pack_runtime.build_worldgen_pipeline(
-							  vb::worldgen::WorldGenParams{ seed }))),
-			  server(net.server(), sp_server_config(seed),
-					  make_singleplayer_host(seed, pack_runtime, registry, move_params)) {
+	Singleplayer(std::uint64_t seed, const std::string &name, int view_distance) : pack_runtime(make_singleplayer_pack_runtime(net.server(), registry)),
+																				   move_params(pack_runtime.effective_move_params(vb::physics::MoveParams{})),
+																				   world(registry),
+																				   // Phase 6.14: mirrors src/server/main.cpp's own
+																				   // build_worldgen_pipeline call -- nullptr unless a pack called
+																				   // vb.worldgen.set_pipeline, in which case --singleplayer's
+																				   // terrain matches a dedicated server's.
+																				   pool(make_generator(seed, registry,
+																						   pack_runtime.build_worldgen_pipeline(
+																								   vb::worldgen::WorldGenParams{ seed }))),
+																				   server(net.server(), sp_server_config(seed),
+																						   make_singleplayer_host(seed, pack_runtime, registry, move_params)) {
 		server.set_move_params(move_params);
 		// Phase 6.18: mirrors src/server/main.cpp's own set_punch_params call.
 		server.set_punch_params(pack_runtime.effective_punch_params(
@@ -332,11 +331,10 @@ struct RemoteConnection {
 	std::optional<vb::net::ClientSession> session;
 
 	RemoteConnection(const std::string &host, std::uint16_t port,
-			const std::string &name, const vb::core::ClientConfig &config)
-			: asset_cache(config.asset_cache_dir.empty()
-							  ? vb::core::user_cache_dir() / "assets"
-							  : std::filesystem::path(config.asset_cache_dir),
-					  static_cast<std::uint64_t>(config.asset_cache_mb) * 1024ull * 1024ull) {
+			const std::string &name, const vb::core::ClientConfig &config) : asset_cache(config.asset_cache_dir.empty()
+																							 ? vb::core::user_cache_dir() / "assets"
+																							 : std::filesystem::path(config.asset_cache_dir),
+																					 static_cast<std::uint64_t>(config.asset_cache_mb) * 1024ull * 1024ull) {
 		auto conn = transport.connect(host, port);
 		if (!conn) {
 			return;
@@ -1167,7 +1165,7 @@ int main(int argc, char **argv) {
 					if (chat_open) {
 						chat_buf.resize(kChatBufferSize, '\0');
 						GuiTextBox(Rectangle{ 12.0f, static_cast<float>(box_bottom - line_h),
-											 360.0f, static_cast<float>(line_h + 4) },
+										   360.0f, static_cast<float>(line_h + 4) },
 								chat_buf.data(), kChatBufferSize, true);
 						chat_buf.resize(std::strlen(chat_buf.c_str()));
 					}

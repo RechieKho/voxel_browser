@@ -147,7 +147,7 @@ int main(int argc, char **argv) {
 	// other failure means the pack itself is broken/hostile and is fatal.
 	auto manifest_result = vb::assetsync::build_manifest(config.content_pack,
 			{ static_cast<std::uint64_t>(config.asset_max_file_mb) * 1024ull * 1024ull,
-				static_cast<std::uint64_t>(config.asset_max_total_mb) * 1024ull * 1024ull });
+					static_cast<std::uint64_t>(config.asset_max_total_mb) * 1024ull * 1024ull });
 	std::shared_ptr<const vb::assetsync::Manifest> manifest_ptr;
 	if (manifest_result) {
 		manifest_ptr = std::make_shared<const vb::assetsync::Manifest>(
@@ -234,7 +234,7 @@ int main(int argc, char **argv) {
 	};
 	host.asset_manifest = [manifest_ptr] { return manifest_ptr; };
 	host.asset_file_bytes = [manifest_ptr, content_pack = config.content_pack](
-			vb::core::AssetHash h) -> std::optional<std::vector<std::byte>> {
+									vb::core::AssetHash h) -> std::optional<std::vector<std::byte>> {
 		if (!manifest_ptr) {
 			return std::nullopt;
 		}
@@ -274,7 +274,8 @@ int main(int argc, char **argv) {
 	// ServerSession::punch() now share, same config-then-pack-override shape
 	// as move_params/punch_params above.
 	session.world_replicator()->set_reach(pack_runtime.effective_action_params(
-			vb::net::ActionParams{}).reach);
+															  vb::net::ActionParams{})
+					.reach);
 	session.set_void_kill_y(config.void_kill_y);
 	// §8.3 hardening: 0 (server.toml's own default) means unlimited, same as
 	// today's unset behavior -- only bites once an operator opts in.

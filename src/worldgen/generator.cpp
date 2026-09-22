@@ -35,11 +35,14 @@ struct DetRng {
 
 WorldGenerator::WorldGenerator(WorldGenParams params,
 		const world::BlockRegistry &registry,
-		std::shared_ptr<const PackWorldGenPipeline> pipeline)
-		: params_(params), air_(core::BlockId::kAir),
-		  stone_(registry.find("base:stone")), dirt_(registry.find("base:dirt")),
-		  grass_(registry.find("base:grass")), sand_(registry.find("base:sand")),
-		  water_(registry.find("base:water")), pipeline_(std::move(pipeline)) {}
+		std::shared_ptr<const PackWorldGenPipeline> pipeline) : params_(params),
+																air_(core::BlockId::kAir),
+																stone_(registry.find("base:stone")),
+																dirt_(registry.find("base:dirt")),
+																grass_(registry.find("base:grass")),
+																sand_(registry.find("base:sand")),
+																water_(registry.find("base:water")),
+																pipeline_(std::move(pipeline)) {}
 
 int WorldGenerator::surface_height(int world_x, int world_z) const {
 	if (pipeline_) {
