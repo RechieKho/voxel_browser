@@ -6,9 +6,13 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include <raylib.h>
+
 #include "vb/core/ids.hpp"
+#include "vb/core/math.hpp"
 #include "vb/world/chunk_mesh_worker_pool.hpp"
 #include "vb/world/client_chunk_store.hpp"
+#include "vb/world/daynight.hpp" // SkyColor
 
 // Owns the GPU-side chunk meshes for the client (spec §11.2). Each frame,
 // sync() submits changed chunks to a background ChunkMeshWorkerPool (budgeted)
@@ -40,6 +44,13 @@ public:
 	// by a frame or more -- see chunk_mesh_worker_pool.hpp.
 	void sync(const world::ClientChunkStore &store, int submit_budget = 8, int upload_budget = 4);
 
+	// Phase 7.2: sets the fog uniforms every uploaded chunk's material shares
+	// (the shader itself, loaded once in the constructor, blends fragment
+	// color to `sky` between world-space distances `start` and `end` from
+	// `view_pos`). Call once per frame, any time before draw() -- no
+	// BeginMode3D/EndMode3D requirement, unlike draw() itself.
+	void set_fog(core::Vec3d view_pos, world::SkyColor sky, float start, float end) const;
+
 	// Draw every uploaded chunk. Call inside BeginMode3D/EndMode3D.
 	void draw() const;
 
@@ -50,6 +61,19 @@ private:
 	struct GpuChunk;
 	void upload(core::ChunkCoord coord, const world::MeshData &data, std::uint64_t revision);
 	void drop(core::ChunkCoord coord);
+
+	// Phase 7.2: one shader shared by every chunk's material (assigned in
+	// upload()) -- a faithful reproduction of raylib's default mesh shader
+	// (texture0 * colDiffuse * vertex color) plus a linear fog mix at the
+	// end, rather than raylib's own default shader untouched. Loaded once in
+	// the constructor (a GL context is guaranteed to exist by then -- see
+	// ChunkRenderer's only construction site in src/client/main.cpp, always
+	// after window init) and unloaded in the destructor.
+	Shader fog_shader_{};
+	int fog_loc_view_pos_ = -1;
+	int fog_loc_color_ = -1;
+	int fog_loc_start_ = -1;
+	int fog_loc_end_ = -1;
 
 	world::ChunkMeshWorkerPool pool_;
 	std::unordered_map<core::ChunkCoord, GpuChunk> gpu_;

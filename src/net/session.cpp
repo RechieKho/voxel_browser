@@ -1131,6 +1131,15 @@ void ClientSession::tick(double) {
 					}
 					break;
 				}
+				if (frame->header.type == protocol::MessageType::kS2CFogParams) {
+					if (auto m = protocol::S2CFogParams::decode(frame->payload)) {
+						apply_fog_params(*m);
+					} else {
+						VB_ERROR("net", "malformed S2C_FogParams: ",
+								core::message(m.error()));
+					}
+					break;
+				}
 				if (handshake_.status() == ClientHandshakeStatus::kJoined &&
 						apply_gameplay_frame(*frame)) {
 					break;
@@ -1336,6 +1345,12 @@ void ClientSession::apply_day_night_curve(const protocol::S2CDayNightCurve &msg)
 	VB_INFO("net", "received day/night curve (", curve.keyframes.size(),
 			" keyframes)");
 	day_night_curve_ = std::move(curve);
+}
+
+void ClientSession::apply_fog_params(const protocol::S2CFogParams &msg) {
+	VB_INFO("net", "received fog params (start=", msg.fog_start,
+			", end=", msg.fog_end, ")");
+	fog_override_ = msg;
 }
 
 void ClientSession::apply_snapshot(const protocol::S2CEntitySnapshot &snap) {

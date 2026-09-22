@@ -13,6 +13,7 @@
 #include "vb/net/transport.hpp"
 #include "vb/net/world_replicator.hpp"
 #include "vb/physics/movement.hpp"
+#include "vb/protocol/world.hpp" // S2CFogParams
 #include "vb/script/vm.hpp"
 #include "vb/world/block.hpp"
 #include "vb/world/daynight.hpp"
@@ -133,6 +134,16 @@ public:
 	// pack ever calls it, same "engine/operator default, pack overrides on
 	// top" shape as effective_move_params()/ServerConfig::gravity.
 	double effective_day_length_seconds(double base) const;
+
+	// Phase 7.2: a pack's `vb.render.set_fog{start=, end=}`, if it ever
+	// called it -- `nullopt` (default) means no pack ever overrode the fog
+	// distance, so the caller should send no S2C_FogParams frame at all and
+	// let each client compute its own default from its own view_distance
+	// config (same "no frame, no behavior change" posture as
+	// effective_day_night_curve(), except there's no server-side universal
+	// default to fall back on here -- the server doesn't know each client's
+	// view_distance).
+	std::optional<protocol::S2CFogParams> effective_fog_params() const;
 
 	// Phase 6.14: compiles a pack's `vb.worldgen.set_pipeline{...}` call (plus
 	// every `vb.register_biome` entry) into an immutable

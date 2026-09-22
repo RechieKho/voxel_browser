@@ -321,6 +321,18 @@ rt.dispatch_tick(dt);
   the real seconds one in-game day takes, the same config-then-pack-override
   shape as `gravity` (`server.toml`'s `day_length_seconds` is the base a pack
   override wins over).
+- Distance fog (Phase 7.2): `vb.render.set_fog{start=, ["end"]=}` (`end` is a
+  Lua keyword, so it must be a quoted key) overrides the
+  engine's default fog distance (rejects a call missing either field, or
+  `end <= start`, and any call after `freeze()`). Absent an override, each
+  client computes its own default from its own `view_distance` config
+  (`end = view_distance * kChunkDim`, `start = end * 0.6`) — the server
+  doesn't know each client's `view_distance`, so unlike
+  `vb.physics.set_params`/`vb.daynight.set_curve` there's no server-side
+  universal default this replaces, only a per-client fallback. Reaches
+  joining clients as `S2C_FogParams`. Deliberately **no color field** — fog
+  always blends into whatever `vb.daynight`'s current sky color already is
+  (`sky_color_for_time()`), never an independently drifting tint.
 - Read-only server config (Phase 6.13): `vb.config.get(key)` returns the
   operator's `server.toml`/CLI value for `key` — `bind_address`, `port`,
   `content_pack`, `max_players`, `view_distance`, `tick_rate`, `world_seed`,

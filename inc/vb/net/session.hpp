@@ -597,6 +597,17 @@ public:
 		return day_night_curve_;
 	}
 
+	// A pack's fog distance override (spec §7.2, Phase 7.2), if a real
+	// S2C_FogParams frame ever arrived and apply_fog_params() set it --
+	// `nullopt` otherwise, meaning the caller should compute its own default
+	// fog distance from its own view_distance config (unlike
+	// day_night_curve()/move_params() there's no server-side universal
+	// default to fall back on here, so this stays optional rather than
+	// defaulting to an empty struct).
+	const std::optional<protocol::S2CFogParams> &fog_override() const {
+		return fog_override_;
+	}
+
 	// This player's inventory (spec §5.1), kept in sync by S2C_Inventory.
 	// Empty until the first snapshot arrives (e.g. before any player:give()).
 	const std::vector<protocol::InventorySlot> &inventory() const {
@@ -624,6 +635,7 @@ private:
 	void apply_keybind_registry(const protocol::S2CKeybindRegistry &msg);
 	void apply_move_params(const protocol::S2CMoveParams &msg);
 	void apply_day_night_curve(const protocol::S2CDayNightCurve &msg);
+	void apply_fog_params(const protocol::S2CFogParams &msg);
 	void apply_snapshot(const protocol::S2CEntitySnapshot &snap);
 	void reconcile(const protocol::EntityRecord &authoritative,
 			std::uint32_t acked_seq);
@@ -662,6 +674,7 @@ private:
 	std::vector<protocol::InventorySlot> inventory_;
 	std::vector<std::string> keybind_names_;
 	world::DayNightCurve day_night_curve_; // empty = default_day_night_curve()
+	std::optional<protocol::S2CFogParams> fog_override_;
 
 	physics::MoveState predicted_;
 	physics::MoveParams move_params_;

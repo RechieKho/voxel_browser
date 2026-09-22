@@ -150,6 +150,21 @@ Decoded<S2CDayNightCurve> S2CDayNightCurve::decode(std::span<const std::byte> in
 	return finish(r, std::move(m));
 }
 
+// --- S2CFogParams -----------------------------------------------------------
+void S2CFogParams::encode(std::vector<std::byte> &out) const {
+	ByteWriter w(out);
+	w.f32(fog_start);
+	w.f32(fog_end);
+}
+
+Decoded<S2CFogParams> S2CFogParams::decode(std::span<const std::byte> in) {
+	ByteReader r(in);
+	S2CFogParams m;
+	m.fog_start = r.f32();
+	m.fog_end = r.f32();
+	return finish(r, std::move(m));
+}
+
 // --- S2CChunkAdd ----------------------------------------------------------
 void S2CChunkAdd::encode(std::vector<std::byte> &out) const {
 	ByteWriter w(out);

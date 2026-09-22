@@ -32,6 +32,7 @@
 #include "vb/core/build_info.hpp"
 #include "vb/core/cli.hpp"
 #include "vb/core/config.hpp"
+#include "vb/core/ids.hpp" // kChunkDim
 #include "vb/core/paths.hpp"
 #include "vb/net/gns_transport.hpp"
 #include "vb/net/loopback.hpp"
@@ -1134,10 +1135,28 @@ int main(int argc, char **argv) {
 				// server's time_of_day clock (S2C_JoinAccept's initial value,
 				// kept current by periodic S2C_TimeOfDay updates). Overwrites
 				// window.begin_frame()'s flat dark clear for this state only.
-				{
-					const vb::world::SkyColor sky = vb::world::sky_color_for_time(
-							client->time_of_day(), client->day_night_curve());
-					ClearBackground(Color{ sky.r, sky.g, sky.b, 255 });
+				const vb::world::SkyColor sky = vb::world::sky_color_for_time(
+						client->time_of_day(), client->day_night_curve());
+				ClearBackground(Color{ sky.r, sky.g, sky.b, 255 });
+
+				// Phase 7.2: distance fog, always blending into the same sky
+				// color computed above (never an independently drifting
+				// tint -- see REMAINING_TASKS.md Phase 7.2). A pack's
+				// vb.render.set_fog{start=, end=} overrides the distances;
+				// absent that, the default matches this client's own
+				// view_distance so fog fades in right around where chunks
+				// stop streaming in, rather than at an arbitrary distance.
+				if (chunk_renderer) {
+					float fog_start;
+					float fog_end;
+					if (const auto &fog = client->fog_override()) {
+						fog_start = fog->fog_start;
+						fog_end = fog->fog_end;
+					} else {
+						fog_end = static_cast<float>(view_distance * vb::core::kChunkDim);
+						fog_start = fog_end * 0.6f;
+					}
+					chunk_renderer->set_fog(controller.position(), sky, fog_start, fog_end);
 				}
 
 				const Camera3D camera = to_camera(controller, fov);

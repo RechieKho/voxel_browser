@@ -99,6 +99,26 @@ struct S2CDayNightCurve {
 	static Decoded<S2CDayNightCurve> decode(std::span<const std::byte> in);
 };
 
+// --- distance fog (spec §7.2, Phase 7.2) --------------------------------
+// A pack's `vb.render.set_fog{start=, end=}` override, sent the same
+// opt-in way as S2C_DayNightCurve/S2C_MoveParams above: `nullopt` from
+// HandshakeServerHost::fog_params sends no frame at all, and the client
+// falls back to its own engine default (fog distance matching its own
+// view_distance config) -- there IS no server-side universal default to
+// send unprompted, since the server doesn't know each client's
+// view_distance. No color field -- fog always reads as "distance to the
+// current sky color" (vb::world::sky_color_for_time()), never an
+// independently drifting tint (decided 2026-09-19).
+struct S2CFogParams {
+	static constexpr MessageType kType = MessageType::kS2CFogParams;
+
+	float fog_start = 0.0f;
+	float fog_end = 0.0f;
+
+	void encode(std::vector<std::byte> &out) const;
+	static Decoded<S2CFogParams> decode(std::span<const std::byte> in);
+};
+
 struct S2CChunkAdd {
 	static constexpr MessageType kType = MessageType::kS2CChunkAdd;
 

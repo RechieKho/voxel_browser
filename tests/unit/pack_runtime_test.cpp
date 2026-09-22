@@ -442,6 +442,50 @@ TEST_CASE("vb.daynight.set_day_length overrides the base day length, "
 	CHECK_FALSE(rt3.load_pack_file(R"(vb.daynight.set_day_length(-5))"));
 }
 
+TEST_CASE("vb.render.set_fog overrides the default fog distance, rejected "
+		"after freeze (Phase 7.2)") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("fog"));
+
+	const auto r = rt.load_pack_file(R"(
+		vb.render.set_fog({ start = 96, ["end"] = 160 })
+	)");
+	REQUIRE(r);
+	rt.freeze();
+
+	const auto fog = rt.effective_fog_params();
+	REQUIRE(fog.has_value());
+	CHECK(fog->fog_start == doctest::Approx(96.0f));
+	CHECK(fog->fog_end == doctest::Approx(160.0f));
+
+	const auto r2 = rt.load_pack_file(R"(vb.render.set_fog({ start = 1, ["end"] = 2 }))");
+	CHECK_FALSE(r2);
+}
+
+TEST_CASE("vb.render.set_fog rejects a missing start/end or end <= start "
+		"(Phase 7.2)") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("fog_bad"));
+
+	CHECK_FALSE(rt.load_pack_file(R"(vb.render.set_fog({}))"));
+	CHECK_FALSE(rt.load_pack_file(R"(vb.render.set_fog({ start = 10 }))"));
+	CHECK_FALSE(rt.load_pack_file(R"(vb.render.set_fog({ ["end"] = 10 }))"));
+	CHECK_FALSE(
+			rt.load_pack_file(R"(vb.render.set_fog({ start = 100, ["end"] = 50 }))"));
+}
+
+TEST_CASE("without a vb.render.set_fog call, effective_fog_params returns "
+		"nullopt (Phase 7.2)") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("fog_default"));
+	rt.freeze();
+
+	CHECK_FALSE(rt.effective_fog_params().has_value());
+}
+
 TEST_CASE("vb.register_biome / vb.register_craft accept arbitrary def tables") {
 	vb::net::LoopbackNetwork net;
 	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();

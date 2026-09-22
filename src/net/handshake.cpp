@@ -256,6 +256,9 @@ ServerHandshakeStep ServerHandshake::on_frame(const Frame &frame) {
 				step.send.push_back(
 						frame_message(protocol::S2CDayNightCurve{ std::move(*dnc) }));
 			}
+			if (auto fp = host_.fog_params()) {
+				step.send.push_back(frame_message(*fp));
+			}
 
 			protocol::S2CJoinAccept accept;
 			accept.your_net_id = grant_.net_id;

@@ -360,6 +360,11 @@ struct PackRuntime::Impl {
 	// a pack ever calls it.
 	std::optional<double> day_length_seconds_override;
 
+	// Phase 7.2: the raw table passed to vb.render.set_fog{start=, end=}, if
+	// a pack ever calls it -- same "capture the table, parse lazily" posture
+	// as move_params_table/day_night_curve_table above.
+	std::optional<sol::table> fog_params_table;
+
 	// Phase 6.13: the operator's ServerConfig, if set_server_config() was ever
 	// called (real servers call it; --singleplayer's in-process PackRuntime
 	// never does, so vb.config.get returns nil there). Read-only from Lua --
@@ -1040,6 +1045,30 @@ void PackRuntime::Impl::install_bindings() {
 			throw sol::error("vb.daynight.set_day_length: 'seconds' must be > 0");
 		}
 		day_length_seconds_override = seconds;
+	};
+
+	// Phase 7.2: overrides the engine's default distance-fog fade (which
+	// otherwise matches each client's own view_distance -- the server
+	// doesn't know that value, so there's no default to advertise unless a
+	// pack sets one). Deliberately no 'color' field: fog always reads as
+	// "distance to the current sky color" (vb::world::sky_color_for_time()),
+	// never an independently drifting tint (decided 2026-09-19,
+	// REMAINING_TASKS.md Phase 7.2).
+	sol::table render_tbl = lua.create_table();
+	vb["render"] = render_tbl;
+	render_tbl["set_fog"] = [this](sol::table def) {
+		if (frozen) {
+			throw sol::error("vb.render.set_fog: registry already frozen");
+		}
+		const sol::optional<double> start = def["start"];
+		const sol::optional<double> end = def["end"];
+		if (!start || !end) {
+			throw sol::error("vb.render.set_fog: 'start' and 'end' are required");
+		}
+		if (!(*end > *start)) {
+			throw sol::error("vb.render.set_fog: 'end' must be greater than 'start'");
+		}
+		fog_params_table = def;
 	};
 
 	// Phase 6.14: vb.noise.* -- small builder functions that just stamp a
@@ -1986,6 +2015,17 @@ net::ActionParams PackRuntime::effective_action_params(net::ActionParams base) c
 	const sol::table &def = *impl_->action_params_table;
 	net::ActionParams out = base;
 	out.reach = def.get_or("reach", out.reach);
+	return out;
+}
+
+std::optional<protocol::S2CFogParams> PackRuntime::effective_fog_params() const {
+	if (!impl_->fog_params_table) {
+		return std::nullopt;
+	}
+	const sol::table &def = *impl_->fog_params_table;
+	protocol::S2CFogParams out;
+	out.fog_start = static_cast<float>(def.get<double>("start"));
+	out.fog_end = static_cast<float>(def.get<double>("end"));
 	return out;
 }
 

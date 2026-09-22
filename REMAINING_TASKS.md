@@ -268,7 +268,7 @@ Full detail: `remaining_tasks/phase6.md`.
 
 ---
 
-## Phase 7 — World & UX Polish (7.1 done, 7.2-7.4 planned)
+## Phase 7 — World & UX Polish (7.1-7.2 done, 7.3-7.4 planned)
 
 > User-requested (2026-09-19): four UX gaps, scoped as their own phase since
 > none of them extend Phase 6's "default + override" system pattern the way
@@ -332,21 +332,58 @@ Full detail: `remaining_tasks/phase6.md`.
       all, and not going any further than text+color — the point of this
       screen is getting out of the way of loading the real content quickly,
       not hosting a themable UI system.
-- [ ] **7.2 — Distance fog, adjustable from Lua.** A `raylib`/shader-level
-      fog effect blending chunk geometry into the sky color at the edge of
-      view distance (Minecraft-style, and the reason 6.16-style Lua
-      presentation doesn't fit here either — this runs inside the chunk
-      render pass itself, not a HUD overlay). **Decided (2026-09-19): fog
-      color is never an independent Lua-settable field** — it's always
-      whatever the current day/night sky color already is (6.8's
-      `sky_color_for_time()`), so fog reads as "distance to the same sky,"
-      not a separate tint that can drift out of sync with it (e.g. green fog
-      under a red sunset sky). Only the **distance** parameters are
-      Lua-adjustable: an engine default (matching current `view_distance`)
-      plus a `vb.render.set_fog{start=, end=}`-style override, following the
-      same pre-freeze "default + override" shape and replication path as
-      `S2C_MoveParams`/`S2C_DayNightCurve` (6.7/6.8) so a dedicated-server
-      pack's choice reaches every client, not just `--singleplayer`.
+- [x] **7.2 — Distance fog, adjustable from Lua.** Landed 2026-09-22: a real
+      GLSL shader (`src/render/chunk_renderer.cpp`'s `kFogVs`/`kFogFs`, GLSL
+      330, loaded once via `LoadShaderFromMemory` in `ChunkRenderer`'s
+      constructor) replaces raylib's default mesh shader on every chunk's
+      material — a faithful copy of it (same attribute/uniform names, so
+      raylib's own `DrawMesh` keeps auto-wiring `mvp`/`matModel`/
+      `colDiffuse`/`texture0` unchanged) plus a linear fog mix at the very
+      end of the fragment shader. `ChunkRenderer::set_fog(view_pos, sky,
+      start, end)` sets the `fogViewPos`/`fogColor`/`fogStart`/`fogEnd`
+      uniforms once per frame from `src/client/main.cpp`'s `kPlaying` case,
+      reusing the exact `SkyColor` already computed for `ClearBackground`
+      that frame — fog color can never drift from the sky, by construction
+      (matches the 2026-09-19 decision below).
+      Wire protocol (bumped to **16**, `docs/protocol.md`): `S2CFogParams`
+      (`inc/vb/protocol/world.hpp`, type 52) is `f32 fog_start, f32
+      fog_end`, sent between `C2S_Ready` and `S2C_JoinAccept` alongside
+      `S2C_MoveParams`/`S2C_DayNightCurve` only if
+      `HandshakeServerHost::fog_params` returns a value
+      (`PackRuntime::effective_fog_params()` on the server side, driven by a
+      pack's `vb.render.set_fog{start=, ["end"]=}` — `end` needs a quoted
+      key, it's a Lua reserved word). Unlike move_params/day_night_curve
+      there's no server-side universal default this replaces: the server
+      doesn't know each client's own `view_distance`, so `nullopt` (no pack
+      override) means each client computes its own default from its own
+      config instead (`src/client/main.cpp`: `fog_end = view_distance *
+      kChunkDim`, `fog_start = fog_end * 0.6`) — `ClientSession::
+      fog_override()` stays `std::optional`, not a struct with an
+      always-valid default, to make that "no server value, client
+      improvises" case explicit rather than a fake zero-initialized frame.
+      No color field on the wire either, matching the decision below.
+      Verified: full `vb_tests` 298/298 green (protocol round-trip +
+      `PackRuntime` Lua-binding tests for `vb.render.set_fog`, including the
+      `end <= start`/missing-field rejection cases), clean `-Werror` build
+      of both binaries on `build-net-lua`, a `--headless --singleplayer`
+      smoke run (never touches `ChunkRenderer`, so this only confirms the
+      protocol-version bump and handshake didn't regress anything). The
+      actual shader output (a human watching fog fade in near the edge of
+      view distance in a real window) was **not** manually eyeballed this
+      pass — no GUI in this agent environment, same still-open caveat as
+      Phase 5's "Live two-window manual playtest" and 7.1's own loading-bar
+      verification.
+      **Decided (2026-09-19): fog color is never an independent Lua-settable
+      field** — it's always whatever the current day/night sky color already
+      is (6.8's `sky_color_for_time()`), so fog reads as "distance to the
+      same sky," not a separate tint that can drift out of sync with it
+      (e.g. green fog under a red sunset sky). Only the **distance**
+      parameters are Lua-adjustable: an engine default (matching current
+      `view_distance`) plus a `vb.render.set_fog{start=, end=}`-style
+      override, following the same pre-freeze "default + override" shape and
+      replication path as `S2C_MoveParams`/`S2C_DayNightCurve` (6.7/6.8) so a
+      dedicated-server pack's choice reaches every client, not just
+      `--singleplayer`.
 - [ ] **7.3 — Walkable "liquid" blocks (water): collision, underwater
       rendering (same sky-color fog mechanism, tighter distance), and a
       generic region-enter/exit hook for entity effects.**

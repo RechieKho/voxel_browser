@@ -20,7 +20,34 @@
 
 ## Current status (2026-09-22)
 
-Most recent landed item is **Phase 7.1: engine-side loading screen** — a new
+Most recent landed item is **Phase 7.2: distance fog**, protocol version
+bumped to **16**. A real GLSL 330 shader (`kFogVs`/`kFogFs` in
+`src/render/chunk_renderer.cpp`, loaded once in `ChunkRenderer`'s
+constructor) replaces raylib's default mesh shader on every chunk's
+material — attribute/uniform names match raylib's own defaults exactly
+(`vertexPosition`/`mvp`/`matModel`/`colDiffuse`/`texture0`) so `DrawMesh`
+keeps auto-wiring those; only the `fogViewPos`/`fogColor`/`fogStart`/
+`fogEnd` uniforms and a linear mix at the end of the fragment shader are
+new. `ChunkRenderer::set_fog(view_pos, sky, start, end)` is called once per
+frame from `src/client/main.cpp`'s `kPlaying` case with the exact `SkyColor`
+already computed for that frame's `ClearBackground` — fog can't
+independently drift from the sky by construction. New wire message
+`S2C_FogParams` (type 52, `f32 fog_start, f32 fog_end`) is opt-in like
+`S2C_MoveParams`/`S2C_DayNightCurve`, but with no server-side universal
+default to fall back to (the server doesn't know each client's own
+`view_distance`) — `ClientSession::fog_override()` is `std::optional`, and a
+client with none computes its own default from `view_distance * kChunkDim`.
+Lua: `vb.render.set_fog{start=, ["end"]=}` (`PackRuntime::
+effective_fog_params()`) — note `end` needs a quoted key, it's a Lua
+reserved word (caught the hard way: the first test-case draft used a bare
+`end = ...` key and failed at Lua parse time, not at the C++ validation it
+was meant to exercise). No color field, by design (matches 6.8's "operator/
+pack persona" split already established for day/night). Full `vb_tests`
+green (298/298) on `build-net-lua`; the actual rendered fog wasn't manually
+eyeballed (no GUI in this agent environment). Full write-up under
+REMAINING_TASKS.md's Phase 7.2 entry.
+
+Before that, most recent landed item was **Phase 7.1: engine-side loading screen** — a new
 `AppState::kLoading` in `src/client/main.cpp`, entered right after a
 successful join instead of dropping straight into `kPlaying`, left once the
 initial view-box of chunks has streamed in (`client->chunk_store().size()`

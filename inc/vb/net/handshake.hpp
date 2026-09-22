@@ -115,6 +115,16 @@ struct HandshakeServerHost {
 		return std::optional<std::vector<protocol::DayNightKeyframeRecord>>{};
 	};
 
+	// A pack-overridden fog distance, sent as S2C_FogParams alongside
+	// day_night_curve above (spec §7.2, Phase 7.2). `nullopt` (default) sends
+	// no frame at all -- the client computes its own default fog distance
+	// from its own view_distance config, so hosts/tests that don't care about
+	// this see zero behavior change (there's no server-side universal
+	// default to send unprompted, unlike move_params/day_night_curve).
+	std::function<std::optional<protocol::S2CFogParams>()> fog_params = [] {
+		return std::optional<protocol::S2CFogParams>{};
+	};
+
 	// Pack-registered custom keybind names, sent as S2C_KeybindRegistry
 	// alongside block_registry above (spec §10.6, Phase 6.3) -- `names[i]`
 	// becomes bit i of every InputCmd::keybinds from then on. `nullopt`

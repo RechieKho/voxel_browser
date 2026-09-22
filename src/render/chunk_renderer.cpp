@@ -14,6 +14,65 @@
 
 namespace vb::render {
 
+namespace {
+
+// Phase 7.2: a faithful copy of raylib's own default mesh shader (see
+// rlgl.h's RL_DEFAULT_SHADER_*), down to the attribute/uniform names it
+// auto-wires by name (vertexPosition/vertexTexCoord/vertexNormal/
+// vertexColor, mvp/matModel/colDiffuse/texture0) -- LoadShaderFromMemory
+// detects those by name and fills Shader::locs itself, so raylib's own
+// DrawMesh() keeps uploading mvp/matModel/colDiffuse/texture0 exactly as it
+// would for the untouched default shader. Only the fog uniforms
+// (fogViewPos/fogColor/fogStart/fogEnd, set once per frame by
+// ChunkRenderer::set_fog) and the fog mix at the very end of main() are new.
+constexpr const char *kFogVs = R"(#version 330
+in vec3 vertexPosition;
+in vec2 vertexTexCoord;
+in vec3 vertexNormal;
+in vec4 vertexColor;
+
+uniform mat4 mvp;
+uniform mat4 matModel;
+uniform vec3 fogViewPos;
+
+out vec2 fragTexCoord;
+out vec4 fragColor;
+out float fragFogDist;
+
+void main()
+{
+    fragTexCoord = vertexTexCoord;
+    fragColor = vertexColor;
+    vec3 worldPos = vec3(matModel * vec4(vertexPosition, 1.0));
+    fragFogDist = distance(worldPos, fogViewPos);
+    gl_Position = mvp * vec4(vertexPosition, 1.0);
+}
+)";
+
+constexpr const char *kFogFs = R"(#version 330
+in vec2 fragTexCoord;
+in vec4 fragColor;
+in float fragFogDist;
+
+uniform sampler2D texture0;
+uniform vec4 colDiffuse;
+uniform vec3 fogColor;
+uniform float fogStart;
+uniform float fogEnd;
+
+out vec4 finalColor;
+
+void main()
+{
+    vec4 texelColor = texture(texture0, fragTexCoord);
+    vec4 base = texelColor * colDiffuse * fragColor;
+    float fogFactor = clamp((fogEnd - fragFogDist) / max(fogEnd - fogStart, 0.001), 0.0, 1.0);
+    finalColor = vec4(mix(fogColor, base.rgb, fogFactor), base.a);
+}
+)";
+
+} // namespace
+
 struct ChunkRenderer::GpuChunk {
 	Model model{};
 	std::uint64_t revision = 0;
@@ -138,7 +197,13 @@ void update_gpu_mesh(Mesh &mesh, const world::MeshData &data) {
 
 } // namespace
 
-ChunkRenderer::ChunkRenderer(std::size_t mesh_threads) : pool_(mesh_threads) {}
+ChunkRenderer::ChunkRenderer(std::size_t mesh_threads) : pool_(mesh_threads) {
+	fog_shader_ = LoadShaderFromMemory(kFogVs, kFogFs);
+	fog_loc_view_pos_ = GetShaderLocation(fog_shader_, "fogViewPos");
+	fog_loc_color_ = GetShaderLocation(fog_shader_, "fogColor");
+	fog_loc_start_ = GetShaderLocation(fog_shader_, "fogStart");
+	fog_loc_end_ = GetShaderLocation(fog_shader_, "fogEnd");
+}
 
 ChunkRenderer::~ChunkRenderer() {
 	for (auto &[coord, gpu] : gpu_) {
@@ -147,6 +212,7 @@ ChunkRenderer::~ChunkRenderer() {
 			UnloadModel(gpu.model);
 		}
 	}
+	UnloadShader(fog_shader_);
 }
 
 void ChunkRenderer::drop(core::ChunkCoord coord) {
@@ -185,6 +251,10 @@ void ChunkRenderer::upload(core::ChunkCoord coord, const world::MeshData &data,
 		slot.vertex_capacity = capacity_for(needed_v);
 		slot.index_capacity = capacity_for(needed_i);
 		slot.model = model_from_mesh(data, slot.vertex_capacity, slot.index_capacity);
+		// Phase 7.2: every chunk shares the one fog shader loaded in the
+		// constructor -- LoadModelFromMesh (inside model_from_mesh) assigns
+		// raylib's own default material/shader, which this replaces.
+		slot.model.materials[0].shader = fog_shader_;
 		slot.valid = true;
 	}
 	slot.revision = revision;
@@ -245,6 +315,17 @@ void ChunkRenderer::sync(const world::ClientChunkStore &store, int submit_budget
 			++submitted;
 		}
 	}
+}
+
+void ChunkRenderer::set_fog(core::Vec3d view_pos, world::SkyColor sky, float start, float end) const {
+	const float view[3] = { static_cast<float>(view_pos.x),
+		static_cast<float>(view_pos.y), static_cast<float>(view_pos.z) };
+	const float color[3] = { static_cast<float>(sky.r) / 255.0f,
+		static_cast<float>(sky.g) / 255.0f, static_cast<float>(sky.b) / 255.0f };
+	SetShaderValue(fog_shader_, fog_loc_view_pos_, view, SHADER_UNIFORM_VEC3);
+	SetShaderValue(fog_shader_, fog_loc_color_, color, SHADER_UNIFORM_VEC3);
+	SetShaderValue(fog_shader_, fog_loc_start_, &start, SHADER_UNIFORM_FLOAT);
+	SetShaderValue(fog_shader_, fog_loc_end_, &end, SHADER_UNIFORM_FLOAT);
 }
 
 void ChunkRenderer::draw() const {

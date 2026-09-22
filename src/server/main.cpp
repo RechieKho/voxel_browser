@@ -232,6 +232,15 @@ int main(int argc, char **argv) {
 		}
 		return out;
 	};
+	// Phase 7.2: advertise a pack's vb.render.set_fog{...} override the
+	// same way -- nullopt (no pack ever called it) sends no frame, leaving
+	// every client to compute its own default fog distance from its own
+	// view_distance config.
+	const std::optional<vb::protocol::S2CFogParams> fog_params =
+			pack_runtime.effective_fog_params();
+	host.fog_params = [fog_params]() -> std::optional<vb::protocol::S2CFogParams> {
+		return fog_params;
+	};
 	host.asset_manifest = [manifest_ptr] { return manifest_ptr; };
 	host.asset_file_bytes = [manifest_ptr, content_pack = config.content_pack](
 									vb::core::AssetHash h) -> std::optional<std::vector<std::byte>> {

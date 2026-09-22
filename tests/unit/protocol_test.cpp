@@ -303,6 +303,16 @@ TEST_CASE("day/night curve round-trips, including an empty list (Phase 6.8)") {
 	CHECK(r2.keyframes == curve.keyframes);
 }
 
+TEST_CASE("fog params round-trip (Phase 7.2)") {
+	auto defaults = round_trip(S2CFogParams{});
+	CHECK(defaults.fog_start == doctest::Approx(0.0f));
+	CHECK(defaults.fog_end == doctest::Approx(0.0f));
+
+	auto p = round_trip(S2CFogParams{ 96.0f, 160.0f });
+	CHECK(p.fog_start == doctest::Approx(96.0f));
+	CHECK(p.fog_end == doctest::Approx(160.0f));
+}
+
 TEST_CASE("keybind registry round-trips, including an empty list") {
 	auto empty = round_trip(S2CKeybindRegistry{});
 	CHECK(empty.names.empty());

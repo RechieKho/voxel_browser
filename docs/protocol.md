@@ -4,8 +4,21 @@
 > as any change to a struct in `inc/vb/protocol/`, and bump
 > `kEngineProtocolVersion` in `cmake/version.hpp.in`.
 
-Current `ENGINE_PROTOCOL_VERSION`: **15**.
+Current `ENGINE_PROTOCOL_VERSION`: **16**.
 
+- **16** — `S2C_FogParams` (52) payload defined (Phase 7.2, spec §7.2):
+  `f32 fog_start`, `f32 fog_end`. Sent between `C2S_Ready` and
+  `S2C_JoinAccept` alongside `S2C_MoveParams`/`S2C_DayNightCurve` only if
+  `HandshakeServerHost::fog_params` returns a value; `nullopt` default = no
+  frame, and unlike move_params/day_night_curve there's no universal engine
+  default this replaces — the server doesn't know each client's own
+  `view_distance`, so a client with no override computes its own default
+  fog distance from it. No color field: fog always blends into whatever
+  `vb::world::sky_color_for_time()` already returns for the current time of
+  day, never an independently drifting tint (decided 2026-09-19).
+  `PackRuntime::effective_fog_params()` returns the raw `{start, end}` a
+  pack passed to `vb.render.set_fog{...}`, or `nullopt` if no pack ever
+  called it.
 - **15** — `S2C_DayNightCurve` (51) payload defined (Phase 6.8, spec §5.4):
   `varint n` + `n × {u32 tick, f64 brightness, u8 r, u8 g, u8 b}`, mirroring
   `vb::world::DayNightKeyframe` flat (protocol/ never depends on world/, same
@@ -247,6 +260,24 @@ sends nothing, so a host/test that never opts in leaves the client on
 `sky_brightness()`/`sky_color_for_time()` in place of the built-in default —
 a pack's `vb.daynight.set_curve{keyframes = {...}}` reaches the actual
 rendered sky, not just server-side bookkeeping.
+
+### Fog parameters — `inc/vb/protocol/world.hpp` (implemented)
+
+| Type (id)           | Fields                     |
+| -------------------- | -------------------------- |
+| `S2C_FogParams` (52) | `f32 fog_start`, `f32 fog_end` |
+
+Sent between `C2S_Ready` and `S2C_JoinAccept` (Phase 7.2) only if
+`HandshakeServerHost::fog_params` returns a value; `nullopt` (default) sends
+nothing. Unlike `S2C_MoveParams`/`S2C_DayNightCurve` there is no universal
+engine default this replaces — the server doesn't know each client's own
+`view_distance`, so a client that never receives this frame computes its own
+default fog distance from its own `view_distance` config
+(`src/client/main.cpp`: `end = view_distance * kChunkDim`, `start = end *
+0.6`). No color field: fog always blends into whatever
+`sky_color_for_time()` already returns, never an independently drifting
+tint. A pack's `vb.render.set_fog{start=, end=}` (`PackRuntime::
+effective_fog_params()`) is the only source of this frame.
 
 ### World editing — `inc/vb/protocol/world.hpp` (implemented)
 
