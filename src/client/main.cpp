@@ -714,7 +714,22 @@ int main(int argc, char **argv) {
 	// of chunks to stream in before letting the player through anyway (e.g. a
 	// server whose own view_distance is smaller than this client guessed, or
 	// a slow connection) -- getting out of the way beats blocking forever.
+	// `loading_deadline` is a *stall* deadline, not a flat one: it's pushed
+	// forward every time `loading_last_uploaded` (the previous frame's
+	// uploaded_count) advances, so a large view distance that's genuinely
+	// still meshing/uploading chunks -- just slowly -- isn't cut off mid-load
+	// (an earlier flat 8s deadline handed off to kPlaying while most of the
+	// default view_distance=8 box, ~2000 chunks, was still unmeshed). Only a
+	// real stall -- e.g. a server whose own view_distance is smaller than
+	// this client guessed, so `fraction` can never reach 1.0 -- lets it fire.
+	// `loading_hard_deadline` is the absolute backstop against a pathological
+	// server that trickles in just enough chunks each tick to keep resetting
+	// the stall deadline forever.
 	std::chrono::steady_clock::time_point loading_deadline;
+	std::chrono::steady_clock::time_point loading_hard_deadline;
+	std::size_t loading_last_uploaded = 0;
+	constexpr std::chrono::milliseconds kLoadingStallTimeout{ 2000 };
+	constexpr std::chrono::seconds kLoadingHardTimeout{ 30 };
 
 	std::unique_ptr<Singleplayer> sp;
 	std::unique_ptr<RemoteConnection> remote;
@@ -885,7 +900,9 @@ int main(int argc, char **argv) {
 		// frame" instead of dropping straight into kPlaying -- the first
 		// frames after join are otherwise an emptier-than-usual world (chunks
 		// still streaming in), rendered with no indication that's expected.
-		loading_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+		loading_deadline = std::chrono::steady_clock::now() + kLoadingStallTimeout;
+		loading_hard_deadline = std::chrono::steady_clock::now() + kLoadingHardTimeout;
+		loading_last_uploaded = 0;
 		state = AppState::kLoading;
 	};
 
@@ -1002,7 +1019,15 @@ int main(int argc, char **argv) {
 				// smaller real box still reads as "done", not stuck.
 				const std::size_t expected = static_cast<std::size_t>(2 * view_distance + 1) *
 						static_cast<std::size_t>(2 * view_distance + 1) * 7u;
-				const std::size_t loaded_chunks = client->chunk_store().size();
+				// Progress must track what's actually visible on screen, not
+				// just chunk data having arrived (client->chunk_store().size()
+				// reaches `expected` well before ChunkRenderer has meshed and
+				// GPU-uploaded that many chunks, since meshing is async and
+				// upload is budgeted -- using store size here let the loading
+				// screen hit 100% and hand off to kPlaying while the world
+				// behind it was still sky-colored, unmeshed chunks).
+				const std::size_t loaded_chunks =
+						chunk_renderer ? chunk_renderer->uploaded_count() : 0;
 				const float fraction = expected == 0
 						? 1.0f
 						: static_cast<float>(loaded_chunks) / static_cast<float>(expected);
@@ -1013,8 +1038,13 @@ int main(int argc, char **argv) {
 				}
 				menu.draw_loading(fraction, operator_title);
 
-				if (fraction >= 1.0f ||
-						std::chrono::steady_clock::now() > loading_deadline) {
+				const auto now = std::chrono::steady_clock::now();
+				if (loaded_chunks > loading_last_uploaded) {
+					loading_last_uploaded = loaded_chunks;
+					loading_deadline = now + kLoadingStallTimeout;
+				}
+				if (fraction >= 1.0f || now > loading_deadline ||
+						now > loading_hard_deadline) {
 					state = AppState::kPlaying;
 				}
 				break;

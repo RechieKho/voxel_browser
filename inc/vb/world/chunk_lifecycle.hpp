@@ -1,5 +1,7 @@
 #pragma once
 
+#include <deque>
+#include <memory>
 #include <unordered_set>
 #include <vector>
 
@@ -40,6 +42,9 @@ private:
 	std::unordered_set<core::ChunkCoord> requested_;
 	std::vector<core::ChunkCoord> newly_ready_;
 	std::vector<core::ChunkCoord> unloaded_;
+	// Chunks the worldgen pool has already finished but update() hasn't yet
+	// inserted+relit (paced by kIngestBudgetPerTick in chunk_lifecycle.cpp).
+	std::deque<std::unique_ptr<Chunk>> backlog_;
 };
 
 } // namespace vb::world
