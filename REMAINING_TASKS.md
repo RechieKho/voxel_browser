@@ -268,7 +268,7 @@ Full detail: `remaining_tasks/phase6.md`.
 
 ---
 
-## Phase 7 — World & UX Polish (7.1-7.3 done, 7.4 planned)
+## Phase 7 — World & UX Polish (7.1-7.3 done, 7.4-7.5 planned)
 
 > User-requested (2026-09-19): four UX gaps, scoped as their own phase since
 > none of them extend Phase 6's "default + override" system pattern the way
@@ -519,6 +519,45 @@ Full detail: `remaining_tasks/phase6.md`.
       `content/base`'s own screens instead of an example pack's.
       `base:inventory` additionally needs `{ slots = player:get_inventory() }`
       passed as `ctx`, matching its own doc comment.
+- [ ] **7.5 — Underwater fog tint should default to the liquid block's own
+      color, overridable from Lua.** User-requested (2026-09-23), and
+      **supersedes 7.2/7.3's 2026-09-19 decision** ("fog color is never an
+      independent Lua-settable field... it's always whatever the current
+      day/night sky color already is") for the underwater case specifically
+      — that decision stays correct for *normal* (above-water) fog, but
+      underwater fog tinted by the sky reads as wrong once you're actually
+      submerged (water should tint the murk itself, not echo whatever color
+      the sky happens to be at the time). Today `ChunkRenderer::set_fog()`
+      (`src/render/chunk_renderer.cpp`) always receives the same `sky`
+      `SkyColor` regardless of whether the camera is underwater — `src/
+      client/main.cpp`'s `kPlaying` block only swaps the *distance* preset
+      (`fog_start=2.0f`/`fog_end=8.0f`) when `is_liquid(eye_block)`, the
+      color argument is untouched. Two parts:
+    - **Default:** derive the underwater fog color from the occupying
+      liquid block's own render color instead of the sky. No such color
+      exists as block *data* yet — `chunk_renderer.cpp`'s `tint_for()` is a
+      hardcoded `switch` on `block_id` (today's water case: `Color{64, 108,
+      196, 255}`, just fixed from alpha 200 in this same phase), not a
+      registry-backed property, so `base:water`'s color can't be looked up
+      generically from `BlockType`/`BlockRegistry` today. This likely needs
+      a real `color`/`tint` field added to `BlockType` (`inc/vb/world/
+      block.hpp`) that `tint_for()` reads instead of switching on id — the
+      same gap Phase 4's "texture/model fields accepted but not stored" note
+      already flags (`vb.register_block`'s `texture`/`model` fields are
+      captured but never stored on `BlockType`); solving underwater tint
+      properly likely means finally giving `BlockType` a real, wire-visible
+      color property, not just a client-only rendering constant.
+    - **Override:** extend `vb.render.set_fog{...}` (or a sibling call) to
+      accept an underwater-specific color, replicated the same
+      `S2CFogParams`-style opt-in path as `fog_start`/`fog_end` (6.7/6.8's
+      "default + override" shape) — needs a protocol version bump (current
+      `ENGINE_PROTOCOL_VERSION` is **16**) since `S2CFogParams`
+      (`inc/vb/protocol/world.hpp`, type 52) is `f32 fog_start, f32 fog_end`
+      only today, no color field.
+      Design not otherwise pinned yet (exact Lua call shape, whether the
+      override is per-block-name or a single global underwater tint,
+      whether normal above-water fog keeps the sky-only rule unconditionally
+      or also becomes overridable) — decide during implementation.
 
 ---
 
