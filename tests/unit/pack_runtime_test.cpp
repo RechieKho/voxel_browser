@@ -77,6 +77,25 @@ TEST_CASE("vb.register_block is idempotent and rejected after freeze") {
 	CHECK_FALSE(r2);
 }
 
+TEST_CASE("vb.register_block{region=...}: liquid defaults to opting in, "
+		  "non-liquid defaults out, both are explicitly overridable (Phase 7.3)") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("register_region"));
+
+	REQUIRE(rt.load_pack_file(R"(
+		vb.register_block({ name = "test:lava", liquid = true })
+		vb.register_block({ name = "test:dry_liquid", liquid = true, region = false })
+		vb.register_block({ name = "test:poison_cloud", region = true })
+		vb.register_block({ name = "test:plain" })
+	)"));
+
+	CHECK(registry.is_region(registry.find("test:lava")));
+	CHECK_FALSE(registry.is_region(registry.find("test:dry_liquid")));
+	CHECK(registry.is_region(registry.find("test:poison_cloud")));
+	CHECK_FALSE(registry.is_region(registry.find("test:plain")));
+}
+
 TEST_CASE("vb.register_entity captures its callback table without dispatching") {
 	vb::net::LoopbackNetwork net;
 	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();

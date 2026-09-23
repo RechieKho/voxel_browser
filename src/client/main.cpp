@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -1185,6 +1186,26 @@ int main(int argc, char **argv) {
 					} else {
 						fog_end = static_cast<float>(view_distance * vb::core::kChunkDim);
 						fog_start = fog_end * 0.6f;
+					}
+					// Phase 7.3: "underwater" is the same sky-color fog
+					// mechanism, just a much closer distance preset -- no
+					// separate tint/color system (REMAINING_TASKS.md 7.3's
+					// decision). Triggered whenever the camera's own eye
+					// voxel is a liquid block, overriding whichever
+					// fog_start/fog_end were picked above (default or a
+					// pack's vb.render.set_fog override alike) so surfacing
+					// always restores normal visibility immediately.
+					const vb::core::Vec3d eye = controller.position();
+					const vb::core::IVec3 eye_voxel{
+						static_cast<int>(std::floor(eye.x)),
+						static_cast<int>(std::floor(eye.y)),
+						static_cast<int>(std::floor(eye.z))
+					};
+					const vb::core::BlockId eye_block =
+							client->chunk_store().block_at(eye_voxel);
+					if (client->chunk_store().registry().is_liquid(eye_block)) {
+						fog_end = 8.0f;
+						fog_start = 2.0f;
 					}
 					chunk_renderer->set_fog(controller.position(), sky, fog_start, fog_end);
 				}

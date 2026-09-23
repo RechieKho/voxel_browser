@@ -276,6 +276,19 @@ public:
 		block_break_hooks_ = std::move(hooks);
 	}
 
+	// Phase 7.3 (spec: REMAINING_TASKS' "generic region-enter/exit hook"):
+	// fires once per player per crossing of a `BlockType::region` block's
+	// boundary, not per-tick -- water is the first block to opt in, but this
+	// is a generic occupancy tracker, not a liquid-specific one. Unset
+	// fields (or both unset) mean update_region_occupancy() below is a no-op
+	// -- same "no handler installed, zero side effect and zero extra
+	// per-tick cost" posture as BlockBreakHooks above.
+	struct RegionHooks {
+		std::function<void(core::NetId, core::IVec3, core::BlockId)> enter;
+		std::function<void(core::NetId, core::IVec3, core::BlockId)> exit;
+	};
+	void set_region_hooks(RegionHooks hooks) { region_hooks_ = std::move(hooks); }
+
 	// Phase 6.1 (vb.register_entity / vb.world.spawn): a generic Lua-kind
 	// entity, replicated the exact same way spawn_item_drop's entries are --
 	// no dedicated wire message, just another interest-grid entry keyed by a
@@ -385,6 +398,7 @@ private:
 	void update_item_drops(double dt_seconds);
 	void update_block_damage();
 	void update_block_punch_healing(double dt_seconds);
+	void update_region_occupancy();
 	void broadcast_snapshots();
 	void broadcast_world();
 	void broadcast_time_of_day();
@@ -410,6 +424,13 @@ private:
 	std::function<void(core::NetId, core::BlockId, std::uint16_t)> on_item_pickup_;
 	world::BlockDamageSystem block_damage_;
 	BlockBreakHooks block_break_hooks_;
+	// Phase 7.3: last-known region-block occupancy per playing net id --
+	// absent = "not currently inside a region block". Compared each tick in
+	// update_region_occupancy() to fire enter/exit exactly on the crossing,
+	// not every tick spent inside one.
+	std::unordered_map<core::NetId, std::pair<core::IVec3, core::BlockId>>
+			region_occupancy_;
+	RegionHooks region_hooks_;
 	// Phase 6.18: sparse pos -> punch/heal state, distinct from
 	// world::BlockDamageSystem above -- that system's begin/tick/stop
 	// lifecycle models a *held*, continuous action across many ticks (5.2's

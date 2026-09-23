@@ -18,9 +18,36 @@
 
 ---
 
-## Current status (2026-09-22)
+## Current status (2026-09-23)
 
-Most recent landed item is **Phase 7.2: distance fog**, protocol version
+Most recent landed item is **Phase 7.3: walkable liquid blocks** — collision
+was already correct (verified, not rebuilt: `is_solid` already gated
+`step_movement`, `base:water` was already non-solid); underwater rendering
+is 7.2's same sky-color fog mechanism with a fixed close preset
+(`fog_start=2.0f`/`fog_end=8.0f`) overriding whichever fog distance was
+already chosen, triggered in `src/client/main.cpp`'s `kPlaying` block
+whenever `client->chunk_store().registry().is_liquid()` is true for the
+camera's own floored eye position; and a new generic `BlockType::region`
+flag (`base:water` only in the base set; `vb.register_block{region=}`
+defaults to the block's own `liquid` value) drives
+`ServerSession::update_region_occupancy()` (`src/net/session.cpp`, one new
+per-tick pass reading the same `interest_` position source
+`update_item_drops` uses, diffed against a `NetId`-keyed
+`region_occupancy_` map) firing `vb.on("region_enter"/"region_exit", player,
+pos, block_name)` exactly on the crossing, not per tick spent inside — no
+wire-protocol change, this is server-local Lua dispatch only, gated
+zero-cost behind `ServerSession::RegionHooks` (unset function fields = no-op)
+the same way `BlockBreakHooks` already is. No engine-side swim-speed/
+movement-slowdown policy was added — that's left entirely to a pack built on
+top of the hook, same "engine provides the primitive" posture as everything
+else in Phase 6/7. Full `vb_tests` 300/300 green on this machine's plain
+`build` dir (both `VB_WITH_NET`/`VB_WITH_LUA` ON); also re-verified a clean
+`-Werror` build (`-DVB_WARNINGS_AS_ERRORS=ON`, matching every CI workflow)
+of `vb_tests`/`voxel_browser`/`voxel_browser_server` before reconfiguring
+back to this dir's plain-local OFF default. Full REMAINING_TASKS.md
+write-up under Phase 7's 7.3 entry.
+
+Before that, most recent landed item was **Phase 7.2: distance fog**, protocol version
 bumped to **16**. A real GLSL 330 shader (`kFogVs`/`kFogFs` in
 `src/render/chunk_renderer.cpp`, loaded once in `ChunkRenderer`'s
 constructor) replaces raylib's default mesh shader on every chunk's

@@ -1099,4 +1099,96 @@ TEST_CASE("vb.register_entity + vb.world.spawn: self persists across on_tick, "
 	CHECK(client.remote_entities().empty());
 }
 
+TEST_CASE("region_enter/region_exit (Phase 7.3): fires once per crossing, "
+		  "not per tick spent inside, and passes the block's registered name") {
+	LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("region_hook"));
+	// Only base:water opts into the region flag by default -- gate on the
+	// block name so a wrong/garbled name silently leaves the inventory
+	// empty instead of passing for the wrong reason.
+	REQUIRE(rt.load_pack_file(R"(
+		vb.on("region_enter", function(player, pos, block)
+			if block == "base:water" then player:give({ item = 1, count = 1 }) end
+		end)
+		vb.on("region_exit", function(player, pos, block)
+			if block == "base:water" then player:give({ item = 6, count = 1 }) end
+		end)
+	)"));
+	rt.freeze();
+
+	vb::world::World world(registry);
+	wg::WorldGenWorkerPool pool(
+			wg::WorldGenerator(wg::WorldGenParams{}, registry),
+			wg::WorldGenWorkerPool::kSynchronous);
+
+	HandshakeServerConfig cfg;
+	cfg.world_seed = 7;
+	ServerSession server(net.server(), cfg);
+	auto replicator = std::make_unique<WorldReplicator>(world, pool, registry, 1, 2);
+	rt.attach_world(*replicator);
+	server.set_world_replicator(std::move(replicator));
+	rt.attach_session(server);
+	REQUIRE(net.server().listen(0));
+
+	Transport &ta = net.create_client();
+	auto ida = ta.connect("x", 0);
+	REQUIRE(ida);
+	ClientSession client(ta, *ida, HandshakeClientConfig{ "A", "", "v", 1 });
+
+	auto pump = [&](int n) {
+		for (int i = 0; i < n; ++i) {
+			server.tick(0.05);
+			client.tick(0.05);
+			rt.dispatch_tick(0.05);
+		}
+	};
+
+	pump(20);
+	REQUIRE(client.joined());
+	const NetId a_id = client.join_accept()->your_net_id;
+
+	const IVec3 water_voxel = surface_voxel(world, 4, 4) + IVec3{ 0, 5, 0 };
+	world.set_block(water_voxel, vb::world::base_block::water);
+	const Vec3d in_water{ water_voxel.x + 0.5, water_voxel.y + 0.5,
+		water_voxel.z + 0.5 };
+	const Vec3d dry{ water_voxel.x + 0.5, water_voxel.y + 5.0, water_voxel.z + 0.5 };
+
+	server.set_player_state(a_id, dry);
+	pump(3);
+	CHECK(client.inventory().empty()); // never entered a region block
+
+	server.set_player_state(a_id, in_water);
+	pump(5); // several ticks *inside* the same region block
+	{
+		const auto &inv = client.inventory();
+		REQUIRE(inv.size() == 1);
+		CHECK(inv[0].item == vb::world::base_block::stone);
+		CHECK(inv[0].count == 1); // one enter, not one per tick
+	}
+
+	server.set_player_state(a_id, dry);
+	pump(3);
+	{
+		const auto &inv = client.inventory();
+		REQUIRE(inv.size() == 2);
+		CHECK(inv[1].item == vb::world::base_block::wood);
+		CHECK(inv[1].count == 1); // one exit
+	}
+
+	// A second crossing fires again -- proves this is edge-triggered per
+	// crossing, not a one-shot latch.
+	server.set_player_state(a_id, in_water);
+	pump(3);
+	server.set_player_state(a_id, dry);
+	pump(3);
+	{
+		const auto &inv = client.inventory();
+		REQUIRE(inv.size() == 2);
+		CHECK(inv[0].count == 2);
+		CHECK(inv[1].count == 2);
+	}
+}
+
 #endif // VB_WITH_LUA

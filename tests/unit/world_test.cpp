@@ -146,4 +146,8 @@ TEST_CASE("BlockRegistry base set") {
 	CHECK(r.is_liquid(base_block::water));
 	CHECK_FALSE(r.is_opaque(base_block::leaves));
 	CHECK(r.find("base:nonesuch") == BlockId::kAir);
+	// Phase 7.3: water is the first block to opt into the generic region
+	// flag; every other base block stays out by default.
+	CHECK(r.is_region(base_block::water));
+	CHECK_FALSE(r.is_region(base_block::stone));
 }

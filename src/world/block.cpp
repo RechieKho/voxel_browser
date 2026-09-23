@@ -14,7 +14,9 @@ BlockRegistry BlockRegistry::base() {
 	r.add({ "base:dirt", true, true, false, 0 });
 	r.add({ "base:grass", true, true, false, 0 });
 	r.add({ "base:sand", true, true, false, 0 });
-	r.add({ "base:water", false, false, true, 0 });
+	BlockType water{ "base:water", false, false, true, 0 };
+	water.region = true; // Phase 7.3: first user of the generic region hook
+	r.add(std::move(water));
 	r.add({ "base:wood", true, true, false, 0 });
 	r.add({ "base:leaves", true, false, false, 0 });
 	return r;

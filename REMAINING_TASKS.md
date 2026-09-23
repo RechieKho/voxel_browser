@@ -268,7 +268,7 @@ Full detail: `remaining_tasks/phase6.md`.
 
 ---
 
-## Phase 7 — World & UX Polish (7.1-7.2 done, 7.3-7.4 planned)
+## Phase 7 — World & UX Polish (7.1-7.3 done, 7.4 planned)
 
 > User-requested (2026-09-19): four UX gaps, scoped as their own phase since
 > none of them extend Phase 6's "default + override" system pattern the way
@@ -384,43 +384,73 @@ Full detail: `remaining_tasks/phase6.md`.
       replication path as `S2C_MoveParams`/`S2C_DayNightCurve` (6.7/6.8) so a
       dedicated-server pack's choice reaches every client, not just
       `--singleplayer`.
-- [ ] **7.3 — Walkable "liquid" blocks (water): collision, underwater
+- [x] **7.3 — Walkable "liquid" blocks (water): collision, underwater
       rendering (same sky-color fog mechanism, tighter distance), and a
-      generic region-enter/exit hook for entity effects.**
-      `BlockType::liquid` (`inc/vb/world/block.hpp`) already exists and
-      `base:water` is already registered non-`solid` (Phase 2's base set) —
-      collision is presumably already correct (`is_solid` gates
-      `step_movement`'s AABB checks) and needs verifying, not building from
-      scratch. What's actually broken/missing:
-    - Rendering: standing/swimming with the camera's eye point inside a
-      water voxel currently renders the world past it undistorted (the bug
-      the user calls "able to see underwater"). **Decided (2026-09-19): no
-      separate underwater tint/color** — being underwater is just 7.2's same
-      sky-color fog mechanism with a much closer `end` distance (murky,
-      short visibility), triggered client-side whenever the camera's voxel
-      position is a liquid block (`ClientChunkStore` already exposes block
-      lookups). One fog mechanism, one color source (the sky), two distance
-      presets (normal view distance, underwater), not two independent visual
-      systems.
-    - **Explicitly out of scope, per user instruction:** no flowing-liquid
+      generic region-enter/exit hook for entity effects.** Landed
+      2026-09-23. Collision needed no change — `is_solid` already gated
+      `step_movement`'s AABB checks and `base:water` was already registered
+      non-solid (Phase 2), so walking into/through it already worked;
+      verified, not rebuilt.
+      Underwater rendering: `src/client/main.cpp`'s `kPlaying` fog block
+      (7.2) now computes the camera's own eye voxel (`controller.position()`
+      floored) each frame and checks
+      `client->chunk_store().registry().is_liquid(eye_block)` — when true it
+      overrides whichever `fog_start`/`fog_end` were already chosen (engine
+      default *or* a pack's `vb.render.set_fog` override alike) with a fixed
+      close preset (`fog_start = 2.0f`, `fog_end = 8.0f`) before calling
+      `ChunkRenderer::set_fog`. No separate tint/color system, exactly the
+      2026-09-19 decision — underwater is 7.2's same sky-color fog mechanism,
+      just a much closer distance, so surfacing restores normal visibility
+      immediately with zero extra state to track.
+      Generic region hook: `BlockType::region` (`inc/vb/world/block.hpp`) is
+      a new flag independent of `liquid` — `BlockRegistry::base()` sets it on
+      `base:water` only (`src/world/block.cpp`); `vb.register_block{region=}`
+      defaults it to the block's own `liquid` value unless given explicitly
+      (`src/script/pack_runtime.cpp`), so a pack's liquid opts in
+      automatically and a non-liquid custom block (a future poison cloud)
+      opts in on request. Server-side, `ServerSession::update_region_occupancy()`
+      (`src/net/session.cpp`, called once per `tick()` after the punch-heal
+      pass) reads each playing player's own position from the same
+      `interest_` entry `update_item_drops` already reads, floors it to a
+      voxel, and diffs `reg.is_region(block)` against a new
+      `region_occupancy_` map keyed by `NetId` to fire
+      `ServerSession::RegionHooks::enter`/`exit` exactly on the crossing —
+      never once per tick spent inside one. Both hook fields are
+      `std::function`s left unset (a no-op early return) unless a pack
+      registered `vb.on("region_enter", ...)` or `"region_exit"`
+      (`PackRuntime::attach_session`), same zero-extra-per-tick-cost posture
+      as `BlockBreakHooks`. `PackRuntime::Impl::run_region_event` fires
+      `vb.on("region_enter"/"region_exit", player, pos, block_name)` — the
+      block is resolved to its registered *name* (via
+      `replicator->world().registry()`) rather than a raw id, so a pack
+      checks `block == "base:water"` instead of needing to know an id.
+      **Explicitly out of scope, per user instruction:** no flowing-liquid
       physics/spread (Minecraft's water-source/flow-level simulation) — the
-      block stays static once placed, only collision + visuals are in scope.
-    - **Decided (2026-09-19): the region-enter/exit hook is generic, not
-      liquid-specific** — liquid is just the built-in example/first user of
-      it, not a special case with its own hook name. Shape: a block-level
-      flag (independent of `liquid`, though every liquid block defaults to
-      opting in) marks a block as a "region" block; server-side per-tick
-      occupancy tracking (whatever entity — starting with players — has its
-      position/AABB inside such a block) fires
-      `vb.on("region_enter"/"region_exit", handler(entity, pos, block))`. No
-      handler registered = zero behavior, same "engine provides the hook,
-      content decides the policy" posture as every other Phase 6 system — a
-      pack implements "slow down in water" itself (`player:set_velocity`/a
-      future speed-modifier API) from this, the engine never hardcodes a
-      swim-speed constant. Exact field name/API not pinned yet — decide
-      during implementation — but the *shape* (generic flag + generic hook,
-      liquid is just one instance) is settled, so a future lava/gas/
-      poison-cloud block reuses the same mechanism with zero engine changes.
+      block stays static once placed, only collision + visuals + the hook
+      are in scope. **Position, not full AABB:** the occupancy check is a
+      single-point test at the player's own position (matching every other
+      per-player system in `ServerSession`, e.g. reach/item-pickup), not the
+      player's full collision box — REMAINING_TASKS' original "position/AABB"
+      note left this open; a point check was judged sufficient (water's
+      collision box already visually matches the voxel) and simpler.
+      Verified: full `vb_tests` 300/300 green — new coverage is
+      `world_test.cpp`'s base-set `is_region` assertions,
+      `pack_runtime_test.cpp`'s `register_block{region=}` default/override
+      matrix, and a new `pack_runtime_integration_test.cpp` end-to-end case
+      that moves a real player in and out of a real `base:water` voxel over
+      a `LoopbackTransport` and confirms `region_enter`/`region_exit` each
+      fire exactly once per crossing (via two counted `player:give()` calls
+      gated on the passed block name), not once per tick spent inside;
+      clean `-Werror` build of both binaries (temporarily reconfigured the
+      local `build` dir with `-DVB_WARNINGS_AS_ERRORS=ON` — off by default
+      for a plain local build, but what every CI workflow already passes —
+      confirmed a clean rebuild of `vb_tests`/`voxel_browser`/
+      `voxel_browser_server`, then reconfigured back to this dir's original
+      OFF setting afterward). The actual underwater visual (a human swimming
+      and seeing
+      the closer fog kick in) was **not** manually eyeballed — no GUI in
+      this agent environment, same still-open caveat as 7.1/7.2's own
+      verification notes.
 - [ ] **7.4 — Wire `content/base`'s existing UI screens to a real trigger, as
       a working example.** `ui/pause.lua` and `ui/inventory.lua` are fully
       defined but their own header comments already flag that **nothing

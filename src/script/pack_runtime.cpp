@@ -464,6 +464,12 @@ struct PackRuntime::Impl {
 	std::optional<float> run_block_health_tick(core::IVec3 pos, float damage,
 			std::uint16_t max_damage, std::uint64_t ticks_since_last_hit);
 
+	// Phase 7.3: fires vb.on("region_enter"/"region_exit", player, pos,
+	// block_name) -- generic occupancy notification, no veto/return value
+	// (see net::ServerSession::RegionHooks for the calling contract).
+	void run_region_event(
+			const std::string &event, core::NetId player, core::IVec3 pos, core::BlockId block);
+
 	// Phase 6.1: vb.world.spawn / self:damage / self:remove dispatch. See
 	// ScriptEntity's comment above for the overall design.
 	core::NetId self_net_id(const sol::table &self) const;
@@ -811,6 +817,11 @@ void PackRuntime::Impl::install_bindings() {
 		type.solid = def.get_or("solid", true);
 		type.opaque = def.get_or("opaque", true);
 		type.liquid = def.get_or("liquid", false);
+		// Phase 7.3: generic per-tick occupancy tracking opt-in (region_enter/
+		// region_exit) -- independent of `liquid`, but every liquid block
+		// defaults to opting in (matches base:water); non-liquid custom
+		// blocks default false and must opt in explicitly.
+		type.region = def.get_or("region", type.liquid);
 		type.light_emission =
 				static_cast<std::uint8_t>(def.get_or("light", 0));
 		// Phase 6.5 (spec §10.7): 0 (default) = today's instant break.
@@ -1359,7 +1370,8 @@ void PackRuntime::Impl::install_bindings() {
 	static const std::set<std::string> kValidEvents = { "player_join",
 		"player_leave", "block_break", "block_place", "player_interact",
 		"chat", "tick", "ui_event", "player_death", "player_input",
-		"block_break_begin", "block_break_tick", "block_health_tick" };
+		"block_break_begin", "block_break_tick", "block_health_tick",
+		"region_enter", "region_exit" };
 	vb["on"] = [this](const std::string &event, sol::protected_function fn) {
 		if (kValidEvents.find(event) == kValidEvents.end()) {
 			throw sol::error("vb.on: unknown event '" + event + "'");
@@ -1897,6 +1909,16 @@ std::optional<float> PackRuntime::Impl::run_block_health_tick(core::IVec3 pos,
 	return replacement;
 }
 
+void PackRuntime::Impl::run_region_event(const std::string &event,
+		core::NetId player, core::IVec3 pos, core::BlockId block) {
+	PlayerHandle p{ player, this };
+	sol::table pos_tbl = make_pos_table(lua_state(), pos);
+	// replicator is guaranteed non-null here: attach_world() runs before
+	// attach_session() installs this hook (see PackRuntime::attach_session).
+	const std::string block_name = replicator->world().registry().get(block).name;
+	fire(event, p, pos_tbl, block_name);
+}
+
 PackRuntime::PackRuntime(net::Transport &transport,
 		world::BlockRegistry &registry, std::filesystem::path storage_path,
 		VmLimits limits) : impl_(std::make_unique<Impl>(transport, registry,
@@ -2348,6 +2370,23 @@ void PackRuntime::attach_session(net::ServerSession &session) {
 			return self->run_block_health_tick(pos, damage, max_damage, idle);
 		};
 		session.set_block_break_hooks(std::move(hooks));
+	}
+	// Phase 7.3: only installed when a pack registered at least one of the
+	// two region events -- ServerSession's own per-tick walk stays a no-op
+	// (both std::function fields unset) for every pack that never opts in,
+	// same zero-extra-cost posture as BlockBreakHooks above.
+	if (self->handlers.count("region_enter") != 0 ||
+			self->handlers.count("region_exit") != 0) {
+		net::ServerSession::RegionHooks hooks;
+		hooks.enter = [self](core::NetId player, core::IVec3 pos,
+							  core::BlockId block) {
+			self->run_region_event("region_enter", player, pos, block);
+		};
+		hooks.exit = [self](core::NetId player, core::IVec3 pos,
+							 core::BlockId block) {
+			self->run_region_event("region_exit", player, pos, block);
+		};
+		session.set_region_hooks(std::move(hooks));
 	}
 }
 

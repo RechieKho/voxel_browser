@@ -42,6 +42,13 @@ struct BlockType {
 	// valid (if strange) pickup radius, so it can't double as the sentinel.
 	double pickup_radius = -1.0;
 	double drop_lifetime_seconds = -1.0;
+	// Phase 7.3: generic "region" flag, independent of `liquid` (though
+	// every liquid block defaults to opting in). Marks a block as one the
+	// server tracks per-tick occupancy for (starting with players) and
+	// fires vb.on("region_enter"/"region_exit", ...) over -- water is just
+	// the first user, not a special case; a future lava/gas/poison-cloud
+	// block reuses this with zero engine changes.
+	bool region = false;
 };
 
 // Well-known ids in the Phase 2 base registry. Do not assume these hold once
@@ -82,6 +89,7 @@ public:
 	bool is_solid(core::BlockId id) const { return prop(id).solid; }
 	bool is_opaque(core::BlockId id) const { return prop(id).opaque; }
 	bool is_liquid(core::BlockId id) const { return prop(id).liquid; }
+	bool is_region(core::BlockId id) const { return prop(id).region; }
 	std::uint8_t light_emission(core::BlockId id) const {
 		return prop(id).light_emission;
 	}

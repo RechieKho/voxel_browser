@@ -395,6 +395,53 @@ void ServerSession::update_block_punch_healing(double dt_seconds) {
 	}
 }
 
+// Phase 7.3: per-tick region occupancy, keyed off each playing player's own
+// position (same interest_ source update_item_drops reads for "where is this
+// net id right now") -- checks the voxel the position itself falls inside,
+// not a full AABB (REMAINING_TASKS' open "exact shape" note; a point check is
+// enough for water's own collision box to already match visually). Fires
+// enter/exit exactly on the crossing by diffing against region_occupancy_,
+// never on every tick spent inside one.
+void ServerSession::update_region_occupancy() {
+	if (!replicator_ || (!region_hooks_.enter && !region_hooks_.exit)) {
+		return;
+	}
+	const world::World &world = replicator_->world();
+	const world::BlockRegistry &reg = world.registry();
+	for (auto &[conn, state] : conns_) {
+		if (!state.playing) {
+			continue;
+		}
+		(void)conn;
+		const replication::EntityState *e = interest_.get(state.net_id);
+		if (!e) {
+			continue;
+		}
+		const core::IVec3 voxel{ static_cast<int>(std::floor(e->pos.x)),
+			static_cast<int>(std::floor(e->pos.y)),
+			static_cast<int>(std::floor(e->pos.z)) };
+		const core::BlockId block = world.get_block(voxel);
+		const bool in_region = reg.contains(block) && reg.is_region(block);
+
+		auto it = region_occupancy_.find(state.net_id);
+		const bool was_in_region = it != region_occupancy_.end();
+		if (in_region && !was_in_region) {
+			region_occupancy_[state.net_id] = { voxel, block };
+			if (region_hooks_.enter) {
+				region_hooks_.enter(state.net_id, voxel, block);
+			}
+		} else if (!in_region && was_in_region) {
+			const auto [last_voxel, last_block] = it->second;
+			region_occupancy_.erase(it);
+			if (region_hooks_.exit) {
+				region_hooks_.exit(state.net_id, last_voxel, last_block);
+			}
+		} else if (in_region && was_in_region) {
+			it->second = { voxel, block }; // stays current for a later exit
+		}
+	}
+}
+
 void ServerSession::handle_block_break_begin(ConnId conn, Conn &state,
 		const protocol::Frame &frame) {
 	(void)conn;
@@ -645,6 +692,7 @@ void ServerSession::tick(double dt_seconds) {
 					--playing_;
 					interest_.remove(it->second.net_id);
 					block_damage_.remove_player(it->second.net_id);
+					region_occupancy_.erase(it->second.net_id);
 					if (replicator_) {
 						replicator_->forget_player(it->second.net_id);
 					}
@@ -700,6 +748,7 @@ void ServerSession::tick(double dt_seconds) {
 	update_item_drops(dt_seconds);
 	update_block_damage();
 	update_block_punch_healing(dt_seconds);
+	update_region_occupancy();
 
 	++server_tick_;
 	broadcast_snapshots();

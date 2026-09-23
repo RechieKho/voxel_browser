@@ -66,7 +66,11 @@ rt.dispatch_tick(dt);
   registration doesn't update an already-registered block's properties** —
   re-registering an existing `name` (e.g. one of the base 8) just returns its
   id unchanged; `max_damage`/`solid`/`opaque`/etc. only take effect the first
-  time a name is registered), `vb.register_item(def)`, `vb.register_entity(def)`
+  time a name is registered); `region` — Phase 7.3, generic per-tick
+  occupancy tracking opt-in, independent of `liquid` (see `region_enter`/
+  `region_exit` below) — defaults to `liquid`'s own value (a liquid block
+  opts in automatically, matching `base:water`) unless given explicitly,
+  `vb.register_item(def)`, `vb.register_entity(def)`
   (captures `on_spawn`/`on_tick`/`on_hit`/`on_death` but nothing dispatches
   them yet — no EnTT registry exists, Phase 3.1; its `visual = {...}`
   sub-table — spritesheet variant/facings/origin/clips grid, schema finalized
@@ -192,12 +196,14 @@ rt.dispatch_tick(dt);
   planks.lua`/`sticks.lua`).
 - Events: `vb.on("player_join"|"player_leave"|"block_break"|"block_place"|
   "player_interact"|"chat"|"tick"|"ui_event"|"player_death"|"player_input"|
-  "block_break_begin"|"block_break_tick"|"block_health_tick", handler)`,
+  "block_break_begin"|"block_break_tick"|"block_health_tick"|
+  "region_enter"|"region_exit", handler)`,
   vetoable via `return false` (except `tick`/`ui_event`, which have
   no veto semantics; `player_death` is a *decision* hook, not a veto —
   see below; `player_input`/`chat` may veto *or* replace, see below;
   `block_break_tick`/`block_health_tick` return numbers, not booleans —
-  see below).
+  see below; `region_enter`/`region_exit` are pure notifications, any
+  return value is ignored, see below).
   `player_join` fires from `install_join_veto`'s `authenticate` wrapper (a
   real pre-join veto — note it hands the handler a plain player *name*
   string, not a `Player` handle, since no session/connection exists yet at
@@ -275,6 +281,21 @@ rt.dispatch_tick(dt);
   nearby players yet (blocked on the still-pending texture/atlas system for
   the crack overlay, `REMAINING_TASKS.md` 6.5), so a second player can't see
   another's break progress today, only feel its effect once it commits.
+  Generic region occupancy (Phase 7.3): `region_enter(player, pos,
+  block_name)` / `region_exit(player, pos, block_name)` fire once per
+  crossing (not once per tick spent inside), server-side, whenever a
+  player's own position moves into/out of a block whose `BlockType.region`
+  flag is set (`register_block{region=...}` above) — `pos` is the voxel
+  they crossed into/out of, `block_name` its registered name (e.g.
+  `"base:water"`, the only block that opts in by default). Purely a
+  notification, no veto — a pack builds its own policy on top (e.g. slow
+  movement in water) from this plus `player:set_velocity`/its own state, the
+  engine hardcodes no swim-speed or liquid-specific behavior at all. Water
+  is just the first user of a generic mechanism; a future lava/gas/
+  poison-cloud block reuses it with zero engine changes. Only installed
+  (`ServerSession::set_region_hooks`) when a pack registers at least one of
+  the two events, same zero-extra-per-tick-cost posture as the block-damage
+  hooks above.
 - Scheduling: `vb.after(seconds, fn)` (one-shot), `vb.every(seconds, fn)`
   (repeating; catches up on a stalled tick, capped at 8 fires/dispatch).
   Storage: `vb.storage.key = value` — a metatable-backed proxy over a
