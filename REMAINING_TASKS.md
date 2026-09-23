@@ -428,6 +428,22 @@ Full detail: `remaining_tasks/phase6.md`.
       comment/expected quad count (stone now keeps all 6 faces, was 5; total
       11, was 10) rather than leaving the old wrong-by-design assertion in
       place.
+      **Second same-day follow-up fix (user-reported with a screenshot):**
+      the mesher fix alone made the lake surface look "broken, like there
+      are holes" when viewed from *above* — not a geometry bug this time.
+      `src/render/chunk_renderer.cpp`'s `tint_for()` gave water `alpha=200`
+      (semi-transparent), a pre-existing Phase-2-era value that was
+      inconsequential as long as submerged terrain was always culled (there
+      was never anything behind the water quad to blend with). Once the
+      mesher fix above made that terrain actually render, the same alpha let
+      the real sandy lakebed blend through — but as flat, hard-edged,
+      voxel-shaped patches (no wave/refraction shading exists to sell a soft
+      "shallow clear water" look), which read as corrupted geometry rather
+      than water. Fixed by bumping water to `alpha=255`, opaque like every
+      other block, so the lake surface is solid-looking from outside again;
+      underwater visibility while swimming is untouched by this, since it's
+      driven entirely by the fog system (once the camera's own eye voxel is
+      inside the water) and never depended on this material's alpha.
       Generic region hook: `BlockType::region` (`inc/vb/world/block.hpp`) is
       a new flag independent of `liquid` — `BlockRegistry::base()` sets it on
       `base:water` only (`src/world/block.cpp`); `vb.register_block{region=}`

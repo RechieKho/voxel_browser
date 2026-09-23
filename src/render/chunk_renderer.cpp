@@ -99,7 +99,16 @@ Color tint_for(std::uint32_t block_id) {
 		case 4:
 			return Color{ 214, 200, 150, 255 }; // sand
 		case 5:
-			return Color{ 64, 108, 196, 200 }; // water
+			// Phase 7.3 fix: was alpha 200 (semi-transparent), inert before
+			// this phase since submerged terrain faces were always culled
+			// (nothing to blend with). Now that they render, the old alpha
+			// let the lakebed blend through as flat, hard-edged patches with
+			// no wave/refraction shading to sell it -- looked like a broken
+			// mesh, not water. Opaque like every other block; underwater
+			// visibility while swimming is unaffected, it's driven entirely
+			// by the fog system (7.2/7.3) once the camera is inside the
+			// water voxel, not by this material's alpha.
+			return Color{ 64, 108, 196, 255 }; // water
 		case 6:
 			return Color{ 110, 84, 52, 255 }; // wood
 		case 7:

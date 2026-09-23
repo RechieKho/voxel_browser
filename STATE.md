@@ -48,7 +48,20 @@ zero-cost behind `ServerSession::RegionHooks` (unset function fields = no-op)
 the same way `BlockBreakHooks` already is. No engine-side swim-speed/
 movement-slowdown policy was added — that's left entirely to a pack built on
 top of the hook, same "engine provides the primitive" posture as everything
-else in Phase 6/7. Full `vb_tests` 300/300 green on this machine's plain
+else in Phase 6/7. **Second same-day follow-up fix:** the mesher fix alone
+made the lake surface look "broken, like there are holes" from *above*
+(user-reported, screenshot-confirmed) — real cause was
+`src/render/chunk_renderer.cpp`'s `tint_for()` giving water `alpha=200`
+(semi-transparent), a Phase-2-era value that was inert as long as submerged
+terrain was always culled (nothing behind it to blend with). Once the mesher
+fix made that terrain render, the same alpha let the sandy lakebed blend
+through as flat, hard-edged, chunk/voxel-shaped patches — no wave/refraction
+shading exists to sell it as water, so it read as corrupted geometry rather
+than "shallow clear water." Fixed by bumping water to `alpha=255`, opaque
+like every other block; underwater visibility while swimming is untouched,
+it's driven entirely by the fog system once the camera's own eye voxel is
+inside the water, not by this material's alpha.
+Full `vb_tests` 300/300 green on this machine's plain
 `build` dir (both `VB_WITH_NET`/`VB_WITH_LUA` ON); also re-verified a clean
 `-Werror` build (`-DVB_WARNINGS_AS_ERRORS=ON`, matching every CI workflow)
 of `vb_tests`/`voxel_browser`/`voxel_browser_server` before reconfiguring
