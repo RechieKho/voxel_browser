@@ -72,6 +72,9 @@ jobs:
           mkdir -p "$dist"
           cp "${{ github.workspace }}/build/voxel_browser.exe" "$dist/"
           cp "${{ github.workspace }}/build/voxel_browser_server.exe" "$dist/"
+          cp "${{ github.workspace }}/server.toml.example" "$dist/"
+          cp -r "${{ github.workspace }}/content" "$dist/"
+          find "$dist/content" \( -name "storage.json" -o -type d -name "db" \) -exec rm -rf {} +
 
       - name: Export binaries
         uses: actions/upload-artifact@v4
