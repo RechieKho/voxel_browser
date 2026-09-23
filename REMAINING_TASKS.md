@@ -533,20 +533,43 @@ Full detail: `remaining_tasks/phase6.md`.
       client/main.cpp`'s `kPlaying` block only swaps the *distance* preset
       (`fog_start=2.0f`/`fog_end=8.0f`) when `is_liquid(eye_block)`, the
       color argument is untouched. Two parts:
-    - **Default:** derive the underwater fog color from the occupying
-      liquid block's own render color instead of the sky. No such color
-      exists as block *data* yet — `chunk_renderer.cpp`'s `tint_for()` is a
-      hardcoded `switch` on `block_id` (today's water case: `Color{64, 108,
-      196, 255}`, just fixed from alpha 200 in this same phase), not a
-      registry-backed property, so `base:water`'s color can't be looked up
-      generically from `BlockType`/`BlockRegistry` today. This likely needs
-      a real `color`/`tint` field added to `BlockType` (`inc/vb/world/
-      block.hpp`) that `tint_for()` reads instead of switching on id — the
-      same gap Phase 4's "texture/model fields accepted but not stored" note
-      already flags (`vb.register_block`'s `texture`/`model` fields are
-      captured but never stored on `BlockType`); solving underwater tint
-      properly likely means finally giving `BlockType` a real, wire-visible
-      color property, not just a client-only rendering constant.
+    - **Default (2026-09-23, refined):** rather than a hand-authored color
+      per block, derive it automatically as the **average pixel color of
+      the block's own texture** — so a pack never declares a separate
+      "fog tint" value that can drift out of sync with its actual art;
+      the block just looks like what it looks like. This is a bigger
+      prerequisite than it first appears: there is **no real texture
+      system in this engine yet at all**. `chunk_renderer.cpp`'s
+      `tint_for()` is a hardcoded `switch` on `block_id` returning a flat
+      `Color` (today's water case: `Color{64, 108, 196, 255}`, just fixed
+      from alpha 200 in this same phase) — every block is a solid color,
+      not a textured quad; the shader's `texture0` sampler is bound to
+      raylib's implicit default 1×1 white texture, never a real per-block
+      image. `vb.register_block`'s `def` table doesn't even read a
+      `texture` field into anything today (`src/script/pack_runtime.cpp`)
+      — `docs/lua-api.md`'s "accepted but not stored" note is generous;
+      it's not read at all. This is the same still-open gap as Phase 4's
+      "Client meshing/atlas driven by the received block registry" item
+      and REMAINING_TASKS' repeated "texture atlas is Phase 4" markers —
+      average-texture-color underwater tint is blocked on that landing
+      first, not implementable standalone.
+      Once a real texture/atlas system exists: computing the average
+      likely doesn't need a new wire field at all — `vb::assetsync`
+      already gets arbitrary content-pack asset bytes (a block's texture
+      image) onto the client via the existing hash-based asset-sync path,
+      so the client can decode the already-synced image and average its
+      pixels itself once, caching the result alongside the resolved
+      `BlockRegistry` entry, the same "client derives it locally from data
+      it already has" shape as `client->fog_override()`'s own
+      no-override default today. Only *overriding* that computed default
+      (see below) needs a wire field.
+      **Interim, until textures land:** the flat `tint_for()` color a
+      block already renders with *is* trivially its own "average" (a
+      flat-colored block has zero texture variance), so a naive default
+      built directly off today's hardcoded switch is a reasonable
+      placeholder — just don't treat it as the real design; replace it
+      wholesale once textures exist rather than trying to reconcile the
+      two schemes.
     - **Override:** extend `vb.render.set_fog{...}` (or a sibling call) to
       accept an underwater-specific color, replicated the same
       `S2CFogParams`-style opt-in path as `fog_start`/`fog_end` (6.7/6.8's
