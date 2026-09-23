@@ -268,7 +268,7 @@ Full detail: `remaining_tasks/phase6.md`.
 
 ---
 
-## Phase 7 — World & UX Polish (7.1-7.3 done, 7.4-7.5 planned)
+## Phase 7 — World & UX Polish (7.1-7.4 done, 7.5 planned)
 
 > User-requested (2026-09-19): four UX gaps, scoped as their own phase since
 > none of them extend Phase 6's "default + override" system pattern the way
@@ -493,32 +493,38 @@ Full detail: `remaining_tasks/phase6.md`.
       the closer fog kick in) was **not** manually eyeballed — no GUI in
       this agent environment, same still-open caveat as 7.1/7.2's own
       verification notes.
-- [ ] **7.4 — Wire `content/base`'s existing UI screens to a real trigger, as
-      a working example.** `ui/pause.lua` and `ui/inventory.lua` are fully
-      defined but their own header comments already flag that **nothing
-      opens them** — `player:open_ui()` is server-push-only and no client
-      gesture (keybind, chat command) ever calls it for these two screens;
-      `content/examples/kitchen_sink/keybinds.lua` hit the exact same wall
-      for its own custom screen ("no base-pack/client UI wires these yet").
-      Root cause, one level deeper than "just add a keybind": Phase 6.3's
-      `vb.register_keybind`/`S2C_KeybindRegistry` gives a pack a *named* bit
-      in `InputCmd.keybinds`, but nothing on the client ever maps a **physical
-      key** to a pack-registered custom name — only the pre-registered
-      engine names (movement + `primary`/`secondary`, Phase 6.19) get a real
-      key via `MovementBindings`/`sample_input_cmd`. Two things needed
-      together, not just content:
-    - A client-side physical-key-to-custom-keybind mapping (even a minimal
-      hardcoded default table in `src/client/main.cpp` keyed by name would
-      close the gap; a real settings-screen UI for it is a further, separate
-      step past Phase 5.3's movement-only rebind screen).
-    - `content/base` itself registering a keybind per screen (e.g. `"Escape"`
-      → `base:pause`, `"E"` or similar → `base:inventory`) and a
-      `vb.on("player_input", ...)` rising-edge handler calling
-      `player:open_ui(...)` — the exact pattern
-      `kitchen_sink/keybinds.lua` already demonstrates, just applied to
-      `content/base`'s own screens instead of an example pack's.
-      `base:inventory` additionally needs `{ slots = player:get_inventory() }`
-      passed as `ctx`, matching its own doc comment.
+- [x] **7.4 — Wire `content/base`'s existing UI screens to a real trigger, as
+      a working example.** Landed 2026-09-23. Root cause was one level deeper
+      than "just add a keybind": Phase 6.3's `vb.register_keybind`/
+      `S2C_KeybindRegistry` gives a pack a *named* bit in `InputCmd.keybinds`,
+      but nothing on the client ever mapped a **physical key** to a
+      pack-registered custom name — only the pre-registered engine names
+      (movement + `primary`/`secondary`, Phase 6.19) got a real key via
+      `MovementBindings`/`sample_input_cmd`. Two things landed together:
+    - A new `kCustomKeybinds` table in `src/client/main.cpp` (`{"base:pause",
+      KEY_ESCAPE}`, `{"base:inventory", KEY_E}`) — a minimal hardcoded
+      default, not a real settings-screen UI (that's still a further, separate
+      step past Phase 5.3's movement-only rebind screen). Read
+      unconditionally in `sample_input_cmd` (unlike the engine-name lookups,
+      which stay gated behind `mouse_captured`) via the same
+      `set_engine_keybind` bit-setter, since opening a pause/inventory screen
+      must work whether or not the mouse is currently captured for looking
+      around.
+    - A new `content/base/keybinds.lua` registering `"base:pause"`/
+      `"base:inventory"` and a `vb.on("player_input", ...)` rising-edge
+      handler calling `player:open_ui("base:pause", {})` /
+      `player:open_ui("base:inventory", { slots = player:get_inventory() })`
+      — the exact pattern `kitchen_sink/keybinds.lua` already demonstrated,
+      applied to `content/base`'s own screens. `ui/pause.lua`/
+      `ui/inventory.lua`'s stale "nothing opens this yet" header comments
+      updated to point at the new wiring.
+      Verified: full `vb_tests` 300/300 green (`content_pack_test.cpp`
+      exercises the new `content/base/keybinds.lua` load as part of loading
+      the whole pack), clean build of both binaries on `build-net-lua`. The
+      actual keypress → screen-opens behavior (a human pressing Escape/E in a
+      real window) was **not** manually eyeballed — no GUI in this agent
+      environment, same still-open caveat as every other Phase 7 item's own
+      verification note.
 - [ ] **7.5 — Underwater fog tint should default to the liquid block's own
       color, overridable from Lua.** User-requested (2026-09-23), and
       **supersedes 7.2/7.3's 2026-09-19 decision** ("fog color is never an

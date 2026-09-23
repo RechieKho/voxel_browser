@@ -394,6 +394,29 @@ void set_engine_keybind(vb::protocol::InputCmd &cmd, const char *name,
 	}
 }
 
+// Phase 7.4: closes the gap `content/base/ui/pause.lua`/`ui/inventory.lua`'s
+// own header comments flagged ("nothing opens this yet") and
+// `content/examples/kitchen_sink/keybinds.lua` hit for its own custom
+// screen ("no base-pack/client UI wires these yet") -- Phase 6.3's
+// vb.register_keybind gives a pack a *named* bit in InputCmd.keybinds, but
+// nothing on the client ever mapped a physical key to a pack-registered
+// custom name (only the 8 pre-registered engine names above get one, via
+// MovementBindings). This is a minimal hardcoded default table, not a real
+// settings-screen UI (Phase 5.3's keybindings screen only covers the 6
+// MovementBindings axes) -- a future rebind screen for these is a separate
+// step past this one, same as that item's own scope note. Unlike the
+// engine-name lookup above, these are read unconditionally (not gated on
+// mouse_captured below): opening a pause/inventory screen must work whether
+// or not the mouse is currently captured for looking around.
+struct CustomKeybind {
+	const char *name;
+	int key;
+};
+constexpr CustomKeybind kCustomKeybinds[] = {
+	{ "base:pause", KEY_ESCAPE },
+	{ "base:inventory", KEY_E },
+};
+
 vb::protocol::InputCmd sample_input_cmd(std::uint32_t seq, double dt, double yaw,
 		double pitch, bool mouse_captured, const MovementBindings &bindings,
 		const std::vector<std::string> &keybind_names = {}) {
@@ -451,6 +474,9 @@ vb::protocol::InputCmd sample_input_cmd(std::uint32_t seq, double dt, double yaw
 		set_engine_keybind(cmd, "sprint", sprint, keybind_names);
 		set_engine_keybind(cmd, "primary", primary, keybind_names);
 		set_engine_keybind(cmd, "secondary", secondary, keybind_names);
+	}
+	for (const CustomKeybind &kb : kCustomKeybinds) {
+		set_engine_keybind(cmd, kb.name, IsKeyDown(kb.key), keybind_names);
 	}
 	return cmd;
 }

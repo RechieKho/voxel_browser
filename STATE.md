@@ -20,7 +20,30 @@
 
 ## Current status (2026-09-23)
 
-Most recent landed item is **Phase 7.3: walkable liquid blocks** — collision
+Most recent landed item is **Phase 7.4: wire `content/base`'s UI screens to a
+real trigger**. Root cause was one level deeper than "just add a keybind":
+Phase 6.3's `vb.register_keybind`/`S2C_KeybindRegistry` gives a pack a
+*named* bit in `InputCmd.keybinds`, but nothing on the client ever mapped a
+**physical key** to a pack-registered custom name — only the pre-registered
+engine names (movement + `primary`/`secondary`, Phase 6.19) got a real key.
+Fixed with a new `kCustomKeybinds` table in `src/client/main.cpp`
+(`{"base:pause", KEY_ESCAPE}`, `{"base:inventory", KEY_E}`) read
+unconditionally in `sample_input_cmd` (not gated behind `mouse_captured`,
+unlike the engine-name lookups — opening a menu must work whether or not the
+mouse is currently captured), plus a new `content/base/keybinds.lua`
+registering those two names and a `vb.on("player_input", ...)` rising-edge
+handler calling `player:open_ui("base:pause", {})` /
+`player:open_ui("base:inventory", { slots = player:get_inventory() })` — same
+pattern `content/examples/kitchen_sink/keybinds.lua` already demonstrated.
+`ui/pause.lua`/`ui/inventory.lua`'s stale "nothing opens this yet" header
+comments updated. Still just a hardcoded default mapping, not a real
+settings-screen UI for custom keybinds (Phase 5.3's rebind screen only
+covers the 6 `MovementBindings` axes) — that's a further, separate step.
+Full `vb_tests` 300/300 green on `build-net-lua`; the actual keypress →
+screen-opens behavior wasn't manually eyeballed (no GUI in this agent
+environment). Full REMAINING_TASKS.md write-up under Phase 7's 7.4 entry.
+
+Before that, most recent landed item was **Phase 7.3: walkable liquid blocks** — collision
 was already correct (verified, not rebuilt: `is_solid` already gated
 `step_movement`, `base:water` was already non-solid); underwater rendering
 is 7.2's same sky-color fog mechanism with a fixed close preset

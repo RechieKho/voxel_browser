@@ -12,16 +12,18 @@
 -- purely local/cosmetic -- no `ui.send_event` -- and just shows up in the
 -- title on the very next frame.
 --
--- **Known gaps, not attempted here (same category as ui/pause.lua):**
--- (1) nothing calls `open_ui` for this screen yet -- there's no client
--- gesture or C2S message requesting "open my inventory"
--- (REMAINING_TASKS.md 5.4 tracks chat/interact messages generally; an
--- inventory-open request is the same shape of gap). (2) item ids are raw
--- block ids today (`vb.register_item` never allocates its own id space --
--- see blocks/*.lua's on_break, which gives back the broken block's own id),
--- so this renders numeric ids, not item names, until that's resolved.
--- (3) the item-grid widget the spec describes for this screen doesn't exist
--- (`ui_runtime.cpp`'s `WidgetType` has no grid variant) -- a `list` stands in.
+-- Opened via the E key: `content/base/keybinds.lua` registers
+-- "base:inventory" and calls `player:open_ui("base:inventory", { slots =
+-- player:get_inventory() })` on its rising edge (Phase 7.4) --
+-- `src/client/main.cpp`'s `kCustomKeybinds` table binds that name to
+-- `KEY_E` client-side.
+--
+-- **Known gaps, not attempted here:** (1) item ids are raw block ids today
+-- (`vb.register_item` never allocates its own id space -- see blocks/*.lua's
+-- on_break, which gives back the broken block's own id), so this renders
+-- numeric ids, not item names, until that's resolved. (2) the item-grid
+-- widget the spec describes for this screen doesn't exist (`ui_runtime.cpp`'s
+-- `WidgetType` has no grid variant) -- a `list` stands in.
 ui.define("base:inventory", function(state)
 	local items = {}
 	local slots = state and state.slots or {}
