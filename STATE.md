@@ -27,7 +27,15 @@ is 7.2's same sky-color fog mechanism with a fixed close preset
 (`fog_start=2.0f`/`fog_end=8.0f`) overriding whichever fog distance was
 already chosen, triggered in `src/client/main.cpp`'s `kPlaying` block
 whenever `client->chunk_store().registry().is_liquid()` is true for the
-camera's own floored eye position; and a new generic `BlockType::region`
+camera's own floored eye position (**same-day follow-up fix:** the fog
+change alone wasn't enough — `src/world/chunk_mesh_snapshot.cpp`'s face
+culling had always symmetrically treated a liquid neighbour like an opaque
+one, so an opaque block's face touching water was culled too, making
+submerged terrain invisible from the water side, a pre-existing bug the old
+`mesher_test.cpp` even asserted as expected; fixed by keying culling off the
+*current* voxel's own type — a liquid neighbour now only culls another
+liquid's own face, never an opaque block's — see REMAINING_TASKS.md 7.3's
+entry for the full writeup); and a new generic `BlockType::region`
 flag (`base:water` only in the base set; `vb.register_block{region=}`
 defaults to the block's own `liquid` value) drives
 `ServerSession::update_region_occupancy()` (`src/net/session.cpp`, one new

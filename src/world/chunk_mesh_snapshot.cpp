@@ -142,6 +142,24 @@ MeshData mesh_chunk_from_snapshot(const ChunkMeshSnapshot &snapshot, const Block
 		const core::BlockId id = block_local(p);
 		return reg.is_opaque(id) || reg.is_liquid(id);
 	};
+	// Phase 7.3 fix: whether a face is *culled* depends on the current
+	// voxel's own type, not just the neighbour's -- blocks_face() above
+	// (kept as-is for AO sampling, where "is there occluding stuff here"
+	// is the right generic question) can't answer that alone. A liquid
+	// neighbour should cull a liquid voxel's own face (merges into one
+	// water body, matches "liquid blocks cull faces against each other"
+	// below) but must NOT cull an opaque voxel's face -- an opaque block
+	// sitting in/under water still needs its water-facing side drawn, or
+	// every submerged block goes invisible (the "can't see underwater
+	// terrain" bug). An opaque neighbour still culls both kinds, same as
+	// always.
+	const auto face_culled = [&](core::BlockId current, IVec3 outside) {
+		const core::BlockId neighbor = block_local(outside);
+		if (reg.is_opaque(neighbor)) {
+			return true;
+		}
+		return reg.is_liquid(current) && reg.is_liquid(neighbor);
+	};
 	const auto light_local = [&](IVec3 p) {
 		return snapshot.lights[padded_index(p.x, p.y, p.z)];
 	};
@@ -161,7 +179,7 @@ MeshData mesh_chunk_from_snapshot(const ChunkMeshSnapshot &snapshot, const Block
 					}
 					const IVec3 n = kFaceNormal[static_cast<std::size_t>(f)];
 					const IVec3 outside{ lv.x + n.x, lv.y + n.y, lv.z + n.z };
-					if (blocks_face(outside)) {
+					if (face_culled(block, outside)) {
 						continue; // culled
 					}
 

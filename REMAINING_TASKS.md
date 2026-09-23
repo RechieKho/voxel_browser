@@ -402,6 +402,32 @@ Full detail: `remaining_tasks/phase6.md`.
       2026-09-19 decision — underwater is 7.2's same sky-color fog mechanism,
       just a much closer distance, so surfacing restores normal visibility
       immediately with zero extra state to track.
+      **Follow-up fix, same day:** the fog change alone didn't fully solve
+      "can't see underwater" — `src/world/chunk_mesh_snapshot.cpp`'s face
+      culling (`mesh_chunk_from_snapshot`) had always treated a liquid
+      neighbour exactly like an opaque one (`blocks_face()`'s `is_opaque(id)
+      || is_liquid(id)`), symmetrically, for *both* the block being meshed
+      and its neighbour. That meant an opaque block's face touching water
+      got culled too — a submerged block (seafloor, cave wall under a lake)
+      was invisible from the water side even though nothing was actually
+      drawn over it, a pre-existing bug (`tests/unit/mesher_test.cpp`'s old
+      "a water block on solid ground only shows its top face" test even
+      encoded it as expected behavior) that 7.2/7.3's fog work simply made
+      visible for the first time. Fixed by making culling depend on the
+      *current* voxel's own type, not just the neighbour's: a new
+      `face_culled(current, outside)` culls on any opaque neighbour
+      (unchanged), but only culls on a liquid neighbour when `current` is
+      itself liquid (water-water merges into one body, matches the
+      still-passing "liquid blocks cull faces against each other" test) —
+      an opaque block's face is never culled by a liquid neighbour, and a
+      liquid's own face is still culled by an opaque one below/beside it (no
+      point drawing a submerged water face nobody can reach). `blocks_face()`
+      itself is untouched and still used for AO sampling, where "is there
+      occluding stuff here" is the right generic question regardless of the
+      current voxel's own type. Updated the affected mesher test's name/
+      comment/expected quad count (stone now keeps all 6 faces, was 5; total
+      11, was 10) rather than leaving the old wrong-by-design assertion in
+      place.
       Generic region hook: `BlockType::region` (`inc/vb/world/block.hpp`) is
       a new flag independent of `liquid` — `BlockRegistry::base()` sets it on
       `base:water` only (`src/world/block.cpp`); `vb.register_block{region=}`

@@ -192,7 +192,17 @@ TEST_CASE("liquid blocks cull faces against each other and against solids") {
 	CHECK(mesh_chunk(store, { 0, 0, 0 }).quad_count() == 6144);
 }
 
-TEST_CASE("a water block on solid ground only shows its top face") {
+TEST_CASE("a water block on solid ground: the stone keeps all 6 faces "
+		  "(water never culls an opaque neighbour's face), water's own "
+		  "bottom is culled by the stone under it") {
+	// Phase 7.3 regression: water used to cull an *opaque* neighbour's face
+	// exactly like an opaque block would -- so a solid block sitting in or
+	// under water lost its water-facing side and went invisible from
+	// underwater. blocks_face()'s old symmetric "opaque || liquid" test
+	// culled both directions; face culling must key off the *current*
+	// voxel's own type (see face_culled() in chunk_mesh_snapshot.cpp) so
+	// only a liquid's own face gets culled by a liquid/opaque neighbour,
+	// never an opaque voxel's face.
 	Chunk c({ 0, 0, 0 });
 	c.blocks().set(5, 4, 5, base_block::stone);
 	c.blocks().set(5, 5, 5, base_block::water); // sits on the stone, open to air
@@ -201,10 +211,10 @@ TEST_CASE("a water block on solid ground only shows its top face") {
 	ClientChunkStore store(BlockRegistry::base());
 	put(store, c);
 
-	// stone: 5 faces (bottom buried by nothing loaded below is still exposed,
-	// top culled by the water sitting on it) = 5; water: bottom culled by the
-	// stone below, 4 sides + top exposed = 5.
-	CHECK(mesh_chunk(store, { 0, 0, 0 }).quad_count() == 10);
+	// stone: all 6 faces, including the top now under water (not culled by
+	// it) = 6; water: bottom culled by the opaque stone below, 4 sides + top
+	// exposed = 5.
+	CHECK(mesh_chunk(store, { 0, 0, 0 }).quad_count() == 11);
 }
 
 TEST_CASE("AO darkens the occluded corner of a top face, not another one") {
