@@ -42,6 +42,16 @@ struct ServerConfig {
 	std::uint32_t max_connections_per_ip = 0;
 	ConfigAuthMode auth_mode = ConfigAuthMode::kNone;
 	std::string motd;
+	// World persistence (ARCHITECTURE_SPEC.md §18's "region file format",
+	// picked up 2026-09-25). `persist_world = false` keeps every prior
+	// version's in-memory-forever behavior exactly (RegionStore is never
+	// constructed at all -- not just skipped). `world_dir` is relative to the
+	// server's working directory, same convention as `content_pack`.
+	bool persist_world = true;
+	std::string world_dir = "world";
+	// Real seconds between full-world autosave sweeps; 0 disables periodic
+	// autosave (edits still save on chunk unload and always at shutdown).
+	double autosave_interval_seconds = 60.0;
 };
 
 struct ClientConfig {

@@ -17,3 +17,6 @@ asset_max_total_mb = 512
 max_connections_per_ip = 0      # 0 = unlimited; only bites over real UDP (VB_WITH_NET)
 auth_mode          = "none"     # "none" | "token" (token verification is stubbed)
 motd               = ""
+persist_world      = true       # false = never touch disk, in-memory-only world (prior behavior)
+world_dir          = "world"    # relative to the server's working directory, like content_pack
+autosave_interval_seconds = 60.0 # 0 disables periodic autosave (unload/shutdown still save)

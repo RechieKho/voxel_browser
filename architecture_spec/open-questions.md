@@ -35,16 +35,18 @@
    `InterestGrid` with the same diff semantics behind a narrow interface. Full
    write-up in `docs/replication.md`.
 4. **Chunk compression**: LZ4 vs. zstd vs. palette-only. Start LZ4, measure.
-5. **Persistence**: region file format for world save — deferred past first
-   playable, but the chunk store should not assume in-memory-forever.
-   **Future direction noted (2026-09-17, not yet planned into a phase):**
-   lean toward an LMDB-backed store keyed by `ChunkCoord`, reusing the
-   existing `vb/world/chunk_codec` palette+RLE serialization (the same
-   format `S2C_ChunkAdd` already uses) as the on-disk chunk payload, with
-   LZ4 (§18 Q4) as the compression layer on top. LMDB avoids reinventing
-   sector allocation and crash-safety that a hand-rolled Anvil-style region
-   file would require; a per-chunk-file or Anvil-style layout remains the
-   fallback if a zero-extra-dependency approach is preferred later.
+5. **Persistence**: region file format for world save. **Resolved
+   (2026-09-25, Phase 7.6, `REMAINING_TASKS.md`):** the 2026-09-17 "lean
+   toward LMDB" direction note above was **reversed** after an explicit
+   user decision (flat files over LMDB, to avoid a new `FetchContent`
+   dependency with no upstream CMake) — landed as `vb::world::RegionStore`,
+   an Anvil-style flat file per 16x16-chunk X/Z region (Y ungrouped), reusing
+   the existing `vb/world/chunk_codec` palette+RLE serialization (the same
+   format `S2C_ChunkAdd` already uses) as the on-disk chunk payload verbatim.
+   No LZ4 framing yet — §18 Q4 (chunk compression) stays open and now
+   explicitly covers this too. Wired into `voxel_browser_server` only; the
+   `--singleplayer` integrated server has no `RegionStore`, a known gap not
+   a cut corner (see `remaining_tasks/deferred.md`).
 6. **Account/auth**: `auth_mode = none | token` — token verification service is
    out of scope for v0 but the handshake reserves the field. **Direction set
    (2026-09-17, not yet implemented):** the engine will not own an auth

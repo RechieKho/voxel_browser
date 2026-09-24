@@ -7,6 +7,7 @@
 
 #include "vb/core/ids.hpp"
 #include "vb/world/lighting.hpp"
+#include "vb/world/region_store.hpp"
 #include "vb/world/world.hpp"
 #include "vb/worldgen/worker_pool.hpp"
 
@@ -35,10 +36,19 @@ public:
 
 	std::size_t requested_count() const { return requested_.size(); }
 
+	// World persistence (opt-in, nullptr = disabled -- same posture as every
+	// other optional engine seam in this codebase): when set, update() loads a
+	// requested chunk from disk instead of regenerating it if one was saved
+	// there, and saves an edited chunk's current state before evicting it on
+	// unload. Does not itself autosave a chunk that stays loaded indefinitely
+	// -- that's the caller's periodic sweep (see RegionStore::save_if_dirty).
+	void set_region_store(RegionStore *store) { region_store_ = store; }
+
 private:
 	World &world_;
 	worldgen::WorldGenWorkerPool &pool_;
 	LightEngine light_;
+	RegionStore *region_store_ = nullptr;
 	std::unordered_set<core::ChunkCoord> requested_;
 	std::vector<core::ChunkCoord> newly_ready_;
 	std::vector<core::ChunkCoord> unloaded_;

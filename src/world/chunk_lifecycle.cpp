@@ -79,10 +79,23 @@ void ChunkLifecycleSystem::update(const std::vector<core::ChunkCoord> &desired) 
 	// 1. Ingest chunks finished since last update.
 	ingest();
 
-	// 2. Request wanted chunks that are neither loaded nor in flight.
+	// 2. Request wanted chunks that are neither loaded nor in flight. A saved
+	//    chunk is loaded straight from disk, synchronously -- no reason to pay
+	//    for a worldgen submission when its real state is already known.
 	for (core::ChunkCoord coord : desired) {
 		if (world_.has_chunk(coord) || requested_.count(coord) != 0) {
 			continue;
+		}
+		if (region_store_ != nullptr) {
+			if (std::unique_ptr<Chunk> loaded = region_store_->load(coord)) {
+				loaded->set_gen_state(GenState::kGenerated);
+				world_.insert_chunk(std::move(loaded));
+				relight_column(light_, coord, find,
+						[](core::ChunkCoord, const std::array<Light, kChunkVolume> &,
+								const Chunk &) {});
+				newly_ready_.push_back(coord);
+				continue;
+			}
 		}
 		if (pool_.submit(coord)) {
 			requested_.insert(coord);
@@ -93,9 +106,15 @@ void ChunkLifecycleSystem::update(const std::vector<core::ChunkCoord> &desired) 
 	//     integrated server streams a chunk the same tick it's requested.
 	ingest();
 
-	// 3. Unload loaded chunks nobody wants.
+	// 3. Unload loaded chunks nobody wants -- save an edited one first, or its
+	//    changes are lost the moment it's evicted.
 	for (core::ChunkCoord coord : world_.loaded_coords()) {
 		if (wanted.count(coord) == 0) {
+			if (region_store_ != nullptr) {
+				if (const Chunk *chunk = world_.find_chunk(coord)) {
+					region_store_->save_if_dirty(*chunk);
+				}
+			}
 			world_.unload_chunk(coord);
 			unloaded_.push_back(coord);
 		}

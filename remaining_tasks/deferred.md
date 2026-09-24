@@ -2,7 +2,11 @@
 
 > Full reasoning for deferred (post-first-playable) items; linked from `REMAINING_TASKS.md`.
 
-- World persistence: region file format, save/load, chunk eviction to disk.
+- ~~World persistence: region file format, save/load, chunk eviction to
+  disk.~~ **Resolved 2026-09-25 (Phase 7.6)** for `voxel_browser_server`;
+  see `REMAINING_TASKS.md`'s Phase 7.6 entry. Still deferred:
+  `--singleplayer`'s integrated server has no `RegionStore` wired in, and
+  region files carry no LZ4/zstd framing yet (RLE only).
 - Account/auth token verification service (`auth_mode = token`).
 - Audio subsystem + Lua sfx/music API.
 - Server-side plugin hot-reload.

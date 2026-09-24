@@ -278,7 +278,7 @@ Full detail: `remaining_tasks/phase6.md`.
 
 ---
 
-## Phase 7 — World & UX Polish (7.1-7.4 done, 7.5's default landed, override open)
+## Phase 7 — World & UX Polish (7.1-7.4, 7.6 done, 7.5's default landed, override open)
 
 > User-requested (2026-09-19): four UX gaps, scoped as their own phase since
 > none of them extend Phase 6's "default + override" system pattern the way
@@ -569,6 +569,61 @@ Full detail: `remaining_tasks/phase6.md`.
       whether normal above-water fog keeps the sky-only rule unconditionally
       or also becomes overridable) — decide during implementation.
 
+- [x] **7.6 — World persistence: chunks survive a server restart.** Landed
+      2026-09-25, reversing ARCHITECTURE_SPEC.md §18 row 5's 2026-09-17
+      "lean toward LMDB" direction note after review (see that section for the
+      updated status) in favor of flat per-region files -- no new
+      `FetchContent` dependency, reuses the existing palette+RLE chunk codec
+      as-is. New `vb::world::RegionStore` (`inc/vb/world/region_store.hpp`,
+      `src/world/region_store.cpp`) groups chunks into one file per X/Z region
+      (16x16 chunks; Y is never grouped -- generated worlds here are only a
+      few chunks tall, unlike Minecraft's motivating case). Only *edited*
+      chunks are ever persisted: `Chunk::revision() == 0` means "still exactly
+      what worldgen produced," so regenerating on next load is equivalent and
+      cheaper than reading+writing it; a chunk already cached/on-disk at its
+      current revision is never re-encoded either. Writes are batched:
+      `save_if_dirty()` only touches an in-memory per-region cache,
+      `flush()` is the one call that actually rewrites a dirty region file.
+      `ChunkLifecycleSystem` takes an optional `RegionStore*` (nullptr =
+      disabled, same posture as every other opt-in engine seam): `update()`'s
+      request step loads a wanted chunk from disk instead of submitting it to
+      worldgen if one was saved there, and its unload step saves an edited
+      chunk before evicting it. `WorldReplicator::set_region_store()` forwards
+      straight through. `voxel_browser_server`'s `main.cpp` owns the
+      `RegionStore` (nullptr when `server.toml`'s new `persist_world = false`),
+      wires it into the replicator, sweeps every loaded chunk through
+      `save_if_dirty()` + one `flush()` on a config'd `autosave_interval_seconds`
+      cadence (default 60s; 0 disables periodic autosave, edits still save on
+      chunk unload) and unconditionally once more right before the process
+      exits. Three new `server.toml` keys: `persist_world` (default `true`),
+      `world_dir` (default `"world"`, relative like `content_pack`),
+      `autosave_interval_seconds` (default `60.0`).
+      **Deliberately out of scope, per the AskUserQuestion decision that
+      shaped this pass:** no LZ4/zstd framing on region files yet (chunk
+      codec's own RLE is the only compression here -- ARCHITECTURE_SPEC §18
+      row 4's "chunk compression" item still covers adding that uniformly);
+      `--singleplayer`'s in-process integrated server (`src/client/main.cpp`)
+      is **not** wired to a `RegionStore` at all -- it explicitly has no
+      `ServerConfig`/`server.toml` on that path (see its own
+      `make_singleplayer_pack_runtime` comment), so persistence there is a
+      separate follow-up, not a cut corner of this one; a corrupt/unreadable
+      region file is logged (`VB_WARN`) and treated as "chunk never saved"
+      (regenerates from worldgen), never fatal -- no migration/versioning
+      story exists yet for a region file format change (version 1 today).
+      Verified: full `vb_tests` 312/312 green (5 new cases in
+      `region_store_test.cpp`, including one that drives a real
+      `ChunkLifecycleSystem` through `WorldReplicator` end-to-end -- edit a
+      block, walk far enough to unload+save the chunk, walk back and confirm
+      it's loaded from disk with the edit intact rather than regenerated),
+      clean `-Werror` build of `vb_tests`/`voxel_browser`/
+      `voxel_browser_server` (temporarily reconfigured `build-net-lua` with
+      `-DVB_WARNINGS_AS_ERRORS=ON`, confirmed clean, reconfigured back to this
+      dir's OFF default afterward -- same verification pattern as every other
+      recent phase). Also manually ran `voxel_browser_server.exe --ticks 40`
+      against a fresh working directory with no client ever connecting:
+      confirmed no `world/` directory is created at all when nothing was ever
+      edited (matches the "only persist edits" design, not a missed case).
+
 ---
 
 ## Cross-Cutting / Continuous
@@ -593,10 +648,12 @@ Full detail: `remaining_tasks/phase6.md`.
 
 ## Deferred (post first-playable)
 
-World persistence (region files, save/load, disk eviction) · token auth
-verification · audio subsystem + Lua sfx/music API · server-side plugin
-hot-reload · entity-entity physics/mounts/projectiles · particle system
-beyond block-break puffs · compression tuning (zstd, snapshot deltas,
+`--singleplayer`'s integrated server wired to `RegionStore` (7.6 landed it for
+the dedicated server only) · region file LZ4/zstd framing (7.6's chunk
+payloads are RLE-only today) · region file format versioning/migration ·
+token auth verification · audio subsystem + Lua sfx/music API · server-side
+plugin hot-reload · entity-entity physics/mounts/projectiles · particle
+system beyond block-break puffs · compression tuning (zstd, snapshot deltas,
 bit-packed inputs) · dedicated server browser/master list · modding
 (stacked packs, dependency resolution) · rule-based decorative structure
 placement for worldgen (depends on 6.14, which landed the prerequisite —

@@ -78,6 +78,9 @@ ServerConfig server_from_table(const toml::table &tbl) {
 	read_uint(tbl, "asset_max_total_mb", c.asset_max_total_mb);
 	read_uint(tbl, "max_connections_per_ip", c.max_connections_per_ip);
 	read_string(tbl, "motd", c.motd);
+	read_bool(tbl, "persist_world", c.persist_world);
+	read_string(tbl, "world_dir", c.world_dir);
+	read_double(tbl, "autosave_interval_seconds", c.autosave_interval_seconds);
 	if (auto mode = tbl["auth_mode"].value<std::string>()) {
 		if (*mode == "token") {
 			c.auth_mode = ConfigAuthMode::kToken;

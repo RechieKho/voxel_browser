@@ -14,5 +14,6 @@ target_sources(vb_core PRIVATE
   lighting.cpp
   paletted_chunk_store.cpp
   raycast.cpp
+  region_store.cpp
   world.cpp
 )

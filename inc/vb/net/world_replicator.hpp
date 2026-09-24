@@ -12,6 +12,7 @@
 #include "vb/protocol/world.hpp"
 #include "vb/world/block.hpp"
 #include "vb/world/chunk_lifecycle.hpp"
+#include "vb/world/region_store.hpp"
 #include "vb/world/world.hpp"
 #include "vb/worldgen/worker_pool.hpp"
 
@@ -91,6 +92,12 @@ public:
 	// called every tick, no different from any other per-tick struct field set.
 	void set_reach(double blocks) { reach_ = blocks; }
 	double reach() const { return reach_; }
+
+	// World persistence: forwarded straight to the owned ChunkLifecycleSystem
+	// (see its own set_region_store doc). nullptr (the default) disables it.
+	void set_region_store(world::RegionStore *store) {
+		lifecycle_.set_region_store(store);
+	}
 
 	const world::World &world() const { return world_; }
 	world::World &world() { return world_; }

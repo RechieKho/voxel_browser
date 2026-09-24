@@ -18,9 +18,57 @@
 
 ---
 
-## Current status (2026-09-23)
+## Current status (2026-09-25)
 
-Most recent landed item is the **real texture/atlas system**, closing the
+Most recent landed item is **Phase 7.6: world persistence** (chunks now
+survive a `voxel_browser_server` restart), closing ARCHITECTURE_SPEC.md
+§18 row 5. **Reversed that row's 2026-09-17 "lean toward LMDB" direction
+note** after an AskUserQuestion with the user during this pass — landed as
+flat per-region files instead, no new dependency. New `vb::world::RegionStore`
+(`inc/vb/world/region_store.hpp`/`src/world/region_store.cpp`) groups chunks
+into one file per 16x16-chunk X/Z region (Y ungrouped -- this engine's
+generated worlds are only a few chunks tall, unlike Minecraft's motivating
+case), reusing the existing `chunk_codec.hpp` palette+RLE payload as-is. Only
+*edited* chunks are ever written: `Chunk::revision() == 0` (untouched since
+worldgen) is skipped, and a chunk already cached/on-disk at its current
+revision is never re-encoded -- `save_if_dirty()` only updates an in-memory
+per-region cache, `flush()` is the one call that actually rewrites a dirty
+region file, so many edits to the same region across a sweep cost one disk
+write, not one per chunk. `ChunkLifecycleSystem` takes an optional
+`RegionStore*` (nullptr = disabled, the usual opt-in-seam posture in this
+codebase): its request step loads a wanted chunk from disk instead of
+submitting it to worldgen when one was saved there, its unload step saves an
+edited chunk before evicting it. `WorldReplicator::set_region_store()`
+forwards straight through to it. `src/server/main.cpp` owns the `RegionStore`
+(three new `server.toml` keys: `persist_world` default `true`, `world_dir`
+default `"world"`, `autosave_interval_seconds` default `60.0`), sweeps every
+loaded chunk through it on that interval and unconditionally once more right
+before exiting. **Gotcha hit while writing this:** `RegionStore` needed its
+own local copy of the `read_whole_file()` idiom (ifstream + `ate`/`tellg` +
+manual `vector<byte>` fill) -- `std::vector<std::byte>` still can't be built
+directly from `std::istreambuf_iterator<char>` under this repo's toolchain
+(same §4 gotcha `assetsync/cache.cpp` and `script/db.cpp` already worked
+around independently; there's no shared helper to import, `assetsync` isn't a
+dependency of the `vb::world` module). **Deliberately not covered:**
+`--singleplayer`'s in-process integrated server has no `RegionStore` wired in
+at all (it has no `ServerConfig`/`server.toml` on that path to begin with --
+see `make_singleplayer_pack_runtime`'s own comment in `src/client/main.cpp`),
+and region files carry no LZ4/zstd framing yet (RLE only) -- both tracked as
+their own `remaining_tasks/deferred.md` items now, not silently dropped. Full
+`vb_tests` 312/312 green (5 new `region_store_test.cpp` cases, one of them a
+real `ChunkLifecycleSystem`-through-`WorldReplicator` end-to-end round trip:
+edit a block, walk far enough to unload+save it, walk back and confirm it
+loads from disk with the edit intact instead of regenerating), clean
+`-Werror` build of `vb_tests`/`voxel_browser`/`voxel_browser_server`
+(temporarily reconfigured `build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`,
+confirmed clean, reconfigured back to this dir's OFF default afterward).
+Also manually ran `voxel_browser_server.exe --ticks 40` against a scratch
+working directory with no client connecting: confirmed no `world/` directory
+gets created at all when nothing was ever edited (the "only persist edits"
+design working as intended, not an oversight). Full REMAINING_TASKS.md
+write-up under Phase 7's new 7.6 entry.
+
+Before that, most recent landed item was the **real texture/atlas system**, closing the
 "no real texture system in this engine at all" gap REMAINING_TASKS.md
 repeatedly cited as blocking Phase 4's textured meshing, 6.5's crack
 overlay, 5's sprite atlases, and 7.5's underwater tint default.
@@ -449,8 +497,10 @@ Tracked in `ARCHITECTURE_SPEC.md` §18, repeated here for visibility:
    payloads.
 4. Chunk compression: LZ4 (spec's starting choice) vs. zstd vs.
    palette-only. Still open.
-5. World persistence / region file format — deferred, but don't design the
-   chunk store as in-memory-forever.
+5. ~~World persistence / region file format.~~ **Resolved 2026-09-25:** flat
+   per-region files (`vb::world::RegionStore`), not the previously-noted LMDB
+   direction — reverted after review, see "Current status" above. Wired into
+   `voxel_browser_server` only; `--singleplayer` still has no persistence.
 6. Auth: `auth_mode = none | token` — handshake reserves the field, no
    service exists.
 

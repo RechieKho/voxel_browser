@@ -28,6 +28,7 @@ add_executable(vb_tests
   unit/physics_test.cpp
   unit/protocol_test.cpp
   unit/net_test.cpp
+  unit/region_store_test.cpp
   unit/script_test.cpp
   unit/replication_test.cpp
   unit/render_test.cpp

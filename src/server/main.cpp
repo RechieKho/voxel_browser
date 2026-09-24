@@ -6,8 +6,10 @@
 // over a real listen socket instead of loopback. Lua content (Phase 4) still
 // needs to land before anything gameplay-facing is pack-defined.
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <csignal>
 #include <cstdlib>
 #include <filesystem>
@@ -30,6 +32,7 @@
 #include "vb/script/pack_loader.hpp"
 #include "vb/script/pack_runtime.hpp"
 #include "vb/world/block.hpp"
+#include "vb/world/region_store.hpp"
 #include "vb/world/world.hpp"
 #include "vb/worldgen/generator.hpp"
 #include "vb/worldgen/worker_pool.hpp"
@@ -160,6 +163,14 @@ int main(int argc, char **argv) {
 	}
 
 	vb::world::World world(registry);
+	// World persistence (opt-in via server.toml's persist_world, default on).
+	// nullptr when disabled -- WorldReplicator/ChunkLifecycleSystem treat that
+	// exactly like every other unset optional seam (no-op), so this is the one
+	// place the feature can be switched off entirely, not just left idle.
+	std::unique_ptr<vb::world::RegionStore> region_store;
+	if (config.persist_world) {
+		region_store = std::make_unique<vb::world::RegionStore>(config.world_dir);
+	}
 	vb::worldgen::WorldGenParams gen_params;
 	gen_params.seed = seed;
 	// Phase 6.14: nullptr unless a pack ever called vb.worldgen.set_pipeline,
@@ -270,6 +281,7 @@ int main(int argc, char **argv) {
 	auto replicator = std::make_unique<vb::net::WorldReplicator>(world, pool,
 			registry, static_cast<int>(config.view_distance), 3);
 	pack_runtime.attach_world(*replicator);
+	replicator->set_region_store(region_store.get());
 	session.set_world_replicator(std::move(replicator));
 	pack_runtime.attach_session(session);
 
@@ -312,6 +324,28 @@ int main(int argc, char **argv) {
 	auto next = std::chrono::steady_clock::now();
 	long long tick = 0;
 
+	// A chunk that stays loaded forever (a player idling in one spot) never
+	// goes through ChunkLifecycleSystem's own unload-triggers-save path, so
+	// its edits would otherwise only reach disk at shutdown -- this sweep is
+	// the periodic durability backstop for that case. 0 (or persistence
+	// disabled entirely) means "only unload/shutdown save", same as leaving
+	// autosave off outright.
+	const long long autosave_ticks = (region_store && config.autosave_interval_seconds > 0.0)
+			? std::max<long long>(1,
+					  std::llround(config.autosave_interval_seconds * config.tick_rate))
+			: 0;
+	auto autosave_sweep = [&] {
+		if (!region_store) {
+			return;
+		}
+		for (vb::core::ChunkCoord coord : world.loaded_coords()) {
+			if (const vb::world::Chunk *chunk = world.find_chunk(coord)) {
+				region_store->save_if_dirty(*chunk);
+			}
+		}
+		region_store->flush();
+	};
+
 	while (!g_stop.load(std::memory_order_relaxed)) {
 		++tick;
 		session.tick(tick_dt_seconds);
@@ -327,6 +361,10 @@ int main(int argc, char **argv) {
 		}
 		pack_runtime.dispatch_tick(tick_dt_seconds);
 
+		if (autosave_ticks > 0 && tick % autosave_ticks == 0) {
+			autosave_sweep();
+		}
+
 		if (max_ticks > 0 && tick >= max_ticks) {
 			break;
 		}
@@ -334,6 +372,11 @@ int main(int argc, char **argv) {
 		next += tick_dt;
 		std::this_thread::sleep_until(next);
 	}
+
+	// Always save on the way out, regardless of the autosave interval -- this
+	// is the difference between "at most autosave_interval_seconds of edits
+	// lost on a clean shutdown" and "up to that much lost on *every* stop".
+	autosave_sweep();
 
 	std::cout << "server: stopped after " << tick << " ticks\n";
 	return EXIT_SUCCESS;

@@ -435,7 +435,7 @@ servers to the extent practical (no code exec, no arbitrary FS writes).
 | 2 | Cellulose (greedy mesher) API fit | **Resolved → reversed → removed.** Hand-rolled meshing is permanent (NVIDIA VAO/VBO-churn bug reproduced more under Cellulose's volatile vertex counts) |
 | 3 | librg version/API | **Resolved 2026-09-10: v7.4.0**, interest culling + create/update/remove framing only; own payload codec/routing. Not yet wired — Phase 1 hand-rolled `InterestGrid` stands in |
 | 4 | Chunk compression: LZ4 vs. zstd vs. palette-only | Open — start LZ4, measure |
-| 5 | Persistence: region file format | Deferred past first playable. **Direction noted 2026-09-17:** lean toward LMDB keyed by `ChunkCoord`, reusing the existing palette+RLE chunk codec + LZ4 |
+| 5 | Persistence: region file format | **Resolved 2026-09-25: flat files, not LMDB** (reversing the 2026-09-17 direction note after implementation review) — `vb::world::RegionStore` groups chunks into one file per X/Z region (Y ungrouped), reusing the existing palette+RLE chunk codec as-is, no new FetchContent dependency. Only edited chunks (`Chunk::revision() > 0`) are ever written. See `REMAINING_TASKS.md`'s new Phase 7.6 for the full writeup; LZ4 framing itself is still open, folded into row 4 |
 | 6 | Account/auth: `auth_mode = none \| token` | **Direction set 2026-09-17:** engine owns no auth concept — `vb.db` + UI/input APIs let packs build their own login. `auth_mode` stays reserved for a future *transport-level* check; OIDC loopback-redirect (RFC 8252) noted as a future `auth_mode = oidc` value |
 | 7 | Entity visual presentation: 3D models vs. 2D sprites | **Resolved 2026-09-11: Don't Starve-style billboards** — full design in §10 above |
 
