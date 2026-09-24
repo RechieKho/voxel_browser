@@ -27,6 +27,11 @@ struct BlockType {
 	bool opaque = true; // face-culling + full light occlusion
 	bool liquid = false; // flows; non-solid; partial light occlusion
 	std::uint8_t light_emission = 0; // 0..15
+	// Real texture/atlas system: pack-relative path (e.g. "textures/stone.png"),
+	// synced to the client over the existing Asset Sync virtual FS. Empty = no
+	// texture -- the client falls back to a flat placeholder color for this
+	// block (vb::render::TextureAtlas / chunk_renderer.cpp's tint_for()).
+	std::string texture;
 	// Phase 6.5 (spec §10.7): 0 (default) = today's instant break, no shared
 	// damage pool. > 0 opts into BlockDamageSystem's contribute/heal-hook
 	// flow -- the engine ships no accrual/heal policy, that's entirely Lua's
@@ -77,6 +82,16 @@ public:
 	// init.lua must not create duplicate ids), otherwise adds it. Only
 	// meaningful before the registry is frozen by the caller.
 	core::BlockId add_or_get(std::string_view name, BlockType type);
+
+	// Real texture/atlas system: attaches a texture path to an already-
+	// registered block without disturbing add_or_get's "first registration's
+	// other fields win, later calls are pure no-ops" semantics -- a pack file
+	// re-declaring a block that BlockRegistry::base() (or an earlier pack
+	// file) already registered, purely to attach a `texture` (this pass's
+	// content/base/blocks/stone.lua and water.lua), must not silently reset
+	// solid/opaque/liquid/etc back to whatever it happened to also pass. A
+	// no-op if `id` is out of range.
+	void set_texture(core::BlockId id, std::string texture);
 
 	std::size_t size() const { return types_.size(); }
 	bool contains(core::BlockId id) const {

@@ -10,6 +10,7 @@ add_library(vb_render STATIC
   chunk_renderer.cpp
   entity_renderer.cpp
   main_menu.cpp
+  texture_atlas.cpp
   ui_renderer.cpp
   window.cpp
 )

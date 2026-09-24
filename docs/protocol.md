@@ -4,8 +4,37 @@
 > as any change to a struct in `inc/vb/protocol/`, and bump
 > `kEngineProtocolVersion` in `cmake/version.hpp.in`.
 
-Current `ENGINE_PROTOCOL_VERSION`: **16**.
+Current `ENGINE_PROTOCOL_VERSION`: **18**.
 
+- **18** — `S2CServerInfo` (`kS2CServerInfo`) gains a `u32 view_distance`
+  field: the operator's real `server.toml` `view_distance`, sent always (not
+  an opt-in `nullopt`-default frame like `S2C_FogParams`/`S2C_MoveParams` —
+  the server always knows this about itself). `HandshakeServerConfig::
+  view_distance` (`inc/vb/net/handshake.hpp`) carries it from
+  `ServerConfig::view_distance` (`src/server/main.cpp`) / the integrated
+  singleplayer host's own `sp_server_config()` (`src/client/main.cpp`,
+  echoing the local player's own `configured_view_distance` back, a no-op
+  clamp). The client clamps its effective `view_distance` — which both
+  `kLoading`'s expected-chunk-count estimate and the default fog distance
+  (`fog_end = view_distance * kChunkDim`) are computed from — to
+  `min(configured_view_distance, S2CServerInfo::view_distance)` in
+  `enter_playing()` right after joining, so a real server advertising a
+  smaller view distance than the player asked for can never leave fog
+  reaching past where that server will actually stream chunks (closes the
+  gap `client.toml.example`'s `render_distance` comment already claimed —
+  "clamped to the server's view_distance" — but that was never actually
+  implemented until now).
+- **17** — Real texture/atlas system: `BlockRegistryRecord` (`S2C_BlockRegistry`,
+  40) gains a `string texture` field (pack-relative path, e.g.
+  `"textures/stone.png"`; empty = no texture, unchanged rendering), mirroring
+  `vb::world::BlockType::texture`. The client resolves it against its own
+  Asset Sync virtual FS (`vb::assetsync::ClientAssetCache`) and packs every
+  referenced texture into one `vb::render::TextureAtlas` per session
+  (`src/client/main.cpp`, right after the block registry is applied and
+  before any chunk is meshed) — closes the long-standing "no real texture
+  system in this engine at all" gap tracked across `REMAINING_TASKS.md`'s
+  Phase 4/5/6.5/7.5 items. A block with no texture (or whose texture path
+  isn't synced) keeps rendering its old flat placeholder color, unaffected.
 - **16** — `S2C_FogParams` (52) payload defined (Phase 7.2, spec §7.2):
   `f32 fog_start`, `f32 fog_end`. Sent between `C2S_Ready` and
   `S2C_JoinAccept` alongside `S2C_MoveParams`/`S2C_DayNightCurve` only if
@@ -222,7 +251,7 @@ assembled virtual pack filesystem (`path -> bytes`) is exposed but unread.
 
 | Type (id)              | Fields                                                        |
 | ----------------------- | ----------------------------------------------------------- |
-| `S2C_BlockRegistry` (40) | `varint n` + `n × {string name, bool solid, bool opaque, bool liquid, u8 light_emission}` (index == `BlockId`) |
+| `S2C_BlockRegistry` (40) | `varint n` + `n × {string name, bool solid, bool opaque, bool liquid, u8 light_emission, string texture, u16 max_damage}` (index == `BlockId`) |
 
 Sent between `C2S_Ready` and `S2C_JoinAccept` (Phase 4.3) only if
 `HandshakeServerHost::block_registry` returns a value; `nullopt` (default)

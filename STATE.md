@@ -20,7 +20,31 @@
 
 ## Current status (2026-09-23)
 
-Most recent landed item is **Phase 7.4: wire `content/base`'s UI screens to a
+Most recent landed item is the **real texture/atlas system**, closing the
+"no real texture system in this engine at all" gap REMAINING_TASKS.md
+repeatedly cited as blocking Phase 4's textured meshing, 6.5's crack
+overlay, 5's sprite atlases, and 7.5's underwater tint default.
+`kEngineProtocolVersion` bumped 16 -> 17 (`texture` field added to
+`BlockRegistryRecord`/`BlockType`). New `vb::render::TextureAtlas`
+(`inc/vb/render/texture_atlas.hpp`) decodes each block's synced PNG via
+raylib `Image` functions and packs one fixed 16x16 cell per block id into a
+single atlas, built once per session in `src/client/main.cpp` right after
+the block registry is applied. **Gotcha found while wiring this up:**
+`BlockRegistry::add_or_get` silently discards the `BlockType` it's passed
+when the name already exists (by design — idempotent re-registration must
+not reset an earlier call's fields) — so a pack file re-declaring an
+already-hardcoded `BlockRegistry::base()` block (this pass's
+`content/base/blocks/stone.lua`/`water.lua`, attaching a texture to blocks
+`src/world/block.cpp` already defines) would silently no-op its `texture`
+too. Fixed with a narrow `BlockRegistry::set_texture(id, path)`, the one
+field this rule doesn't apply to — don't add more fields to that exception
+without re-checking every pack that relies on "first registration's values
+win" (`pack_runtime_test.cpp`'s idempotent-registration case is the
+regression guard). Full write-up: `state/changelog-recent.md`. Full
+`vb_tests` 306/306 green, clean build of both binaries, all 4 CTest cases
+pass, on `build-net-lua`.
+
+Before that, most recent landed item was **Phase 7.4: wire `content/base`'s UI screens to a
 real trigger**. Root cause was one level deeper than "just add a keybind":
 Phase 6.3's `vb.register_keybind`/`S2C_KeybindRegistry` gives a pack a
 *named* bit in `InputCmd.keybinds`, but nothing on the client ever mapped a

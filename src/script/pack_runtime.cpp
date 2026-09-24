@@ -824,6 +824,7 @@ void PackRuntime::Impl::install_bindings() {
 		type.region = def.get_or("region", type.liquid);
 		type.light_emission =
 				static_cast<std::uint8_t>(def.get_or("light", 0));
+		type.texture = def.get_or("texture", std::string{});
 		// Phase 6.5 (spec §10.7): 0 (default) = today's instant break.
 		type.max_damage = static_cast<std::uint16_t>(def.get_or("max_damage", 0));
 		// Phase 6.9 (spec §11.1): stack cap for this item, engine default
@@ -835,6 +836,15 @@ void PackRuntime::Impl::install_bindings() {
 		type.pickup_radius = def.get_or("pickup_radius", -1.0);
 		type.drop_lifetime_seconds = def.get_or("item_lifetime_seconds", -1.0);
 		const core::BlockId id = registry.add_or_get(name, type);
+		// add_or_get is a no-op on an already-registered name (see its own
+		// comment) -- set_texture() is the one field this pass needs to
+		// still land for a block a hardcoded BlockRegistry::base() default
+		// (or an earlier pack file) already registered, e.g.
+		// content/base/blocks/stone.lua/water.lua re-declaring an existing
+		// Phase 2 block purely to attach a texture.
+		if (!type.texture.empty()) {
+			registry.set_texture(id, type.texture);
+		}
 		auto it = std::find_if(blocks.begin(), blocks.end(),
 				[&](const BlockDef &b) { return b.name == name; });
 		if (it == blocks.end()) {

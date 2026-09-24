@@ -24,7 +24,7 @@ struct ServerConfig {
 	std::uint16_t port = 27015;
 	std::string content_pack = "content/base";
 	std::uint32_t max_players = 16;
-	std::uint32_t view_distance = 8; // chunks
+	std::uint32_t view_distance = 4; // chunks
 	std::uint32_t tick_rate = 20;
 	std::uint64_t world_seed = 0; // 0 = random at startup
 	double gravity = 24.0;
@@ -49,7 +49,7 @@ struct ClientConfig {
 	std::uint32_t window_height = 720;
 	bool vsync = true;
 	double fov = 70.0;
-	std::uint32_t render_distance = 8; // chunks, clamped to server view_distance
+	std::uint32_t render_distance = 4; // chunks, clamped to server view_distance
 	double mouse_sensitivity = 0.12;
 	std::uint32_t asset_cache_mb = 512;
 	std::string asset_cache_dir; // empty = vb::core::user_cache_dir() / "assets"

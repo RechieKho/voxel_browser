@@ -1353,7 +1353,7 @@ std::vector<std::string> ClientSession::take_chat_messages() {
 void ClientSession::apply_block_registry(const protocol::S2CBlockRegistry &msg) {
 	world::BlockRegistry reg;
 	for (const auto &b : msg.blocks) {
-		reg.add({ b.name, b.solid, b.opaque, b.liquid, b.light_emission });
+		reg.add({ b.name, b.solid, b.opaque, b.liquid, b.light_emission, b.texture });
 	}
 	VB_INFO("net", "received block registry (", msg.blocks.size(), " blocks)");
 	chunks_.set_registry(std::move(reg));

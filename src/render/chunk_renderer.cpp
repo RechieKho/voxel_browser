@@ -87,37 +87,6 @@ struct ChunkRenderer::GpuChunk {
 
 namespace {
 
-// Flat per-block tint for Phase 2 (the texture atlas is Phase 4).
-Color tint_for(std::uint32_t block_id) {
-	switch (block_id) {
-		case 1:
-			return Color{ 128, 128, 132, 255 }; // stone
-		case 2:
-			return Color{ 134, 96, 67, 255 }; // dirt
-		case 3:
-			return Color{ 96, 160, 74, 255 }; // grass
-		case 4:
-			return Color{ 214, 200, 150, 255 }; // sand
-		case 5:
-			// Phase 7.3 fix: was alpha 200 (semi-transparent), inert before
-			// this phase since submerged terrain faces were always culled
-			// (nothing to blend with). Now that they render, the old alpha
-			// let the lakebed blend through as flat, hard-edged patches with
-			// no wave/refraction shading to sell it -- looked like a broken
-			// mesh, not water. Opaque like every other block; underwater
-			// visibility while swimming is unaffected, it's driven entirely
-			// by the fog system (7.2/7.3) once the camera is inside the
-			// water voxel, not by this material's alpha.
-			return Color{ 64, 108, 196, 255 }; // water
-		case 6:
-			return Color{ 110, 84, 52, 255 }; // wood
-		case 7:
-			return Color{ 74, 128, 60, 220 }; // leaves
-		default:
-			return WHITE;
-	}
-}
-
 // Writes `data`'s vertices/indices into the front of `mesh`'s (already
 // allocated) CPU-side arrays. Those arrays may be larger than `data` needs
 // (see model_from_mesh's headroom) -- only the first
@@ -125,7 +94,19 @@ Color tint_for(std::uint32_t block_id) {
 // leftover from a previous, larger mesh and never referenced by the draw
 // call (DrawMesh draws exactly mesh.triangleCount*3 indices, and every index
 // value stays < data.vertices.size()).
-void fill_mesh_arrays(const world::MeshData &data, Mesh &mesh) {
+//
+// `rects` is empty until ChunkRenderer::set_atlas() has been called (no real
+// texture system yet built, or a VB_WITH_COMPRESSION-less build where asset
+// sync/the atlas never runs) -- that's today's Phase-2 behavior exactly:
+// local 0/1 face UVs (raylib's default 1x1 white texture0 samples the same
+// regardless) and a flat per-block vertex-color tint. Once an atlas exists,
+// texcoords remap through the block's real AtlasRect and the vertex color
+// drops to light-only (grayscale) -- the atlas texel itself now carries the
+// color, so a real-textured block isn't double-tinted by the old guessed
+// flat color. Alpha is untouched either way: still sourced from
+// fallback_color_for()'s `.a` channel (leaves/water transparency), which was
+// never meant to be replaced by per-texel alpha in this pass.
+void fill_mesh_arrays(const world::MeshData &data, Mesh &mesh, const std::vector<AtlasRect> &rects) {
 	for (std::size_t i = 0; i < data.vertices.size(); ++i) {
 		const world::MeshVertex &v = data.vertices[i];
 		mesh.vertices[i * 3 + 0] = v.px;
@@ -134,14 +115,24 @@ void fill_mesh_arrays(const world::MeshData &data, Mesh &mesh) {
 		mesh.normals[i * 3 + 0] = v.nx;
 		mesh.normals[i * 3 + 1] = v.ny;
 		mesh.normals[i * 3 + 2] = v.nz;
-		mesh.texcoords[i * 2 + 0] = v.u;
-		mesh.texcoords[i * 2 + 1] = v.v;
 
-		const Color base = tint_for(v.block_id);
+		const Color base = fallback_color_for(v.block_id);
 		const float l = v.light;
-		mesh.colors[i * 4 + 0] = static_cast<unsigned char>(static_cast<float>(base.r) * l);
-		mesh.colors[i * 4 + 1] = static_cast<unsigned char>(static_cast<float>(base.g) * l);
-		mesh.colors[i * 4 + 2] = static_cast<unsigned char>(static_cast<float>(base.b) * l);
+		if (rects.empty()) {
+			mesh.texcoords[i * 2 + 0] = v.u;
+			mesh.texcoords[i * 2 + 1] = v.v;
+			mesh.colors[i * 4 + 0] = static_cast<unsigned char>(static_cast<float>(base.r) * l);
+			mesh.colors[i * 4 + 1] = static_cast<unsigned char>(static_cast<float>(base.g) * l);
+			mesh.colors[i * 4 + 2] = static_cast<unsigned char>(static_cast<float>(base.b) * l);
+		} else {
+			const AtlasRect &rect = v.block_id < rects.size() ? rects[v.block_id] : AtlasRect{};
+			mesh.texcoords[i * 2 + 0] = rect.u0 + v.u * (rect.u1 - rect.u0);
+			mesh.texcoords[i * 2 + 1] = rect.v0 + v.v * (rect.v1 - rect.v0);
+			const auto lit = static_cast<unsigned char>(255.0f * l);
+			mesh.colors[i * 4 + 0] = lit;
+			mesh.colors[i * 4 + 1] = lit;
+			mesh.colors[i * 4 + 2] = lit;
+		}
 		mesh.colors[i * 4 + 3] = base.a;
 	}
 	for (std::size_t i = 0; i < data.indices.size(); ++i) {
@@ -161,7 +152,8 @@ std::size_t capacity_for(std::size_t needed) {
 	return needed == 0 ? 0 : static_cast<std::size_t>(static_cast<float>(needed) * kCapacityHeadroom) + 1;
 }
 
-Model model_from_mesh(const world::MeshData &data, std::size_t vertex_capacity, std::size_t index_capacity) {
+Model model_from_mesh(const world::MeshData &data, std::size_t vertex_capacity, std::size_t index_capacity,
+		const std::vector<AtlasRect> &rects) {
 	Mesh mesh{};
 	// vertexCount/triangleCount drive the GPU buffer *size* UploadMesh()
 	// allocates below; they're brought back down to the actual counts
@@ -176,7 +168,7 @@ Model model_from_mesh(const world::MeshData &data, std::size_t vertex_capacity, 
 	mesh.indices = static_cast<unsigned short *>(
 			MemAlloc(static_cast<unsigned int>(index_capacity * sizeof(unsigned short))));
 
-	fill_mesh_arrays(data, mesh);
+	fill_mesh_arrays(data, mesh, rects);
 
 	UploadMesh(&mesh, false);
 	mesh.vertexCount = static_cast<int>(data.vertices.size());
@@ -189,8 +181,8 @@ Model model_from_mesh(const world::MeshData &data, std::size_t vertex_capacity, 
 // `data` fits within the model's current vertex_capacity/index_capacity.
 // Buffer index order matches raylib's UploadMesh(): 0 position, 1 texcoord,
 // 2 normal, 3 color, 6 indices (config.h's RL_DEFAULT_SHADER_ATTRIB_LOCATION_*).
-void update_gpu_mesh(Mesh &mesh, const world::MeshData &data) {
-	fill_mesh_arrays(data, mesh);
+void update_gpu_mesh(Mesh &mesh, const world::MeshData &data, const std::vector<AtlasRect> &rects) {
+	fill_mesh_arrays(data, mesh, rects);
 
 	const int vbytes3 = static_cast<int>(data.vertices.size() * 3 * sizeof(float));
 	const int vbytes2 = static_cast<int>(data.vertices.size() * 2 * sizeof(float));
@@ -222,6 +214,27 @@ ChunkRenderer::~ChunkRenderer() {
 		}
 	}
 	UnloadShader(fog_shader_);
+	if (has_atlas_) {
+		UnloadTexture(atlas_);
+	}
+}
+
+void ChunkRenderer::set_atlas(Texture2D atlas, std::vector<AtlasRect> rects, std::vector<Color> average_colors) {
+	if (has_atlas_) {
+		UnloadTexture(atlas_);
+	}
+	atlas_ = atlas;
+	has_atlas_ = true;
+	atlas_rects_ = std::move(rects);
+	atlas_average_colors_ = std::move(average_colors);
+}
+
+Color ChunkRenderer::underwater_tint(core::BlockId id) const {
+	const auto idx = static_cast<std::size_t>(id);
+	if (idx < atlas_average_colors_.size()) {
+		return atlas_average_colors_[idx];
+	}
+	return fallback_color_for(static_cast<std::uint32_t>(idx));
 }
 
 void ChunkRenderer::drop(core::ChunkCoord coord) {
@@ -252,18 +265,25 @@ void ChunkRenderer::upload(core::ChunkCoord coord, const world::MeshData &data,
 	if (slot.valid && needed_v <= slot.vertex_capacity && needed_i <= slot.index_capacity) {
 		// Fits within the existing GPU buffers -- update in place, no
 		// UnloadModel/UploadMesh churn (see the comment on GpuChunk).
-		update_gpu_mesh(slot.model.meshes[0], data);
+		update_gpu_mesh(slot.model.meshes[0], data, atlas_rects_);
 	} else {
 		if (slot.valid) {
 			UnloadModel(slot.model);
 		}
 		slot.vertex_capacity = capacity_for(needed_v);
 		slot.index_capacity = capacity_for(needed_i);
-		slot.model = model_from_mesh(data, slot.vertex_capacity, slot.index_capacity);
+		slot.model = model_from_mesh(data, slot.vertex_capacity, slot.index_capacity, atlas_rects_);
 		// Phase 7.2: every chunk shares the one fog shader loaded in the
 		// constructor -- LoadModelFromMesh (inside model_from_mesh) assigns
 		// raylib's own default material/shader, which this replaces.
 		slot.model.materials[0].shader = fog_shader_;
+		// Real texture/atlas system: bind the shared atlas texture (a no-op,
+		// still raylib's default white 1x1, until set_atlas() has been
+		// called -- see the class's kLoading-time call site in
+		// src/client/main.cpp).
+		if (has_atlas_) {
+			slot.model.materials[0].maps[MATERIAL_MAP_DIFFUSE].texture = atlas_;
+		}
 		slot.valid = true;
 	}
 	slot.revision = revision;

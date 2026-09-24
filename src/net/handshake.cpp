@@ -127,6 +127,7 @@ ServerHandshakeStep ServerHandshake::on_frame(const Frame &frame) {
 			info.pack_version = config_.pack_version;
 			info.engine_protocol_version = kEngineProtocolVersion;
 			info.tick_rate = config_.tick_rate;
+			info.view_distance = config_.view_distance;
 			info.motd = config_.motd;
 			info.auth_mode = config_.auth_mode;
 

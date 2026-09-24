@@ -5,11 +5,13 @@
 #include <deque>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include <raylib.h>
 
 #include "vb/core/ids.hpp"
 #include "vb/core/math.hpp"
+#include "vb/render/texture_atlas.hpp"
 #include "vb/world/chunk_mesh_worker_pool.hpp"
 #include "vb/world/client_chunk_store.hpp"
 #include "vb/world/daynight.hpp" // SkyColor
@@ -57,6 +59,25 @@ public:
 	std::size_t uploaded_count() const { return gpu_.size(); }
 	std::size_t pending_mesh_count() const { return pool_.pending(); }
 
+	// Real texture/atlas system: hands over ownership of a GPU atlas texture
+	// (already uploaded, e.g. via TextureAtlas::upload()) plus its per-block
+	// UV rects/average colors. Every chunk model created *after* this call
+	// binds the atlas as its material's diffuse texture and remaps face UVs
+	// through `rects`; models already uploaded before this call are left
+	// alone until they're next rebuilt (upload() always re-fills the CPU
+	// arrays from the current rects_/has_atlas_ state, so any live chunk
+	// naturally picks up the atlas on its next edit-triggered re-mesh -- see
+	// src/client/main.cpp, which calls this once per session before any
+	// chunk has been meshed at all, so in practice every chunk gets it from
+	// its very first upload). Call at most once per ChunkRenderer.
+	void set_atlas(Texture2D atlas, std::vector<AtlasRect> rects, std::vector<Color> average_colors);
+
+	// REMAINING_TASKS 7.5: the color underwater fog should default to for
+	// `id` -- the atlas's real average texture color if set_atlas() has been
+	// called and covers `id`, else the same flat placeholder chunk meshes
+	// themselves fall back to.
+	Color underwater_tint(core::BlockId id) const;
+
 private:
 	struct GpuChunk;
 	void upload(core::ChunkCoord coord, const world::MeshData &data, std::uint64_t revision);
@@ -74,6 +95,11 @@ private:
 	int fog_loc_color_ = -1;
 	int fog_loc_start_ = -1;
 	int fog_loc_end_ = -1;
+
+	Texture2D atlas_{};
+	bool has_atlas_ = false;
+	std::vector<AtlasRect> atlas_rects_;
+	std::vector<Color> atlas_average_colors_;
 
 	world::ChunkMeshWorkerPool pool_;
 	std::unordered_map<core::ChunkCoord, GpuChunk> gpu_;

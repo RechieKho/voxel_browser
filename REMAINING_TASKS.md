@@ -130,9 +130,15 @@ Full detail: `remaining_tasks/phase4.md`.
 - [ ] `register_entity`'s `visual = {...}` sub-table (variant/facings/clips)
       for 3.5's `entity_renderer` — schema finalized, not implemented; nothing
       reads a per-kind visual def yet.
-- [ ] Client meshing/atlas driven by the received block registry beyond
-      solid/opaque/light — still just untextured cubes; waits on a real
-      texture/model concept (4.4/5.1).
+- [x] Real texture/atlas system landed 2026-09-23 (see
+      `state/changelog-recent.md`): `vb.register_block{texture=...}` ->
+      `S2C_BlockRegistry` -> a per-session `vb::render::TextureAtlas` built
+      from Asset Sync (or, `--singleplayer`, straight off disk) -> real
+      per-face UVs in `ChunkRenderer`. Proved on `base:stone`/`base:water`
+      only (user-scoped) — **remaining:** every other base block (dirt,
+      grass, sand, wood, leaves) still renders its old flat placeholder
+      color; a full base-pack reskin is a separate follow-up pass, not a
+      mechanism gap.
 - [ ] `--singleplayer`'s registry-wiring gap is closed (Phase 5.1); no
       remaining item here.
 - [ ] Manifest staleness: a pack that writes `vb.storage` *after* startup
@@ -216,8 +222,12 @@ Full detail: `remaining_tasks/phase6.md`.
       Phase 3.2's still-unimplemented flood guard).
 - [ ] Replicate block-damage *value* (not just begin/stop/complete) to nearby
       players — 6.5, prerequisite for a crack overlay.
-- [ ] Default generic crack overlay + `crack_texture` override — 6.5, blocked
-      on the real texture/atlas system (4.3/5.1).
+- [ ] Default generic crack overlay + `crack_texture` override — 6.5. The
+      real texture/atlas system this was blocked on landed 2026-09-23 (see
+      Phase 4's own item), but this specific piece is still `[ ]`: no
+      crack-overlay art exists, and 6.5's other still-open item (replicating
+      the live block-damage *value* to nearby players) is a real prerequisite
+      this doesn't have yet either.
 - [x] Movement/action key bindings extended into the 6.3 keybind registry
       (6.19) — `move_forward`/`move_back`/`move_left`/`move_right`/`jump`/
       `sprint`/`primary`/`secondary` are pre-registered by every
@@ -268,7 +278,7 @@ Full detail: `remaining_tasks/phase6.md`.
 
 ---
 
-## Phase 7 — World & UX Polish (7.1-7.4 done, 7.5 planned)
+## Phase 7 — World & UX Polish (7.1-7.4 done, 7.5's default landed, override open)
 
 > User-requested (2026-09-19): four UX gaps, scoped as their own phase since
 > none of them extend Phase 6's "default + override" system pattern the way
@@ -525,7 +535,7 @@ Full detail: `remaining_tasks/phase6.md`.
       real window) was **not** manually eyeballed — no GUI in this agent
       environment, same still-open caveat as every other Phase 7 item's own
       verification note.
-- [ ] **7.5 — Underwater fog tint should default to the liquid block's own
+- **7.5 — Underwater fog tint should default to the liquid block's own
       color, overridable from Lua.** User-requested (2026-09-23), and
       **supersedes 7.2/7.3's 2026-09-19 decision** ("fog color is never an
       independent Lua-settable field... it's always whatever the current
@@ -533,54 +543,25 @@ Full detail: `remaining_tasks/phase6.md`.
       — that decision stays correct for *normal* (above-water) fog, but
       underwater fog tinted by the sky reads as wrong once you're actually
       submerged (water should tint the murk itself, not echo whatever color
-      the sky happens to be at the time). Today `ChunkRenderer::set_fog()`
-      (`src/render/chunk_renderer.cpp`) always receives the same `sky`
-      `SkyColor` regardless of whether the camera is underwater — `src/
-      client/main.cpp`'s `kPlaying` block only swaps the *distance* preset
-      (`fog_start=2.0f`/`fog_end=8.0f`) when `is_liquid(eye_block)`, the
-      color argument is untouched. Two parts:
-    - **Default (2026-09-23, refined):** rather than a hand-authored color
-      per block, derive it automatically as the **average pixel color of
-      the block's own texture** — so a pack never declares a separate
-      "fog tint" value that can drift out of sync with its actual art;
-      the block just looks like what it looks like. This is a bigger
-      prerequisite than it first appears: there is **no real texture
-      system in this engine yet at all**. `chunk_renderer.cpp`'s
-      `tint_for()` is a hardcoded `switch` on `block_id` returning a flat
-      `Color` (today's water case: `Color{64, 108, 196, 255}`, just fixed
-      from alpha 200 in this same phase) — every block is a solid color,
-      not a textured quad; the shader's `texture0` sampler is bound to
-      raylib's implicit default 1×1 white texture, never a real per-block
-      image. `vb.register_block`'s `def` table doesn't even read a
-      `texture` field into anything today (`src/script/pack_runtime.cpp`)
-      — `docs/lua-api.md`'s "accepted but not stored" note is generous;
-      it's not read at all. This is the same still-open gap as Phase 4's
-      "Client meshing/atlas driven by the received block registry" item
-      and REMAINING_TASKS' repeated "texture atlas is Phase 4" markers —
-      average-texture-color underwater tint is blocked on that landing
-      first, not implementable standalone.
-      Once a real texture/atlas system exists: computing the average
-      likely doesn't need a new wire field at all — `vb::assetsync`
-      already gets arbitrary content-pack asset bytes (a block's texture
-      image) onto the client via the existing hash-based asset-sync path,
-      so the client can decode the already-synced image and average its
-      pixels itself once, caching the result alongside the resolved
-      `BlockRegistry` entry, the same "client derives it locally from data
-      it already has" shape as `client->fog_override()`'s own
-      no-override default today. Only *overriding* that computed default
-      (see below) needs a wire field.
-      **Interim, until textures land:** the flat `tint_for()` color a
-      block already renders with *is* trivially its own "average" (a
-      flat-colored block has zero texture variance), so a naive default
-      built directly off today's hardcoded switch is a reasonable
-      placeholder — just don't treat it as the real design; replace it
-      wholesale once textures exist rather than trying to reconcile the
-      two schemes.
-    - **Override:** extend `vb.render.set_fog{...}` (or a sibling call) to
-      accept an underwater-specific color, replicated the same
-      `S2CFogParams`-style opt-in path as `fog_start`/`fog_end` (6.7/6.8's
-      "default + override" shape) — needs a protocol version bump (current
-      `ENGINE_PROTOCOL_VERSION` is **16**) since `S2CFogParams`
+      the sky happens to be at the time). Two parts:
+    - [x] **Default**, landed 2026-09-23 alongside the real texture/atlas
+      system (Phase 4's own item, `state/changelog-recent.md`): the
+      underwater tint is now the **real average pixel color of `base:water`'s
+      own synced texture** — `vb::render::TextureAtlas::build()` computes it
+      once per session (decoding every block's texture and averaging its
+      pixels, real `Image` data, not a guess) and `ChunkRenderer::
+      underwater_tint(BlockId)` exposes it; `src/client/main.cpp`'s `kPlaying`
+      block now passes that instead of `sky` to `set_fog()` whenever
+      `is_liquid(eye_block)`. A liquid block with no texture (or before any
+      atlas exists at all) still falls back to the old flat placeholder
+      color exactly as this item originally scoped as its own interim step —
+      that fallback is `vb::render::fallback_color_for()` now (moved out of
+      `chunk_renderer.cpp`'s old `tint_for()`, same values, renamed).
+    - [ ] **Override** — still open: extend `vb.render.set_fog{...}` (or a
+      sibling call) to accept an underwater-specific color, replicated the
+      same `S2CFogParams`-style opt-in path as `fog_start`/`fog_end` (6.7/
+      6.8's "default + override" shape) — needs a protocol version bump
+      (current `ENGINE_PROTOCOL_VERSION` is **17**) since `S2CFogParams`
       (`inc/vb/protocol/world.hpp`, type 52) is `f32 fog_start, f32 fog_end`
       only today, no color field.
       Design not otherwise pinned yet (exact Lua call shape, whether the

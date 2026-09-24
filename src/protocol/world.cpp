@@ -53,6 +53,7 @@ void S2CBlockRegistry::encode(std::vector<std::byte> &out) const {
 		w.boolean(b.opaque);
 		w.boolean(b.liquid);
 		w.u8(b.light_emission);
+		w.string(b.texture);
 		w.u16(b.max_damage);
 	}
 }
@@ -72,6 +73,7 @@ Decoded<S2CBlockRegistry> S2CBlockRegistry::decode(std::span<const std::byte> in
 		b.opaque = r.boolean();
 		b.liquid = r.boolean();
 		b.light_emission = r.u8();
+		b.texture = r.string();
 		b.max_damage = r.u16();
 		m.blocks.push_back(std::move(b));
 	}

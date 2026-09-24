@@ -58,15 +58,25 @@ rt.dispatch_tick(dt);
 ```
 
 - Registration (pack load only, rejected once `freeze()` has run):
-  `vb.register_block(def) -> BlockId` (idempotent by `name`; `texture`/`model`
-  fields are accepted but not stored — no wire-visible model/texture fields
-  exist on `BlockType` yet; `max_damage` — Phase 6.5, default `0` = today's
-  instant break — opts the block into the shared block-damage breaking system
-  below, replicated to clients as part of `S2C_BlockRegistry`. **Idempotent
-  registration doesn't update an already-registered block's properties** —
-  re-registering an existing `name` (e.g. one of the base 8) just returns its
-  id unchanged; `max_damage`/`solid`/`opaque`/etc. only take effect the first
-  time a name is registered); `region` — Phase 7.3, generic per-tick
+  `vb.register_block(def) -> BlockId` (idempotent by `name`; **the real
+  texture/atlas system**: `texture` is a pack-relative path (e.g.
+  `"textures/stone.png"`), synced to the client over the existing Asset Sync
+  virtual FS and packed into one atlas texture per session
+  (`vb::render::TextureAtlas`) — a block with no `texture` (the default,
+  empty string) keeps rendering a flat placeholder color. `model` is still
+  accepted but not stored — no wire-visible model field exists on
+  `BlockType` yet; `max_damage` — Phase 6.5, default `0` = today's instant
+  break — opts the block into the shared block-damage breaking system below,
+  replicated to clients as part of `S2C_BlockRegistry`. **Idempotent
+  registration doesn't update an already-registered block's other
+  properties** — re-registering an existing `name` (e.g. one of the base 8)
+  just returns its id unchanged; `max_damage`/`solid`/`opaque`/etc. only take
+  effect the first time a name is registered. `texture` is the one
+  exception: re-registering an existing `name` with a non-empty `texture`
+  still attaches it (`BlockRegistry::set_texture`) — this is how
+  `content/base/blocks/stone.lua`/`water.lua` give an already-hardcoded
+  `BlockRegistry::base()` block a real texture without needing to touch
+  `src/world/block.cpp`; `region` — Phase 7.3, generic per-tick
   occupancy tracking opt-in, independent of `liquid` (see `region_enter`/
   `region_exit` below) — defaults to `liquid`'s own value (a liquid block
   opts in automatically, matching `base:water`) unless given explicitly,

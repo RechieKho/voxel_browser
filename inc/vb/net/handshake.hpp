@@ -51,6 +51,10 @@ struct HandshakeServerConfig {
 	std::string pack_name = "base";
 	std::string pack_version = "0.0.0";
 	std::uint16_t tick_rate = 20;
+	// Sent verbatim as S2CServerInfo::view_distance (see that field's own
+	// comment) -- the operator's real server.toml view_distance, not a
+	// per-pack override; there's no opt-in pattern to mirror here.
+	std::uint32_t view_distance = 8;
 	std::string motd;
 	protocol::AuthMode auth_mode = protocol::AuthMode::kNone;
 	std::uint32_t max_players = 16;

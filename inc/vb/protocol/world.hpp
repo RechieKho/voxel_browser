@@ -18,9 +18,8 @@ namespace vb::protocol {
 
 // --- block registry (spec §8.3 / §9) ------------------------------------
 // Sent between C2S_Ready and S2C_JoinAccept (Phase 4.3) so the client can
-// mirror the server's (possibly Lua-extended) block table. No model/texture/
-// collision-shape fields exist here -- BlockType doesn't have them yet
-// (waits on 4.4 asset sync + 5.1 base pack).
+// mirror the server's (possibly Lua-extended) block table. No model/
+// collision-shape fields exist here yet.
 
 struct BlockRegistryRecord {
 	std::string name;
@@ -28,6 +27,11 @@ struct BlockRegistryRecord {
 	bool opaque = true;
 	bool liquid = false;
 	std::uint8_t light_emission = 0;
+	// Real texture/atlas system: mirrors vb::world::BlockType::texture --
+	// pack-relative path, empty = no texture. The client resolves it against
+	// its own Asset Sync virtual FS (vb::assetsync::ClientAssetCache), same
+	// posture as every other BlockType field mirrored here.
+	std::string texture;
 	// Phase 6.5 (spec §10.7): 0 = instant break, no shared damage pool.
 	std::uint16_t max_damage = 0;
 

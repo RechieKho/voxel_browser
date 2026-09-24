@@ -172,6 +172,7 @@ int main(int argc, char **argv) {
 	vb::net::HandshakeServerConfig hs_config;
 	hs_config.pack_name = "base";
 	hs_config.tick_rate = static_cast<std::uint16_t>(config.tick_rate);
+	hs_config.view_distance = config.view_distance;
 	hs_config.motd = config.motd;
 	hs_config.auth_mode = static_cast<vb::protocol::AuthMode>(config.auth_mode);
 	hs_config.max_players = config.max_players;
@@ -195,7 +196,7 @@ int main(int argc, char **argv) {
 		out.reserve(registry.size());
 		for (std::size_t i = 0; i < registry.size(); ++i) {
 			const auto &t = registry.get(static_cast<vb::core::BlockId>(i));
-			out.push_back({ t.name, t.solid, t.opaque, t.liquid, t.light_emission });
+			out.push_back({ t.name, t.solid, t.opaque, t.liquid, t.light_emission, t.texture });
 		}
 		return out;
 	};

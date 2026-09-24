@@ -97,11 +97,12 @@ vb::worldgen::WorldGenerator make_generator(std::uint64_t seed) {
 	return make_generator(seed, vb::world::BlockRegistry::base());
 }
 
-vb::net::HandshakeServerConfig sp_server_config(std::uint64_t seed) {
+vb::net::HandshakeServerConfig sp_server_config(std::uint64_t seed, int view_distance) {
 	vb::net::HandshakeServerConfig c;
 	c.pack_name = "base";
 	c.motd = "integrated singleplayer";
 	c.world_seed = seed;
+	c.view_distance = static_cast<std::uint32_t>(view_distance);
 	return c;
 }
 
@@ -144,6 +145,32 @@ vb::script::PackRuntime make_singleplayer_pack_runtime(
 	return rt;
 }
 
+// Real texture/atlas system, --singleplayer only: no Asset Sync exists on
+// this in-process path (see RemoteConnection's own asset_cache for the real-
+// multiplayer equivalent), so texture bytes are read straight off disk
+// instead of resolved through a synced virtual FS -- only the handful of
+// paths the registry actually references, not the whole content pack tree.
+vb::render::VirtualFs load_textures_from_disk(
+		const vb::world::BlockRegistry &registry, const std::filesystem::path &content_root) {
+	vb::render::VirtualFs vfs;
+	for (std::size_t i = 0; i < registry.size(); ++i) {
+		const vb::world::BlockType &type = registry.get(static_cast<vb::core::BlockId>(i));
+		if (type.texture.empty()) {
+			continue;
+		}
+		std::ifstream f(content_root / type.texture, std::ios::binary | std::ios::ate);
+		if (!f) {
+			continue; // missing on disk -- TextureAtlas::build() falls back gracefully
+		}
+		const auto size = static_cast<std::size_t>(f.tellg());
+		f.seekg(0);
+		std::vector<std::byte> bytes(size);
+		f.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(size));
+		vfs[type.texture] = std::move(bytes);
+	}
+	return vfs;
+}
+
 vb::net::HandshakeServerHost make_singleplayer_host(std::uint64_t seed,
 		vb::script::PackRuntime &pack_runtime,
 		const vb::world::BlockRegistry &registry,
@@ -175,7 +202,7 @@ vb::net::HandshakeServerHost make_singleplayer_host(std::uint64_t seed,
 		out.reserve(registry.size());
 		for (std::size_t i = 0; i < registry.size(); ++i) {
 			const auto &t = registry.get(static_cast<vb::core::BlockId>(i));
-			out.push_back({ t.name, t.solid, t.opaque, t.liquid, t.light_emission });
+			out.push_back({ t.name, t.solid, t.opaque, t.liquid, t.light_emission, t.texture });
 		}
 		return out;
 	};
@@ -238,7 +265,7 @@ struct Singleplayer {
 																				   pool(make_generator(seed, registry,
 																						   pack_runtime.build_worldgen_pipeline(
 																								   vb::worldgen::WorldGenParams{ seed }))),
-																				   server(net.server(), sp_server_config(seed),
+																				   server(net.server(), sp_server_config(seed, view_distance),
 																						   make_singleplayer_host(seed, pack_runtime, registry, move_params)) {
 		server.set_move_params(move_params);
 		// Phase 6.18: mirrors src/server/main.cpp's own set_punch_params call.
@@ -701,14 +728,20 @@ int main(int argc, char **argv) {
 	const bool singleplayer = args.has("singleplayer");
 	const bool headless = args.has("headless") || VB_HEADLESS_DEFAULT;
 	const float fov = static_cast<float>(config.fov);
-	const int view_distance =
+	// The player's own preference (Settings screen / client.toml), never
+	// mutated. `view_distance` below starts equal to it but may be clamped
+	// down per-connection once a real server's own (possibly smaller) view
+	// distance is known -- see begin_connect/enter_playing in the windowed
+	// path. Singleplayer always uses this unclamped value: the client IS
+	// the server there, so there's nothing external to clamp against.
+	const int configured_view_distance =
 			static_cast<int>(config.render_distance < 2 ? 2 : config.render_distance);
 
 	std::cout << vb::core::describe_build() << '\n'
 			  << "client: " << (headless ? "headless" : "windowed") << " mode\n";
 
 	if (headless) {
-		return run_headless(config, args, cli_server, cli_port, singleplayer, view_distance);
+		return run_headless(config, args, cli_server, cli_port, singleplayer, configured_view_distance);
 	}
 
 	// --- windowed: main menu first (spec §5.3) -----------------------------
@@ -733,6 +766,14 @@ int main(int argc, char **argv) {
 		kError };
 	AppState state = AppState::kMenu;
 	std::string error_message;
+	// The view distance actually in effect this connection -- starts at
+	// configured_view_distance every time begin_connect() runs, then
+	// enter_playing() clamps it down to a real server's own (possibly
+	// smaller) S2CServerInfo::view_distance once that's known. Drives
+	// kLoading's expected-chunk-count estimate and the default fog distance
+	// below, so both always agree with whatever this connection can
+	// actually stream in.
+	int view_distance = configured_view_distance;
 	bool connecting_singleplayer = false;
 	std::string connecting_target;
 	int connect_ticks = 0;
@@ -755,7 +796,18 @@ int main(int argc, char **argv) {
 	std::chrono::steady_clock::time_point loading_deadline;
 	std::chrono::steady_clock::time_point loading_hard_deadline;
 	std::size_t loading_last_uploaded = 0;
-	constexpr std::chrono::milliseconds kLoadingStallTimeout{ 2000 };
+	// 2000ms measured as too tight in practice: `loading_deadline` starts
+	// counting the instant kLoading is entered, before the server has sent a
+	// single chunk -- the very first batch out of a cold worldgen pool (no
+	// cached chunks yet, every one of the view box's chunks generated fresh)
+	// can itself take longer than 2s, so `loaded_chunks` was still 0 when the
+	// stall deadline fired and kPlaying was entered with (visibly) nothing
+	// loaded -- reported as "the world does not finish loading when the
+	// loading screen disappears". 5s gives the worldgen -> mesh -> upload
+	// pipeline room to produce its first real batch without making a
+	// genuinely dead connection (no server, wrong port) wait much longer
+	// before `loading_hard_deadline` would have caught it anyway.
+	constexpr std::chrono::milliseconds kLoadingStallTimeout{ 5000 };
 	constexpr std::chrono::seconds kLoadingHardTimeout{ 30 };
 
 	std::unique_ptr<Singleplayer> sp;
@@ -801,6 +853,11 @@ int main(int argc, char **argv) {
 		sp.reset();
 		remote.reset();
 		client = nullptr;
+		// Undo any clamp a previous connection's enter_playing() applied --
+		// a fresh connection (even a retry of the same server) starts back
+		// at the player's own full preference until this one's own
+		// S2CServerInfo says otherwise.
+		view_distance = configured_view_distance;
 		if (as_singleplayer) {
 			sp = std::make_unique<Singleplayer>(7, menu.player_name(), view_distance);
 			connecting_target = "singleplayer";
@@ -828,6 +885,18 @@ int main(int argc, char **argv) {
 
 	auto enter_playing = [&] {
 		client = connecting_singleplayer ? &sp->client() : &*remote->session;
+		// Bind this connection's effective view distance to whatever the
+		// server actually just told us (S2CServerInfo::view_distance,
+		// always present, unlike the opt-in fog/move-params messages) --
+		// never wider than the player's own configured_view_distance, so a
+		// server advertising a larger box than the player asked for doesn't
+		// silently raise their own setting. A no-op for singleplayer:
+		// sp_server_config() above already echoes this same
+		// configured_view_distance back as the server's own.
+		if (const auto &info = client->server_info()) {
+			view_distance = std::min(configured_view_distance,
+					static_cast<int>(info->view_distance));
+		}
 		const auto &accept = *client->join_accept();
 		const vb::core::NetId net_id = accept.your_net_id;
 		spawn = accept.spawn_pos;
@@ -902,6 +971,36 @@ int main(int argc, char **argv) {
 		client->set_local_feet(spawn);
 		input_seq = 0;
 		chunk_renderer = std::make_unique<vb::render::ChunkRenderer>();
+		// Real texture/atlas system: built once per session, right after the
+		// block registry (S2C_BlockRegistry, already applied by now -- see
+		// client->move_params() above reading back another join-time
+		// message the same way) and every referenced texture's bytes are
+		// available, and before kLoading starts streaming/meshing any chunk
+		// -- so every chunk mesh this session uploads already gets real
+		// atlas UVs from its very first upload, no re-upload-on-atlas-
+		// arrival case to handle. `remote` resolves texture paths against
+		// its already-synced Asset Sync virtual FS; `sp` (--singleplayer)
+		// has no asset sync at all (client + server share one in-process
+		// registry/content pack), so it reads the same
+		// `kSingleplayerContentPack` the integrated server's PackRuntime
+		// loaded from, straight off disk instead.
+		{
+			const vb::render::VirtualFs vfs = remote ? remote->asset_cache.virtual_fs()
+													  : load_textures_from_disk(client->chunk_store().registry(),
+																kSingleplayerContentPack);
+			vb::render::TextureAtlas atlas =
+					vb::render::TextureAtlas::build(client->chunk_store().registry(), vfs);
+			std::vector<vb::render::AtlasRect> rects;
+			std::vector<Color> averages;
+			rects.reserve(atlas.block_count());
+			averages.reserve(atlas.block_count());
+			for (std::size_t i = 0; i < atlas.block_count(); ++i) {
+				const auto id = static_cast<vb::core::BlockId>(i);
+				rects.push_back(atlas.rect_for(id));
+				averages.push_back(atlas.average_color_for(id));
+			}
+			chunk_renderer->set_atlas(atlas.upload(), std::move(rects), std::move(averages));
+		}
 		entity_renderer = std::make_unique<vb::render::EntityRenderer>();
 		mouse_captured = false;
 		chat_log.clear();
@@ -1213,6 +1312,22 @@ int main(int argc, char **argv) {
 						fog_end = static_cast<float>(view_distance * vb::core::kChunkDim);
 						fog_start = fog_end * 0.6f;
 					}
+					// A pack's vb.render.set_fog override can name any
+					// distance it likes -- nothing about it is checked
+					// against how far this client actually keeps chunks
+					// loaded. An override longer than that reach would
+					// show a hard, unfogged edge right where the world
+					// stops rendering instead of the soft fade fog exists
+					// to provide; bind the two together by clamping
+					// fog_end to the real view distance regardless of
+					// source (the engine default above is already exactly
+					// at that bound, so this is a no-op for it -- only an
+					// override can ever be pulled in). fog_start is
+					// clamped to match so it can't end up past a
+					// just-lowered fog_end.
+					const float max_fog_distance = static_cast<float>(view_distance * vb::core::kChunkDim);
+					fog_end = std::min(fog_end, max_fog_distance);
+					fog_start = std::min(fog_start, fog_end);
 					// Phase 7.3: "underwater" is the same sky-color fog
 					// mechanism, just a much closer distance preset -- no
 					// separate tint/color system (REMAINING_TASKS.md 7.3's
@@ -1229,11 +1344,18 @@ int main(int argc, char **argv) {
 					};
 					const vb::core::BlockId eye_block =
 							client->chunk_store().block_at(eye_voxel);
+					vb::world::SkyColor fog_color = sky;
 					if (client->chunk_store().registry().is_liquid(eye_block)) {
 						fog_end = 8.0f;
 						fog_start = 2.0f;
+						// Phase 7.5: underwater fog defaults to the submerged
+						// liquid's own texture's average color instead of
+						// echoing the sky -- water should tint the murk
+						// itself, not whatever time of day it happens to be.
+						const Color tint = chunk_renderer->underwater_tint(eye_block);
+						fog_color = vb::world::SkyColor{ tint.r, tint.g, tint.b };
 					}
-					chunk_renderer->set_fog(controller.position(), sky, fog_start, fog_end);
+					chunk_renderer->set_fog(controller.position(), fog_color, fog_start, fog_end);
 				}
 
 				const Camera3D camera = to_camera(controller, fov);

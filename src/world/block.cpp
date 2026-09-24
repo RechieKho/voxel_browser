@@ -38,6 +38,13 @@ core::BlockId BlockRegistry::add_or_get(std::string_view name, BlockType type) {
 	return add(std::move(type));
 }
 
+void BlockRegistry::set_texture(core::BlockId id, std::string texture) {
+	const auto idx = static_cast<std::size_t>(id);
+	if (idx < types_.size()) {
+		types_[idx].texture = std::move(texture);
+	}
+}
+
 const BlockType &BlockRegistry::get(core::BlockId id) const { return prop(id); }
 
 const BlockType &BlockRegistry::prop(core::BlockId id) const {

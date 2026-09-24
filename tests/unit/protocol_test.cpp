@@ -110,11 +110,12 @@ TEST_CASE("handshake structs round-trip") {
 	CHECK(h2.client_nonce == 0x1122334455667788ull);
 	CHECK(h2.client_version == "vb-test/0");
 
-	S2CServerInfo info{ "base", "1.0.0", vb::kEngineProtocolVersion, 20, "hello!",
+	S2CServerInfo info{ "base", "1.0.0", vb::kEngineProtocolVersion, 20, 6, "hello!",
 		AuthMode::kNone };
 	auto i2 = round_trip(info);
 	CHECK(i2.pack_name == "base");
 	CHECK(i2.tick_rate == 20);
+	CHECK(i2.view_distance == 6);
 	CHECK(i2.auth_mode == AuthMode::kNone);
 
 	S2CJoinAccept accept{ vb::core::NetId{ 7 }, { 1.5, 64.25, -3.0 }, 0xABCDEF, 1200 };
@@ -217,17 +218,21 @@ TEST_CASE("block registry round-trips, including an empty list") {
 	CHECK(empty.blocks.empty());
 
 	S2CBlockRegistry reg;
-	reg.blocks.push_back({ "base:air", false, false, false, 0, 0 });
-	reg.blocks.push_back({ "base:stone", true, true, false, 0, 0 });
-	reg.blocks.push_back({ "test:glow", true, true, false, 15, 0 });
-	reg.blocks.push_back({ "test:crumbly", true, true, false, 0, 5 });
+	reg.blocks.push_back({ .name = "base:air", .solid = false, .opaque = false, .liquid = false });
+	reg.blocks.push_back({ .name = "base:stone", .solid = true, .opaque = true, .liquid = false });
+	reg.blocks.push_back({ .name = "test:glow", .solid = true, .opaque = true, .liquid = false, .light_emission = 15 });
+	reg.blocks.push_back({ .name = "test:crumbly", .solid = true, .opaque = true, .liquid = false, .max_damage = 5 });
+	// Real texture/atlas system: a pack-relative texture path round-trips too.
+	reg.blocks.push_back({ .name = "test:stone", .solid = true, .opaque = true, .liquid = false,
+			.texture = "textures/stone.png" });
 	auto r2 = round_trip(reg);
-	REQUIRE(r2.blocks.size() == 4);
+	REQUIRE(r2.blocks.size() == 5);
 	CHECK(r2.blocks[0].name == "base:air");
 	CHECK_FALSE(r2.blocks[0].solid);
 	CHECK(r2.blocks[2].name == "test:glow");
 	CHECK(r2.blocks[2].light_emission == 15);
 	CHECK(r2.blocks[3].max_damage == 5); // Phase 6.5
+	CHECK(r2.blocks[4].texture == "textures/stone.png");
 	CHECK(r2.blocks == reg.blocks);
 }
 
@@ -391,7 +396,7 @@ TEST_CASE("asset sync messages round-trip") {
 
 TEST_CASE("decode rejects a bad enum and trailing bytes") {
 	std::vector<std::byte> bytes;
-	S2CServerInfo{ "p", "v", 1, 20, "m", AuthMode::kNone }.encode(bytes);
+	S2CServerInfo{ "p", "v", 1, 20, 8, "m", AuthMode::kNone }.encode(bytes);
 	bytes.back() = std::byte{ 0x7F }; // clobber auth_mode
 	auto bad = S2CServerInfo::decode(as_span(bytes));
 	CHECK_FALSE(bad);

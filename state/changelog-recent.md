@@ -14,7 +14,83 @@
 
 ---
 
-Last updated: 2026-09-18 (Phase 6.18 follow-up -- block self-heal: a block
+Last updated: 2026-09-23 (real texture/atlas system -- closes the "no real
+texture system in this engine at all" gap `REMAINING_TASKS.md` repeatedly
+cited as blocking Phase 4's textured meshing, 6.5's crack overlay, 5's
+sprite atlases, and 7.5's underwater tint default. `vb::world::BlockType`
+and `vb::protocol::BlockRegistryRecord` both gain a `texture` field
+(pack-relative path, empty = none) -- `kEngineProtocolVersion` bumped
+16 -> 17. `vb.register_block{texture=...}` (`src/script/pack_runtime.cpp`)
+stores it; a new `BlockRegistry::set_texture(id, path)`
+(`inc/vb/world/block.hpp`/`src/world/block.cpp`) is the one exception to
+`add_or_get`'s "idempotent registration doesn't update an existing block's
+properties" rule -- discovered while wiring this up: without it,
+`content/base/blocks/stone.lua`/`water.lua` re-declaring an already-
+hardcoded `BlockRegistry::base()` block to attach a texture would have
+silently no-op'd, same as re-registering `max_damage`/`solid`/etc. always
+has. New `vb::render::TextureAtlas` (`inc/vb/render/texture_atlas.hpp` /
+`src/render/texture_atlas.cpp`), split pure-CPU-build (`build()`, unit
+tested headless -- decodes each block's synced PNG via raylib `Image`
+functions, computes its real average pixel color, packs a fixed 16x16 cell
+per block id into one grid image; a block with no/missing texture gets a
+flat placeholder cell instead, sourced from the old `chunk_renderer.cpp`
+`tint_for()` switch, moved here and renamed `fallback_color_for()`) /
+GPU-upload (`upload()`, untested, mirrors `ChunkRenderer::upload`'s own
+split). `ChunkRenderer::set_atlas()`/`underwater_tint()`
+(`src/render/chunk_renderer.cpp`) bind it once per session
+(`src/client/main.cpp`, right after the block registry is applied, before
+any chunk is meshed) -- `fill_mesh_arrays` remaps face UVs through the
+block's real `AtlasRect` and drops vertex color to light-only once an atlas
+is set (alpha still sourced from `fallback_color_for()`, leaves/water
+transparency unchanged); with no atlas set (pre-atlas frames, or a
+`VB_WITH_COMPRESSION`-less build where asset sync never runs) rendering is
+byte-for-byte the old flat-tint behavior. `--singleplayer` has no Asset
+Sync at all (client+server share one in-process registry), so a new
+`load_textures_from_disk()` reads texture bytes straight off
+`content/base` instead of a synced virtual FS. Proved on two blocks per
+user request: `base:stone` (new placeholder PNG) and `base:water` (also
+closes Phase 7.5's default: `chunk_renderer->underwater_tint(eye_block)`
+now replaces the sky color for submerged fog, instead of the old "fog
+always echoes the sky" rule) -- every other block keeps its old flat
+color unchanged, this is not a whole-pack reskin. New
+`tests/unit/texture_atlas_test.cpp` (4 cases, GL-context-free); extended
+`protocol_test.cpp`'s block-registry round-trip and `pack_runtime_test.cpp`
+with 3 new cases (texture stored/defaults empty, texture attaches to an
+already-registered block, idempotent re-registration still doesn't reset
+other fields). Full `vb_tests` green (306/306), clean `-Werror` build of
+both binaries, all 4 CTest cases pass, on `build-net-lua`.
+**Same-day follow-up (user-reported):** grayish seams visible at block
+edges. Root cause: atlas cells were packed edge-to-edge with zero padding,
+so sampling right at (or just past, under bilinear filtering) a cell's UV
+boundary picked up a texel from the *next* cell in the grid -- often a very
+different flat fallback color, reading as a gray seam along every face.
+Fixed with the standard atlas padding technique: each cell is now allocated
+`kCellSize + 2` px (`kStride`, `texture_atlas.cpp`), a real texture is drawn
+into the inner unpadded region and its edge pixels are clamp-extended 1px
+outward into the padding (`extend_border()`); `AtlasRect` only ever maps
+the inner content rect, never the padding. A flat fallback cell needs no
+border extension -- it fills the whole padded cell with one uniform color,
+so any spill-over already samples the same color. `vb_tests` re-verified
+green (306/306), all 4 CTest cases pass.
+**Second same-day follow-up (user-reported):** whitish sparkly lines on
+distant/grazing surfaces (worst on open water near the horizon) even after
+the seam fix above. Different root cause: the atlas texture had no mipmaps,
+so GL_NEAREST always samples exactly one texel per screen pixel regardless
+of how much texture-space area that pixel actually covers -- far away or at
+a grazing angle, many atlas texels collapse into one screen pixel, and
+picking just one of them at random (aliasing) looks like shimmering noise;
+the placeholder textures' own per-pixel speckle jitter made it worse.
+Fixed in `TextureAtlas::upload()`: `GenTextureMipmaps()` + `SetTextureFilter
+(..., TEXTURE_FILTER_BILINEAR)` (bilinear *within* a mip level, sharp
+switching *between* levels -- deliberately not TRILINEAR, to avoid also
+blending in a coarser mip's own residual cross-cell bleed). Mipmap box-
+filtering halves each level's padding too, so `kPadding` went 1 -> 4 (a few
+halvings' worth of margin) in the same commit -- coarser mips than that can
+still bleed slightly, but by then minification is so extreme fog has
+already mixed the fragment down to the fog color regardless, so it isn't
+visible in practice. `vb_tests` re-verified green (306/306), all 4 CTest
+cases pass.
+Previous entry: 2026-09-18 (Phase 6.18 follow-up -- block self-heal: a block
 that stops taking punches now heals back to full over time instead of
 keeping an accumulated punch count forever. `ServerSession::PunchParams`
 gained `heal_after_seconds` (default 4.0, idle time since the last landed

@@ -60,6 +60,13 @@ struct S2CServerInfo {
 	std::string pack_version;
 	std::uint16_t engine_protocol_version = 0;
 	std::uint16_t tick_rate = 20;
+	// The server's own configured chunk view distance (server.toml's
+	// view_distance) -- unlike fog_params/move_params, there's no opt-in
+	// "nullopt means unset" here, the server always knows this about itself.
+	// Lets a client clamp its own (possibly larger) render_distance so its
+	// default fog distance never reaches past chunks the server will never
+	// actually stream to it (see src/client/main.cpp's enter_playing).
+	std::uint32_t view_distance = 8;
 	std::string motd;
 	AuthMode auth_mode = AuthMode::kNone;
 

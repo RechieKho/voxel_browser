@@ -42,6 +42,7 @@ void S2CServerInfo::encode(std::vector<std::byte> &out) const {
 	w.string(pack_version);
 	w.u16(engine_protocol_version);
 	w.u16(tick_rate);
+	w.u32(view_distance);
 	w.string(motd);
 	w.u8(static_cast<std::uint8_t>(auth_mode));
 }
@@ -53,6 +54,7 @@ Decoded<S2CServerInfo> S2CServerInfo::decode(std::span<const std::byte> in) {
 	m.pack_version = r.string();
 	m.engine_protocol_version = r.u16();
 	m.tick_rate = r.u16();
+	m.view_distance = r.u32();
 	m.motd = r.string();
 	m.auth_mode = static_cast<AuthMode>(r.u8());
 	if (!r.failed() && !valid(m.auth_mode)) {

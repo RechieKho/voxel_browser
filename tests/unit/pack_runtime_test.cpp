@@ -70,11 +70,53 @@ TEST_CASE("vb.register_block is idempotent and rejected after freeze") {
 	)");
 	REQUIRE(r1);
 	CHECK(registry.find("test:glow") != vb::core::BlockId::kAir);
+	CHECK(registry.light_emission(registry.find("test:glow")) == 15); // id2's call didn't reset it
 
 	rt.freeze();
 
 	const auto r2 = rt.load_pack_file(R"(vb.register_block({ name = "test:late" }))");
 	CHECK_FALSE(r2);
+}
+
+TEST_CASE("vb.register_block{texture=...} re-declaring an existing block attaches the texture "
+		  "without resetting fields it doesn't mention (real texture/atlas system)") {
+	// Mirrors content/base/blocks/stone.lua's/water.lua's own pattern: a pack
+	// file re-declares a block BlockRegistry::base() already hardcoded,
+	// purely to attach `texture` -- BlockRegistry::add_or_get is a no-op on
+	// an already-registered name (by design -- re-running init.lua must not
+	// reset an earlier call's fields), so PackRuntime falls back to the
+	// narrower BlockRegistry::set_texture() for this one field.
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("register_texture_existing"));
+
+	REQUIRE(rt.load_pack_file(R"(
+		vb.register_block({ name = "base:stone", solid = true, opaque = true,
+			liquid = false, light = 0, texture = "textures/stone.png" })
+	)"));
+
+	const auto stone = registry.find("base:stone");
+	CHECK(stone == vb::world::base_block::stone); // same id base() already assigned
+	CHECK(registry.get(stone).texture == "textures/stone.png");
+	CHECK(registry.is_solid(stone));
+	CHECK(registry.is_opaque(stone));
+	CHECK_FALSE(registry.is_liquid(stone));
+}
+
+TEST_CASE("vb.register_block{texture=...} is stored and defaults to empty (real texture/atlas system)") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("register_texture"));
+
+	REQUIRE(rt.load_pack_file(R"(
+		vb.register_block({ name = "test:textured", texture = "textures/textured.png" })
+		vb.register_block({ name = "test:untextured" })
+	)"));
+
+	const auto textured = registry.find("test:textured");
+	const auto untextured = registry.find("test:untextured");
+	CHECK(registry.get(textured).texture == "textures/textured.png");
+	CHECK(registry.get(untextured).texture.empty());
 }
 
 TEST_CASE("vb.register_block{region=...}: liquid defaults to opting in, "

@@ -6,7 +6,7 @@ bind_address       = "0.0.0.0"
 port               = 27015
 content_pack       = "content/base"
 max_players        = 16
-view_distance      = 8          # chunks
+view_distance      = 4          # chunks
 tick_rate          = 20         # Hz, clamped to 1..240
 world_seed         = 0          # 0 = random each startup
 gravity            = 24.0
