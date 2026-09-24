@@ -325,12 +325,31 @@ struct Singleplayer {
 	// rate above -- mirrors src/server/main.cpp's own tick loop so a pack
 	// behaves identically whether it's driven by a real dedicated server or
 	// this in-process one.
+	// Per-real-tick chunk ingest+relight budget (mirrors
+	// chunk_lifecycle.cpp's own kIngestBudgetPerTick default) -- see
+	// set_ingest_budget()'s doc for why this needs shrinking per catch-up
+	// step below instead of being spent in full on every one of them.
+	static constexpr std::size_t kBaseChunkIngestBudget = 32;
+
 	void tick(double dt) {
 		if (client_session) {
 			client_session->tick(dt);
 		}
 
 		tick_accum_ += dt;
+		// How many fixed steps this frame is about to run, capped the same way
+		// the loop below caps itself -- known up front since it's a pure
+		// function of tick_accum_/kFixedDt, so the ingest budget can be spread
+		// across them before the first step runs instead of after the fact.
+		const int expected_steps = std::min(kMaxStepsPerFrame,
+				static_cast<int>(tick_accum_ / kFixedDt));
+		if (vb::net::WorldReplicator *wr = server.world_replicator()) {
+			const std::size_t per_step_budget = expected_steps > 1
+					? std::max<std::size_t>(1,
+							  kBaseChunkIngestBudget / static_cast<std::size_t>(expected_steps))
+					: kBaseChunkIngestBudget;
+			wr->set_chunk_ingest_budget(per_step_budget);
+		}
 		int steps = 0;
 		while (tick_accum_ >= kFixedDt && steps < kMaxStepsPerFrame) {
 			server.tick(kFixedDt);

@@ -99,6 +99,14 @@ public:
 		lifecycle_.set_region_store(store);
 	}
 
+	// Forwarded straight to the owned ChunkLifecycleSystem -- see its
+	// set_ingest_budget() doc for why a caller driving several fixed-step
+	// catch-up ticks inside one rendered frame (Singleplayer::tick(),
+	// src/client/main.cpp) needs this.
+	void set_chunk_ingest_budget(std::size_t chunks_per_update) {
+		lifecycle_.set_ingest_budget(chunks_per_update);
+	}
+
 	const world::World &world() const { return world_; }
 	world::World &world() { return world_; }
 	std::size_t requested_chunk_count() const {

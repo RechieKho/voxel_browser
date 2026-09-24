@@ -20,6 +20,34 @@
 
 ## Current status (2026-09-25)
 
+**Same-day follow-up: fixed a singleplayer FPS dip during chunk streaming**
+(user-reported: "the frame rate dipped" while chunks loaded, distinct from
+the 2026-09-15 dip already fixed in `chunk_mesh_snapshot.cpp`). Root cause:
+`ChunkLifecycleSystem::update()`'s `kIngestBudgetPerTick` (32 chunks
+inserted+relit per call, `src/world/chunk_lifecycle.cpp`) was sized assuming
+one `update()` call per real tick interval -- true for a dedicated server,
+which sleeps between ticks, but not for `--singleplayer`'s
+`Singleplayer::tick()` (`src/client/main.cpp`), which runs a fixed-step
+catch-up loop of up to `kMaxStepsPerFrame` (5) server ticks inside a *single*
+rendered frame after any stall. Each step called `update()` with the full
+budget, so a stall could relight up to 5x32=160 chunks synchronously in one
+frame -- expensive enough (flood-fill sky+block light over ~32k voxels each)
+to cause the next frame's stall too, a self-sustaining stutter. Fixed with
+`ChunkLifecycleSystem::set_ingest_budget()` / `WorldReplicator::
+set_chunk_ingest_budget()` passthrough (new, both header-only setters);
+`Singleplayer::tick()` now computes `expected_steps` up front (pure function
+of `tick_accum_/kFixedDt`, capped the same as the loop below it) and divides
+the base budget across them before the catch-up loop runs, so one frame's
+total ingest work stays bounded to roughly the original per-tick budget
+regardless of how many steps it catches up on. A dedicated server never
+calls `set_chunk_ingest_budget()` at all, so its behavior (and the existing
+`kIngestBudgetPerTick`-sized test expectations) is unchanged. Full
+`vb_tests` 312/312 green, clean `voxel_browser`/`voxel_browser_server`
+rebuild, on `build-net-lua`. **Not fixed by this pass** (separate, still-open
+item, see §6 below): `WorldReplicator::tick()`'s per-player chunk *encode+
+send* loop is still an uncapped burst with no byte budget of its own --
+today's fix only bounds the ingest/relight side.
+
 Most recent landed item is **Phase 7.6: world persistence** (chunks now
 survive a `voxel_browser_server` restart), closing ARCHITECTURE_SPEC.md
 §18 row 5. **Reversed that row's 2026-09-17 "lean toward LMDB" direction

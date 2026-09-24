@@ -44,11 +44,23 @@ public:
 	// -- that's the caller's periodic sweep (see RegionStore::save_if_dirty).
 	void set_region_store(RegionStore *store) { region_store_ = store; }
 
+	// Overrides the default 32-chunks-per-update() ingest budget (see
+	// chunk_lifecycle.cpp's kDefaultIngestBudgetPerTick comment for why it
+	// exists at all). Callers that invoke update() more than once per real
+	// frame -- see Singleplayer::tick()'s fixed-step catch-up loop in
+	// src/client/main.cpp -- should shrink this proportionally so the *frame*
+	// pays the intended budget instead of update()'s caller count silently
+	// multiplying it; a caller that ticks once per frame never needs this.
+	void set_ingest_budget(std::size_t chunks_per_update) {
+		ingest_budget_ = chunks_per_update;
+	}
+
 private:
 	World &world_;
 	worldgen::WorldGenWorkerPool &pool_;
 	LightEngine light_;
 	RegionStore *region_store_ = nullptr;
+	std::size_t ingest_budget_ = 32; // see set_ingest_budget() / chunk_lifecycle.cpp
 	std::unordered_set<core::ChunkCoord> requested_;
 	std::vector<core::ChunkCoord> newly_ready_;
 	std::vector<core::ChunkCoord> unloaded_;

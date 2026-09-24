@@ -7,8 +7,8 @@
 
 namespace vb::world {
 
-namespace {
-// Caps how many just-finished chunks get inserted+relit per update() call.
+// Default (see ChunkLifecycleSystem::ingest_budget_ / set_ingest_budget()):
+// caps how many just-finished chunks get inserted+relit per update() call.
 // relight_column() cascades down through a whole loaded column per chunk
 // (up to ~2*vertical_view+1 relight_chunk() calls each), so ingesting an
 // unbounded batch is `O(chunks_finished_since_last_tick)` per call -- fine
@@ -24,8 +24,17 @@ namespace {
 // just waits in `backlog_` for the next update() call(s) -- polling it off
 // the pool is still unbounded (cheap: just moves pointers), only the
 // insert+relight work is paced.
-constexpr std::size_t kIngestBudgetPerTick = 32;
-} // namespace
+//
+// This constant assumes update() runs once per real tick interval, which is
+// true for a dedicated server (src/server/main.cpp sleeps between ticks) but
+// NOT for --singleplayer's in-process server: Singleplayer::tick()
+// (src/client/main.cpp) catches up on several fixed 1/20s steps inside one
+// rendered frame after any stall, calling this budget's full amount on each
+// step -- up to kMaxStepsPerFrame=5x in a single frame, which is itself
+// enough relight work to cause the next frame's stall (a self-sustaining
+// stutter loop). Singleplayer::tick() shrinks the budget via
+// set_ingest_budget() proportionally to how many catch-up steps it expects
+// to run that frame so the *frame*, not each individual step, pays this cost.
 
 ChunkLifecycleSystem::ChunkLifecycleSystem(World &world,
 		worldgen::WorldGenWorkerPool &pool, const BlockRegistry &registry) : world_(world),
@@ -55,7 +64,7 @@ void ChunkLifecycleSystem::update(const std::vector<core::ChunkCoord> &desired) 
 		// before the chunk above it exists yet.
 		std::vector<core::ChunkCoord> just_inserted;
 		std::size_t taken = 0;
-		while (taken < kIngestBudgetPerTick && !backlog_.empty()) {
+		while (taken < ingest_budget_ && !backlog_.empty()) {
 			std::unique_ptr<Chunk> chunk = std::move(backlog_.front());
 			backlog_.pop_front();
 			const core::ChunkCoord coord = chunk->coord();
