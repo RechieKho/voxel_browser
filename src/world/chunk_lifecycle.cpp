@@ -90,12 +90,30 @@ void ChunkLifecycleSystem::update(const std::vector<core::ChunkCoord> &desired) 
 
 	// 2. Request wanted chunks that are neither loaded nor in flight. A saved
 	//    chunk is loaded straight from disk, synchronously -- no reason to pay
-	//    for a worldgen submission when its real state is already known.
+	//    for a worldgen submission when its real state is already known. That
+	//    synchronous load+relight work shares (1)'s ingest_budget_ instead of
+	//    running unbounded: a persisted world's initial view box (e.g. ~2000
+	//    chunks at view_distance=8) would otherwise load+relight *all* of them
+	//    in a single update() call the first time a player (re)joins -- the
+	//    same unbounded-per-tick-work failure this file's ingest_budget_
+	//    comment already describes for the worldgen-finish path, just hit via
+	//    the disk-load path instead (blocks the tick, and the network send
+	//    that follows it, long enough that the client's loading-screen stall
+	//    deadline fires over a still-empty world). Once the budget's spent
+	//    this call, remaining coords are skipped entirely rather than routed
+	//    to pool_.submit() -- falling through to worldgen would regenerate,
+	//    and silently discard, a chunk that actually has saved data on disk.
+	//    They're retried (load-checked again) on a later tick.
+	std::size_t disk_loads = 0;
 	for (core::ChunkCoord coord : desired) {
 		if (world_.has_chunk(coord) || requested_.count(coord) != 0) {
 			continue;
 		}
 		if (region_store_ != nullptr) {
+			if (disk_loads >= ingest_budget_) {
+				continue;
+			}
+			++disk_loads;
 			if (std::unique_ptr<Chunk> loaded = region_store_->load(coord)) {
 				loaded->set_gen_state(GenState::kGenerated);
 				world_.insert_chunk(std::move(loaded));

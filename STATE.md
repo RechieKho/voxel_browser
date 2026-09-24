@@ -20,6 +20,28 @@
 
 ## Current status (2026-09-25)
 
+**Same-day follow-up #2: fixed the multiplayer loading screen dismissing over
+a still-empty world again** (user-reported regression, same symptom the
+original Phase 7.1 loading-screen bug had). Root cause: Phase 7.6's world
+persistence (below) added a *second*, unbudgeted synchronous-work path into
+`ChunkLifecycleSystem::update()` -- step 2's saved-chunk disk load+relight
+loop iterates the entire `desired` view box calling `region_store_->load()`
+synchronously with no cap, unlike step 1's `ingest_budget_`-bounded worldgen
+ingest right above it. Rejoining a previously-saved world with a real
+`voxel_browser_server` re-loads its *entire* initial view box (~2000 chunks
+at view_distance=8) from disk in one `update()` call, blocking that tick (and
+the network send that follows it) long enough that the client's 5s
+loading-screen stall deadline fires before any chunks arrive. Fixed by
+sharing `ingest_budget_` across both loops: step 2 now stops after
+`ingest_budget_` disk-load attempts (hit or miss) per `update()` call and
+leaves the rest for a later tick, instead of falling through to
+`pool_.submit()` for a deferred coord (which would silently regenerate --
+and discard -- a chunk that actually has saved data). Only fires when
+`persist_world` is on and rejoining a world with existing saves; a fresh
+world or `persist_world=false` is unaffected (matches `region_store_ ==
+nullptr` early-outs already in place). `vb_tests` 312/312 green on
+`build-net-lua`. See `src/world/chunk_lifecycle.cpp`'s step-2 comment.
+
 **Same-day follow-up: fixed a singleplayer FPS dip during chunk streaming**
 (user-reported: "the frame rate dipped" while chunks loaded, distinct from
 the 2026-09-15 dip already fixed in `chunk_mesh_snapshot.cpp`). Root cause:
@@ -546,7 +568,11 @@ Other undecided:
   backpressure — a larger view distance, denser world, or several players
   joining at once could still overflow it. Proper fix: a per-connection
   byte-budget-per-tick on the `diff.entered` send loop. **Revisit before
-  ever raising the shipped default view distance.**
+  ever raising the shipped default view distance.** Still open as of the
+  2026-09-25 disk-load-budget fix above — that fix bounds
+  `ChunkLifecycleSystem::update()`'s *ingest* side (worldgen + region-store
+  disk loads) per tick, not this *send* side; a large view box still leaves
+  in one uncapped burst once ingested.
 
 ---
 
