@@ -36,6 +36,15 @@ struct InputCmd {
 	// index i in the most recent S2C_KeybindRegistry is held this cmd; an
 	// unregistered key literally cannot be represented here.
 	std::uint32_t keybinds = 0;
+	// Entity-management follow-up (REMAINING_TASKS' "held item / hotbar
+	// selection" gap, Phase 6.20): which inventory slot (0-based) the player
+	// currently has selected. Client-local UI state, not a discrete action --
+	// reported every cmd exactly like `buttons`, so a dropped packet doesn't
+	// desync it. The engine assigns no meaning to the index beyond "which
+	// slot of this player's ecs::Inventory" -- a pack decides what "holding"
+	// slot N actually does (content/base/mechanics.lua reads it via
+	// player:get_held_item()).
+	std::uint8_t selected_slot = 0;
 
 	bool operator==(const InputCmd &) const = default;
 };

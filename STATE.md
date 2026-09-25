@@ -20,6 +20,49 @@
 
 ## Current status (2026-09-25)
 
+**Same-day follow-up #9: held item / hotbar selection** (entity-management
+follow-up, closes REMAINING_TASKS' 6.20 gap: "Placed block is still a
+hardcoded `base_stone_id` ... no 'held item'/hotbar-selection primitive
+exists"). Protocol bumped **21 -> 22**: `InputCmd` (`C2S_InputBatch`) gains a
+`u8 selected_slot` (0-based), reported every cmd like `buttons`/`keybinds`.
+Client (`src/client/main.cpp`) reads number keys 1-9 into a persistent local,
+gated on `mouse_captured` (so typing a digit into chat doesn't reselect),
+and outlines the selected hotbar slot. Server mirrors the latest value into
+`ecs::PlayerInput::selected_slot` (`ServerSession::handle_input_batch`),
+readable via `ServerSession::selected_slot(NetId)`; a pack's
+`vb.on("player_input", ...)` chain can override it too (input table's
+`selected_slot`, 1-based -- `PackRuntime::Impl`'s new
+`selected_slot_from_table`), same veto/replace shape as
+move/yaw/pitch/buttons/keybinds (`net::ServerSession::PlayerInputOverride`
+gains the field). New `PlayerHandle` methods `get_selected_slot()` (1-based,
+matches `get_inventory()`'s own array) and `get_held_item()` (resolves that
+slot against the real inventory, `nil` if out of range/empty). `content/
+base/mechanics.lua`'s right-click placing now reads `get_held_item()`
+instead of a hardcoded stone id, and spends one unit via `player:take()` on
+a successful placement -- closes the loop with break -> drop -> pickup ->
+inventory that already existed, instead of an infinite dispenser.
+**Gotcha:** adding these two methods to `PlayerHandle`'s sol2 `new_usertype`
+(already 20+ methods) pushed `pack_runtime.cpp` over MSVC's object-file
+section-count ceiling (`fatal error C1128: ... compile with /bigobj`) --
+fixed with a per-source `/bigobj` in `src/script/CMakeLists.txt`. Getting
+*that* to actually apply was its own gotcha: `set_source_files_properties()`
+is scoped to the directory it's *called from*, not the directory the
+consuming target is defined in -- `vb_core` is defined in
+`src/core/CMakeLists.txt`, so setting the property from
+`src/script/CMakeLists.txt` (the file's own directory, where it's
+`target_sources()`'d into `vb_core`) silently never reached the actual
+compile rule until adding CMake 3.18's `TARGET_DIRECTORY vb_core` argument
+to the call. Verified: full `vb_tests` 342/342 green (a `netcode_test.cpp`
+round-trip case for `InputCmd::selected_slot`, a `pack_runtime_test.cpp`
+case for `get_held_item()`/`get_selected_slot()`'s no-session default, a
+`pack_runtime_integration_test.cpp` case proving a real client's
+`InputCmd::selected_slot` reaches both accessors end-to-end), clean build of
+`vb_tests`/`voxel_browser`/`voxel_browser_server` on `build-net-lua`. The
+actual hotbar-highlight rendering (a human pressing 1-9 and watching the
+outline move) was **not** manually eyeballed -- no GUI in this agent
+environment, same still-open caveat as every other recent rendering-adjacent
+pass.
+
 **Same-day follow-up #8: per-instance `ScriptState.visual_override` (skins)**
 (REMAINING_TASKS' Phase 4 item left open by follow-up #6/#7 above, spec
 `architecture_spec/rendering.md` §11.3's "Per-instance override"). New third,

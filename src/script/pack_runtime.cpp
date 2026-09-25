@@ -169,7 +169,8 @@ constexpr int kMaxTimerCatchUpFires = 8; // anti-stall guard for vb.every after 
 // only registered keybind names ever appear as `keybinds` keys.
 sol::table build_input_table(sol::state &lua, core::Vec3f move, float yaw,
 		float pitch, std::uint8_t buttons, std::uint32_t keybinds,
-		const std::vector<std::string> &keybind_names, double dt) {
+		const std::vector<std::string> &keybind_names, double dt,
+		std::uint8_t selected_slot) {
 	sol::table t = lua.create_table();
 	sol::table move_t = lua.create_table();
 	move_t["x"] = move.x;
@@ -200,6 +201,11 @@ sol::table build_input_table(sol::state &lua, core::Vec3f move, float yaw,
 		keybinds_t[keybind_names[i]] = (keybinds & (1u << i)) != 0;
 	}
 	t["keybinds"] = keybinds_t;
+
+	// Entity-management follow-up (held item / hotbar selection): 1-based to
+	// match player:get_inventory()'s own 1-based array, unlike the wire's
+	// 0-based InputCmd::selected_slot.
+	t["selected_slot"] = static_cast<int>(selected_slot) + 1;
 	return t;
 }
 
@@ -251,6 +257,18 @@ std::uint32_t keybinds_from_table(const sol::table &t, std::uint32_t fallback,
 		}
 	}
 	return out;
+}
+
+// Reconstructs InputCmd::selected_slot (0-based) from a handler's returned
+// `selected_slot` field (1-based, matching build_input_table's own
+// convention) -- absent/non-number keeps `fallback` (already 0-based)
+// unchanged.
+std::uint8_t selected_slot_from_table(const sol::table &t, std::uint8_t fallback) {
+	const sol::optional<int> one_based = t.get<sol::optional<int>>("selected_slot");
+	if (!one_based || *one_based < 1) {
+		return fallback;
+	}
+	return static_cast<std::uint8_t>(*one_based - 1);
 }
 
 // Named frame-size variants, exactly architecture_spec/rendering.md §11.3's
@@ -786,6 +804,37 @@ struct PlayerHandle {
 		return t;
 	}
 
+	// Entity-management follow-up (held item / hotbar selection, Phase
+	// 6.20): 1-based, matching get_inventory()'s own 1-based array -- a pack
+	// never has to think in the wire's 0-based InputCmd::selected_slot.
+	int get_selected_slot() const {
+		if (rt->session == nullptr) {
+			return 1;
+		}
+		return static_cast<int>(rt->session->selected_slot(net_id)) + 1;
+	}
+
+	// The inventory slot currently selected, or nil if that slot is out of
+	// range or empty -- resolves get_selected_slot() against this player's
+	// actual inventory (the engine has no idea a "hotbar" exists, only a
+	// selected index; a pack decides what holding an empty slot means).
+	sol::object get_held_item(sol::this_state ts) const {
+		sol::state_view lua(ts);
+		const std::vector<ecs::ItemStack> &slots = rt->inventories[net_id].slots;
+		const int index = get_selected_slot() - 1;
+		if (index < 0 || static_cast<std::size_t>(index) >= slots.size()) {
+			return sol::lua_nil;
+		}
+		const ecs::ItemStack &stack = slots[static_cast<std::size_t>(index)];
+		if (stack.item == core::BlockId::kAir || stack.count == 0) {
+			return sol::lua_nil;
+		}
+		sol::table s = lua.create_table();
+		s["item"] = static_cast<std::uint16_t>(stack.item);
+		s["count"] = stack.count;
+		return s;
+	}
+
 	void send_message(std::string_view text) const {
 		if (rt->session == nullptr) {
 			return;
@@ -998,7 +1047,9 @@ void PackRuntime::Impl::install_bindings() {
 			&PlayerHandle::take, "get_name", &PlayerHandle::get_name, "damage",
 			&PlayerHandle::damage, "break_block", &PlayerHandle::break_block,
 			"place_block", &PlayerHandle::place_block, "punch",
-			&PlayerHandle::punch);
+			&PlayerHandle::punch, "get_selected_slot",
+			&PlayerHandle::get_selected_slot, "get_held_item",
+			&PlayerHandle::get_held_item);
 
 	sol::table vb = lua.create_named_table("vb");
 
@@ -2050,6 +2101,7 @@ net::ServerSession::InputHookResult PackRuntime::Impl::run_player_input(
 	float pitch = cmd.pitch;
 	std::uint8_t buttons = cmd.buttons;
 	std::uint32_t keybinds = cmd.keybinds;
+	std::uint8_t selected_slot = cmd.selected_slot;
 	bool changed = false;
 
 	PlayerHandle p{ id, this };
@@ -2058,7 +2110,8 @@ net::ServerSession::InputHookResult PackRuntime::Impl::run_player_input(
 			continue;
 		}
 		sol::table input_t = build_input_table(lua_state(), move, yaw, pitch,
-				buttons, keybinds, keybind_names, static_cast<double>(cmd.dt));
+				buttons, keybinds, keybind_names, static_cast<double>(cmd.dt),
+				selected_slot);
 		vm.begin_call_budget();
 		sol::protected_function_result r = fn(p, input_t);
 		if (!r.valid()) {
@@ -2097,12 +2150,15 @@ net::ServerSession::InputHookResult PackRuntime::Impl::run_player_input(
 				keybinds_from_table(t, keybinds, keybind_names);
 		changed = changed || new_keybinds != keybinds;
 		keybinds = new_keybinds;
+		const std::uint8_t new_selected_slot =
+				selected_slot_from_table(t, selected_slot);
+		changed = changed || new_selected_slot != selected_slot;
+		selected_slot = new_selected_slot;
 	}
 
 	if (changed) {
-		result.replacement =
-				net::ServerSession::PlayerInputOverride{ move, yaw, pitch, buttons,
-					keybinds };
+		result.replacement = net::ServerSession::PlayerInputOverride{ move, yaw,
+			pitch, buttons, keybinds, selected_slot };
 	}
 	return result;
 }

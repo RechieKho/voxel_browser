@@ -59,6 +59,10 @@ struct PlayerInput {
 	float pitch = 0.0f;
 	std::uint8_t buttons = 0;
 	std::uint32_t last_seq = 0; // highest input seq applied
+	// Entity-management follow-up (held item / hotbar selection, Phase
+	// 6.20): mirrors the latest processed InputCmd::selected_slot, same
+	// "last one wins" posture as buttons/keybinds above.
+	std::uint8_t selected_slot = 0;
 };
 
 struct Health {

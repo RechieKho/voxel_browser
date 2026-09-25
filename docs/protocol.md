@@ -4,8 +4,23 @@
 > as any change to a struct in `inc/vb/protocol/`, and bump
 > `kEngineProtocolVersion` in `cmake/version.hpp.in`.
 
-Current `ENGINE_PROTOCOL_VERSION`: **21**.
+Current `ENGINE_PROTOCOL_VERSION`: **22**.
 
+- **22** — `InputCmd` (within `C2S_InputBatch`, 80) gains a `u8 selected_slot`
+  field, appended after `keybinds`: which inventory slot (0-based) the player
+  currently has selected, reported every cmd exactly like `buttons`/
+  `keybinds` (entity-management follow-up, REMAINING_TASKS' "held item /
+  hotbar selection" gap, Phase 6.20). The engine assigns no meaning to the
+  index beyond "which slot of this player's inventory" — `ServerSession`
+  just mirrors the latest value into `ecs::PlayerInput::selected_slot`
+  (`net::ServerSession::selected_slot()` reads it back); a pack decides what
+  "holding" that slot means via the new `player:get_selected_slot()`/
+  `player:get_held_item()` Lua primitives (`content/base/mechanics.lua`'s
+  right-click placing now reads the held item instead of a hardcoded
+  `base_stone_id`). A pack's `vb.on("player_input", ...)` handler can also
+  override it (the input table's `selected_slot`, 1-based to match
+  `player:get_inventory()`'s own 1-based array), same override shape as
+  `move`/`yaw`/`pitch`/`buttons`/`keybinds`.
 - **21** — `EntityRecord` (within `S2C_EntitySnapshot`, 60) gains an optional
   `visual_override` field: a script entity's per-instance visual override
   (`vb.world.spawn(kind, pos, {visual_override = {...}})`, entity-management
@@ -284,9 +299,12 @@ prediction/reconciliation (spec §8.4).
 
 `InputCmd` = `u32 seq`, `f32 dt`, `f32×3 move` (x=strafe, y=up/fly, z=forward, [-1,1]),
 `f32 yaw`, `f32 pitch`, `u8 buttons` (bit0 jump, bit1 sprint, bit2 primary,
-bit3 secondary, bit4 fly-up, bit5 fly-down). Sent every client frame; each batch
-resends recent unacked commands. The server simulates any `seq` above the last it
-has run and acks the highest via `S2C_EntitySnapshot.last_acked_input_seq`.
+bit3 secondary, bit4 fly-up, bit5 fly-down), `u32 keybinds` (bit *i* = the
+keybind at index *i* of the most recent `S2C_KeybindRegistry` is held, Phase
+6.3), `u8 selected_slot` (which inventory slot is selected, version 22). Sent
+every client frame; each batch resends recent unacked commands. The server
+simulates any `seq` above the last it has run and acks the highest via
+`S2C_EntitySnapshot.last_acked_input_seq`.
 
 ### Asset sync — `inc/vb/protocol/assetsync.hpp` (implemented)
 

@@ -19,6 +19,7 @@ void C2SInputBatch::encode(std::vector<std::byte> &out) const {
 		w.f32(c.pitch);
 		w.u8(c.buttons);
 		w.u32(c.keybinds);
+		w.u8(c.selected_slot);
 	}
 }
 
@@ -41,6 +42,7 @@ Decoded<C2SInputBatch> C2SInputBatch::decode(std::span<const std::byte> in) {
 		c.pitch = r.f32();
 		c.buttons = r.u8();
 		c.keybinds = r.u32();
+		c.selected_slot = r.u8();
 		m.cmds.push_back(c);
 	}
 	r.expect_consumed();

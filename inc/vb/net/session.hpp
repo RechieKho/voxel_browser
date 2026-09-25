@@ -102,6 +102,14 @@ public:
 	// connection.
 	std::optional<physics::MoveState> player_move_state(core::NetId id) const;
 
+	// Entity-management follow-up (held item / hotbar selection, Phase
+	// 6.20): the latest `InputCmd::selected_slot` reported by a playing
+	// connection (post `vb.on("player_input", ...)` override, if any), or 0
+	// if `id` isn't a playing connection. Meaningless on its own -- a
+	// script host resolves it against that player's actual inventory
+	// (`PlayerHandle::get_held_item()`).
+	std::uint8_t selected_slot(core::NetId id) const;
+
 	// Phase 4.2 (Lua entity/player API): directly set a connected player's
 	// authoritative velocity. No-op if `id` isn't a playing connection.
 	void set_player_velocity(core::NetId id, core::Vec3d vel);
@@ -226,6 +234,7 @@ public:
 		float pitch = 0.0f;
 		std::uint8_t buttons = 0;
 		std::uint32_t keybinds = 0;
+		std::uint8_t selected_slot = 0;
 	};
 	struct InputHookResult {
 		bool veto = false;

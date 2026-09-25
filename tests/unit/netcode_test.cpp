@@ -44,6 +44,7 @@ TEST_CASE("C2SInputBatch round-trips") {
 	in.cmds = { forward_cmd(1), forward_cmd(2), forward_cmd(3) };
 	in.cmds[2].buttons = vb::protocol::kInputJump | vb::protocol::kInputSprint;
 	in.cmds[2].keybinds = 0b101u; // Phase 6.3: bits 0 and 2
+	in.cmds[2].selected_slot = 7; // held item / hotbar selection follow-up
 
 	std::vector<std::byte> bytes;
 	in.encode(bytes);
@@ -56,6 +57,8 @@ TEST_CASE("C2SInputBatch round-trips") {
 			(vb::protocol::kInputJump | vb::protocol::kInputSprint));
 	CHECK(out->cmds[2].keybinds == 0b101u);
 	CHECK(out->cmds[0].keybinds == 0u);
+	CHECK(out->cmds[2].selected_slot == 7);
+	CHECK(out->cmds[0].selected_slot == 0);
 	CHECK(out->cmds[0].move.z == doctest::Approx(1.0));
 }
 

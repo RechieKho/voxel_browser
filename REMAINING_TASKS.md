@@ -400,10 +400,58 @@ Full detail: `remaining_tasks/phase6.md`.
       to `ui.define_hud` — 6.16.
 - [ ] No punch-rate cooldown enforced engine-side; no swing animation; PvP has
       no armor/cooldown/knockback — 6.18, deliberate scope cuts.
-- [ ] Placed block is still a hardcoded `base_stone_id` in
-      `content/base/mechanics.lua`, not read from a selected hotbar/
-      inventory slot — 6.20; no "held item"/hotbar-selection primitive
-      exists anywhere yet for a pack to read from.
+- [x] Held item / hotbar selection — landed 2026-09-25 (entity-management
+      follow-up, closes 6.20's own gap). Placing used to always place a
+      hardcoded `base_stone_id` regardless of what the player was carrying,
+      because no primitive existed anywhere for a pack to ask "what slot is
+      this player's hotbar on, and what's in it". Wire protocol bumped
+      **21 -> 22**: `InputCmd` (within `C2S_InputBatch`) gains a `u8
+      selected_slot` (0-based), reported every cmd exactly like `buttons`/
+      `keybinds` — the client (`src/client/main.cpp`) reads number keys 1-9
+      into a persistent `selected_slot` local (gated on `mouse_captured`,
+      same as movement/break/place, so typing a digit into an open chat box
+      never changes it) and outlines the selected slot in the hotbar HUD.
+      Server-side, `ecs::PlayerInput::selected_slot` mirrors the latest
+      processed value (`ServerSession::handle_input_batch`), readable via
+      the new `ServerSession::selected_slot(NetId)`; a pack's
+      `vb.on("player_input", ...)` handler chain can also override it (the
+      input table's `selected_slot`, 1-based to match
+      `player:get_inventory()`'s own 1-based array — reconstruction lives in
+      `PackRuntime::Impl`'s new `selected_slot_from_table`), same
+      veto/replace shape `net::ServerSession::PlayerInputOverride` already
+      gave `move`/`yaw`/`pitch`/`buttons`/`keybinds`. Two new Lua primitives
+      on `PlayerHandle` close the actual gap: `player:get_selected_slot()`
+      (1-based) and `player:get_held_item()` (resolves that slot against the
+      player's real inventory — `nil` if the slot is out of range or empty,
+      the same shape `get_inventory()`'s own entries use). `content/base/
+      mechanics.lua`'s right-click placing now reads `player:get_held_item()`
+      instead of the hardcoded stone id — an empty/out-of-range slot places
+      nothing, and a successful placement spends one unit via
+      `player:take()`, so placing is a real inventory drain now (matches
+      the existing break -> drop -> pickup -> inventory loop) rather than an
+      infinite stone dispenser. **Gotcha hit while wiring the Lua bindings:**
+      `pack_runtime.cpp`'s `PlayerHandle` usertype (20+ methods, all through
+      sol2's template-heavy `new_usertype`) was already close enough to
+      MSVC's object-file section-count ceiling that adding these two pushed
+      it over (`fatal error C1128: number of sections exceeded object file
+      format limit: compile with /bigobj`) — fixed with a per-source
+      `/bigobj` on `pack_runtime.cpp` only (`src/script/CMakeLists.txt`);
+      a second gotcha on the way there: `set_source_files_properties()` is
+      directory-scoped to where it's *called*, not where the consuming
+      target is defined, so setting it from `src/script/CMakeLists.txt` (as
+      first tried) silently never reached `vb_core`'s build rule (defined in
+      `src/core/CMakeLists.txt`) until adding CMake 3.18's
+      `TARGET_DIRECTORY vb_core` argument. Verified: full `vb_tests`
+      (see `STATE.md`'s "Current status" for the pass/fail count) green,
+      including a new `netcode_test.cpp` round-trip case for
+      `InputCmd::selected_slot`, a `pack_runtime_test.cpp` case for
+      `get_held_item()`/`get_selected_slot()`'s no-session default, and a
+      `pack_runtime_integration_test.cpp` case proving a real client's
+      `InputCmd::selected_slot` reaches both accessors end-to-end. The
+      actual hotbar-highlight rendering (a human pressing 1-9 and watching
+      the outline move) was **not** manually eyeballed — no GUI in this
+      agent environment, same still-open caveat as every other recent
+      rendering-adjacent pass.
 - [x] **6.21:** block-edit reach and punch reach unified into one
       pack-overridable `net::ActionParams::reach` (`inc/vb/net/
       world_replicator.hpp`), replacing both `WorldReplicator`'s old

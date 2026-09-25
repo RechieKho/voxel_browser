@@ -141,6 +141,7 @@ void ServerSession::handle_input_batch(Conn &conn,
 				effective.pitch = hook.replacement->pitch;
 				effective.buttons = hook.replacement->buttons;
 				effective.keybinds = hook.replacement->keybinds;
+				effective.selected_slot = hook.replacement->selected_slot;
 			}
 		}
 		// The spawn chunk may still be generating (async worldgen worker) --
@@ -158,6 +159,7 @@ void ServerSession::handle_input_batch(Conn &conn,
 					move_params_, world);
 		}
 		input.last_seq = cmd.seq;
+		input.selected_slot = effective.selected_slot;
 		rot.yaw = effective.yaw;
 		rot.pitch = effective.pitch;
 	}
@@ -554,6 +556,16 @@ std::optional<physics::MoveState> ServerSession::player_move_state(core::NetId i
 		}
 	}
 	return std::nullopt;
+}
+
+std::uint8_t ServerSession::selected_slot(core::NetId id) const {
+	for (const auto &[conn, state] : conns_) {
+		(void)conn;
+		if (state.playing && state.net_id == id) {
+			return registry_.get<ecs::PlayerInput>(state.entity).selected_slot;
+		}
+	}
+	return 0;
 }
 
 void ServerSession::set_player_velocity(core::NetId id, core::Vec3d vel) {

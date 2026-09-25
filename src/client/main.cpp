@@ -498,12 +498,14 @@ constexpr CustomKeybind kCustomKeybinds[] = {
 
 vb::protocol::InputCmd sample_input_cmd(std::uint32_t seq, double dt, double yaw,
 		double pitch, bool mouse_captured, const MovementBindings &bindings,
-		const std::vector<std::string> &keybind_names = {}) {
+		const std::vector<std::string> &keybind_names = {},
+		std::uint8_t selected_slot = 0) {
 	vb::protocol::InputCmd cmd;
 	cmd.seq = seq;
 	cmd.dt = static_cast<float>(dt);
 	cmd.yaw = static_cast<float>(yaw);
 	cmd.pitch = static_cast<float>(pitch);
+	cmd.selected_slot = selected_slot;
 	if (mouse_captured) {
 		const bool forward = IsKeyDown(bindings.forward);
 		const bool back = IsKeyDown(bindings.back);
@@ -882,6 +884,13 @@ int main(int argc, char **argv) {
 	std::unique_ptr<vb::render::ChunkRenderer> chunk_renderer;
 	std::unique_ptr<vb::render::EntityRenderer> entity_renderer;
 	bool mouse_captured = false;
+	// Entity-management follow-up (held item / hotbar selection): which
+	// inventory slot (0-based) number keys 1-9 have selected, persisted
+	// across frames like input_seq above -- sample_input_cmd only ever reads
+	// this, number-key handling lives in the kPlaying loop below, gated on
+	// mouse_captured the same way movement/break/place input already is (so
+	// typing "1" into an open chat box never changes it).
+	std::uint8_t selected_slot = 0;
 
 	// Phase 6.17: the client-local physical-key-to-action map for movement +
 	// break/place (see MovementBindings' own comment above). One instance,
@@ -1298,6 +1307,19 @@ int main(int argc, char **argv) {
 					DisableCursor();
 				}
 
+				// Hotbar selection (entity-management follow-up): keys 1-9 pick
+				// inventory slot 0-8. Gated on mouse_captured, same as
+				// movement/break/place below, so typing a digit into an open
+				// chat box or UI never changes it.
+				if (mouse_captured) {
+					for (int i = 0; i < 9; ++i) {
+						if (IsKeyPressed(KEY_ONE + i)) {
+							selected_slot = static_cast<std::uint8_t>(i);
+							break;
+						}
+					}
+				}
+
 				// Look only — position is authoritative, driven by input commands
 				// and corrected by the server via prediction/reconciliation
 				// (spec §8.4).
@@ -1312,7 +1334,8 @@ int main(int argc, char **argv) {
 				{
 					const vb::protocol::InputCmd cmd = sample_input_cmd(++input_seq, dt,
 							controller.yaw(), controller.pitch(), mouse_captured,
-							movement_bindings, client->registered_keybinds());
+							movement_bindings, client->registered_keybinds(),
+							selected_slot);
 					client->push_input(cmd);
 					// Singleplayer ticks the whole embedded game (client + server,
 					// over loopback); a real connection just pumps this client's
@@ -1519,11 +1542,12 @@ int main(int argc, char **argv) {
 				}
 
 				// Hotbar (spec §5.1): a real inventory sync now exists
-				// (S2C_Inventory) even though there's no dedicated slot-select
-				// input yet -- just render every slot the server last sent,
-				// bottom-center, block name + count. Textures/atlas (5.1's own
-				// deferred item) aren't wired to anything client-side yet, so
-				// this is text-only like ui/inventory.lua's own known gap.
+				// (S2C_Inventory) -- renders every slot the server last sent,
+				// bottom-center, block name + count, outlining whichever slot
+				// number keys 1-9 selected (entity-management follow-up, above).
+				// Textures/atlas (5.1's own deferred item) aren't wired to
+				// anything client-side yet, so this is text-only like
+				// ui/inventory.lua's own known gap.
 				{
 					const auto &inv = client->inventory();
 					if (!inv.empty()) {
@@ -1534,9 +1558,17 @@ int main(int argc, char **argv) {
 						const int total_w = static_cast<int>(inv.size()) * (kSlotW + kGap) - kGap;
 						int x = (GetScreenWidth() - total_w) / 2;
 						const int y = GetScreenHeight() - kSlotH - 16;
-						for (const auto &slot : inv) {
+						for (std::size_t slot_idx = 0; slot_idx < inv.size(); ++slot_idx) {
+							const auto &slot = inv[slot_idx];
 							DrawRectangle(x, y, kSlotW, kSlotH, Color{ 30, 30, 34, 200 });
-							DrawRectangleLines(x, y, kSlotW, kSlotH, Color{ 90, 90, 100, 230 });
+							// Entity-management follow-up: outline whichever slot
+							// number keys 1-9 currently selected, so a player can
+							// see what player:get_held_item() will resolve to.
+							const bool selected =
+									slot_idx == static_cast<std::size_t>(selected_slot);
+							DrawRectangleLines(x, y, kSlotW, kSlotH,
+									selected ? Color{ 230, 220, 120, 255 }
+											 : Color{ 90, 90, 100, 230 });
 							std::string name = registry.contains(slot.item)
 									? registry.get(slot.item).name
 									: "?";

@@ -32,11 +32,19 @@ local was_secondary_down = {}
 -- at all (6.17's own writeup flagged this: "Placing (RMB, always instant) is
 -- unaffected"). This closes that gap the same way 6.18 closed it for
 -- breaking/punching: the client only reports raw input.buttons.secondary,
--- this handler decides *when* (rising edge) and *what* (base_stone_id, the
--- same block the old hardcoded path placed) via player:place_block(), and
--- the engine only ever runs the validated edit primitive
--- (apply_script_block_edit -- reach check, hooks, fan-out), same as
--- break_block().
+-- this handler decides *when* (rising edge) and *what* via
+-- player:place_block(), and the engine only ever runs the validated edit
+-- primitive (apply_script_block_edit -- reach check, hooks, fan-out), same
+-- as break_block().
+--
+-- Entity-management follow-up (REMAINING_TASKS' "held item / hotbar
+-- selection" gap): "what" used to be a hardcoded base_stone_id regardless of
+-- what the player was even carrying. Now reads player:get_held_item() (the
+-- new selected-slot primitive, Phase 6.20) -- an empty/out-of-range slot
+-- places nothing at all, and a successful placement spends one unit of the
+-- held stack via player:take() the same way crafting already spends
+-- ingredients, so placing is a real inventory drain now instead of an
+-- infinite stone dispenser.
 --
 vb.on("player_input", function(player, input)
 	local name = player:get_name()
@@ -63,10 +71,14 @@ vb.on("player_input", function(player, input)
 		local eye_height = vb.physics.get_params().eye_height
 		local reach = vb.action.get_params().reach
 		local origin = { x = pos.x, y = pos.y + eye_height, z = pos.z }
-		local hit = vb.world.raycast(origin, dir, reach)
+		local held = player:get_held_item()
+		local hit = held and vb.world.raycast(origin, dir, reach)
 		if hit then
-			player:place_block(
-					hit.x + hit.nx, hit.y + hit.ny, hit.z + hit.nz, base_stone_id)
+			local placed = player:place_block(
+					hit.x + hit.nx, hit.y + hit.ny, hit.z + hit.nz, held.item)
+			if placed then
+				player:take({ item = held.item, count = 1 })
+			end
 		end
 	end
 	was_secondary_down[name] = secondary

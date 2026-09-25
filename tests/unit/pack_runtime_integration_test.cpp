@@ -504,6 +504,82 @@ TEST_CASE("pack script vetoes and replaces player input via a handler chain") {
 			pos_after_dash.z != pos_after_veto.z));
 }
 
+TEST_CASE("player:get_selected_slot()/get_held_item() track a real client's "
+		  "InputCmd::selected_slot") {
+	LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("held_item_live"));
+	REQUIRE(rt.load_pack_file(R"(
+		last_selected_slot = nil
+		last_held_item = "unset"
+		vb.on("chat", function(player, text)
+			if text == "give" then
+				player:give({ item = 5, count = 9 })
+				return false
+			elseif text == "check" then
+				last_selected_slot = player:get_selected_slot()
+				local held = player:get_held_item()
+				last_held_item = held and held.item or nil
+				return false
+			end
+			return true
+		end)
+	)"));
+	rt.freeze();
+
+	HandshakeServerConfig cfg;
+	cfg.world_seed = 7;
+	ServerSession server(net.server(), cfg);
+	rt.attach_session(server);
+	REQUIRE(net.server().listen(0));
+
+	Transport &ta = net.create_client();
+	auto ida = ta.connect("x", 0);
+	REQUIRE(ida);
+	ClientSession client(ta, *ida, HandshakeClientConfig{ "A", "", "v", 1 });
+
+	auto pump = [&](int n) {
+		for (int i = 0; i < n; ++i) {
+			server.tick(0.05);
+			client.tick(0.05);
+			rt.dispatch_tick(0.05);
+		}
+	};
+	pump(16);
+	REQUIRE(client.joined());
+
+	// Before any InputCmd carries a selected_slot, the default (slot 1,
+	// index 0) applies.
+	client.send_chat("check");
+	pump(4);
+	REQUIRE(rt.load_pack_file("assert(last_selected_slot == 1)"));
+
+	// give() puts one stack of item 5 into slot 1 -- slot 1 is still what's
+	// "held" until the client selects something else.
+	client.send_chat("give");
+	pump(4);
+	client.send_chat("check");
+	pump(4);
+	REQUIRE(rt.load_pack_file("assert(last_held_item == 5)"));
+
+	// Now select slot index 4 (5th slot, empty) via a real InputCmd -- the
+	// wire's 0-based selected_slot should surface as Lua's 1-based slot 5,
+	// with nothing held there.
+	vb::protocol::InputCmd cmd;
+	cmd.seq = 1;
+	cmd.dt = 0.05f;
+	cmd.selected_slot = 4;
+	client.push_input(cmd);
+	pump(4);
+	client.send_chat("check");
+	pump(4);
+	REQUIRE(rt.load_pack_file(R"(
+		assert(last_selected_slot == 5)
+		assert(last_held_item == nil)
+	)"));
+}
+
 TEST_CASE("player_leave dispatch fires with the right net id") {
 	LoopbackNetwork net;
 	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();

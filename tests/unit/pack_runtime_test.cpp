@@ -770,6 +770,41 @@ TEST_CASE("player:take() removes items across slots, all-or-nothing") {
 	CHECK_FALSE(rt.dispatch_chat(id, "check-remaining").veto); // 2 left
 }
 
+TEST_CASE("player:get_held_item() resolves get_selected_slot() against the "
+		  "real inventory") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("held_item"));
+
+	// No ServerSession attached (same "inventory-only" seam the take() test
+	// above uses) -- get_selected_slot() falls back to slot 1 (index 0) with
+	// no session to ask, exactly like every other accessor here that no-ops
+	// without one attached.
+	REQUIRE(rt.load_pack_file(R"(
+		vb.on("chat", function(player, text)
+			if text == "check-default-slot" then
+				return player:get_selected_slot() == 1
+			elseif text == "check-empty-held" then
+				return player:get_held_item() == nil
+			elseif text == "give" then
+				player:give({ item = 5, count = 3 })
+				return true
+			elseif text == "check-held" then
+				local held = player:get_held_item()
+				return held ~= nil and held.item == 5 and held.count == 3
+			end
+			return true
+		end)
+	)"));
+	rt.freeze();
+
+	const vb::core::NetId id{ 1 };
+	CHECK_FALSE(rt.dispatch_chat(id, "check-default-slot").veto);
+	CHECK_FALSE(rt.dispatch_chat(id, "check-empty-held").veto); // no session and empty inventory
+	CHECK_FALSE(rt.dispatch_chat(id, "give").veto);
+	CHECK_FALSE(rt.dispatch_chat(id, "check-held").veto); // slot 1 now holds the given item
+}
+
 TEST_CASE("player:give() combines into existing slots up to max_stack, then starts new ones") {
 	vb::net::LoopbackNetwork net;
 	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
