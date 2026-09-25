@@ -1,6 +1,7 @@
 # Engine modules + executables. One add_subdirectory per module (spec §4).
 
 add_subdirectory(core)
+add_subdirectory(ecs)
 add_subdirectory(protocol)
 add_subdirectory(world)
 add_subdirectory(worldgen)

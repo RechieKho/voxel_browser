@@ -166,6 +166,13 @@ void ServerSession::handle_input_batch(Conn &conn,
 	collider.on_ground = move.on_ground;
 	conn.input_driven = true;
 
+	// Upserted immediately, not deferred to system_sync_interest()'s once-
+	// per-tick pass: several other network_io-phase handlers this same tick
+	// (handle_block_edit, handle_block_break_begin/stop, punch(), and
+	// update_region_occupancy()/update_item_drops() later this tick) read
+	// interest_ expecting this player's just-simulated position, not last
+	// tick's. system_sync_interest() covers script entities, which have no
+	// such synchronous readers.
 	replication::EntityState s;
 	if (const auto *e = interest_.get(conn.net_id)) {
 		s = *e;
@@ -188,8 +195,12 @@ void ServerSession::handle_block_edit(ConnId conn, Conn &state,
 	if (!edit) {
 		return;
 	}
-	const replication::EntityState *e = interest_.get(state.net_id);
-	core::Vec3d eye = e ? e->pos : core::Vec3d{};
+	// Read straight from the registry, not interest_: interest_ is only
+	// refreshed once per tick (system_sync_interest, after all of this
+	// tick's messages are processed) -- a block edit arriving in the same
+	// message batch as a fresh input move needs this tick's position, not
+	// last tick's stale mirror.
+	core::Vec3d eye = registry_.get<ecs::Position>(state.entity).value;
 	eye.y += move_params_.eye_height;
 
 	protocol::S2CBlockEditResult result;
@@ -212,8 +223,24 @@ bool ServerSession::apply_script_block_edit(core::NetId editor,
 	if (!replicator_) {
 		return false;
 	}
-	const replication::EntityState *e = interest_.get(editor);
-	core::Vec3d eye = e ? e->pos : core::Vec3d{};
+	core::Vec3d eye{};
+	bool found = false;
+	for (auto &[conn, state] : conns_) {
+		(void)conn;
+		if (state.playing && state.net_id == editor) {
+			eye = registry_.get<ecs::Position>(state.entity).value;
+			found = true;
+			break;
+		}
+	}
+	if (!found) {
+		// Not a live player conn -- may be a script entity id; interest_ is
+		// still a fine fallback here since script entities don't move
+		// mid-tick the way player input does.
+		if (const replication::EntityState *e = interest_.get(editor)) {
+			eye = e->pos;
+		}
+	}
 	eye.y += move_params_.eye_height;
 
 	protocol::C2SBlockEdit edit;
@@ -242,22 +269,26 @@ bool ServerSession::apply_script_block_edit(core::NetId editor,
 
 ServerSession::PunchResult ServerSession::punch(core::NetId puncher) {
 	PunchResult result;
-	bool is_playing = false;
+	entt::entity puncher_entity{ entt::null };
 	for (auto &[conn, state] : conns_) {
 		(void)conn;
 		if (state.playing && state.net_id == puncher) {
-			is_playing = true;
+			puncher_entity = state.entity;
 			break;
 		}
 	}
-	const replication::EntityState *pe = interest_.get(puncher);
-	if (!is_playing || !pe) {
+	if (puncher_entity == entt::null) {
 		return result;
 	}
-	core::Vec3d eye = pe->pos;
+	// Read straight from the registry, not interest_ (only refreshed once
+	// per tick, after all of this tick's messages -- including this punch,
+	// almost always called mid-network_io from a vb.on("player_input")
+	// handler -- are processed).
+	core::Vec3d eye = registry_.get<ecs::Position>(puncher_entity).value;
 	eye.y += move_params_.eye_height;
+	const ecs::Rotation &puncher_rot = registry_.get<ecs::Rotation>(puncher_entity);
 	const core::Vec3d dir = core::forward_from_yaw_pitch(
-			static_cast<double>(pe->rot.x), static_cast<double>(pe->rot.y));
+			static_cast<double>(puncher_rot.yaw), static_cast<double>(puncher_rot.pitch));
 	// Phase 6.21: read the same shared reach WorldReplicator's block-edit path
 	// enforces, so punch reach and mining reach are always one value, not two
 	// independently pack-overridable numbers. Falls back to ActionParams's own
@@ -280,25 +311,22 @@ ServerSession::PunchResult ServerSession::punch(core::NetId puncher) {
 		if (!other.playing || other.net_id == puncher) {
 			continue;
 		}
-		const replication::EntityState *oe = interest_.get(other.net_id);
-		if (!oe) {
-			continue;
-		}
+		const core::Vec3d other_pos = registry_.get<ecs::Position>(other.entity).value;
 		const double denom = dir.x * dir.x + dir.z * dir.z;
 		double t = 0.0;
 		if (denom > 1e-9) {
-			t = ((oe->pos.x - eye.x) * dir.x + (oe->pos.z - eye.z) * dir.z) / denom;
+			t = ((other_pos.x - eye.x) * dir.x + (other_pos.z - eye.z) * dir.z) / denom;
 		}
 		t = core::clamp(t, 0.0, reach);
 		const double px = eye.x + dir.x * t;
 		const double py = eye.y + dir.y * t;
 		const double pz = eye.z + dir.z * t;
-		const double dx = px - oe->pos.x;
-		const double dz = pz - oe->pos.z;
+		const double dx = px - other_pos.x;
+		const double dz = pz - other_pos.z;
 		const double horiz_dist = std::sqrt(dx * dx + dz * dz);
 		const double hr = static_cast<double>(punch_params_.hit_radius);
-		const bool vertical_ok = py >= oe->pos.y - hr &&
-				py <= oe->pos.y + move_params_.height + hr;
+		const bool vertical_ok = py >= other_pos.y - hr &&
+				py <= other_pos.y + move_params_.height + hr;
 		if (horiz_dist <= hr && vertical_ok && t < best_player_t) {
 			best_player_t = t;
 			best_player = other.net_id;
@@ -557,7 +585,7 @@ std::string_view ServerSession::player_name(core::NetId id) const {
 	return {};
 }
 
-void ServerSession::tick(double dt_seconds) {
+void ServerSession::system_network_io() {
 	scratch_.clear();
 	transport_.poll(scratch_);
 
@@ -710,7 +738,9 @@ void ServerSession::tick(double dt_seconds) {
 			}
 		}
 	}
+}
 
+void ServerSession::system_handshake_timeouts(double dt_seconds) {
 	// Handshake timeouts + asset-stream pacing.
 	std::vector<std::pair<ConnId, std::string>> to_drop;
 	for (auto &[conn, state] : conns_) {
@@ -735,7 +765,9 @@ void ServerSession::tick(double dt_seconds) {
 	for (const auto &[conn, reason] : to_drop) {
 		drop(conn, reason);
 	}
+}
 
+void ServerSession::system_advance_time_of_day(double dt_seconds) {
 	time_of_day_ticks_ = world::advance_time_of_day(
 			time_of_day_ticks_, dt_seconds, day_length_seconds_);
 	time_of_day_broadcast_accum_ += dt_seconds;
@@ -743,16 +775,94 @@ void ServerSession::tick(double dt_seconds) {
 		time_of_day_broadcast_accum_ = 0.0;
 		broadcast_time_of_day();
 	}
+}
 
-	check_respawns();
-	update_item_drops(dt_seconds);
-	update_block_damage();
-	update_block_punch_healing(dt_seconds);
-	update_region_occupancy();
+// Spec §6's InterestManagementSystem/ReplicationSystem, scoped to script
+// entities: spawn_script_entity()/set_script_entity_state() write Position/
+// Rotation/Velocity components instead of upserting interest_ directly (see
+// their comments), and this generic pass is what actually pushes them into
+// the interest grid, once per tick. Players are excluded (PlayerTag) and
+// keep their existing immediate-upsert path (handle_input_batch,
+// check_respawns, set_player_state, join) -- several other message handlers
+// this same tick (handle_block_edit, punch(), block-break, and later
+// same-tick systems like update_region_occupancy/update_item_drops) read
+// interest_ expecting a player's *just-simulated* position, which a single
+// end-of-tick pass can't provide without those call sites reading the
+// registry directly instead (done for the reach-sensitive ones; not worth
+// doing everywhere just to make this loop fully generic). Item drops keep
+// their own path too (update_item_drops) -- they aren't registry entities.
+void ServerSession::system_sync_interest() {
+	for (auto entity : registry_.view<ecs::Position, ecs::NetReplicated>(
+				 entt::exclude<ecs::PlayerTag>)) {
+		const auto &pos = registry_.get<ecs::Position>(entity);
+		const auto &net = registry_.get<ecs::NetReplicated>(entity);
+		core::EntityKindId kind = core::EntityKindId::kInvalid;
+		if (const auto *k = registry_.try_get<ecs::EntityKind>(entity)) {
+			kind = k->id;
+		}
+		core::Vec2f rot{};
+		if (const auto *r = registry_.try_get<ecs::Rotation>(entity)) {
+			rot = { r->yaw, r->pitch };
+		}
+		core::Vec3f vel{};
+		if (const auto *v = registry_.try_get<ecs::Velocity>(entity)) {
+			vel = core::Vec3f{ static_cast<float>(v->value.x),
+				static_cast<float>(v->value.y),
+				static_cast<float>(v->value.z) };
+		}
+		interest_.upsert(replication::EntityState{
+				net.net_id, kind, pos.value, rot, vel });
+	}
+}
 
-	++server_tick_;
-	broadcast_snapshots();
-	broadcast_world();
+void ServerSession::tick(double dt_seconds) {
+	if (systems_.names().empty()) {
+		build_systems();
+	}
+	systems_.run(registry_, ecs::TickContext{ dt_seconds, server_tick_ });
+}
+
+void ServerSession::build_systems() {
+	systems_.add("network_io", [this](entt::registry &, const ecs::TickContext &) {
+		system_network_io();
+	});
+	systems_.add("handshake_timeouts",
+			[this](entt::registry &, const ecs::TickContext &ctx) {
+				system_handshake_timeouts(ctx.dt_seconds);
+			});
+	systems_.add("advance_time_of_day",
+			[this](entt::registry &, const ecs::TickContext &ctx) {
+				system_advance_time_of_day(ctx.dt_seconds);
+			});
+	systems_.add("check_respawns", [this](entt::registry &, const ecs::TickContext &) {
+		check_respawns();
+	});
+	systems_.add("update_item_drops",
+			[this](entt::registry &, const ecs::TickContext &ctx) {
+				update_item_drops(ctx.dt_seconds);
+			});
+	systems_.add("update_block_damage",
+			[this](entt::registry &, const ecs::TickContext &) { update_block_damage(); });
+	systems_.add("update_block_punch_healing",
+			[this](entt::registry &, const ecs::TickContext &ctx) {
+				update_block_punch_healing(ctx.dt_seconds);
+			});
+	systems_.add("update_region_occupancy",
+			[this](entt::registry &, const ecs::TickContext &) {
+				update_region_occupancy();
+			});
+	systems_.add("sync_interest", [this](entt::registry &, const ecs::TickContext &) {
+		system_sync_interest();
+	});
+	// Matches the pre-SystemRunner order: the tick counter advances before
+	// broadcast_snapshots() so the outgoing snapshot carries the new tick.
+	systems_.add("advance_server_tick",
+			[this](entt::registry &, const ecs::TickContext &) { ++server_tick_; });
+	systems_.add("broadcast_snapshots",
+			[this](entt::registry &, const ecs::TickContext &) { broadcast_snapshots(); });
+	systems_.add("broadcast_world", [this](entt::registry &, const ecs::TickContext &) {
+		broadcast_world();
+	});
 }
 
 void ServerSession::update_item_drops(double dt_seconds) {
@@ -888,6 +998,9 @@ void ServerSession::check_respawns() {
 		pos.value = decision.pos;
 		registry_.get<ecs::Velocity>(state.entity).value = {};
 		registry_.get<ecs::Collider>(state.entity).on_ground = false;
+		// Upserted immediately -- later phases this same tick (item drops,
+		// block damage, region occupancy) read interest_ expecting the
+		// post-respawn position, not last tick's pre-respawn one.
 		replication::EntityState s;
 		if (const auto *e = interest_.get(state.net_id)) {
 			s = *e;
@@ -934,24 +1047,46 @@ core::NetId ServerSession::spawn_item_drop(
 core::NetId ServerSession::spawn_script_entity(
 		core::EntityKindId kind, core::Vec3d pos) {
 	const auto id = static_cast<core::NetId>(next_script_entity_id_++);
-	interest_.upsert(replication::EntityState{ id, kind, pos, {}, {} });
+	const entt::entity entity = registry_.create();
+	registry_.emplace<ecs::Position>(entity, pos);
+	registry_.emplace<ecs::EntityKind>(entity, kind);
+	registry_.emplace<ecs::NetReplicated>(entity, id);
+	script_entities_[id] = entity;
+	// interest_ picks this entity up on the next system_sync_interest() pass
+	// this same tick -- no need to upsert it here too.
 	return id;
 }
 
 void ServerSession::set_script_entity_state(
 		core::NetId id, core::Vec3d pos, core::Vec2f rot, core::Vec3f vel) {
-	replication::EntityState s;
-	if (const auto *existing = interest_.get(id)) {
-		s = *existing;
+	const auto it = script_entities_.find(id);
+	if (it == script_entities_.end()) {
+		return;
 	}
-	s.net_id = id;
-	s.pos = pos;
-	s.rot = rot;
-	s.vel = vel;
-	interest_.upsert(s);
+	const entt::entity entity = it->second;
+	registry_.get<ecs::Position>(entity).value = pos;
+	if (auto *r = registry_.try_get<ecs::Rotation>(entity)) {
+		*r = { rot.x, rot.y };
+	} else {
+		registry_.emplace<ecs::Rotation>(entity, rot.x, rot.y);
+	}
+	const core::Vec3d vel_d{ static_cast<double>(vel.x),
+		static_cast<double>(vel.y), static_cast<double>(vel.z) };
+	if (auto *v = registry_.try_get<ecs::Velocity>(entity)) {
+		v->value = vel_d;
+	} else {
+		registry_.emplace<ecs::Velocity>(entity, vel_d);
+	}
+	// interest_ is refreshed from the registry every tick by
+	// system_sync_interest(); no need to upsert it here too.
 }
 
 void ServerSession::remove_script_entity(core::NetId id) {
+	const auto it = script_entities_.find(id);
+	if (it != script_entities_.end()) {
+		registry_.destroy(it->second);
+		script_entities_.erase(it);
+	}
 	interest_.remove(id);
 }
 
@@ -1062,15 +1197,30 @@ void ServerSession::broadcast_snapshots() {
 
 void ServerSession::set_player_state(core::NetId id, core::Vec3d pos,
 		core::Vec2f rot, core::Vec3f vel) {
-	replication::EntityState s;
-	if (const auto *existing = interest_.get(id)) {
-		s = *existing;
+	for (auto &[conn, state] : conns_) {
+		(void)conn;
+		if (state.playing && state.net_id == id) {
+			registry_.get<ecs::Position>(state.entity).value = pos;
+			registry_.get<ecs::Rotation>(state.entity) = { rot.x, rot.y };
+			registry_.get<ecs::Velocity>(state.entity).value = {
+				static_cast<double>(vel.x), static_cast<double>(vel.y),
+				static_cast<double>(vel.z)
+			};
+			// Upserted immediately (see handle_input_batch's comment) --
+			// callers (tests, script teleports) expect this to be visible to
+			// interest_-reading code the moment they call it, same tick.
+			replication::EntityState s;
+			if (const auto *e = interest_.get(id)) {
+				s = *e;
+			}
+			s.net_id = id;
+			s.pos = pos;
+			s.rot = rot;
+			s.vel = vel;
+			interest_.upsert(s);
+			return;
+		}
 	}
-	s.net_id = id;
-	s.pos = pos;
-	s.rot = rot;
-	s.vel = vel;
-	interest_.upsert(s);
 }
 
 std::vector<SessionPlayerJoined> ServerSession::take_joins() {
@@ -1407,15 +1557,25 @@ void ClientSession::apply_snapshot(const protocol::S2CEntitySnapshot &snap) {
 
 	const auto ingest = [&](const protocol::EntityRecord &r) {
 		remote_[r.net_id] = r;
-		RemoteSample &s = remote_samples_[r.net_id];
+		auto [it, inserted] = net_to_entity_.try_emplace(r.net_id, entt::null);
+		if (inserted) {
+			it->second = entity_registry_.create();
+		}
+		const entt::entity entity = it->second;
+		entity_registry_.emplace_or_replace<ecs::EntityKind>(entity, r.kind);
+		ecs::InterpBuffer &s =
+				entity_registry_.get_or_emplace<ecs::InterpBuffer>(entity);
 		if (s.cur_tick == 0) {
 			s.prev_pos = r.pos;
+			s.prev_yaw = r.rot.x;
 			s.prev_tick = snap.server_tick;
 		} else if (s.cur_tick != snap.server_tick) {
 			s.prev_pos = s.cur_pos;
+			s.prev_yaw = s.cur_yaw;
 			s.prev_tick = s.cur_tick;
 		}
 		s.cur_pos = r.pos;
+		s.cur_yaw = r.rot.x;
 		s.cur_tick = snap.server_tick;
 	};
 	for (const auto &r : snap.entered) {
@@ -1426,7 +1586,10 @@ void ClientSession::apply_snapshot(const protocol::S2CEntitySnapshot &snap) {
 	}
 	for (core::NetId id : snap.removed) {
 		remote_.erase(id);
-		remote_samples_.erase(id);
+		if (const auto it = net_to_entity_.find(id); it != net_to_entity_.end()) {
+			entity_registry_.destroy(it->second);
+			net_to_entity_.erase(it);
+		}
 	}
 
 	if (snap.has_local) {
@@ -1513,12 +1676,13 @@ void ClientSession::forget_pending_edits_for(core::ChunkCoord coord) {
 }
 
 core::Vec3d ClientSession::interpolated_pos(core::NetId id) const {
-	const auto it = remote_samples_.find(id);
-	if (it == remote_samples_.end()) {
+	const auto net_it = net_to_entity_.find(id);
+	if (net_it == net_to_entity_.end() ||
+			!entity_registry_.all_of<ecs::InterpBuffer>(net_it->second)) {
 		const auto r = remote_.find(id);
 		return r == remote_.end() ? core::Vec3d{} : r->second.pos;
 	}
-	const RemoteSample &s = it->second;
+	const ecs::InterpBuffer &s = entity_registry_.get<ecs::InterpBuffer>(net_it->second);
 	if (s.cur_tick <= s.prev_tick) {
 		return s.cur_pos;
 	}

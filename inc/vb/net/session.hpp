@@ -18,6 +18,7 @@
 #include "vb/core/ids.hpp"
 #include "vb/core/math.hpp"
 #include "vb/ecs/components.hpp"
+#include "vb/ecs/system_runner.hpp"
 #include "vb/net/handshake.hpp"
 #include "vb/net/transport.hpp"
 #include "vb/net/world_replicator.hpp"
@@ -403,18 +404,33 @@ private:
 	void broadcast_world();
 	void broadcast_time_of_day();
 
+	// SystemRunner (spec §6/§7.2): named, ordered phases of tick(), built
+	// once on first tick() call. system_network_io/system_handshake_timeouts/
+	// system_advance_time_of_day just give the equivalent former inline
+	// tick() blocks a name+slot; system_sync_interest is the one genuinely
+	// new system (see its definition).
+	void build_systems();
+	void system_network_io();
+	void system_handshake_timeouts(double dt_seconds);
+	void system_advance_time_of_day(double dt_seconds);
+	void system_sync_interest();
+
 	Transport &transport_;
 	HandshakeServerConfig config_;
 	HandshakeServerHost host_;
 	// One entity per playing connection (spec §7.1's base components --
 	// Position/Velocity/Rotation/Collider/PlayerInput/Health/PlayerTag/
 	// NetReplicated), created in tick()'s join-completion handling and
-	// destroyed on disconnect. Nothing iterates this generically yet (no
-	// SystemRunner -- Phase 3.1's other, still-deferred half); ServerSession's
-	// own methods below read/write player state through it directly, same as
-	// they did through Conn's old inline fields, but a future Lua entity kind
-	// or system now has a real registry to query players through.
+	// destroyed on disconnect, plus one entity per spawned script entity
+	// (Position/EntityKind/NetReplicated, see spawn_script_entity). Iterated
+	// generically by system_sync_interest() via SystemRunner (systems_,
+	// below) -- see ARCHITECTURE_SPEC.md §6/§7.2.
 	entt::registry registry_;
+	ecs::SystemRunner systems_;
+	// spawn_script_entity()'s NetId -> registry entity, so
+	// set_script_entity_state()/remove_script_entity() can find the entity
+	// again by the id PackRuntime already tracks its Lua-side state under.
+	std::unordered_map<core::NetId, entt::entity> script_entities_;
 	std::map<ConnId, Conn> conns_;
 	replication::InterestGrid interest_;
 	std::unique_ptr<WorldReplicator> replicator_;
@@ -670,13 +686,6 @@ private:
 		core::ChunkCoord coord{};
 	};
 
-	struct RemoteSample {
-		core::Vec3d prev_pos{};
-		core::Vec3d cur_pos{};
-		std::uint32_t prev_tick = 0;
-		std::uint32_t cur_tick = 0;
-	};
-
 	Transport &transport_;
 	ConnId conn_;
 	ClientHandshake handshake_;
@@ -684,7 +693,15 @@ private:
 	std::string failure_reason_;
 	std::vector<TransportEvent> scratch_;
 	std::unordered_map<core::NetId, protocol::EntityRecord> remote_;
-	std::unordered_map<core::NetId, RemoteSample> remote_samples_;
+	// Client-side lightweight ECS mirror (spec §6): one entity per remote
+	// net id, holding ecs::InterpBuffer (prev/cur sample for render
+	// interpolation -- replaces the old bespoke RemoteSample struct) and
+	// ecs::EntityKind. remote_ above stays the flat "latest record per net
+	// id" view (unchanged public remote_entities() API, still used by
+	// entity_renderer.cpp and tests); this registry is the interpolation
+	// bookkeeping's real home instead of an ad hoc parallel map.
+	entt::registry entity_registry_;
+	std::unordered_map<core::NetId, entt::entity> net_to_entity_;
 	world::ClientChunkStore chunks_{ world::BlockRegistry::base() };
 	std::uint32_t last_server_tick_ = 0;
 	assetsync::ClientAssetCache *asset_cache_ = nullptr; // not owned; may be null

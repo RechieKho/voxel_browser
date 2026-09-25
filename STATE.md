@@ -20,6 +20,52 @@
 
 ## Current status (2026-09-25)
 
+**Same-day follow-up #3: closed Phase 3's two remaining ECS items --
+`vb::ecs::SystemRunner` (§7.2) + the client-side lightweight registry.**
+`SystemRunner` (`inc/vb/ecs/system_runner.hpp`/`src/ecs/system_runner.cpp`,
+new `vb/ecs` module) is a named, ordered list of tick phases;
+`ServerSession::build_systems()` registers `tick()`'s existing phases under
+it plus one new one, `system_sync_interest()`. Script entities (Phase 6.1)
+are now real registry entities (`spawn_script_entity`/
+`set_script_entity_state`/`remove_script_entity` write `Position`/
+`EntityKind`/`NetReplicated`/`Rotation`/`Velocity` components instead of
+only touching the interest grid), giving the runner a genuine second
+consumer besides players -- `system_sync_interest()` generically pushes
+every such entity into `interest_` once a tick
+(`registry_.view<Position, NetReplicated>(exclude<PlayerTag>)`).
+Client-side: `ClientSession`'s old bespoke `RemoteSample`/`remote_samples_`
+interp bookkeeping is now a real `entt::registry` + the
+already-defined-but-previously-unused `ecs::InterpBuffer` component.
+`remote_entities()`/`interpolated_pos()`'s public API is unchanged (3 test
+files + `entity_renderer.cpp` needed no edits). See
+`remaining_tasks/phase3.md` for the full write-up.
+
+**Gotcha hit and fixed during this pass, worth knowing before touching
+`ServerSession::tick()` again:** `interest_` (the `replication::InterestGrid`)
+and `registry_` (the EnTT registry) are *not* interchangeable "current
+position" sources within a single tick, even though both eventually hold the
+same value. Several `network_io`-phase handlers -- `handle_block_edit`,
+`handle_block_break_begin`, `punch()` (called synchronously from a
+`vb.on("player_input", ...)` Lua hook, i.e. *during* `handle_input_batch`) --
+need a player's *just-simulated-this-tick* position/rotation for reach/hit
+checks. The first attempt at `system_sync_interest()` made it fully generic
+(all `Position+NetReplicated` entities, players included) and moved it to a
+single once-per-tick pass after `network_io` -- this silently broke reach
+checks (a block breaks only if still in range *after* the input that moved
+the player toward it, but the edit message can arrive in the same batch as
+that move) and 2 of 312 tests failed on it. Fix: players keep their original
+*immediate* `interest_.upsert()` calls (`handle_input_batch`,
+`check_respawns`, `set_player_state`, join) exactly as before;
+`system_sync_interest()` is scoped to script entities only (`exclude
+<PlayerTag>`), which have no such synchronous same-tick reader. The 4 reach-
+sensitive handlers above were also changed to read `ecs::Position`/
+`ecs::Rotation` straight off `registry_` instead of `interest_`, since that's
+always live regardless of which pass has run. Takeaway: `registry_` is the
+one true "right now" source; `interest_` is a replication-facing mirror that
+different entity kinds are allowed to refresh on different cadences (players:
+immediately; script entities: once/tick) as long as every *reader* is aware
+of which cadence it's getting.
+
 **Same-day follow-up #2: fixed the multiplayer loading screen dismissing over
 a still-empty world again** (user-reported regression, same symptom the
 original Phase 7.1 loading-screen bug had). Root cause: Phase 7.6's world

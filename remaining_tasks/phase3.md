@@ -39,9 +39,46 @@ with prediction/interpolation.
       **Still deferred:** nothing iterates the registry generically yet — a
       `SystemRunner` (below) is only worth adding once a Lua entity kind
       (Phase 4) needs to.
-- [ ] System runner with explicit ordering (§7.2).
-- [ ] Client-side lightweight registry — currently `ClientSession` holds the
-      predicted local state + a `remote_samples_` interp buffer inline.
+- [x] System runner with explicit ordering (§7.2), 2026-09-25:
+      `vb::ecs::SystemRunner` (`inc/vb/ecs/system_runner.hpp`,
+      `src/ecs/system_runner.cpp`) — a named, ordered list of
+      `void(entt::registry&, const TickContext&)` steps, run in registration
+      order. `ServerSession::build_systems()` registers `tick()`'s phases
+      under it (`network_io`, `handshake_timeouts`, `advance_time_of_day`,
+      `check_respawns`, `update_item_drops`, `update_block_damage`,
+      `update_block_punch_healing`, `update_region_occupancy`,
+      `sync_interest`, `advance_server_tick`, `broadcast_snapshots`,
+      `broadcast_world`) — same behavior, but now a single greppable,
+      inspectable table instead of an implicit call sequence. Gets a real
+      second registry consumer at the same time: `spawn_script_entity`/
+      `set_script_entity_state`/`remove_script_entity` (Phase 6.1's script
+      entities) now create/update/destroy a real registry entity
+      (`Position`/`EntityKind`/`NetReplicated`, +`Rotation`/`Velocity` once
+      moved) instead of only touching the interest grid, and the new
+      `system_sync_interest()` generically pushes every such entity
+      (`registry_.view<Position, NetReplicated>(exclude<PlayerTag>)`) into
+      `interest_` once a tick, replacing what used to be per-mutator manual
+      upserts. Players deliberately stay on their existing *immediate*
+      upsert path (`handle_input_batch`, `check_respawns`, `set_player_state`,
+      join) rather than folding into the same generic pass — several other
+      network_io-phase handlers this same tick (`handle_block_edit`,
+      `handle_block_break_begin`, `punch()`) need this tick's
+      just-simulated position, not last tick's, so they now read
+      `ecs::Position`/`ecs::Rotation` straight off the registry instead of
+      `interest_` where that freshness matters. `PackRuntime::dispatch_tick`
+      stays externally driven (unchanged) — see `ARCHITECTURE_SPEC.md`'s
+      note for why folding `ScriptPreTickSystem`/`ScriptPostTickSystem` into
+      this runner was scoped out.
+- [x] Client-side lightweight registry, 2026-09-25: `ClientSession` gained
+      `entity_registry_` (`entt::registry`) + `net_to_entity_`
+      (`NetId -> entt::entity`); the bespoke `RemoteSample` struct and
+      `remote_samples_` map are gone, replaced by the already-defined-but-
+      previously-unused `ecs::InterpBuffer` component
+      (`inc/vb/ecs/components.hpp`) as the real interpolation bookkeeping,
+      plus `ecs::EntityKind` per remote entity. `remote_` (flat "latest
+      `EntityRecord` per net id" map) and the public `remote_entities()`/
+      `interpolated_pos()` API are unchanged, so `entity_renderer.cpp` and
+      the 3 test files that read them needed no changes.
 
 ### 3.2 Input pipeline
 

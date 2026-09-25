@@ -93,10 +93,14 @@ eyeballed live.
 Full detail: `remaining_tasks/phase3.md`.
 
 **Remaining:**
-- [ ] System runner with explicit ordering (§7.2) — only worth adding once a
-      Lua entity kind needs to iterate the registry generically.
-- [ ] Client-side lightweight registry (currently `ClientSession` holds
-      predicted state inline).
+- [x] System runner with explicit ordering (§7.2) — `vb::ecs::SystemRunner`
+      (2026-09-25); script entities (Phase 6.1) are now real registry
+      entities, giving it a genuine second consumer besides players. See
+      `remaining_tasks/phase3.md`.
+- [x] Client-side lightweight registry (2026-09-25) — `ClientSession`'s
+      remote-entity interpolation bookkeeping now lives in a real
+      `entt::registry` (`ecs::InterpBuffer`/`ecs::EntityKind`), not the old
+      ad hoc `RemoteSample` struct. See `remaining_tasks/phase3.md`.
 - [ ] Per-player rate limit / flood guard belongs with `GnsTransport`.
 - [ ] Step-up jerk: physics is exact but visually abrupt; needs a render-only
       eye-height smoothing layer client-side (not attempted).

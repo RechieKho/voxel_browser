@@ -9,15 +9,17 @@
 #include "vb/physics/movement.hpp"
 
 // Base ECS components (spec §7.1). The server holds an EnTT registry of these
-// (one entity per playing connection, `vb::net::ServerSession`); the client
-// keeps a lightweight subset for rendering (Position prev/current, Rotation,
-// EntityKind, RenderHandle). Systems live in vb/ecs and vb/physics.
+// (one entity per playing connection plus one per spawned script entity,
+// `vb::net::ServerSession`); the client keeps a lightweight subset for
+// rendering (Position prev/current via InterpBuffer, EntityKind). Systems
+// live in vb/ecs and vb/physics.
 //
 // Phase 3.1 (2026-09-17): ServerSession's own methods read/write player state
-// through the registry directly (no indirection through Conn's old inline
-// fields anymore); a `SystemRunner` that iterates the registry generically is
-// still follow-up work, deferred until a Lua entity kind (Phase 4) actually
-// needs to.
+// through the registry directly. `vb::ecs::SystemRunner`
+// (system_runner.hpp), added 2026-09-25, generically iterates it for the
+// script-entity interest/replication sync (see ServerSession::
+// system_sync_interest) -- players stay on their own immediate-upsert path,
+// see that function's comment for why.
 
 namespace vb::ecs {
 
