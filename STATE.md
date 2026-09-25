@@ -20,6 +20,70 @@
 
 ## Current status (2026-09-25)
 
+**Same-day follow-up #7: real base-pack art for `base:player`/
+`base:dropped_item`** (the follow-up #6 entry below deliberately left open).
+Neither ever flowed through the `vb.register_entity` kind mechanism at all:
+players replicate with `EntityRecord::kind` hardcoded to `kInvalid` at join
+(`src/net/session.cpp`), and dropped items carry a fixed reserved sentinel,
+`world::kItemDropKind = 0xFFFF` (`inc/vb/world/item_drops.hpp`), deliberately
+outside the dense id space `S2C_EntityKindRegistry` indexes by (`kinds[i] ==
+EntityKindId - 1`) -- so `EntityRenderer` could never find a `KindVisual` for
+either, regardless of what a pack registered. Fixed with a new, generic
+`vb.register_entity{represents = "player" | "item_drop"}` field (validated at
+registration: unknown value throws, a role claimed by two kinds throws) --
+deliberately not a hardcoded `"base:player"`/`"base:dropped_item"` string
+check anywhere in engine code (this repo's "generic primitives, not
+game-specific ones" convention). `PackRuntime::Impl` tracks at most one
+`player_kind_id`/`item_drop_kind_id`; `PackRuntime::attach_session()` (the
+single call site both `src/server/main.cpp` and `src/client/main.cpp`'s
+`--singleplayer` path already go through) forwards them to two new
+`ServerSession` setters, `set_player_visual_kind()`/
+`set_item_drop_visual_kind()`. The join handler and `spawn_item_drop()` now
+read `player_visual_kind_.value_or(EntityKindId::kInvalid)` /
+`item_drop_visual_kind_.value_or(world::kItemDropKind)` instead of the old
+hardcoded values -- a pack that never sets `represents` sees zero behavior
+change, exact "default + override" posture as everywhere else in this
+codebase. `content/base/entities/player.lua` (new) and `dropped_item.lua`
+(edited) register real `visual = {...}` art: `content/base/textures/
+player.png` (768x384, 3 facings-rows x 6 idle+walk-columns) and
+`dropped_item.png` (512x384, 3 rows x 4 idle-bob-columns), both real,
+hand-pixeled-then-upscaled PNGs generated with a throwaway stdlib-only
+(`zlib`+`struct`) Python PNG writer (no art tools available in this
+environment, no PIL/raylib dependency needed) -- not the synthetic
+test-time-only images follow-up #6 used, these are checked into
+`content/base/textures/` like `stone.png`/`water.png`. **Gotcha hit writing
+the integration tests:** a `ServerSession` built without first calling
+`pack_runtime.install_entity_kind_registry(host)` on the `HandshakeServerHost`
+passed to its constructor never sends `S2C_EntityKindRegistry` at all, so
+`ClientSession::entity_kind()` stays permanently empty regardless of what
+`represents=` resolved to server-side -- both new tests initially built
+`ServerSession server(net.server(), cfg)` (no host) and failed with
+`entity_kind()` returning `nullptr`; fixed by building a real
+`HandshakeServerHost`, calling `install_entity_kind_registry(host)` *before*
+constructing `ServerSession(net.server(), cfg, host)` (`ServerSession` copies
+`host` in its constructor), matching the exact ordering `src/server/main.cpp`
+and `src/client/main.cpp`'s `--singleplayer` path already use. A second,
+separate mistake in the same test: positioning a test player only 0.5m from a
+spawned drop caused it to be picked up (and thus removed from replication)
+before the visibility assertion ever ran -- fixed by using the same 2m
+"visible but not yet picked up" distance the existing
+`vb.world.spawn_item_drop` replication test already established. Verified:
+full `vb_tests` 334/334 green (2 new `pack_runtime_test.cpp` cases for
+`represents=` validation, 2 new `pack_runtime_integration_test.cpp` end-to-end
+cases proving a real client resolves the overridden kind via `entity_kind()`
+for both a spawned drop and another player), clean `-Werror` build of
+`vb_tests`/`voxel_browser`/`voxel_browser_server` (temporarily reconfigured
+`build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`, confirmed clean,
+reconfigured back to this dir's OFF default afterward), `content/base loads
+cleanly...` test confirms the new/edited Lua files parse and register
+end-to-end. The actual rendered sprite/animation was **not** manually
+eyeballed -- no GUI in this agent environment, same still-open caveat as
+follow-up #6 and every other recent rendering-adjacent pass. **Deliberately
+out of scope:** per-instance `ScriptState.visual_override` (skins), 8-facing
+art and run/jump/fall/hurt/dead clips for the player (idle+walk/4-facings was
+the scoped fidelity) -- undeclared clips already fall back to the first
+declared clip (`resolve_clip`), same as any other kind.
+
 **Same-day follow-up #6: real per-kind entity sprite art,
 `vb.register_entity{visual = {...}}`** (REMAINING_TASKS' long-tracked Phase
 4/6.1 gap -- the schema was finalized 2026-09-17 in

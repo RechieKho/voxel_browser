@@ -249,6 +249,21 @@ public:
 	core::NetId spawn_item_drop(
 			core::Vec3d pos, core::BlockId item, std::uint16_t count);
 
+	// Entity-management follow-up: lets a pack-registered `vb.register_entity`
+	// kind stand in, cosmetically, for a player or a dropped item -- neither
+	// goes through vb.world.spawn (players are joined via the handshake,
+	// drops via spawn_item_drop() above), so neither ever gets a real
+	// EntityKindId to look up width/height/visual by unless one is set here.
+	// Unset (the default) means players replicate with
+	// EntityKindId::kInvalid and drops with the reserved world::kItemDropKind
+	// sentinel, exactly as before either setter existed.
+	void set_player_visual_kind(core::EntityKindId kind) {
+		player_visual_kind_ = kind;
+	}
+	void set_item_drop_visual_kind(core::EntityKindId kind) {
+		item_drop_visual_kind_ = kind;
+	}
+
 	// Phase 5.1: routes a player walking over a dropped item up to a script
 	// host's inventory, without ServerSession knowing anything about Lua.
 	// Unset (the default -- e.g. `--singleplayer`, which has no PackRuntime)
@@ -447,6 +462,12 @@ private:
 	std::unordered_map<core::NetId, std::pair<core::IVec3, core::BlockId>>
 			region_occupancy_;
 	RegionHooks region_hooks_;
+	// Entity-management follow-up: see set_player_visual_kind()/
+	// set_item_drop_visual_kind() above. nullopt means "no pack opted in" --
+	// join and spawn_item_drop() fall back to their pre-existing default kind
+	// values exactly as before either setter existed.
+	std::optional<core::EntityKindId> player_visual_kind_;
+	std::optional<core::EntityKindId> item_drop_visual_kind_;
 	// Phase 6.18: sparse pos -> punch/heal state, distinct from
 	// world::BlockDamageSystem above -- that system's begin/tick/stop
 	// lifecycle models a *held*, continuous action across many ticks (5.2's

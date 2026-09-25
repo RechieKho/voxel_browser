@@ -110,9 +110,9 @@ Full detail: `remaining_tasks/phase3.md`.
       per-clip frame lists) for entity kinds — landed 2026-09-25 as Phase
       4's `visual = {...}` item below (`EntityRenderer`'s `KindVisual`/
       `EntityVisualLayout`, entity-management follow-up).
-- [ ] Real billboard art (atlas, per-clip frames) — mechanism now real
-      (Phase 4's `visual = {...}` item, landed 2026-09-25); still waits on
-      real base-pack sprites (5.1) actually shipping a spritesheet.
+- [x] Real billboard art (atlas, per-clip frames) — `base:player`/
+      `base:dropped_item` now ship real checked-in spritesheets, see Phase
+      4's own "Real base-pack art" entry, landed 2026-09-25.
 
 ---
 
@@ -182,6 +182,21 @@ Full detail: `remaining_tasks/phase4.md`.
       (a human watching a real spritesheet animate on a billboard) was
       **not** manually eyeballed — no GUI in this agent environment, same
       still-open caveat as every other recent rendering-adjacent pass.
+- [x] Real base-pack art for `base:player`/`base:dropped_item` -- landed
+      2026-09-25. Neither ever went through the `vb.register_entity` kind
+      mechanism (players hardcoded `EntityKindId::kInvalid` at join, drops
+      carried the reserved `world::kItemDropKind` sentinel, outside
+      `S2C_EntityKindRegistry`'s dense id space) -- fixed with a new generic
+      `vb.register_entity{represents = "player" | "item_drop"}` field
+      (`PackRuntime::attach_session()` forwards the resolved id to two new
+      `ServerSession` setters), not a hardcoded pack-name check in engine
+      code. `content/base/entities/player.lua` (new) and `dropped_item.lua`
+      (edited) register real, checked-in `visual = {...}` spritesheets
+      (idle+walk, 4 facings) generated with a throwaway stdlib PNG writer (no
+      art tools in this environment). See `STATE.md`'s "Current status" for
+      the full write-up, including a gotcha around `install_entity_kind_
+      registry(host)` ordering relative to `ServerSession`'s constructor.
+      Full `vb_tests` 334/334 green, clean `-Werror` build.
 - [x] Real texture/atlas system landed 2026-09-23 (see
       `state/changelog-recent.md`): `vb.register_block{texture=...}` ->
       `S2C_BlockRegistry` -> a per-session `vb::render::TextureAtlas` built
@@ -212,8 +227,8 @@ platforms has not been run by a human yet.
 Full detail: `remaining_tasks/phase5.md`.
 
 **Remaining:**
-- [ ] Player + dropped-item billboard sprite atlases (§11.3/3.5) — replaces
-      the flat placeholder quad; not started.
+- [x] Player + dropped-item billboard sprite atlases (§11.3/3.5) — landed
+      2026-09-25, see Phase 4's "Real base-pack art" entry.
 - [~] Cross-chunk relight on edit (breaking a floor lets light into the chunk
       below) — still per-chunk from scratch each edit.
 - [ ] Per-block hardness/tool break-time variation — one flat duration today

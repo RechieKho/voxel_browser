@@ -864,6 +864,137 @@ TEST_CASE("vb.world.spawn_item_drop replicates to a client and is picked up on a
 	CHECK(inv[0].count == 2);
 }
 
+TEST_CASE("vb.register_entity{represents=\"item_drop\"} tags real drops with "
+		"that kind's id instead of the reserved sentinel (entity-management "
+		"follow-up)") {
+	LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("item_drop_represents"));
+	REQUIRE(rt.load_pack_file(R"(
+		vb.register_entity({ name = "test:coin", represents = "item_drop",
+			width = 0.3, height = 0.3 })
+		vb.on("chat", function(player, text)
+			vb.world.spawn_item_drop({ x = 5, y = 5, z = 5 }, 3, 2)
+			return true
+		end)
+	)"));
+	rt.freeze();
+
+	// install_entity_kind_registry() must run before ServerSession's
+	// constructor copies `host` (same ordering src/server/main.cpp and
+	// src/client/main.cpp's --singleplayer path both use) -- otherwise no
+	// S2C_EntityKindRegistry frame ever reaches a joining client and
+	// entity_kind() below stays empty regardless of what represents= claimed.
+	HandshakeServerHost host;
+	rt.install_entity_kind_registry(host);
+
+	HandshakeServerConfig cfg;
+	cfg.world_seed = 7;
+	ServerSession server(net.server(), cfg, host);
+	rt.attach_session(server);
+	REQUIRE(net.server().listen(0));
+
+	Transport &ta = net.create_client();
+	auto ida = ta.connect("x", 0);
+	REQUIRE(ida);
+	ClientSession client(ta, *ida, HandshakeClientConfig{ "A", "", "v", 1 });
+
+	auto pump = [&](int n) {
+		for (int i = 0; i < n; ++i) {
+			server.tick(0.05);
+			client.tick(0.05);
+			rt.dispatch_tick(0.05);
+		}
+	};
+	pump(16);
+	REQUIRE(client.joined());
+
+	// Spawn the drop while far away (matches "vb.world.spawn_item_drop
+	// replicates to a client..." above), then move close on a later tick --
+	// two separate steps, not one, so the interest diff has a real position
+	// change to react to.
+	const NetId player_id = client.join_accept()->your_net_id;
+	server.set_player_state(player_id, Vec3d{ 100, 100, 100 });
+	client.send_chat("drop it");
+	pump(6);
+
+	// 2m away: within interest range but outside the default pickup radius,
+	// so the drop stays replicated instead of being immediately collected
+	// (same distance the "spawn_item_drop replicates..." test above uses).
+	server.set_player_state(player_id, Vec3d{ 5, 5, 7 });
+	pump(6);
+
+	REQUIRE_FALSE(client.remote_entities().empty());
+	const auto kind = client.remote_entities().begin()->second.kind;
+	const auto *record = client.entity_kind(kind);
+	REQUIRE(record != nullptr);
+	CHECK(record->name == "test:coin");
+	CHECK(record->width == doctest::Approx(0.3f));
+}
+
+TEST_CASE("vb.register_entity{represents=\"player\"} tags a joining player's "
+		"replicated kind, seen by another client (entity-management "
+		"follow-up)") {
+	LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("player_represents"));
+	REQUIRE(rt.load_pack_file(R"(
+		vb.register_entity({ name = "test:hero", represents = "player",
+			width = 0.6, height = 1.9 })
+	)"));
+	rt.freeze();
+
+	// See the item_drop test above for why this must run before
+	// ServerSession's constructor copies `host`.
+	HandshakeServerHost host;
+	rt.install_entity_kind_registry(host);
+
+	HandshakeServerConfig cfg;
+	cfg.world_seed = 7;
+	ServerSession server(net.server(), cfg, host);
+	rt.attach_session(server);
+	REQUIRE(net.server().listen(0));
+
+	Transport &ta = net.create_client();
+	auto ida = ta.connect("x", 0);
+	REQUIRE(ida);
+	ClientSession a(ta, *ida, HandshakeClientConfig{ "A", "", "v", 1 });
+
+	Transport &tb = net.create_client();
+	auto idb = tb.connect("x", 0);
+	REQUIRE(idb);
+	ClientSession b(tb, *idb, HandshakeClientConfig{ "B", "", "v", 2 });
+
+	auto pump = [&](int n) {
+		for (int i = 0; i < n; ++i) {
+			server.tick(0.05);
+			a.tick(0.05);
+			b.tick(0.05);
+		}
+	};
+	pump(16);
+	REQUIRE(a.joined());
+	REQUIRE(b.joined());
+
+	// Force both within interest range of each other (same pattern as
+	// replication_test.cpp's TwoClientWorld -- default spawn positions aren't
+	// guaranteed close enough on their own).
+	const NetId a_id = a.join_accept()->your_net_id;
+	const NetId b_id = b.join_accept()->your_net_id;
+	server.set_player_state(a_id, Vec3d{ 0, 64, 0 });
+	server.set_player_state(b_id, Vec3d{ 8, 64, 0 });
+	pump(4);
+
+	REQUIRE(a.remote_entities().count(b_id) == 1); // sees B
+	const auto kind = a.remote_entities().at(b_id).kind;
+	const auto *record = a.entity_kind(kind);
+	REQUIRE(record != nullptr);
+	CHECK(record->name == "test:hero");
+	CHECK(record->width == doctest::Approx(0.6f));
+}
+
 TEST_CASE("vb.register_block{pickup_radius=...} widens a dropped item's "
 		  "pickup range beyond the engine default") {
 	LoopbackNetwork net;

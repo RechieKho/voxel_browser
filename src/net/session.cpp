@@ -681,9 +681,15 @@ void ServerSession::system_network_io() {
 					registry_.emplace<ecs::Health>(it->second.entity, 20.0f, 20.0f);
 					registry_.emplace<ecs::PlayerTag>(it->second.entity, step.player_name);
 					registry_.emplace<ecs::NetReplicated>(it->second.entity, g.net_id);
+					// Entity-management follow-up: player_visual_kind_ lets a
+					// pack's vb.register_entity{represents="player"} kind
+					// supply width/height/visual for players (see
+					// set_player_visual_kind()); unset means kInvalid, exact
+					// pre-existing behavior.
 					interest_.upsert(replication::EntityState{
-							g.net_id, core::EntityKindId::kInvalid, g.spawn_pos,
-							{}, {} });
+							g.net_id,
+							player_visual_kind_.value_or(core::EntityKindId::kInvalid),
+							g.spawn_pos, {}, {} });
 					joins_.push_back({ ev.conn, g.net_id, step.player_name });
 					VB_INFO("net", "player '", step.player_name, "' joined as net id ",
 							static_cast<std::uint32_t>(g.net_id));
@@ -1039,8 +1045,12 @@ core::NetId ServerSession::spawn_item_drop(
 	}
 	const core::NetId id =
 			item_drops_.spawn(pos, item, count, pickup_radius, lifetime_seconds);
+	// Entity-management follow-up: item_drop_visual_kind_ lets a pack's
+	// vb.register_entity{represents="item_drop"} kind supply width/height/
+	// visual for drops (see set_item_drop_visual_kind()); unset falls back to
+	// the reserved world::kItemDropKind sentinel, exact pre-existing behavior.
 	interest_.upsert(replication::EntityState{
-			id, world::kItemDropKind, pos, {}, {} });
+			id, item_drop_visual_kind_.value_or(world::kItemDropKind), pos, {}, {} });
 	return id;
 }
 

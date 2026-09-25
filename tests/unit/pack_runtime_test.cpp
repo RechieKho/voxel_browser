@@ -274,6 +274,39 @@ TEST_CASE("vb.register_entity{visual=} rejects a bad shape") {
 		clips = { { clip = "idle", frames = 1, fps = 0 } } } }))");
 }
 
+TEST_CASE("vb.register_entity{represents=} accepts 'player'/'item_drop', "
+		"rejects an unknown value, and rejects a role claimed twice") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+
+	{
+		vb::script::PackRuntime rt(net.server(), registry, temp_storage("represents_ok"));
+		REQUIRE(rt.load_pack_file(R"(
+			vb.register_entity({ name = "test:hero", represents = "player" })
+			vb.register_entity({ name = "test:coin", represents = "item_drop" })
+		)"));
+	}
+	{
+		vb::script::PackRuntime rt(net.server(), registry, temp_storage("represents_unknown"));
+		CHECK_FALSE(rt.load_pack_file(
+				R"(vb.register_entity({ name = "test:a", represents = "monster" }))"));
+	}
+	{
+		vb::script::PackRuntime rt(net.server(), registry, temp_storage("represents_dup_player"));
+		CHECK_FALSE(rt.load_pack_file(R"(
+			vb.register_entity({ name = "test:a", represents = "player" })
+			vb.register_entity({ name = "test:b", represents = "player" })
+		)"));
+	}
+	{
+		vb::script::PackRuntime rt(net.server(), registry, temp_storage("represents_dup_item_drop"));
+		CHECK_FALSE(rt.load_pack_file(R"(
+			vb.register_entity({ name = "test:a", represents = "item_drop" })
+			vb.register_entity({ name = "test:b", represents = "item_drop" })
+		)"));
+	}
+}
+
 TEST_CASE("install_entity_kind_registry leaves the hook at nullopt when no "
 		"pack ever called vb.register_entity") {
 	vb::net::LoopbackNetwork net;

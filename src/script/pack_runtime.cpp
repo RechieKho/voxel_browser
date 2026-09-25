@@ -438,6 +438,16 @@ struct PackRuntime::Impl {
 	std::vector<BlockDef> blocks;
 	std::vector<ItemDef> items;
 	std::vector<EntityKindDef> entity_kinds;
+	// Entity-management follow-up: `vb.register_entity{represents=...}` lets a
+	// kind opt into standing in for an engine-managed entity that doesn't go
+	// through vb.world.spawn at all (players, ItemDropSystem drops) purely for
+	// replication-time cosmetics (S2C_EntityKindRegistry's width/height/
+	// visual) -- see PackRuntime::attach_session(), which forwards these into
+	// ServerSession::set_player_visual_kind()/set_item_drop_visual_kind().
+	// nullopt (the default) means no pack claimed the role, and both session
+	// setters are simply never called -- exact pre-existing behavior.
+	std::optional<core::EntityKindId> player_kind_id;
+	std::optional<core::EntityKindId> item_drop_kind_id;
 	std::vector<BiomeDef> biomes;
 	std::vector<CraftDef> crafts;
 	// Phase 6.3: vb.register_keybind names, order == bit index into every
@@ -1008,6 +1018,25 @@ void PackRuntime::Impl::install_bindings() {
 		const sol::optional<sol::table> visual_table = def["visual"];
 		if (visual_table) {
 			e.visual = parse_entity_visual(*visual_table);
+		}
+		const sol::optional<std::string> represents = def["represents"];
+		if (represents) {
+			if (*represents == "player") {
+				if (player_kind_id) {
+					throw sol::error(
+							"vb.register_entity: 'player' is already claimed by another kind's represents=");
+				}
+				player_kind_id = e.id;
+			} else if (*represents == "item_drop") {
+				if (item_drop_kind_id) {
+					throw sol::error(
+							"vb.register_entity: 'item_drop' is already claimed by another kind's represents=");
+				}
+				item_drop_kind_id = e.id;
+			} else {
+				throw sol::error("vb.register_entity: 'represents' must be 'player' or 'item_drop', got '" +
+						*represents + "'");
+			}
 		}
 		entity_kinds.push_back(std::move(e));
 		return static_cast<std::uint16_t>(entity_kinds.back().id);
@@ -2592,6 +2621,18 @@ void PackRuntime::attach_session(net::ServerSession &session) {
 			self->run_region_event("region_exit", player, pos, block);
 		};
 		session.set_region_hooks(std::move(hooks));
+	}
+	// Entity-management follow-up: forwards a pack's `represents = "player"`/
+	// `"item_drop"` claim (vb.register_entity) onto ServerSession's own
+	// replication-time kind tagging for players/dropped items -- unset means
+	// neither setter is called, exact pre-existing behavior (players replicate
+	// with EntityKindId::kInvalid, drops with the reserved world::kItemDropKind
+	// sentinel).
+	if (self->player_kind_id) {
+		session.set_player_visual_kind(*self->player_kind_id);
+	}
+	if (self->item_drop_kind_id) {
+		session.set_item_drop_visual_kind(*self->item_drop_kind_id);
 	}
 }
 
