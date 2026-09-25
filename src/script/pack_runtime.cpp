@@ -273,6 +273,13 @@ struct EntityKindDef {
 	sol::protected_function on_tick;
 	sol::protected_function on_hit;
 	sol::protected_function on_death;
+	// Billboard footprint, metres -- mirrors render::EntityRenderer's
+	// placeholder quad dimensions until real per-kind sprite art exists (see
+	// REMAINING_TASKS' still-open `visual = {...}` item). Overridable via
+	// `vb.register_entity{width=, height=}`; sent to clients as
+	// protocol::EntityKindRegistryRecord by install_entity_kind_registry().
+	float width = 0.8f;
+	float height = 1.8f;
 };
 
 // Phase 6.1: one spawned `vb.world.spawn(kind, pos)` instance. `self` is a
@@ -884,6 +891,8 @@ void PackRuntime::Impl::install_bindings() {
 		e.on_tick = def.get_or("on_tick", sol::protected_function{});
 		e.on_hit = def.get_or("on_hit", sol::protected_function{});
 		e.on_death = def.get_or("on_death", sol::protected_function{});
+		e.width = def.get_or("width", e.width);
+		e.height = def.get_or("height", e.height);
 		entity_kinds.push_back(std::move(e));
 		return static_cast<std::uint16_t>(entity_kinds.back().id);
 	};
@@ -1976,6 +1985,22 @@ void PackRuntime::install_keybind_registry(net::HandshakeServerHost &host) {
 			return std::nullopt;
 		}
 		return self->keybind_names;
+	};
+}
+
+void PackRuntime::install_entity_kind_registry(net::HandshakeServerHost &host) {
+	Impl *self = impl_.get();
+	host.entity_kind_registry =
+			[self]() -> std::optional<std::vector<protocol::EntityKindRegistryRecord>> {
+		if (self->entity_kinds.empty()) {
+			return std::nullopt;
+		}
+		std::vector<protocol::EntityKindRegistryRecord> out;
+		out.reserve(self->entity_kinds.size());
+		for (const auto &e : self->entity_kinds) {
+			out.push_back({ e.name, e.width, e.height });
+		}
+		return out;
 	};
 }
 

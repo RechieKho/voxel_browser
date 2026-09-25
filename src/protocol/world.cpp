@@ -11,6 +11,7 @@ namespace {
 inline constexpr std::uint64_t kMaxChunkBytes = 8u * 1024u * 1024u;
 inline constexpr std::uint64_t kMaxBlockRegistryRecords = 4096u;
 inline constexpr std::uint64_t kMaxDayNightKeyframes = 256u;
+inline constexpr std::uint64_t kMaxEntityKindRegistryRecords = 4096u;
 
 constexpr std::uint64_t chunk_volume() {
 	return static_cast<std::uint64_t>(core::kChunkDim) *
@@ -164,6 +165,36 @@ Decoded<S2CFogParams> S2CFogParams::decode(std::span<const std::byte> in) {
 	S2CFogParams m;
 	m.fog_start = r.f32();
 	m.fog_end = r.f32();
+	return finish(r, std::move(m));
+}
+
+// --- S2CEntityKindRegistry ---------------------------------------------
+void S2CEntityKindRegistry::encode(std::vector<std::byte> &out) const {
+	ByteWriter w(out);
+	w.varint(kinds.size());
+	for (const auto &k : kinds) {
+		w.string(k.name);
+		w.f32(k.width);
+		w.f32(k.height);
+	}
+}
+
+Decoded<S2CEntityKindRegistry> S2CEntityKindRegistry::decode(
+		std::span<const std::byte> in) {
+	ByteReader r(in);
+	S2CEntityKindRegistry m;
+	const std::uint64_t n = r.varint();
+	if (n > kMaxEntityKindRegistryRecords) {
+		return Err{ core::ProtocolError::kLengthExceeded };
+	}
+	m.kinds.reserve(static_cast<std::size_t>(n));
+	for (std::uint64_t i = 0; i < n && !r.failed(); ++i) {
+		EntityKindRegistryRecord k;
+		k.name = r.string();
+		k.width = r.f32();
+		k.height = r.f32();
+		m.kinds.push_back(std::move(k));
+	}
 	return finish(r, std::move(m));
 }
 

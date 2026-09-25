@@ -4,8 +4,25 @@
 > as any change to a struct in `inc/vb/protocol/`, and bump
 > `kEngineProtocolVersion` in `cmake/version.hpp.in`.
 
-Current `ENGINE_PROTOCOL_VERSION`: **18**.
+Current `ENGINE_PROTOCOL_VERSION`: **19**.
 
+- **19** — `S2C_EntityKindRegistry` (53) defined (entity-management follow-up
+  to Phase 6.1/REMAINING_TASKS' "no client-side kind-specific rendering for
+  script entities" item): `varint n` + `n × {string name, f32 width, f32
+  height}`. `kinds[i]` describes `core::EntityKindId` value `i + 1`, matching
+  `PackRuntime::Impl::entity_kinds`' own registration-order id assignment, so
+  no id is sent per record. Sent between `C2S_Ready` and `S2C_JoinAccept`
+  alongside `S2C_BlockRegistry`/`S2C_KeybindRegistry` only if
+  `HandshakeServerHost::entity_kind_registry` returns a value; `nullopt`
+  default (no pack ever called `vb.register_entity`) sends no frame, so a
+  host/test that doesn't use this sees zero behavior change and every remote
+  entity keeps rendering as the flat placeholder billboard it always has.
+  `width`/`height` default to the placeholder's own `0.8`/`1.8` metre
+  dimensions, overridable per kind via `vb.register_entity{width=, height=}`.
+  `PackRuntime::install_entity_kind_registry(host)` wires the built vector in
+  (mirrors `install_keybind_registry`'s shape exactly). A player's
+  `EntityRecord::kind` is always `kInvalid` (0) and never indexes into this
+  list — `render::EntityRenderer` keeps the placeholder default for those.
 - **18** — `S2CServerInfo` (`kS2CServerInfo`) gains a `u32 view_distance`
   field: the operator's real `server.toml` `view_distance`, sent always (not
   an opt-in `nullopt`-default frame like `S2C_FogParams`/`S2C_MoveParams` —

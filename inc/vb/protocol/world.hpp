@@ -123,6 +123,35 @@ struct S2CFogParams {
 	static Decoded<S2CFogParams> decode(std::span<const std::byte> in);
 };
 
+// --- entity kind registry (spec §11.3, entity management follow-up) -----
+// Sent between C2S_Ready and S2C_JoinAccept alongside S2C_BlockRegistry/
+// S2C_KeybindRegistry so the client can render script entities distinctly
+// per kind instead of one flat placeholder for every EntityRecord::kind.
+// `kinds[i]` describes `core::EntityKindId` value `i + 1` -- index-to-id
+// mapping matches PackRuntime::Impl::entity_kinds' own assignment
+// (`id = entity_kinds.size() + 1` at registration time), so no id needs to
+// be sent per record. A player's EntityRecord::kind is always kInvalid (0),
+// never indexes into this list.
+struct EntityKindRegistryRecord {
+	std::string name;
+	// Billboard footprint, metres -- mirrors render::EntityRenderer's
+	// placeholder quad dimensions (width x height) until real per-kind
+	// sprite art (REMAINING_TASKS' still-open `visual = {...}` item) exists.
+	float width = 0.8f;
+	float height = 1.8f;
+
+	bool operator==(const EntityKindRegistryRecord &) const = default;
+};
+
+struct S2CEntityKindRegistry {
+	static constexpr MessageType kType = MessageType::kS2CEntityKindRegistry;
+
+	std::vector<EntityKindRegistryRecord> kinds; // index == EntityKindId - 1
+
+	void encode(std::vector<std::byte> &out) const;
+	static Decoded<S2CEntityKindRegistry> decode(std::span<const std::byte> in);
+};
+
 struct S2CChunkAdd {
 	static constexpr MessageType kType = MessageType::kS2CChunkAdd;
 

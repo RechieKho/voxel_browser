@@ -20,6 +20,49 @@
 
 ## Current status (2026-09-25)
 
+**Same-day follow-up #4: client-side kind-specific rendering for script
+entities** (REMAINING_TASKS' Phase 6.1 "EntityKind id threads through but
+nothing branches on it" gap). Protocol version bumped **18 -> 19**: new
+`S2C_EntityKindRegistry` (type 53, `inc/vb/protocol/world.hpp`) carries
+`{name, width, height}` per `vb.register_entity` kind, `kinds[i]` describing
+`EntityKindId i+1` (matches `PackRuntime::Impl::entity_kinds`' own
+registration-order id assignment, so no id needs to ride the wire). Sent
+between `C2S_Ready` and `S2C_JoinAccept` alongside `S2C_BlockRegistry`/
+`S2C_KeybindRegistry` via a new `HandshakeServerHost::entity_kind_registry`
+hook, same `nullopt` = no frame, no behavior change posture as every other
+opt-in registry here. `PackRuntime::install_entity_kind_registry(host)`
+mirrors `install_keybind_registry`'s shape exactly; wired into both
+`src/server/main.cpp` and `src/client/main.cpp`'s `--singleplayer` host
+(alongside `install_join_veto`, mirroring `host.block_registry`'s presence in
+both paths). `vb.register_entity{width=, height=}` (new optional fields on
+`EntityKindDef`, default `0.8`/`1.8` -- `render::EntityRenderer`'s own
+existing placeholder quad dimensions) lets a pack size a kind's billboard;
+`ClientSession::entity_kind(EntityKindId)` looks a script entity's record up
+by id (`nullptr` for `kInvalid`/players or an id with no registry entry --
+same "missing = default" fallback as everywhere else), and
+`EntityRenderer::sync()` now re-checks it every frame per tracked entity
+(cheap, one map lookup) to pick the billboard's width/height, replacing the
+one flat `kPlaceholderWidth`/`kPlaceholderHeight` every kind used to render
+as regardless of what it was. Players (`EntityRecord::kind == kInvalid`)
+still always get the placeholder default. `content/examples/kitchen_sink`'s
+`entities/sentry.lua` demonstrates the new fields (`width=1.0, height=1.2`).
+**Deliberately not attempted:** real per-kind sprite art/atlas
+(`visual = {...}`, REMAINING_TASKS' own still-open item) -- this only closes
+the "nothing branches on kind at all" gap with a differently-sized flat
+placeholder, not real art. Full `vb_tests` 317/317 green on `build-net-lua`
+(5 new cases: a protocol round-trip + cap-free-list test, two
+`block_registry_test.cpp` end-to-end client-applies-it/no-hook-means-empty
+cases mirroring the existing keybind-registry pair, two `pack_runtime_test.cpp`
+cases for `install_entity_kind_registry`'s built/empty output), clean
+`-Werror` build of `vb_tests`/`voxel_browser`/`voxel_browser_server`
+(temporarily reconfigured `build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`,
+confirmed clean, reconfigured back to this dir's OFF default afterward --
+same verification pattern as every other recent phase). The actual rendered
+size difference (a human watching two different-sized billboards in a real
+window) was **not** manually eyeballed -- no GUI in this agent environment,
+same still-open caveat as every other recent Phase 6/7 item's own
+verification note.
+
 **Same-day follow-up #3: closed Phase 3's two remaining ECS items --
 `vb::ecs::SystemRunner` (§7.2) + the client-side lightweight registry.**
 `SystemRunner` (`inc/vb/ecs/system_runner.hpp`/`src/ecs/system_runner.cpp`,

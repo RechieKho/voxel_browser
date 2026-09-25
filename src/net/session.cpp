@@ -1312,6 +1312,15 @@ void ClientSession::tick(double) {
 					}
 					break;
 				}
+				if (frame->header.type == protocol::MessageType::kS2CEntityKindRegistry) {
+					if (auto m = protocol::S2CEntityKindRegistry::decode(frame->payload)) {
+						apply_entity_kind_registry(*m);
+					} else {
+						VB_ERROR("net", "malformed S2C_EntityKindRegistry: ",
+								core::message(m.error()));
+					}
+					break;
+				}
 				if (frame->header.type == protocol::MessageType::kS2CMoveParams) {
 					if (auto m = protocol::S2CMoveParams::decode(frame->payload)) {
 						apply_move_params(*m);
@@ -1512,6 +1521,12 @@ void ClientSession::apply_block_registry(const protocol::S2CBlockRegistry &msg) 
 void ClientSession::apply_keybind_registry(const protocol::S2CKeybindRegistry &msg) {
 	keybind_names_ = msg.names;
 	VB_INFO("net", "received keybind registry (", msg.names.size(), " keybinds)");
+}
+
+void ClientSession::apply_entity_kind_registry(
+		const protocol::S2CEntityKindRegistry &msg) {
+	entity_kinds_ = msg.kinds;
+	VB_INFO("net", "received entity kind registry (", msg.kinds.size(), " kinds)");
 }
 
 void ClientSession::apply_move_params(const protocol::S2CMoveParams &msg) {

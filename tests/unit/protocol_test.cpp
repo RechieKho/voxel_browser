@@ -101,6 +101,7 @@ TEST_CASE("lane assignment matches the spec") {
 	CHECK(lane_for(MessageType::kS2CAssetData) == Lane::kAssets);
 	CHECK(lane_for(MessageType::kC2SInputBatch) == Lane::kInput);
 	CHECK(lane_for(MessageType::kS2CKeybindRegistry) == Lane::kWorld);
+	CHECK(lane_for(MessageType::kS2CEntityKindRegistry) == Lane::kWorld);
 }
 
 TEST_CASE("handshake structs round-trip") {
@@ -341,6 +342,24 @@ TEST_CASE("keybind registry decode rejects more than kMaxKeybinds names") {
 	auto decoded = S2CKeybindRegistry::decode(as_span(bytes));
 	CHECK_FALSE(decoded);
 	CHECK(decoded.error() == vb::core::ProtocolError::kLengthExceeded);
+}
+
+TEST_CASE("entity kind registry round-trips, including an empty list") {
+	auto empty = round_trip(S2CEntityKindRegistry{});
+	CHECK(empty.kinds.empty());
+
+	S2CEntityKindRegistry reg;
+	reg.kinds.push_back({ "test:slime", 0.6f, 0.6f });
+	reg.kinds.push_back({ "test:golem" }); // default width/height
+	auto r2 = round_trip(reg);
+	REQUIRE(r2.kinds.size() == 2);
+	CHECK(r2.kinds[0].name == "test:slime");
+	CHECK(r2.kinds[0].width == doctest::Approx(0.6f));
+	CHECK(r2.kinds[0].height == doctest::Approx(0.6f));
+	CHECK(r2.kinds[1].name == "test:golem");
+	CHECK(r2.kinds[1].width == doctest::Approx(0.8f));
+	CHECK(r2.kinds[1].height == doctest::Approx(1.8f));
+	CHECK(r2.kinds == reg.kinds);
 }
 
 TEST_CASE("time of day round-trips") {

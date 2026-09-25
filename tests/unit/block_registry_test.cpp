@@ -115,6 +115,62 @@ TEST_CASE("without a keybind_registry hook, the client has no registered "
 	CHECK(client.registered_keybinds().empty());
 }
 
+TEST_CASE("server sends a custom entity kind registry and the client applies "
+		"it") {
+	LoopbackNetwork net;
+	HandshakeServerConfig cfg;
+	HandshakeServerHost host;
+	host.entity_kind_registry =
+			[]() -> std::optional<std::vector<vb::protocol::EntityKindRegistryRecord>> {
+		return std::vector<vb::protocol::EntityKindRegistryRecord>{
+			{ "test:slime", 0.6f, 0.6f },
+			{ "test:golem", 1.2f, 2.4f },
+		};
+	};
+	ServerSession server(net.server(), cfg, host);
+	REQUIRE(net.server().listen(0));
+
+	Transport &t = net.create_client();
+	auto id = t.connect("x", 0);
+	REQUIRE(id);
+	ClientSession client(t, *id, HandshakeClientConfig{ "P", "", "v", 1 });
+
+	pump(server, client, 10);
+	REQUIRE(client.joined());
+
+	const auto &kinds = client.entity_kind_registry();
+	REQUIRE(kinds.size() == 2);
+	CHECK(kinds[0].name == "test:slime");
+	CHECK(kinds[0].width == doctest::Approx(0.6f));
+	CHECK(kinds[1].name == "test:golem");
+	CHECK(kinds[1].height == doctest::Approx(2.4f));
+
+	// EntityKindId 1 -> kinds[0], EntityKindId::kInvalid (players) -> nullptr.
+	const auto *slime = client.entity_kind(static_cast<vb::core::EntityKindId>(1));
+	REQUIRE(slime != nullptr);
+	CHECK(slime->name == "test:slime");
+	CHECK(client.entity_kind(vb::core::EntityKindId::kInvalid) == nullptr);
+	CHECK(client.entity_kind(static_cast<vb::core::EntityKindId>(99)) == nullptr);
+}
+
+TEST_CASE("without an entity_kind_registry hook, the client has no "
+		"registered entity kinds") {
+	LoopbackNetwork net;
+	HandshakeServerConfig cfg;
+	ServerSession server(net.server(), cfg); // default host: no hook set
+	REQUIRE(net.server().listen(0));
+
+	Transport &t = net.create_client();
+	auto id = t.connect("x", 0);
+	REQUIRE(id);
+	ClientSession client(t, *id, HandshakeClientConfig{ "P", "", "v", 1 });
+
+	pump(server, client, 10);
+	REQUIRE(client.joined());
+
+	CHECK(client.entity_kind_registry().empty());
+}
+
 TEST_CASE("server sends custom move params and the client's prediction uses "
 		"them (Phase 6.7)") {
 	LoopbackNetwork net;

@@ -154,6 +154,45 @@ TEST_CASE("vb.register_entity captures its callback table without dispatching") 
 	REQUIRE(r);
 }
 
+TEST_CASE("vb.register_entity{width=, height=} reaches joining clients as "
+		"S2C_EntityKindRegistry, defaulting to the placeholder's own "
+		"0.8/1.8 when omitted (entity-management follow-up to Phase 6.1)") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("entity_kind_registry"));
+
+	REQUIRE(rt.load_pack_file(R"(
+		vb.register_entity({ name = "test:slime", width = 0.6, height = 0.6 })
+		vb.register_entity({ name = "test:golem" })
+	)"));
+	rt.freeze();
+
+	vb::net::HandshakeServerHost host;
+	rt.install_entity_kind_registry(host);
+	REQUIRE(host.entity_kind_registry);
+	const auto kinds = host.entity_kind_registry();
+	REQUIRE(kinds.has_value());
+	REQUIRE(kinds->size() == 2);
+	CHECK((*kinds)[0].name == "test:slime");
+	CHECK((*kinds)[0].width == doctest::Approx(0.6f));
+	CHECK((*kinds)[0].height == doctest::Approx(0.6f));
+	CHECK((*kinds)[1].name == "test:golem");
+	CHECK((*kinds)[1].width == doctest::Approx(0.8f));
+	CHECK((*kinds)[1].height == doctest::Approx(1.8f));
+}
+
+TEST_CASE("install_entity_kind_registry leaves the hook at nullopt when no "
+		"pack ever called vb.register_entity") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("entity_kind_registry_empty"));
+	rt.freeze();
+
+	vb::net::HandshakeServerHost host;
+	rt.install_entity_kind_registry(host);
+	CHECK_FALSE(host.entity_kind_registry());
+}
+
 TEST_CASE("vb.register_keybind is idempotent, capped, and rejected after freeze") {
 	vb::net::LoopbackNetwork net;
 	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();

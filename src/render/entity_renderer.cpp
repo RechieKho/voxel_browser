@@ -40,9 +40,24 @@ Color tint_for_entity(core::NetId id) {
 
 } // namespace
 
+// Entity-management follow-up to Phase 6.1: a script entity's registered
+// vb.register_entity{width=, height=} (protocol::EntityKindRegistryRecord,
+// looked up via ClientSession::entity_kind()) replaces the flat
+// kPlaceholderWidth/kPlaceholderHeight for its billboard -- players
+// (EntityRecord::kind == kInvalid) and any kind with no registry entry (host
+// never opted in) keep the placeholder defaults, same "missing = default"
+// posture as every other opt-in registry in this codebase.
+struct TrackedEntity {
+	EntityPresentationState state;
+	float width = kPlaceholderWidth;
+	float height = kPlaceholderHeight;
+
+	explicit TrackedEntity(int facings) : state(facings) {}
+};
+
 struct EntityRenderer::Impl {
 	Texture2D placeholder{};
-	std::unordered_map<core::NetId, EntityPresentationState> states;
+	std::unordered_map<core::NetId, TrackedEntity> states;
 };
 
 EntityRenderer::EntityRenderer() : impl_(std::make_unique<Impl>()) {
@@ -73,24 +88,32 @@ void EntityRenderer::sync(const net::ClientSession &client,
 		auto [it, inserted] =
 				impl_->states.try_emplace(id, kDefaultFacings);
 		(void)inserted;
+		// Re-checked every sync (cheap: one map lookup) rather than only on
+		// insert, so a registry that arrives just after this entity's first
+		// snapshot still takes effect -- frame arrival order across the
+		// S2C_EntityKindRegistry/S2C_EntitySnapshot messages isn't guaranteed.
+		if (const auto *kind = client.entity_kind(rec.kind)) {
+			it->second.width = kind->width;
+			it->second.height = kind->height;
+		}
 		const core::Vec3d pos = client.interpolated_pos(id);
-		it->second.update(pos, static_cast<double>(rec.rot.x), rec.vel,
+		it->second.state.update(pos, static_cast<double>(rec.rot.x), rec.vel,
 				rec.flags, camera.position, dt_seconds);
 	}
 }
 
 void EntityRenderer::draw(const CameraView &camera_view) const {
 	const Camera3D camera = to_raylib_camera(camera_view);
-	for (const auto &[id, state] : impl_->states) {
-		const EntityPresentationState::Frame &frame = state.frame();
-		const core::Vec3d pos = state.position();
+	for (const auto &[id, tracked] : impl_->states) {
+		const EntityPresentationState::Frame &frame = tracked.state.frame();
+		const core::Vec3d pos = tracked.state.position();
 		const Vector3 feet{ static_cast<float>(pos.x),
 			static_cast<float>(pos.y), static_cast<float>(pos.z) };
 
 		const Rectangle source{ 0.0f, 0.0f,
 			static_cast<float>(impl_->placeholder.width),
 			static_cast<float>(impl_->placeholder.height) };
-		Vector2 size{ kPlaceholderWidth, kPlaceholderHeight };
+		Vector2 size{ tracked.width, tracked.height };
 		if (frame.pose.mirrored) {
 			size.x = -size.x; // DrawBillboardPro flips the source horizontally
 		}

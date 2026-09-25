@@ -220,8 +220,13 @@ Full detail: `remaining_tasks/phase6.md`.
       content calls either yet.
 - [ ] No automatic despawn-on-health trigger for generic script entities (no
       health primitive exists; a pack tracks HP on `self` itself) — 6.1.
-- [ ] No client-side kind-specific rendering for script entities (`EntityKind`
-      id threads through but nothing branches on it) — 6.1.
+- [x] Client-side kind-specific rendering for script entities — landed
+      2026-09-25 (`EntityKind` id now drives the billboard's own
+      width/height, via a new `S2C_EntityKindRegistry` (protocol version 19)
+      and `vb.register_entity{width=, height=}`). Real per-kind sprite art
+      (the `visual = {...}` schema below) is still a separate, unimplemented
+      item — this only closes "nothing branches on kind at all", not that.
+      See `STATE.md`'s "Current status" for the full write-up.
 - [ ] Per-connection rate limiting on custom-keybind events — 6.3 (folds into
       Phase 3.2's still-unimplemented flood guard).
 - [ ] Replicate block-damage *value* (not just begin/stop/complete) to nearby

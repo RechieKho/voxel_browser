@@ -177,6 +177,13 @@ vb::net::HandshakeServerHost make_singleplayer_host(std::uint64_t seed,
 		const vb::physics::MoveParams &move_params) {
 	vb::net::HandshakeServerHost host = sp_server_host(seed);
 	pack_runtime.install_join_veto(host); // before ServerSession copies `host`
+	// Entity-management follow-up to Phase 6.1: mirrors src/server/main.cpp's
+	// own install_entity_kind_registry call exactly -- without this,
+	// --singleplayer's script entities would render as the flat placeholder
+	// regardless of what a pack's vb.register_entity{width=, height=} asked
+	// for, the same "silently missing" gap host.block_registry above closes
+	// for custom blocks.
+	pack_runtime.install_entity_kind_registry(host); // before ServerSession copies `host`
 	// Phase 6.7: mirrors src/server/main.cpp's own host.move_params exactly --
 	// without this, --singleplayer's client-side prediction would silently
 	// keep vb::physics::MoveParams's hardcoded defaults even when a pack

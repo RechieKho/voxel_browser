@@ -80,6 +80,15 @@ public:
 	// constructing the ServerSession that will copy `host`.
 	void install_keybind_registry(net::HandshakeServerHost &host);
 
+	// Wraps host.entity_kind_registry so every vb.register_entity kind reaches
+	// joining clients as S2C_EntityKindRegistry (entity-management follow-up
+	// to Phase 6.1), letting render::EntityRenderer size script-entity
+	// billboards per kind instead of one flat placeholder for all of them.
+	// Same calling convention as install_join_veto/install_keybind_registry:
+	// call after freeze(), before constructing the ServerSession that will
+	// copy `host`.
+	void install_entity_kind_registry(net::HandshakeServerHost &host);
+
 	// Call once each object exists to enable the block-edit veto/on_break/
 	// on_place hooks and the entity/player runtime API respectively.
 	void attach_world(net::WorldReplicator &replicator);

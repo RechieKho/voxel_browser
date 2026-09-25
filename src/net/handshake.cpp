@@ -250,6 +250,10 @@ ServerHandshakeStep ServerHandshake::on_frame(const Frame &frame) {
 				step.send.push_back(
 						frame_message(protocol::S2CKeybindRegistry{ std::move(*names) }));
 			}
+			if (auto kinds = host_.entity_kind_registry()) {
+				step.send.push_back(frame_message(
+						protocol::S2CEntityKindRegistry{ std::move(*kinds) }));
+			}
 			if (auto mp = host_.move_params()) {
 				step.send.push_back(frame_message(*mp));
 			}

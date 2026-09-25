@@ -594,6 +594,33 @@ public:
 		return keybind_names_;
 	}
 
+	// Pack-registered `vb.register_entity{...}` kinds (entity-management
+	// follow-up to Phase 6.1), index == EntityKindId - 1. Empty until (and
+	// unless) an S2C_EntityKindRegistry arrives -- a host that never opts in
+	// leaves this empty forever, same "no frame, no behavior change" posture
+	// as registered_keybinds()/chunk_store()'s block registry.
+	const std::vector<protocol::EntityKindRegistryRecord> &
+	entity_kind_registry() const {
+		return entity_kinds_;
+	}
+
+	// Looks up a script entity's registered kind record by EntityRecord::kind.
+	// Returns nullptr for core::EntityKindId::kInvalid (every player) or an
+	// id with no matching S2C_EntityKindRegistry entry (host never opted in,
+	// or a stale id) -- callers fall back to a generic placeholder either way,
+	// same "missing = default" posture as every other opt-in registry.
+	const protocol::EntityKindRegistryRecord *entity_kind(
+			core::EntityKindId id) const {
+		if (id == core::EntityKindId::kInvalid) {
+			return nullptr;
+		}
+		const auto index = static_cast<std::size_t>(id) - 1;
+		if (index >= entity_kinds_.size()) {
+			return nullptr;
+		}
+		return &entity_kinds_[index];
+	}
+
 	// --- client UI VM (spec §10.4, Phase 4.5) ---------------------------
 
 	// Drains a pending S2C_OpenUi, if one arrived since the last call.
@@ -670,6 +697,7 @@ private:
 	bool apply_gameplay_frame(const protocol::Frame &frame);
 	void apply_block_registry(const protocol::S2CBlockRegistry &msg);
 	void apply_keybind_registry(const protocol::S2CKeybindRegistry &msg);
+	void apply_entity_kind_registry(const protocol::S2CEntityKindRegistry &msg);
 	void apply_move_params(const protocol::S2CMoveParams &msg);
 	void apply_day_night_curve(const protocol::S2CDayNightCurve &msg);
 	void apply_fog_params(const protocol::S2CFogParams &msg);
@@ -711,6 +739,7 @@ private:
 	std::optional<std::uint32_t> time_of_day_override_;
 	std::vector<protocol::InventorySlot> inventory_;
 	std::vector<std::string> keybind_names_;
+	std::vector<protocol::EntityKindRegistryRecord> entity_kinds_;
 	world::DayNightCurve day_night_curve_; // empty = default_day_night_curve()
 	std::optional<protocol::S2CFogParams> fog_override_;
 

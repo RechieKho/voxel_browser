@@ -18,6 +18,12 @@
 -- itself, by calling `self:remove(cause)` once `self.hp` runs out.
 vb.register_entity({
 	name = "kitchen_sink:sentry",
+	-- Also demonstrates the entity-management follow-up to Phase 6.1:
+	-- render::EntityRenderer now sizes a script entity's billboard from these
+	-- (S2C_EntityKindRegistry) instead of the flat 0.8x1.8 player-sized
+	-- placeholder every kind used to render as, regardless of what it was.
+	width = 1.0,
+	height = 1.2,
 	on_spawn = function(self)
 		self.hp = 10
 		self.age = 0

@@ -137,6 +137,17 @@ struct HandshakeServerHost {
 	std::function<std::optional<std::vector<std::string>>()> keybind_registry =
 			[] { return std::optional<std::vector<std::string>>{}; };
 
+	// Pack-registered `vb.register_entity{...}` kinds, sent as
+	// S2C_EntityKindRegistry alongside block_registry above (entity-management
+	// follow-up to Phase 6.1). `kinds[i]` describes EntityKindId `i + 1`.
+	// `nullopt` (default) sends no frame at all: no host/test that doesn't use
+	// this channel sees any behavior change, and every remote entity keeps
+	// rendering as the flat placeholder billboard it always has.
+	std::function<std::optional<std::vector<protocol::EntityKindRegistryRecord>>()>
+			entity_kind_registry = [] {
+		return std::optional<std::vector<protocol::EntityKindRegistryRecord>>{};
+	};
+
 	// Built once at server startup (assetsync::build_manifest over the
 	// content pack) and handed to every connection by reference -- never
 	// rebuilt per connection. `nullptr` (default) skips asset sync entirely
