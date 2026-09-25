@@ -182,6 +182,58 @@ Full detail: `remaining_tasks/phase4.md`.
       (a human watching a real spritesheet animate on a billboard) was
       **not** manually eyeballed — no GUI in this agent environment, same
       still-open caveat as every other recent rendering-adjacent pass.
+- [x] Per-instance `ScriptState.visual_override` (skins) -- landed 2026-09-25.
+      `vb.world.spawn(kind, pos, { visual_override = {...} })` takes a third,
+      optional options table whose `visual_override` is the same shape as
+      `register_entity`'s `visual` (`variant`/`texture`/`facings`/`origin`/
+      `clips`) but with every field independently optional -- an omitted
+      field inherits the kind's own `visual` unchanged
+      (`render::merge_visual_override`, `inc/vb/render/
+      entity_visual_layout.hpp`), so a pack can override just `texture` (a
+      player-skin variant) while keeping the kind's `facings`/`clips`/
+      `origin`. Protocol bumped **20 -> 21**: `EntityRecord` (within
+      `S2C_EntitySnapshot`) gains an optional `visual_override`
+      (`protocol::EntityVisualOverride`, all-optional fields), populated only
+      on the one `entered` record a client gets when a NetId first enters
+      their interest set (`net::ServerSession::to_record`/
+      `broadcast_snapshots`, backed by a new `set_script_entity_visual_
+      override()`/`script_entity_visual_overrides_` map) -- `updated`/`local`
+      records never carry it, and `ClientSession` caches whatever it first
+      learned (`entity_visual_overrides_`) for the entity's whole replicated
+      lifetime, same "learned once, immutable" posture as `EntityRecord.kind`
+      itself. Client-side, `EntityRenderer::sync()` lazily decodes an
+      override's texture (merged over the kind's own `EntityVisualDef`, or an
+      all-default one if the kind never set `visual`) the first time it sees
+      a given NetId's override -- at most once per id, cached in a new
+      `instance_visuals` map that takes priority over `kind_visuals` in
+      `draw()` -- reusing a `set_kind_visual`/lazy-decode path factored into a
+      shared `decode_kind_visual()` helper. `EntityRenderer::set_virtual_fs()`
+      (new) keeps a copy of the synced/on-disk pack filesystem for this
+      lazy decode, since (unlike every kind's `visual`, fixed at registration
+      before any client joins) an override's owning entity can spawn at any
+      later time, not just during the one join-time pass `set_kind_visual`
+      calls already cover. **Deliberately out of scope, left as a real
+      follow-up:** `entity:set_visual_override()`/a live-update or clear path
+      -- the override is fixed at spawn time only; there is no wire mechanism
+      to change or clear it for a client that has already seen the entity.
+      The reserved `self.visual_override` Lua table (spec's own key) is kept
+      in sync for pack introspection only -- nothing engine-side reads it
+      back, the parsed/validated copy already lives server-side. Verified:
+      full `vb_tests` 340/340 green (1 new `protocol_test.cpp` round-trip
+      case incl. an `updated` record never carrying an override, 3 new
+      `entity_visual_layout_test.cpp` cases for `merge_visual_override`'s
+      empty/texture-only/full-replace behavior, 2 new
+      `pack_runtime_integration_test.cpp` cases -- one proving the override
+      reaches a real client's `entity_visual_override()` with only `texture`
+      set, one proving a malformed override rejects the whole spawn), clean
+      `-Werror` build of `vb_tests`/`voxel_browser`/`voxel_browser_server`
+      (temporarily reconfigured `build-net-lua` with
+      `-DVB_WARNINGS_AS_ERRORS=ON`, confirmed clean, reconfigured back to
+      this dir's OFF default afterward). The actual rendered skin swap (a
+      human watching two instances of the same kind render with different
+      textures) was **not** manually eyeballed -- no GUI in this agent
+      environment, same still-open caveat as every other recent
+      rendering-adjacent pass.
 - [x] Real base-pack art for `base:player`/`base:dropped_item` -- landed
       2026-09-25. Neither ever went through the `vb.register_entity` kind
       mechanism (players hardcoded `EntityKindId::kInvalid` at join, drops

@@ -1317,6 +1317,99 @@ TEST_CASE("vb.register_entity{health=}: damage() auto-despawns at 0 without "
 	CHECK(client.remote_entities().size() == 1); // slime still alive
 }
 
+TEST_CASE("vb.world.spawn(kind, pos, {visual_override=}) reaches a joining "
+		  "client on the entered EntityRecord, overriding just texture while "
+		  "the kind's own facings/clips still apply") {
+	LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("entity_visual_override"));
+	REQUIRE(rt.load_pack_file(R"(
+		instance = nil
+		vb.register_entity({
+			name = "test:hero",
+			visual = {
+				variant = "tall",
+				texture = "textures/entities/hero.png",
+				facings = 4,
+				clips = { { clip = "idle", frames = 2, fps = 4 } },
+			},
+		})
+		vb.on("chat", function(player, text)
+			if text == "spawn" then
+				instance = vb.world.spawn("test:hero", { x = 5, y = 5, z = 5 },
+						{ visual_override = { texture = "textures/entities/skins/hero_red.png" } })
+			end
+			return true
+		end)
+	)"));
+	rt.freeze();
+
+	HandshakeServerConfig cfg;
+	cfg.world_seed = 7;
+	ServerSession server(net.server(), cfg);
+	rt.attach_session(server);
+	REQUIRE(net.server().listen(0));
+
+	Transport &ta = net.create_client();
+	auto ida = ta.connect("x", 0);
+	REQUIRE(ida);
+	ClientSession client(ta, *ida, HandshakeClientConfig{ "A", "", "v", 1 });
+
+	auto pump = [&](int n) {
+		for (int i = 0; i < n; ++i) {
+			server.tick(0.05);
+			client.tick(0.05);
+			rt.dispatch_tick(0.05);
+		}
+	};
+	pump(16);
+	REQUIRE(client.joined());
+	server.set_player_state(client.join_accept()->your_net_id, Vec3d{ 5, 5, 7 });
+
+	client.send_chat("spawn");
+	pump(6);
+	CHECK_FALSE(client.remote_entities().empty());
+
+	// Find the spawned kind's own NetId (the only remote entity here).
+	REQUIRE(client.remote_entities().size() == 1);
+	const auto net_id = client.remote_entities().begin()->first;
+
+	const auto *ov = client.entity_visual_override(net_id);
+	REQUIRE(ov != nullptr);
+	REQUIRE(ov->texture.has_value());
+	CHECK(*ov->texture == "textures/entities/skins/hero_red.png");
+	// Only texture was overridden -- facings/frame size/clips were never set
+	// on the override table, so they stay nullopt (render::
+	// merge_visual_override inherits the kind's own visual for those).
+	CHECK_FALSE(ov->facings.has_value());
+	CHECK_FALSE(ov->frame_width.has_value());
+	CHECK_FALSE(ov->clips.has_value());
+}
+
+TEST_CASE("vb.world.spawn rejects a malformed visual_override without "
+		  "spawning anything") {
+	LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("entity_visual_override_bad"));
+	REQUIRE(rt.load_pack_file(R"(
+		vb.register_entity({ name = "test:hero" })
+	)"));
+	rt.freeze();
+
+	HandshakeServerConfig cfg;
+	cfg.world_seed = 7;
+	ServerSession server(net.server(), cfg);
+	rt.attach_session(server);
+
+	const auto r = rt.load_pack_file(R"(
+		vb.world.spawn("test:hero", { x = 0, y = 0, z = 0 },
+				{ visual_override = { facings = 5 } })
+	)");
+	CHECK_FALSE(r);
+}
+
 TEST_CASE("region_enter/region_exit (Phase 7.3): fires once per crossing, "
 		  "not per tick spent inside, and passes the block's registered name") {
 	LoopbackNetwork net;

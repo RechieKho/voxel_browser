@@ -20,6 +20,77 @@
 
 ## Current status (2026-09-25)
 
+**Same-day follow-up #8: per-instance `ScriptState.visual_override` (skins)**
+(REMAINING_TASKS' Phase 4 item left open by follow-up #6/#7 above, spec
+`architecture_spec/rendering.md` §11.3's "Per-instance override"). New third,
+optional argument to `vb.world.spawn(kind, pos, opts)`: `opts.visual_override`
+takes the same shape as `register_entity`'s `visual` table
+(`variant`/`texture`/`facings`/`origin`/`clips`) but every field is
+independently optional -- an omitted one inherits the kind's own `visual`
+unchanged (`render::merge_visual_override`, new pure function in
+`inc/vb/render/entity_visual_layout.hpp`), so a pack overriding just `texture`
+(a player-skin variant) keeps the kind's `facings`/`clips`/`origin`.
+Validated the same way as `register_entity`'s `visual` whenever a field is
+given (`PackRuntime`'s new `parse_entity_visual_override`).
+Protocol bumped **20 -> 21**: `EntityRecord` (within `S2C_EntitySnapshot`)
+gains an optional `visual_override` (`protocol::EntityVisualOverride`, every
+field optional, own presence-bool-per-field codec in `src/protocol/
+snapshot.cpp` -- deliberately not sharing `world.cpp`'s `write_entity_visual`/
+`read_entity_visual`, which encode a fully-specified `EntityVisualDef` for a
+different message, not a partial override; same "no shared helper to import"
+posture as `RegionStore`'s own `read_whole_file()`, §4 below). Populated only
+on the **one** `entered` record a client receives when a NetId first enters
+their interest set (`net::ServerSession::to_record`/`broadcast_snapshots`,
+backed by a new `ServerSession::set_script_entity_visual_override()`/
+`script_entity_visual_overrides_` map, set from `vb.world.spawn`) --
+`updated`/`local` records never carry it (their `has_override` bit is always
+false, meaning "unchanged", not "cleared"), and `ClientSession` caches
+whatever it first learned (new `entity_visual_overrides_` map, exposed via
+`entity_visual_override(NetId)`) for that NetId's whole replicated lifetime --
+same "learned once, immutable" posture this codebase already gives
+`EntityRecord.kind` itself, chosen deliberately to avoid resending a
+potentially large override (a texture path + a full clip list) every tick to
+every observer the way a naive "just add it next to `kind`" approach would
+have. Client-side, `EntityRenderer::sync()` lazily decodes an override's
+texture (merged over the kind's own `EntityVisualDef`, or an all-default one
+if the kind never set `visual` at all) the first time it sees a given NetId's
+override -- at most once per id ever (an `instance_visual_attempted` set
+guards this, since an override never changes), cached in a new
+`instance_visuals` map that `draw()` checks before `kind_visuals`. The
+kind-visual and instance-visual decode paths were unified into one shared
+`decode_kind_visual()` helper (previously duplicated logic inline in
+`set_kind_visual`). New `EntityRenderer::set_virtual_fs()` keeps a persistent
+copy of the synced/on-disk pack filesystem for this lazy decode -- unlike
+every kind's own `visual` (fixed at registration, before any client joins, so
+`set_kind_visual` only ever needs to run once per kind in one join-time loop),
+an override's owning entity can spawn at any later moment during the session,
+so the renderer needs standing access to the vfs rather than a one-shot
+parameter. **Deliberately out of scope, left as a real follow-up:**
+`entity:set_visual_override()`/any live-update or clear path -- the override
+is fixed at spawn time only; there is no wire mechanism to change or clear it
+for a client that has already seen the entity (would need resending on an
+already-`stayed` record, which the "learned once" wire design above
+deliberately doesn't support yet). The reserved `self.visual_override` Lua
+table (the spec's own key) is kept in sync purely for pack introspection --
+nothing engine-side ever reads it back; the parsed, validated, replicated
+copy already lives server-side in `script_entity_visual_overrides_`.
+Verified: full `vb_tests` 340/340 green (1 new `protocol_test.cpp` round-trip
+case, including proof that an `updated` record never carries an override even
+when the entity has one; 3 new `entity_visual_layout_test.cpp` cases for
+`merge_visual_override`'s empty/texture-only/full-replace behavior; 2 new
+`pack_runtime_integration_test.cpp` cases -- one spawning a real kind with its
+own `visual` and a texture-only override, proving a real client's
+`entity_visual_override()` comes back with only `texture` set and every other
+field still `nullopt`; one proving a malformed override (`facings = 5`)
+rejects the whole `vb.world.spawn` call, not just the override), clean
+`-Werror` build of `vb_tests`/`voxel_browser`/`voxel_browser_server`
+(temporarily reconfigured `build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`,
+confirmed clean, reconfigured back to this dir's OFF default afterward). The
+actual rendered skin swap (a human watching two instances of the same kind
+render with visibly different textures) was **not** manually eyeballed -- no
+GUI in this agent environment, same still-open caveat as every other recent
+rendering-adjacent pass.
+
 **Same-day follow-up #7: real base-pack art for `base:player`/
 `base:dropped_item`** (the follow-up #6 entry below deliberately left open).
 Neither ever flowed through the `vb.register_entity` kind mechanism at all:

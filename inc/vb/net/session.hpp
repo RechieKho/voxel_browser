@@ -318,6 +318,18 @@ public:
 			core::Vec2f rot = {}, core::Vec3f vel = {});
 	void remove_script_entity(core::NetId id);
 
+	// Entity-management follow-up (spec architecture_spec/rendering.md
+	// §11.3's "Per-instance override"): `vb.world.spawn`'s `visual_override`
+	// option. `nullopt` clears it (no-op if never set). Attached to the one
+	// S2C_EntitySnapshot record a given observing client receives when this
+	// NetId first enters their interest set (protocol::EntityRecord::
+	// visual_override, see ServerSession::to_record/broadcast_snapshots) --
+	// fixed for the entity's whole replicated lifetime, same as `kind`; there
+	// is no path yet to change it after a client has already seen the entity
+	// (deliberately out of scope for this pass, see REMAINING_TASKS.md).
+	void set_script_entity_visual_override(
+			core::NetId id, std::optional<protocol::EntityVisualOverride> override_def);
+
 	// Phase 6.18 (Growtopia-style combat): tunables for punch() below. One
 	// discrete swing per call -- edge-triggering (only calling punch() on a
 	// rising "attack key" edge, not every tick it's held) is entirely the
@@ -446,6 +458,11 @@ private:
 	// set_script_entity_state()/remove_script_entity() can find the entity
 	// again by the id PackRuntime already tracks its Lua-side state under.
 	std::unordered_map<core::NetId, entt::entity> script_entities_;
+	// set_script_entity_visual_override()'s storage -- looked up by
+	// broadcast_snapshots() only when building an `entered` record (see
+	// to_record()); absent means the entity never set one.
+	std::unordered_map<core::NetId, protocol::EntityVisualOverride>
+			script_entity_visual_overrides_;
 	std::map<ConnId, Conn> conns_;
 	replication::InterestGrid interest_;
 	std::unique_ptr<WorldReplicator> replicator_;
@@ -642,6 +659,19 @@ public:
 		return &entity_kinds_[index];
 	}
 
+	// Entity-management follow-up: a script entity's per-instance visual
+	// override (`vb.world.spawn`'s `visual_override` option), learned once
+	// from the S2C_EntitySnapshot record that first made this NetId visible
+	// (protocol::EntityRecord::visual_override is only ever populated on an
+	// `entered` record, see ServerSession::to_record) and cached here for the
+	// rest of the entity's replicated lifetime. nullptr for any entity that
+	// never set one, same "missing = default" posture as entity_kind().
+	const protocol::EntityVisualOverride *entity_visual_override(
+			core::NetId id) const {
+		const auto it = entity_visual_overrides_.find(id);
+		return it == entity_visual_overrides_.end() ? nullptr : &it->second;
+	}
+
 	// --- client UI VM (spec §10.4, Phase 4.5) ---------------------------
 
 	// Drains a pending S2C_OpenUi, if one arrived since the last call.
@@ -761,6 +791,11 @@ private:
 	std::vector<protocol::InventorySlot> inventory_;
 	std::vector<std::string> keybind_names_;
 	std::vector<protocol::EntityKindRegistryRecord> entity_kinds_;
+	// entity_visual_override()'s storage, populated from EntityRecord::
+	// visual_override in apply_snapshot() and erased alongside remote_ on
+	// removal.
+	std::unordered_map<core::NetId, protocol::EntityVisualOverride>
+			entity_visual_overrides_;
 	world::DayNightCurve day_night_curve_; // empty = default_day_night_curve()
 	std::optional<protocol::S2CFogParams> fog_override_;
 

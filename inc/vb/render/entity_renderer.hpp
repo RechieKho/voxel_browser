@@ -48,6 +48,16 @@ public:
 	void set_kind_visual(core::EntityKindId id,
 			const protocol::EntityVisualDef &def, const VirtualFs &vfs);
 
+	// Entity-management follow-up: keeps a copy of the synced/on-disk pack
+	// filesystem so sync() can lazily decode a per-instance visual override's
+	// texture the first time it sees one (an override's spawn time isn't
+	// known up front the way every kind's `visual` is at join, so this can't
+	// be a one-shot loop over a fixed list the way set_kind_visual's join-time
+	// caller works). Assets don't change post-join (no manifest-staleness
+	// story exists for mid-session pack writes -- see REMAINING_TASKS.md), so
+	// one copy taken right after join stays valid for the whole session.
+	void set_virtual_fs(VirtualFs vfs);
+
 	// Refresh per-entity animation clip + facing from `client`'s replicated
 	// remote entities (spec §8.4's remote_entities()/interpolated_pos()). Call
 	// once per frame, before draw().

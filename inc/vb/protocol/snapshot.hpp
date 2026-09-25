@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -8,6 +9,7 @@
 #include "vb/core/math.hpp"
 #include "vb/protocol/handshake.hpp" // Decoded<>
 #include "vb/protocol/message.hpp"
+#include "vb/protocol/world.hpp" // EntityVisualOverride
 
 // S2C_EntitySnapshot (spec §8.4) — lane 2, unreliable, one per server tick.
 // Carries newly-visible entities in full (`entered`), position/rotation deltas
@@ -23,6 +25,17 @@ struct EntityRecord {
 	core::Vec2f rot{}; // yaw, pitch (degrees)
 	core::Vec3f vel{};
 	std::uint8_t flags = 0;
+	// Entity-management follow-up (spec architecture_spec/rendering.md
+	// §11.3's "Per-instance override"): a script entity's `vb.world.spawn`
+	// `visual_override` option, learned once and cached client-side
+	// (ClientSession's own entity_visual_overrides_ map) rather than resent
+	// every tick. Only ever populated on an `entered` record -- ServerSession
+	// only attaches it there (see net::ServerSession::to_record); `updated`/
+	// `local` records always leave this nullopt, which means "unchanged", not
+	// "cleared" (there is no clear path yet -- the override is fixed for the
+	// entity's whole replicated lifetime, same as `kind`). Absent entirely
+	// (the common case) costs one bool on the wire.
+	std::optional<EntityVisualOverride> visual_override;
 
 	bool operator==(const EntityRecord &) const = default;
 };

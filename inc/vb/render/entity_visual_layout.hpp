@@ -76,6 +76,37 @@ inline std::optional<EntityVisualLayout> build_entity_visual_layout(
 	return layout;
 }
 
+// Per-instance override merge (spec architecture_spec/rendering.md §11.3's
+// "Per-instance override" -- a script entity's own
+// protocol::EntityVisualOverride, field-by-field over its kind's
+// protocol::EntityVisualDef). Every unset override field inherits the kind's
+// own value unchanged; `frame_width`/`frame_height` and `origin_x`/
+// `origin_y` are only ever set as pairs on EntityVisualOverride, so no
+// half-pair inheritance case exists to handle here.
+inline protocol::EntityVisualDef merge_visual_override(
+		const protocol::EntityVisualDef &kind_default,
+		const protocol::EntityVisualOverride &over) {
+	protocol::EntityVisualDef out = kind_default;
+	if (over.texture) {
+		out.texture = *over.texture;
+	}
+	if (over.frame_width && over.frame_height) {
+		out.frame_width = *over.frame_width;
+		out.frame_height = *over.frame_height;
+	}
+	if (over.facings) {
+		out.facings = *over.facings;
+	}
+	if (over.origin_x && over.origin_y) {
+		out.origin_x = *over.origin_x;
+		out.origin_y = *over.origin_y;
+	}
+	if (over.clips) {
+		out.clips = *over.clips;
+	}
+	return out;
+}
+
 // Exact-name lookup; falls back to the first declared clip if `name` isn't
 // present (rendering.md: "falls back to the first declared clip rather than
 // erroring at runtime"). `layout.clips` is never empty for a layout returned

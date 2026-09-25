@@ -1061,7 +1061,7 @@ int main(int argc, char **argv) {
 		// kind that never set `visual = {...}` is untouched, keeping its
 		// flat placeholder billboard exactly as before this existed.
 		{
-			const vb::render::VirtualFs entity_vfs = remote
+			vb::render::VirtualFs entity_vfs = remote
 					? remote->asset_cache.virtual_fs()
 					: load_entity_textures_from_disk(client->entity_kind_registry(), kSingleplayerContentPack);
 			const auto &entity_kinds = client->entity_kind_registry();
@@ -1072,6 +1072,12 @@ int main(int argc, char **argv) {
 							static_cast<vb::core::EntityKindId>(i + 1), *rec.visual, entity_vfs);
 				}
 			}
+			// Entity-management follow-up: kept for the rest of the session
+			// so sync() can lazily decode a per-instance visual_override's
+			// texture whenever one shows up (unlike the kind visuals above,
+			// an override's owning entity can spawn at any later time, not
+			// just during this one join-time pass).
+			entity_renderer->set_virtual_fs(std::move(entity_vfs));
 		}
 		mouse_captured = false;
 		chat_log.clear();

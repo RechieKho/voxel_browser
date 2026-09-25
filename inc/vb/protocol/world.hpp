@@ -168,6 +168,29 @@ struct EntityVisualDef {
 	bool operator==(const EntityVisualDef &) const = default;
 };
 
+// Per-instance override merged over a script entity's kind-level
+// EntityVisualDef (architecture_spec/rendering.md §11.3's "Per-instance
+// override" -- e.g. a player-skin pack overriding just `texture` while
+// `facings`/`origin`/`clips` inherit the kind's own `visual` unchanged).
+// Every field is independently optional; an unset field inherits the kind
+// default. `frame_width`/`frame_height` travel together (both set or
+// neither) since a pack always resolves them from one `variant` name
+// server-side, same as `EntityVisualDef` itself -- there's no sensible way to
+// override just one half of that pair; `origin_x`/`origin_y` are coupled the
+// same way. See render::merge_visual_override (vb/render/
+// entity_visual_layout.hpp) for how this is applied client-side.
+struct EntityVisualOverride {
+	std::optional<std::string> texture;
+	std::optional<std::uint16_t> frame_width;
+	std::optional<std::uint16_t> frame_height;
+	std::optional<std::uint8_t> facings;
+	std::optional<float> origin_x;
+	std::optional<float> origin_y;
+	std::optional<std::vector<EntityClipDef>> clips;
+
+	bool operator==(const EntityVisualOverride &) const = default;
+};
+
 struct EntityKindRegistryRecord {
 	std::string name;
 	// Billboard footprint, metres -- mirrors render::EntityRenderer's

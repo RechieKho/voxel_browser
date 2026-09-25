@@ -154,6 +154,42 @@ TEST_CASE("entity snapshot round-trips") {
 	CHECK(s2.removed[0] == vb::core::NetId{ 9 });
 }
 
+TEST_CASE("entity snapshot round-trips a per-instance visual override") {
+	S2CEntitySnapshot s;
+	s.server_tick = 1;
+	s.last_acked_input_seq = 0;
+
+	EntityRecord entered{ vb::core::NetId{ 3 }, vb::core::EntityKindId{ 1 },
+		{ 1.0, 2.0, 3.0 }, { 45.0f, -10.0f }, { 0.1f, 0.0f, -0.2f }, 0 };
+	EntityVisualOverride ov;
+	ov.texture = "textures/entities/skins/player_red.png";
+	ov.facings = 4;
+	ov.clips = std::vector<EntityClipDef>{ { "idle", 4, 6.0f } };
+	entered.visual_override = ov;
+	s.entered.push_back(entered);
+
+	// A `stayed`/updated record never carries an override (see
+	// net::ServerSession::to_record) -- nullopt round-trips as absent, not a
+	// spurious default-constructed EntityVisualOverride.
+	s.updated.push_back({ vb::core::NetId{ 4 }, vb::core::EntityKindId{ 1 },
+			{ 0.0, 0.0, 0.0 }, {}, {}, 0 });
+
+	auto s2 = round_trip(s);
+	REQUIRE(s2.entered.size() == 1);
+	REQUIRE(s2.entered[0].visual_override.has_value());
+	CHECK(s2.entered[0].visual_override->texture == "textures/entities/skins/player_red.png");
+	CHECK_FALSE(s2.entered[0].visual_override->frame_width.has_value());
+	REQUIRE(s2.entered[0].visual_override->facings.has_value());
+	CHECK(*s2.entered[0].visual_override->facings == 4);
+	REQUIRE(s2.entered[0].visual_override->clips.has_value());
+	REQUIRE(s2.entered[0].visual_override->clips->size() == 1);
+	CHECK((*s2.entered[0].visual_override->clips)[0].clip == "idle");
+	CHECK(s2.entered[0] == entered);
+
+	REQUIRE(s2.updated.size() == 1);
+	CHECK_FALSE(s2.updated[0].visual_override.has_value());
+}
+
 TEST_CASE("chat / open_ui round-trip") {
 	auto c1 = round_trip(C2SChat{ "hi there" });
 	CHECK(c1.text == "hi there");

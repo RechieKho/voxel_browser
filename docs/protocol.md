@@ -4,8 +4,33 @@
 > as any change to a struct in `inc/vb/protocol/`, and bump
 > `kEngineProtocolVersion` in `cmake/version.hpp.in`.
 
-Current `ENGINE_PROTOCOL_VERSION`: **20**.
+Current `ENGINE_PROTOCOL_VERSION`: **21**.
 
+- **21** — `EntityRecord` (within `S2C_EntitySnapshot`, 60) gains an optional
+  `visual_override` field: a script entity's per-instance visual override
+  (`vb.world.spawn(kind, pos, {visual_override = {...}})`, entity-management
+  follow-up to version 20's kind-level `visual`, spec
+  `architecture_spec/rendering.md` §11.3's "Per-instance override"). Layout,
+  after the existing `flags`: `bool has_override`; if true, an
+  `EntityVisualOverride` — every field independently optional, each prefixed
+  by its own presence bool: `string texture`; `u16 frame_width, u16
+  frame_height` (travel together, both or neither); `u8 facings`; `f32
+  origin_x, f32 origin_y` (also together); `varint clip_count` + `clip_count ×
+  {string clip, u16 frames, f32 fps}` (capped at 64, same shape as
+  `EntityVisualDef.clips`). Client-side, `render::merge_visual_override`
+  (`inc/vb/render/entity_visual_layout.hpp`) merges this field-by-field over
+  the entity's kind-level `EntityVisualDef` (absent kind default = an
+  all-default `EntityVisualDef{}`) before decoding — a pack overriding only
+  `texture` (the "player skin" motivating case) keeps its kind's `facings`/
+  `origin`/`clips` unchanged. **Only ever populated on an `entered` record**
+  (`net::ServerSession::to_record`/`broadcast_snapshots`) — `updated`/`local`
+  records always send `has_override = false`, which means "unchanged", not
+  "cleared": `ClientSession` caches whatever it first learned
+  (`entity_visual_overrides_`) for the rest of that NetId's replicated
+  lifetime, the same "learned once, immutable" posture as `EntityRecord.kind`
+  itself. There is no wire path yet to change or clear an override after a
+  client has already seen the entity — deliberately out of scope for this
+  pass, see `REMAINING_TASKS.md`.
 - **20** — `EntityKindRegistryRecord` (within `S2C_EntityKindRegistry`, 53)
   gains an optional `visual` field: real per-kind spritesheet art
   (`vb.register_entity{visual = {...}}`, entity-management follow-up to
@@ -245,7 +270,9 @@ buffered, and yields `consumed` so a stream reader can advance.
 | `S2C_EntitySnapshot` (60) | `u32 server_tick`, `u32 last_acked_input_seq`, `varint n` + `n×EntityRecord entered`, `varint n` + `n×EntityRecord updated`, `varint n` + `n×u32 removed`, `bool has_local`, `EntityRecord local` (only if `has_local`) |
 
 `EntityRecord` = `u32 net_id`, `u16 kind`, `f64×3 pos`, `f32×2 rot` (yaw,pitch deg),
-`f32×3 vel`, `u8 flags` (bit 0 = `on_ground`). Interest culling excludes the
+`f32×3 vel`, `u8 flags` (bit 0 = `on_ground`), `bool has_override` + optional
+`EntityVisualOverride visual_override` (version 21, see that entry above —
+only ever set on an `entered` record). Interest culling excludes the
 recipient, so their own authoritative state rides in `local` for
 prediction/reconciliation (spec §8.4).
 

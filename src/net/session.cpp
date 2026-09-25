@@ -1098,6 +1098,16 @@ void ServerSession::remove_script_entity(core::NetId id) {
 		script_entities_.erase(it);
 	}
 	interest_.remove(id);
+	script_entity_visual_overrides_.erase(id);
+}
+
+void ServerSession::set_script_entity_visual_override(
+		core::NetId id, std::optional<protocol::EntityVisualOverride> override_def) {
+	if (override_def) {
+		script_entity_visual_overrides_[id] = std::move(*override_def);
+	} else {
+		script_entity_visual_overrides_.erase(id);
+	}
 }
 
 void ServerSession::broadcast_time_of_day() {
@@ -1135,13 +1145,21 @@ void ServerSession::broadcast_world() {
 
 namespace {
 
-protocol::EntityRecord to_record(const replication::EntityState &s) {
+// `override_def` is only ever passed for an `entered` record (see
+// broadcast_snapshots) -- `stayed`/`local` records call this with the
+// default nullptr, leaving EntityRecord::visual_override unset ("unchanged",
+// not "cleared"; see that field's own comment in snapshot.hpp).
+protocol::EntityRecord to_record(const replication::EntityState &s,
+		const protocol::EntityVisualOverride *override_def = nullptr) {
 	protocol::EntityRecord r;
 	r.net_id = s.net_id;
 	r.kind = s.kind;
 	r.pos = s.pos;
 	r.rot = s.rot;
 	r.vel = s.vel;
+	if (override_def != nullptr) {
+		r.visual_override = *override_def;
+	}
 	return r;
 }
 
@@ -1164,7 +1182,10 @@ void ServerSession::broadcast_snapshots() {
 		snap.server_tick = server_tick_;
 		for (core::NetId id : d.entered) {
 			if (const auto *e = interest_.get(id)) {
-				snap.entered.push_back(to_record(*e));
+				const auto ov_it = script_entity_visual_overrides_.find(id);
+				snap.entered.push_back(to_record(*e,
+						ov_it != script_entity_visual_overrides_.end() ? &ov_it->second
+																		: nullptr));
 			}
 		}
 		for (core::NetId id : d.stayed) {
@@ -1582,6 +1603,9 @@ void ClientSession::apply_snapshot(const protocol::S2CEntitySnapshot &snap) {
 
 	const auto ingest = [&](const protocol::EntityRecord &r) {
 		remote_[r.net_id] = r;
+		if (r.visual_override) {
+			entity_visual_overrides_[r.net_id] = *r.visual_override;
+		}
 		auto [it, inserted] = net_to_entity_.try_emplace(r.net_id, entt::null);
 		if (inserted) {
 			it->second = entity_registry_.create();
@@ -1611,6 +1635,7 @@ void ClientSession::apply_snapshot(const protocol::S2CEntitySnapshot &snap) {
 	}
 	for (core::NetId id : snap.removed) {
 		remote_.erase(id);
+		entity_visual_overrides_.erase(id);
 		if (const auto it = net_to_entity_.find(id); it != net_to_entity_.end()) {
 			entity_registry_.destroy(it->second);
 			net_to_entity_.erase(it);

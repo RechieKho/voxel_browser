@@ -100,9 +100,24 @@ rt.dispatch_tick(dt);
   actually decoded (`render::build_entity_visual_layout`) — a mismatch there
   logs a warning and that kind keeps the flat `width`/`height` placeholder
   rather than failing pack load. A kind that never sets `visual` is
-  unaffected either way. Per-instance override
-  (`ScriptState.visual_override`, e.g. skins) is still a real, separate,
-  not-yet-implemented follow-up. `vb.register_biome(def)` (Phase 6.14: `name`
+  unaffected either way. Per-instance override (spec's
+  `ScriptState.visual_override`, e.g. skins) is now real too:
+  `vb.world.spawn(kind, pos, { visual_override = {...} })` takes the same
+  shape as `register_entity`'s `visual` table but with every field optional
+  (`variant`/`texture`/`facings`/`origin`/`clips`) — an omitted field
+  inherits the kind's own `visual` unchanged (`render::merge_visual_override`,
+  client-side), so a pack can override just `texture` (a player-skin variant)
+  while keeping the kind's `facings`/`clips`/`origin`. Validated the same way
+  as `register_entity`'s `visual` whenever a field is given
+  (`PackRuntime`'s `parse_entity_visual_override`); the merged, decoded
+  result falls back to the kind's own visual (or the flat placeholder if the
+  kind has none) on any validation/decode failure, same posture as the
+  kind-level path. Set once at spawn time only — there's no
+  `entity:set_visual_override()`/live-update path yet, and no wire mechanism
+  to change or clear it for a client that has already seen the entity (spec
+  architecture_spec/rendering.md §11.3, `docs/protocol.md`'s version-21
+  entry); the reserved `self.visual_override` table is kept for pack
+  introspection only, nothing engine-side reads it back. `vb.register_biome(def)` (Phase 6.14: `name`
   (idempotent-by-name, mirrors every other registration function),
   `surface`/`filler`/`stone` (block *names*, resolved to `BlockId`s via the
   registry when a pipeline is compiled), `probability` (base Voronoi-cell

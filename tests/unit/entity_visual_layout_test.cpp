@@ -5,6 +5,7 @@
 using namespace vb::render;
 using vb::protocol::EntityClipDef;
 using vb::protocol::EntityVisualDef;
+using vb::protocol::EntityVisualOverride;
 
 namespace {
 
@@ -75,4 +76,45 @@ TEST_CASE("resolve_clip falls back to the first declared clip when the name is a
 	REQUIRE(layout.has_value());
 	// def has no "dead" clip -- falls back to "idle" (first declared).
 	CHECK(resolve_clip(*layout, "dead").name == "idle");
+}
+
+TEST_CASE("merge_visual_override with every field unset returns the kind default unchanged") {
+	const EntityVisualDef def = make_def();
+	const EntityVisualOverride empty;
+	CHECK(merge_visual_override(def, empty) == def);
+}
+
+TEST_CASE("merge_visual_override overrides only texture, e.g. a player skin") {
+	const EntityVisualDef def = make_def();
+	EntityVisualOverride ov;
+	ov.texture = "textures/entities/skins/player_red.png";
+
+	const EntityVisualDef merged = merge_visual_override(def, ov);
+	CHECK(merged.texture == "textures/entities/skins/player_red.png");
+	CHECK(merged.frame_width == def.frame_width);
+	CHECK(merged.frame_height == def.frame_height);
+	CHECK(merged.facings == def.facings);
+	CHECK(merged.origin_x == def.origin_x);
+	CHECK(merged.origin_y == def.origin_y);
+	CHECK(merged.clips == def.clips);
+}
+
+TEST_CASE("merge_visual_override replaces frame size/origin/facings/clips wholesale when given") {
+	const EntityVisualDef def = make_def();
+	EntityVisualOverride ov;
+	ov.frame_width = 256;
+	ov.frame_height = 256;
+	ov.facings = 4;
+	ov.origin_x = 0.5f;
+	ov.origin_y = 0.5f;
+	ov.clips = std::vector<EntityClipDef>{ { "only", 1, 1.0f } };
+
+	const EntityVisualDef merged = merge_visual_override(def, ov);
+	CHECK(merged.texture == def.texture); // never overridden -- inherited
+	CHECK(merged.frame_width == 256);
+	CHECK(merged.frame_height == 256);
+	CHECK(merged.facings == 4);
+	CHECK(merged.origin_y == doctest::Approx(0.5f));
+	REQUIRE(merged.clips.size() == 1);
+	CHECK(merged.clips[0].clip == "only");
 }

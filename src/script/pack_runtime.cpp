@@ -336,6 +336,81 @@ protocol::EntityVisualDef parse_entity_visual(const sol::table &t) {
 	return visual;
 }
 
+// Parses `vb.world.spawn(kind, pos, {visual_override = {...}})`'s option
+// table (spec architecture_spec/rendering.md §11.3's "Per-instance
+// override"). Unlike parse_entity_visual above, every field here is
+// optional -- an absent one inherits the entity's kind default unchanged
+// (render::merge_visual_override does that merge client-side). Still
+// shape-validated the same way (variant name recognized, facings 4/8, origin
+// in [0,1], clips non-empty with positive frames/fps) whenever a field *is*
+// given, so a malformed override fails loudly at spawn time rather than
+// silently misrendering later.
+protocol::EntityVisualOverride parse_entity_visual_override(const sol::table &t) {
+	protocol::EntityVisualOverride out;
+	const sol::optional<std::string> variant_name = t["variant"];
+	if (variant_name) {
+		const auto *variant = entity_visual_variant(*variant_name);
+		if (variant == nullptr) {
+			throw sol::error("visual_override: variant '" + *variant_name +
+					"' is not a recognized frame-size variant");
+		}
+		out.frame_width = variant->first;
+		out.frame_height = variant->second;
+	}
+	const sol::optional<std::string> texture = t["texture"];
+	if (texture) {
+		if (texture->empty()) {
+			throw sol::error("visual_override: texture must not be empty");
+		}
+		out.texture = *texture;
+	}
+	const sol::optional<int> facings = t["facings"];
+	if (facings) {
+		if (*facings != 4 && *facings != 8) {
+			throw sol::error("visual_override: facings must be 4 or 8");
+		}
+		out.facings = static_cast<std::uint8_t>(*facings);
+	}
+	const sol::optional<sol::table> origin_table = t["origin"];
+	if (origin_table) {
+		const float origin_x = origin_table->get_or("x", 0.5f);
+		const float origin_y = origin_table->get_or("y", 1.0f);
+		if (origin_x < 0.0f || origin_x > 1.0f || origin_y < 0.0f || origin_y > 1.0f) {
+			throw sol::error("visual_override: origin.x/y must each be in [0, 1]");
+		}
+		out.origin_x = origin_x;
+		out.origin_y = origin_y;
+	}
+	const sol::optional<sol::table> clips_table = t["clips"];
+	if (clips_table) {
+		if (clips_table->size() == 0) {
+			throw sol::error("visual_override: clips must be a non-empty array");
+		}
+		std::vector<protocol::EntityClipDef> clips;
+		for (std::size_t i = 1; i <= clips_table->size(); ++i) {
+			const sol::table entry = (*clips_table)[i];
+			const std::string clip_name = entry.get_or("clip", std::string{});
+			if (clip_name.empty()) {
+				throw sol::error(
+						"visual_override: every clips entry needs a non-empty 'clip' name");
+			}
+			const int frames = entry.get_or("frames", 0);
+			if (frames <= 0) {
+				throw sol::error(
+						"visual_override: clips['" + clip_name + "'].frames must be positive");
+			}
+			const float fps = entry.get_or("fps", 0.0f);
+			if (fps <= 0.0f) {
+				throw sol::error(
+						"visual_override: clips['" + clip_name + "'].fps must be positive");
+			}
+			clips.push_back({ clip_name, static_cast<std::uint16_t>(frames), fps });
+		}
+		out.clips = std::move(clips);
+	}
+	return out;
+}
+
 } // namespace
 
 struct BlockDef {
@@ -1535,6 +1610,7 @@ void PackRuntime::Impl::install_bindings() {
 	entity_mt["__index"] = entity_methods;
 
 	world_tbl["spawn"] = [this](const std::string &kind, sol::table pos,
+								 sol::optional<sol::table> opts,
 								 sol::this_state ts) -> sol::object {
 		sol::state_view sv(ts);
 		auto kind_it = std::find_if(entity_kinds.begin(), entity_kinds.end(),
@@ -1545,12 +1621,36 @@ void PackRuntime::Impl::install_bindings() {
 		if (session == nullptr) {
 			throw sol::error("vb.world.spawn: session not attached yet");
 		}
+		// Entity-management follow-up (spec architecture_spec/rendering.md
+		// §11.3's "Per-instance override"): validated up front, before
+		// spawn_script_entity() below, so a malformed override never leaves a
+		// half-spawned entity behind.
+		const sol::optional<sol::table> visual_override_table = [&]() -> sol::optional<sol::table> {
+			if (!opts) {
+				return sol::nullopt;
+			}
+			return (*opts)["visual_override"];
+		}();
+		std::optional<protocol::EntityVisualOverride> visual_override;
+		if (visual_override_table) {
+			visual_override = parse_entity_visual_override(*visual_override_table);
+		}
 		const core::Vec3d p{ pos.get_or("x", 0.0), pos.get_or("y", 0.0),
 			pos.get_or("z", 0.0) };
 		const core::NetId id = session->spawn_script_entity(kind_it->id, p);
+		if (visual_override) {
+			session->set_script_entity_visual_override(id, visual_override);
+		}
 		sol::table self = sv.create_table();
 		self[sol::metatable_key] = entity_mt;
 		self["__net_id"] = static_cast<double>(static_cast<std::uint32_t>(id));
+		if (visual_override_table) {
+			// Spec's reserved key, kept in sync purely for pack introspection
+			// (e.g. a pack reading back what it passed in) -- ServerSession
+			// already has the parsed, replicated copy above; nothing reads
+			// this table back engine-side.
+			self["visual_override"] = *visual_override_table;
+		}
 		const std::size_t kind_index =
 				static_cast<std::size_t>(kind_it - entity_kinds.begin());
 		ScriptEntity entity{ kind_index, self, p };
