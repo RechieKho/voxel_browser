@@ -20,6 +20,53 @@
 
 ## Current status (2026-09-25)
 
+**Same-day follow-up #5: automatic despawn-on-health for generic script
+entities** (REMAINING_TASKS' Phase 6.1 "no health primitive exists; a pack
+tracks HP on `self` itself" gap). Opt-in per kind via
+`vb.register_entity{health=...}` (new `EntityKindDef::max_health`, rejects
+`health <= 0` at registration time) — a kind that never sets it is completely
+unaffected (`entity:damage()` stays notification-only: fires `on_hit`,
+nothing else, exactly as before this landed). A kind that opts in gets a
+per-instance current health (`ScriptEntity::health`, seeded from the kind
+default in `vb.world.spawn`), new `entity:get_health()` (returns
+`{current, max}` or `nil` if untracked) / `entity:set_health(value)` (clamped
+`[0, max]`, errors if untracked) accessors, and `entity:damage()` now
+decrements the tracked value and calls the existing `despawn_entity()` (fires
+`on_death`, deregisters from the interest grid) once it reaches 0 -- the same
+path `entity:remove()` already used, just triggered automatically. Server-
+side bookkeeping only, never replicated (no client HUD reads a script
+entity's health, so no protocol version bump).
+**Gotcha hit while wiring this up, worth knowing before touching
+`dispatch_entity_hit` again:** `on_hit` is arbitrary pack Lua and can itself
+call `self:remove()` -- kitchen_sink's `entities/sentry.lua` does exactly
+this, tracking its own hand-rolled hp on `self` rather than the new engine
+primitive. The first draft found the `ScriptEntity` iterator once, fired
+`on_hit`, then kept using that same iterator to touch `.health` -- a
+use-after-erase the instant `on_hit` despawns the entity itself, since
+`despawn_entity()` erases the map entry out from under it.
+`kitchen_sink_pack_test.cpp`'s existing sentry test caught this immediately
+(an MSVC STL iterator-debug assertion, not a silent corruption) the first
+time the changed `pack_runtime.cpp` was rebuilt and the full suite run --
+confirmed by `git stash`-ing back to the pre-change tree and re-running the
+identical test in isolation, which passed clean. Fixed by re-`find`ing the
+entity by id *after* the `on_hit` call returns, instead of reusing the
+pre-call iterator. Takeaway: any C++ code here that calls into pack Lua and
+then wants to keep touching the same engine-side entity/map entry afterward
+must assume the Lua call may have deleted that very entry, and re-look it up
+-- `dispatch_entity_tick`'s per-tick loop already re-`find`s for exactly this
+reason (its own comment: "removed by an earlier handler this tick"), but
+`dispatch_entity_hit` had not been paying that same tax until this pass.
+Verified: full `vb_tests` 319/319 green (a new
+`pack_runtime_integration_test.cpp` case spawns a `health=5` kind next to an
+opted-out kind, proves 2 hits of 3 auto-despawns the tracked one at exactly 0
+with no explicit `:remove()` call while the untracked one survives 1000
+damage notification-only; a `pack_runtime_test.cpp` case covers the
+registration-time `health <= 0` rejection), clean `-Werror` build of
+`vb_tests`/`voxel_browser`/`voxel_browser_server` (temporarily reconfigured
+`build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`, confirmed clean,
+reconfigured back to this dir's OFF default afterward -- same verification
+pattern as every other recent pass).
+
 **Same-day follow-up #4: client-side kind-specific rendering for script
 entities** (REMAINING_TASKS' Phase 6.1 "EntityKind id threads through but
 nothing branches on it" gap). Protocol version bumped **18 -> 19**: new

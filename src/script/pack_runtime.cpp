@@ -280,6 +280,12 @@ struct EntityKindDef {
 	// protocol::EntityKindRegistryRecord by install_entity_kind_registry().
 	float width = 0.8f;
 	float height = 1.8f;
+	// Opt-in health tracking (`vb.register_entity{health=...}`). Unset means
+	// this kind never gets a Health primitive at all -- entity:damage() stays
+	// pure notification (on_hit only, no despawn), matching every kind
+	// spawned before this existed. Server-side bookkeeping only, never
+	// replicated -- no client HUD reads a script entity's health.
+	std::optional<float> max_health;
 };
 
 // Phase 6.1: one spawned `vb.world.spawn(kind, pos)` instance. `self` is a
@@ -302,6 +308,11 @@ struct ScriptEntity {
 	std::size_t kind_index = 0; // index into Impl::entity_kinds
 	sol::table self;
 	core::Vec3d pos{};
+	// Current health, only set if this instance's kind opted into
+	// `vb.register_entity{health=...}` -- unset (nullopt) for every other
+	// kind, so entity:damage()/get_health() can tell "not tracked" apart
+	// from "tracked and at 0" (which is mid-despawn, not a valid steady state).
+	std::optional<float> health;
 };
 
 struct BiomeDef {
@@ -893,6 +904,13 @@ void PackRuntime::Impl::install_bindings() {
 		e.on_death = def.get_or("on_death", sol::protected_function{});
 		e.width = def.get_or("width", e.width);
 		e.height = def.get_or("height", e.height);
+		const sol::optional<float> health = def["health"];
+		if (health && *health <= 0.0f) {
+			throw sol::error("vb.register_entity: 'health' must be positive");
+		}
+		if (health) {
+			e.max_health = *health;
+		}
 		entity_kinds.push_back(std::move(e));
 		return static_cast<std::uint16_t>(entity_kinds.back().id);
 	};
@@ -1341,16 +1359,50 @@ void PackRuntime::Impl::install_bindings() {
 		}
 		return entity_kinds[it->second.kind_index].name;
 	};
-	// Notification-only: the engine tracks no health for generic entities
-	// (same "engine takes no position" posture as 6.5's block-damage design)
-	// -- this just fires the kind's on_hit so a pack can implement whatever
-	// health/aggro/knockback logic it wants.
+	// Always fires the kind's on_hit, exactly as before -- a pack that never
+	// opted into `vb.register_entity{health=...}` sees no behavior change at
+	// all (notification-only, no despawn). If the kind did opt in,
+	// dispatch_entity_hit also decrements the tracked health and auto-despawns
+	// at 0 (see its own comment).
 	entity_methods["damage"] = [this](sol::table self, double amount,
 									   sol::optional<std::string> cause) {
 		dispatch_entity_hit(self_net_id(self), amount, cause.value_or(std::string{}));
 	};
 	entity_methods["remove"] = [this](sol::table self, sol::optional<std::string> cause) {
 		despawn_entity(self_net_id(self), cause.value_or(std::string{}));
+	};
+	// nil if this instance's kind never set `health=` in vb.register_entity --
+	// lets a pack tell "not tracked" apart from "tracked and full/empty".
+	entity_methods["get_health"] = [this](sol::table self, sol::this_state ts) -> sol::object {
+		sol::state_view sv(ts);
+		const auto it = entities.find(self_net_id(self));
+		if (it == entities.end() || !it->second.health) {
+			return sol::make_object(sv, sol::lua_nil);
+		}
+		const EntityKindDef &kind = entity_kinds[it->second.kind_index];
+		sol::table t = sv.create_table();
+		t["current"] = *it->second.health;
+		t["max"] = *kind.max_health;
+		return t;
+	};
+	// Errors if the kind never opted into health tracking -- there's no
+	// sensible "max" to clamp against otherwise. Clamped to [0, max]; reaching
+	// 0 despawns exactly like damage() running health out does, so a pack
+	// script can implement healing/instakill without duplicating the despawn
+	// call itself.
+	entity_methods["set_health"] = [this](sol::table self, double value) {
+		const core::NetId id = self_net_id(self);
+		const auto it = entities.find(id);
+		if (it == entities.end() || !it->second.health) {
+			throw sol::error(
+					"entity:set_health(): kind never set health= in vb.register_entity");
+		}
+		const EntityKindDef &kind = entity_kinds[it->second.kind_index];
+		it->second.health = std::clamp(
+				static_cast<float>(value), 0.0f, *kind.max_health);
+		if (*it->second.health <= 0.0f) {
+			despawn_entity(id, "set_health");
+		}
 	};
 	entity_mt = lua.create_table();
 	entity_mt["__index"] = entity_methods;
@@ -1374,7 +1426,11 @@ void PackRuntime::Impl::install_bindings() {
 		self["__net_id"] = static_cast<double>(static_cast<std::uint32_t>(id));
 		const std::size_t kind_index =
 				static_cast<std::size_t>(kind_it - entity_kinds.begin());
-		entities[id] = ScriptEntity{ kind_index, self, p };
+		ScriptEntity entity{ kind_index, self, p };
+		if (kind_it->max_health) {
+			entity.health = *kind_it->max_health;
+		}
+		entities[id] = std::move(entity);
 		if (kind_it->on_spawn.valid()) {
 			vm.begin_call_budget();
 			sol::protected_function_result r = kind_it->on_spawn(self);
@@ -1501,16 +1557,32 @@ void PackRuntime::Impl::dispatch_entity_hit(
 	if (it == entities.end()) {
 		return;
 	}
-	const EntityKindDef &kind = entity_kinds[it->second.kind_index];
-	if (!kind.on_hit.valid()) {
+	const std::size_t kind_index = it->second.kind_index;
+	const EntityKindDef &kind = entity_kinds[kind_index];
+	if (kind.on_hit.valid()) {
+		vm.begin_call_budget();
+		sol::protected_function_result r =
+				kind.on_hit(it->second.self, amount, std::string(cause));
+		if (!r.valid()) {
+			const sol::error e = r;
+			VB_WARN("script", "entity on_hit handler error: ", e.what());
+		}
+	}
+	// on_hit is free to despawn (or respawn under a fresh id) the entity
+	// itself, e.g. kitchen_sink's sentry.lua calling self:remove() once its
+	// own hand-tracked hp runs out -- re-look-up rather than reuse `it`,
+	// which the erase above would leave dangling.
+	const auto it2 = entities.find(id);
+	if (it2 == entities.end() || !it2->second.health) {
+		// Health tracking is opt-in (vb.register_entity{health=...}) -- a kind
+		// that never set it keeps the pre-existing notification-only behavior
+		// (on_hit fires, nothing else) exactly as before this was added.
 		return;
 	}
-	vm.begin_call_budget();
-	sol::protected_function_result r =
-			kind.on_hit(it->second.self, amount, std::string(cause));
-	if (!r.valid()) {
-		const sol::error e = r;
-		VB_WARN("script", "entity on_hit handler error: ", e.what());
+	it2->second.health =
+			std::max(0.0f, *it2->second.health - static_cast<float>(amount));
+	if (*it2->second.health <= 0.0f) {
+		despawn_entity(id, cause);
 	}
 }
 

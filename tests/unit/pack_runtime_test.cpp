@@ -154,6 +154,22 @@ TEST_CASE("vb.register_entity captures its callback table without dispatching") 
 	REQUIRE(r);
 }
 
+TEST_CASE("vb.register_entity{health=} rejects a non-positive value") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("entity_health_validation"));
+
+	const auto r = rt.load_pack_file(R"(
+		vb.register_entity({ name = "test:zombie", health = 0 })
+	)");
+	CHECK_FALSE(r);
+
+	const auto r2 = rt.load_pack_file(R"(
+		vb.register_entity({ name = "test:zombie2", health = -5 })
+	)");
+	CHECK_FALSE(r2);
+}
+
 TEST_CASE("vb.register_entity{width=, height=} reaches joining clients as "
 		"S2C_EntityKindRegistry, defaulting to the placeholder's own "
 		"0.8/1.8 when omitted (entity-management follow-up to Phase 6.1)") {

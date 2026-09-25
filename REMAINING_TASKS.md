@@ -218,8 +218,39 @@ Full detail: `remaining_tasks/phase6.md`.
 - [ ] No fall damage, PvP, mob damage, or hunger — 6.6 only added the
       primitive (`player:damage`) and the decision hook (`player_death`); no
       content calls either yet.
-- [ ] No automatic despawn-on-health trigger for generic script entities (no
-      health primitive exists; a pack tracks HP on `self` itself) — 6.1.
+- [x] Automatic despawn-on-health trigger for generic script entities —
+      landed 2026-09-25. Opt-in per kind via `vb.register_entity{health=...}`
+      (`EntityKindDef::max_health`, rejects a non-positive value at
+      registration); a kind that never sets it keeps the exact pre-existing
+      behavior (`entity:damage()` is notification-only, `on_hit` fires,
+      nothing else). A kind that does opt in gets a per-instance current
+      health (`ScriptEntity::health`, initialized from the kind default at
+      `vb.world.spawn`), new `entity:get_health()`/`entity:set_health(v)`
+      accessors (nil/error respectively for an untracked kind), and
+      `entity:damage()` now decrements it and calls the existing
+      `despawn_entity()` (fires `on_death`, deregisters) once it reaches 0 —
+      the same despawn path `entity:remove()` already used, just triggered
+      automatically instead of requiring the pack to track HP on `self` and
+      call `:remove()` itself. Server-side bookkeeping only, no protocol
+      change (never replicated — no client HUD reads a script entity's
+      health). **Gotcha hit while wiring this up:** `on_hit` can itself call
+      `self:remove()` (kitchen_sink's `sentry.lua` does exactly this,
+      tracking its own hand-rolled hp) — the first draft reused the iterator
+      taken before firing `on_hit` to then touch `.health` afterward, which
+      is a use-after-erase if `on_hit` already despawned the entity
+      (`tests/unit/kitchen_sink_pack_test.cpp`'s sentry test crashed on an
+      MSVC STL iterator-debug assertion, not silently). Fixed by re-`find`ing
+      after the `on_hit` call instead of reusing the pre-call iterator.
+      Verified: full `vb_tests` 319/319 green (a new
+      `pack_runtime_integration_test.cpp` case spawns a `health=5` kind and
+      an opted-out kind side by side, proves 2 hits of 3 despawn the tracked
+      one exactly at 0 without an explicit `:remove()` while the untracked
+      one survives 1000 damage notification-only; a `pack_runtime_test.cpp`
+      case covers the registration-time validation), clean `-Werror` build of
+      `vb_tests`/`voxel_browser`/`voxel_browser_server` (temporarily
+      reconfigured `build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`,
+      confirmed clean, reconfigured back to this dir's OFF default
+      afterward).
 - [x] Client-side kind-specific rendering for script entities — landed
       2026-09-25 (`EntityKind` id now drives the billboard's own
       width/height, via a new `S2C_EntityKindRegistry` (protocol version 19)

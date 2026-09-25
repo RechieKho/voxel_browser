@@ -1099,6 +1099,93 @@ TEST_CASE("vb.register_entity + vb.world.spawn: self persists across on_tick, "
 	CHECK(client.remote_entities().empty());
 }
 
+TEST_CASE("vb.register_entity{health=}: damage() auto-despawns at 0 without "
+		  "an explicit :remove() call, and leaves kinds that never opted in "
+		  "untouched") {
+	LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("entity_health"));
+	REQUIRE(rt.load_pack_file(R"(
+		death_cause = nil
+		zombie = nil
+		slime = nil -- opts out of health tracking entirely
+
+		vb.register_entity({
+			name = "test:zombie",
+			health = 5,
+			on_death = function(self, cause) death_cause = cause end,
+		})
+		vb.register_entity({ name = "test:slime" })
+
+		vb.on("chat", function(player, text)
+			if text == "spawn" then
+				zombie = vb.world.spawn("test:zombie", { x = 5, y = 5, z = 5 })
+				slime = vb.world.spawn("test:slime", { x = 6, y = 5, z = 5 })
+			elseif text == "hit" then
+				zombie:damage(3, "punch") -- 5 -> 2, still alive
+			elseif text == "kill" then
+				zombie:damage(3, "punch") -- 2 -> -1 clamped to 0, auto-despawns
+			elseif text == "hit_untracked" then
+				slime:damage(1000, "punch") -- no health= set, notification only
+			end
+			return true
+		end)
+	)"));
+	rt.freeze();
+
+	HandshakeServerConfig cfg;
+	cfg.world_seed = 7;
+	ServerSession server(net.server(), cfg);
+	rt.attach_session(server);
+	REQUIRE(net.server().listen(0));
+
+	Transport &ta = net.create_client();
+	auto ida = ta.connect("x", 0);
+	REQUIRE(ida);
+	ClientSession client(ta, *ida, HandshakeClientConfig{ "A", "", "v", 1 });
+
+	auto pump = [&](int n) {
+		for (int i = 0; i < n; ++i) {
+			server.tick(0.05);
+			client.tick(0.05);
+			rt.dispatch_tick(0.05);
+		}
+	};
+	pump(16);
+	REQUIRE(client.joined());
+	server.set_player_state(client.join_accept()->your_net_id, Vec3d{ 5, 5, 7 });
+
+	client.send_chat("spawn");
+	pump(6);
+	REQUIRE(rt.load_pack_file(R"(
+		local hp = zombie:get_health()
+		assert(hp ~= nil)
+		assert(hp.current == 5 and hp.max == 5)
+		assert(slime:get_health() == nil) -- never opted into health tracking
+	)"));
+
+	client.send_chat("hit");
+	pump(6);
+	REQUIRE(rt.load_pack_file(R"(
+		local hp = zombie:get_health()
+		assert(hp.current == 2 and hp.max == 5)
+		assert(death_cause == nil) -- not dead yet
+	)"));
+	CHECK_FALSE(client.remote_entities().empty());
+
+	client.send_chat("kill");
+	pump(6);
+	REQUIRE(rt.load_pack_file(R"( assert(death_cause == "punch") )"));
+	CHECK(client.remote_entities().size() == 1); // zombie gone, slime remains
+
+	// Untracked kind: damage() is still notification-only, never despawns.
+	client.send_chat("hit_untracked");
+	pump(6);
+	REQUIRE(rt.load_pack_file(R"( assert(slime:get_health() == nil) )"));
+	CHECK(client.remote_entities().size() == 1); // slime still alive
+}
+
 TEST_CASE("region_enter/region_exit (Phase 7.3): fires once per crossing, "
 		  "not per tick spent inside, and passes the block's registered name") {
 	LoopbackNetwork net;
