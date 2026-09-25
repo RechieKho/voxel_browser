@@ -115,3 +115,14 @@ TEST_CASE("EntityPresentationState tracks the entity's latest position") {
 	CHECK(state.position().y == doctest::Approx(2.0));
 	CHECK(state.position().z == doctest::Approx(3.0));
 }
+
+TEST_CASE("anim_clip_name covers every AnimClip with rendering.md's base clip names") {
+	CHECK(anim_clip_name(AnimClip::kIdle) == "idle");
+	CHECK(anim_clip_name(AnimClip::kWalk) == "walk");
+	CHECK(anim_clip_name(AnimClip::kRun) == "run");
+	CHECK(anim_clip_name(AnimClip::kJump) == "jump");
+	CHECK(anim_clip_name(AnimClip::kFall) == "fall");
+	CHECK(anim_clip_name(AnimClip::kActing) == "acting");
+	CHECK(anim_clip_name(AnimClip::kHurt) == "hurt");
+	CHECK(anim_clip_name(AnimClip::kDead) == "dead");
+}

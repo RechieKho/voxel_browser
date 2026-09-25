@@ -171,6 +171,32 @@ vb::render::VirtualFs load_textures_from_disk(
 	return vfs;
 }
 
+// Same idea as load_textures_from_disk() above, for entity kinds' `visual`
+// spritesheets (entity-management follow-up) instead of block textures --
+// --singleplayer has no asset-sync virtual FS to read these back out of, so
+// this reads them straight off the same on-disk content pack the integrated
+// server loaded from.
+vb::render::VirtualFs load_entity_textures_from_disk(
+		const std::vector<vb::protocol::EntityKindRegistryRecord> &kinds,
+		const std::filesystem::path &content_root) {
+	vb::render::VirtualFs vfs;
+	for (const auto &kind : kinds) {
+		if (!kind.visual) {
+			continue;
+		}
+		std::ifstream f(content_root / kind.visual->texture, std::ios::binary | std::ios::ate);
+		if (!f) {
+			continue; // missing on disk -- set_kind_visual() falls back to the placeholder
+		}
+		const auto size = static_cast<std::size_t>(f.tellg());
+		f.seekg(0);
+		std::vector<std::byte> bytes(size);
+		f.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(size));
+		vfs[kind.visual->texture] = std::move(bytes);
+	}
+	return vfs;
+}
+
 vb::net::HandshakeServerHost make_singleplayer_host(std::uint64_t seed,
 		vb::script::PackRuntime &pack_runtime,
 		const vb::world::BlockRegistry &registry,
@@ -1028,6 +1054,25 @@ int main(int argc, char **argv) {
 			chunk_renderer->set_atlas(atlas.upload(), std::move(rects), std::move(averages));
 		}
 		entity_renderer = std::make_unique<vb::render::EntityRenderer>();
+		// Entity-management follow-up: build any registered kind's real
+		// spritesheet (S2C_EntityKindRegistry.visual) the same session the
+		// block texture atlas above was built -- both are one-shot,
+		// join-time setup reading from the same synced/disk content pack. A
+		// kind that never set `visual = {...}` is untouched, keeping its
+		// flat placeholder billboard exactly as before this existed.
+		{
+			const vb::render::VirtualFs entity_vfs = remote
+					? remote->asset_cache.virtual_fs()
+					: load_entity_textures_from_disk(client->entity_kind_registry(), kSingleplayerContentPack);
+			const auto &entity_kinds = client->entity_kind_registry();
+			for (std::size_t i = 0; i < entity_kinds.size(); ++i) {
+				const auto &rec = entity_kinds[i];
+				if (rec.visual) {
+					entity_renderer->set_kind_visual(
+							static_cast<vb::core::EntityKindId>(i + 1), *rec.visual, entity_vfs);
+				}
+			}
+		}
 		mouse_captured = false;
 		chat_log.clear();
 		chat_buf.clear();

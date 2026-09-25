@@ -3,7 +3,10 @@
 #include <cstddef>
 #include <memory>
 
+#include "vb/core/ids.hpp"
 #include "vb/core/math.hpp"
+#include "vb/protocol/world.hpp" // EntityVisualDef
+#include "vb/render/texture_atlas.hpp" // VirtualFs
 
 // Draws a Y-axis-billboarded sprite for each replicated remote entity (spec
 // §11.3). Phase 3 ships a single hardcoded flat-tinted placeholder frame (no
@@ -33,6 +36,17 @@ public:
 
 	EntityRenderer(const EntityRenderer &) = delete;
 	EntityRenderer &operator=(const EntityRenderer &) = delete;
+
+	// Decodes `def.texture`'s bytes out of `vfs`, validates the sheet against
+	// `def`'s declared layout (vb::render::build_entity_visual_layout), and
+	// uploads it as a real GPU texture for `id`'s billboard to use going
+	// forward. Missing bytes or a failed validation logs VB_WARN and leaves
+	// this kind on the flat placeholder -- same "missing = default" posture
+	// as ClientSession::entity_kind() itself. Call once per session, right
+	// after construction, for every S2C_EntityKindRegistry record that set a
+	// `visual` (mirrors how ChunkRenderer::set_atlas() is wired).
+	void set_kind_visual(core::EntityKindId id,
+			const protocol::EntityVisualDef &def, const VirtualFs &vfs);
 
 	// Refresh per-entity animation clip + facing from `client`'s replicated
 	// remote entities (spec §8.4's remote_entities()/interpolated_pos()). Call

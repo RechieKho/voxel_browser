@@ -4,8 +4,31 @@
 > as any change to a struct in `inc/vb/protocol/`, and bump
 > `kEngineProtocolVersion` in `cmake/version.hpp.in`.
 
-Current `ENGINE_PROTOCOL_VERSION`: **19**.
+Current `ENGINE_PROTOCOL_VERSION`: **20**.
 
+- **20** — `EntityKindRegistryRecord` (within `S2C_EntityKindRegistry`, 53)
+  gains an optional `visual` field: real per-kind spritesheet art
+  (`vb.register_entity{visual = {...}}`, entity-management follow-up to
+  version 19's width/height item, spec `architecture_spec/rendering.md`
+  §11.3's 2026-09-17 schema). Layout, after the existing `name`/`width`/
+  `height`: `bool has_visual`; if true, `string texture`, `u16 frame_width`,
+  `u16 frame_height`, `u8 facings`, `f32 origin_x`, `f32 origin_y`, then
+  `varint clip_count` + `clip_count × {string clip, u16 frames, f32 fps}`
+  (capped at `kMaxEntityClips = 64`, `src/protocol/world.cpp`). Absent
+  (`has_visual = false`) for a kind that never sets `visual = {...}` (e.g.
+  `kitchen_sink:sentry`, which only sets `width`/`height`) — same
+  "missing = default" posture as every other opt-in field here; that kind's
+  billboard stays the flat placeholder exactly as version 19 shipped it.
+  `frame_width`/`frame_height` are the *resolved* pixel size of the pack's
+  chosen named variant (`small`/`tall`/`flat`/`medium`/.../`large_flat`,
+  looked up server-side at registration in `PackRuntime`'s
+  `parse_entity_visual` — see `docs/lua-api.md`) — only the resolved size
+  travels the wire, never the variant name. The required sheet size
+  (`frame_width * sum(clip frames)` by `frame_height * (facings/2+1)`) is
+  validated against the real decoded PNG client-side
+  (`render::build_entity_visual_layout`, `inc/vb/render/
+  entity_visual_layout.hpp`), not on this struct — a mismatch there leaves
+  that kind on the flat placeholder (logged `VB_WARN`), not a decode error.
 - **19** — `S2C_EntityKindRegistry` (53) defined (entity-management follow-up
   to Phase 6.1/REMAINING_TASKS' "no client-side kind-specific rendering for
   script entities" item): `varint n` + `n × {string name, f32 width, f32

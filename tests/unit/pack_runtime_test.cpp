@@ -197,6 +197,83 @@ TEST_CASE("vb.register_entity{width=, height=} reaches joining clients as "
 	CHECK((*kinds)[1].height == doctest::Approx(1.8f));
 }
 
+TEST_CASE("vb.register_entity{visual=} reaches joining clients as "
+		"S2C_EntityKindRegistry.visual, absent for a kind that never sets "
+		"one (entity-management follow-up to the width/height item)") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("entity_visual"));
+
+	REQUIRE(rt.load_pack_file(R"(
+		vb.register_entity({ name = "test:slime", visual = {
+			variant = "tall",
+			texture = "textures/entities/slime.png",
+			facings = 4,
+			origin = { x = 0.5, y = 1.0 },
+			clips = {
+				{ clip = "idle", frames = 4, fps = 6 },
+				{ clip = "walk", frames = 6, fps = 10 },
+			},
+		} })
+		vb.register_entity({ name = "test:golem" })
+	)"));
+	rt.freeze();
+
+	vb::net::HandshakeServerHost host;
+	rt.install_entity_kind_registry(host);
+	const auto kinds = host.entity_kind_registry();
+	REQUIRE(kinds.has_value());
+	REQUIRE(kinds->size() == 2);
+
+	REQUIRE((*kinds)[0].visual.has_value());
+	const auto &visual = *(*kinds)[0].visual;
+	CHECK(visual.texture == "textures/entities/slime.png");
+	CHECK(visual.frame_width == 128); // "tall" variant
+	CHECK(visual.frame_height == 256);
+	CHECK(visual.facings == 4);
+	CHECK(visual.origin_x == doctest::Approx(0.5f));
+	CHECK(visual.origin_y == doctest::Approx(1.0f));
+	REQUIRE(visual.clips.size() == 2);
+	CHECK(visual.clips[0].clip == "idle");
+	CHECK(visual.clips[0].frames == 4);
+	CHECK(visual.clips[1].clip == "walk");
+	CHECK(visual.clips[1].fps == doctest::Approx(10.0f));
+
+	CHECK_FALSE((*kinds)[1].visual.has_value());
+}
+
+TEST_CASE("vb.register_entity{visual=} rejects a bad shape") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+
+	auto rejects = [&](const char *lua) {
+		vb::script::PackRuntime rt(net.server(), registry, temp_storage("entity_visual_rejects"));
+		CHECK_FALSE(rt.load_pack_file(lua));
+	};
+
+	rejects(R"(vb.register_entity({ name = "test:a", visual = {
+		variant = "huge", texture = "t.png", clips = { { clip = "idle", frames = 1, fps = 1 } } } }))");
+	rejects(R"(vb.register_entity({ name = "test:b", visual = {
+		variant = "small", texture = "", clips = { { clip = "idle", frames = 1, fps = 1 } } } }))");
+	rejects(R"(vb.register_entity({ name = "test:c", visual = {
+		variant = "small", texture = "t.png", facings = 6,
+		clips = { { clip = "idle", frames = 1, fps = 1 } } } }))");
+	rejects(R"(vb.register_entity({ name = "test:d", visual = {
+		variant = "small", texture = "t.png", origin = { x = 1.5, y = 1.0 },
+		clips = { { clip = "idle", frames = 1, fps = 1 } } } }))");
+	rejects(R"(vb.register_entity({ name = "test:e", visual = {
+		variant = "small", texture = "t.png", clips = {} } }))");
+	rejects(R"(vb.register_entity({ name = "test:f", visual = {
+		variant = "small", texture = "t.png",
+		clips = { { clip = "", frames = 1, fps = 1 } } } }))");
+	rejects(R"(vb.register_entity({ name = "test:g", visual = {
+		variant = "small", texture = "t.png",
+		clips = { { clip = "idle", frames = 0, fps = 1 } } } }))");
+	rejects(R"(vb.register_entity({ name = "test:h", visual = {
+		variant = "small", texture = "t.png",
+		clips = { { clip = "idle", frames = 1, fps = 0 } } } }))");
+}
+
 TEST_CASE("install_entity_kind_registry leaves the hook at nullopt when no "
 		"pack ever called vb.register_entity") {
 	vb::net::LoopbackNetwork net;

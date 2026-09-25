@@ -106,10 +106,13 @@ Full detail: `remaining_tasks/phase3.md`.
       eye-height smoothing layer client-side (not attempted).
 - [ ] Wall-clock `server_time_est` + smoothing on the client (needs
       `GnsTransport` RTT — loopback has no latency to estimate).
-- [ ] `SpriteVisual` component (atlas handle, `facings`, per-clip frame
-      lists) for entity kinds — nothing produces one until 4.2.
-- [ ] Real billboard art (atlas, per-clip frames) — pack-defined, waits on
-      4.2's `visual = {...}` + Asset Sync + base-pack sprites (5.1).
+- [x] `SpriteVisual`-equivalent client state (atlas handle, `facings`,
+      per-clip frame lists) for entity kinds — landed 2026-09-25 as Phase
+      4's `visual = {...}` item below (`EntityRenderer`'s `KindVisual`/
+      `EntityVisualLayout`, entity-management follow-up).
+- [ ] Real billboard art (atlas, per-clip frames) — mechanism now real
+      (Phase 4's `visual = {...}` item, landed 2026-09-25); still waits on
+      real base-pack sprites (5.1) actually shipping a spritesheet.
 
 ---
 
@@ -131,9 +134,54 @@ Full detail: `remaining_tasks/phase4.md`.
 - [ ] `EntityKind` tick/spawn/hit/death callbacks wired into real systems —
       superseded in practice by Phase 6.1's hardcoded-system approach; the
       formal `SystemRunner` itself is still `[ ]` (see Phase 3.1).
-- [ ] `register_entity`'s `visual = {...}` sub-table (variant/facings/clips)
-      for 3.5's `entity_renderer` — schema finalized, not implemented; nothing
-      reads a per-kind visual def yet.
+- [x] `register_entity`'s `visual = {...}` sub-table (variant/facings/clips)
+      for 3.5's `entity_renderer` — landed 2026-09-25. Protocol version bumped
+      **19 -> 20**: `EntityKindRegistryRecord` gains an optional `visual`
+      field (`protocol::EntityVisualDef` — texture path, resolved
+      frame_width/height, facings, origin, a `clips` list of
+      `{clip, frames, fps}`), absent for a kind that never sets one (e.g.
+      `kitchen_sink:sentry`, which only sets `width`/`height` — no behavior
+      change for it). `PackRuntime`'s `vb["register_entity"]` binding parses
+      and shape-validates `visual = {...}` at registration (unknown variant,
+      missing texture, `facings` not 4/8, out-of-range `origin`, an empty
+      `clips` array, or a non-positive `frames`/`fps` all throw a
+      `sol::error`) — no image decoding happens on this, headless,
+      pack-runtime side. Client-side, a new pure header
+      `vb/render/entity_visual_layout.hpp` (`build_entity_visual_layout`)
+      computes the running per-clip column layout and validates it against
+      the *real* decoded PNG's pixel dimensions once
+      `EntityRenderer::set_kind_visual()` decodes the synced/on-disk texture
+      (wired from `src/client/main.cpp`, right after the block texture atlas
+      is built, same one-shot join-time posture) — a mismatch there logs
+      `VB_WARN` and that kind keeps the flat placeholder billboard rather
+      than failing pack load. `EntityRenderer::draw()` now picks its
+      billboard's source rect from the resolved pose row (unchanged
+      `select_pose()` machinery) and animation clip (new
+      `render::anim_clip_name(AnimClip)` bridges the existing
+      `resolve_anim_clip()` enum to a pack's clip names, falling back to the
+      first declared clip if the pack never named that one, per spec) and
+      frame index (`clip_time * fps`, wrapped via modulo — the finalized
+      schema has no separate loop/hold-last-frame flag). A kind with no
+      `kind_visuals_` entry (players, or any kind that never set `visual`)
+      renders exactly as before this landed. **Deliberately out of scope,
+      kept for a follow-up:** per-instance `ScriptState.visual_override`
+      (skins) and real base-pack art (`base:player`/`base:dropped_item`
+      shipping actual spritesheets, still "5.1" below) — this pass proved the
+      mechanism with synthetically-generated-at-test-time PNGs
+      (`ExportImageToMemory`, same pattern `texture_atlas_test.cpp` already
+      used), not new binary art checked into `content/`. Verified: full
+      `vb_tests` 331/331 green (12 new cases: a protocol round-trip +
+      too-many-clips-cap test, two new `pack_runtime_test.cpp` cases covering
+      every rejection path plus a full valid-visual-reaches-the-registry
+      case, a new `entity_visual_layout_test.cpp` covering the pure layout
+      math, and an `anim_clip_name` coverage case in `entity_visual_test.cpp`),
+      clean `-Werror` build of `vb_tests`/`voxel_browser`/
+      `voxel_browser_server` (temporarily reconfigured `build-net-lua` with
+      `-DVB_WARNINGS_AS_ERRORS=ON`, confirmed clean, reconfigured back to
+      this dir's OFF default afterward). The actual rendered sprite/animation
+      (a human watching a real spritesheet animate on a billboard) was
+      **not** manually eyeballed — no GUI in this agent environment, same
+      still-open caveat as every other recent rendering-adjacent pass.
 - [x] Real texture/atlas system landed 2026-09-23 (see
       `state/changelog-recent.md`): `vb.register_block{texture=...}` ->
       `S2C_BlockRegistry` -> a per-session `vb::render::TextureAtlas` built
@@ -255,9 +303,9 @@ Full detail: `remaining_tasks/phase6.md`.
       2026-09-25 (`EntityKind` id now drives the billboard's own
       width/height, via a new `S2C_EntityKindRegistry` (protocol version 19)
       and `vb.register_entity{width=, height=}`). Real per-kind sprite art
-      (the `visual = {...}` schema below) is still a separate, unimplemented
-      item — this only closes "nothing branches on kind at all", not that.
-      See `STATE.md`'s "Current status" for the full write-up.
+      (the `visual = {...}` schema below) landed as its own separate pass on
+      2026-09-25, see Phase 4's own entry above. See `STATE.md`'s "Current
+      status" for the full write-up.
 - [ ] Per-connection rate limiting on custom-keybind events — 6.3 (folds into
       Phase 3.2's still-unimplemented flood guard).
 - [ ] Replicate block-damage *value* (not just begin/stop/complete) to nearby

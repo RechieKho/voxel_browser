@@ -81,11 +81,28 @@ rt.dispatch_tick(dt);
   `region_exit` below) — defaults to `liquid`'s own value (a liquid block
   opts in automatically, matching `base:water`) unless given explicitly,
   `vb.register_item(def)`, `vb.register_entity(def)`
-  (captures `on_spawn`/`on_tick`/`on_hit`/`on_death` but nothing dispatches
-  them yet — no EnTT registry exists, Phase 3.1; its `visual = {...}`
-  sub-table — spritesheet variant/facings/origin/clips grid, schema finalized
-  2026-09-17 in `ARCHITECTURE_SPEC.md` §11.3 — isn't read yet either, see
-  `REMAINING_TASKS.md` 4.2), `vb.register_biome(def)` (Phase 6.14: `name`
+  (`name` (idempotent-by-name), `on_spawn`/`on_tick`/`on_hit`/`on_death`
+  callbacks, opt-in `health=` (`entity:get_health()`/`set_health()`,
+  auto-despawn at 0), `width=`/`height=` billboard footprint (default
+  `0.8`/`1.8`, the placeholder's own dimensions) — real dispatch is a small
+  hardcoded system (`PackRuntime::Impl::entities`), not an EnTT registry
+  (Phase 3.1 still doesn't exist server-side for this). `visual = {...}`
+  (entity-management follow-up, schema finalized 2026-09-17 in
+  `architecture_spec/rendering.md` §11.3) is now real: `variant` (one of the
+  9 named frame-size presets, `small` through `large_flat` — see the table
+  in `rendering.md`), `texture` (pack-relative path, synced like any asset),
+  `facings` (4 or 8, default 8), `origin = {x=, y=}` (normalized anchor
+  within a frame, default `{0.5, 1.0}` = bottom-centre feet point, each
+  component in `[0, 1]`), and `clips` (a non-empty array of
+  `{clip=, frames=, fps=}`, `frames`/`fps` both positive) — all validated at
+  registration (`PackRuntime`'s `parse_entity_visual`); the sheet's real
+  pixel dimensions are validated separately, client-side, once the texture is
+  actually decoded (`render::build_entity_visual_layout`) — a mismatch there
+  logs a warning and that kind keeps the flat `width`/`height` placeholder
+  rather than failing pack load. A kind that never sets `visual` is
+  unaffected either way. Per-instance override
+  (`ScriptState.visual_override`, e.g. skins) is still a real, separate,
+  not-yet-implemented follow-up. `vb.register_biome(def)` (Phase 6.14: `name`
   (idempotent-by-name, mirrors every other registration function),
   `surface`/`filler`/`stone` (block *names*, resolved to `BlockId`s via the
   registry when a pipeline is compiled), `probability` (base Voronoi-cell

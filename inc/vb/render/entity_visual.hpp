@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <string_view>
 
 #include "vb/core/math.hpp"
 
@@ -74,6 +75,32 @@ inline AnimClip resolve_anim_clip(core::Vec3f vel, std::uint8_t flags,
 		return AnimClip::kWalk;
 	}
 	return AnimClip::kIdle;
+}
+
+// Canonical clip name per AnimClip, matching architecture_spec/rendering.md
+// §11.3's base clip set exactly -- bridges resolve_anim_clip()'s enum output
+// to a pack's `visual.clips` list (protocol::EntityClipDef::clip), looked up
+// by render::resolve_clip() (vb/render/entity_visual_layout.hpp).
+inline std::string_view anim_clip_name(AnimClip clip) {
+	switch (clip) {
+		case AnimClip::kIdle:
+			return "idle";
+		case AnimClip::kWalk:
+			return "walk";
+		case AnimClip::kRun:
+			return "run";
+		case AnimClip::kJump:
+			return "jump";
+		case AnimClip::kFall:
+			return "fall";
+		case AnimClip::kActing:
+			return "acting";
+		case AnimClip::kHurt:
+			return "hurt";
+		case AnimClip::kDead:
+			return "dead";
+	}
+	return "idle";
 }
 
 inline double normalize_angle_deg(double deg) {

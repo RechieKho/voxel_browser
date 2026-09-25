@@ -12,6 +12,7 @@ inline constexpr std::uint64_t kMaxChunkBytes = 8u * 1024u * 1024u;
 inline constexpr std::uint64_t kMaxBlockRegistryRecords = 4096u;
 inline constexpr std::uint64_t kMaxDayNightKeyframes = 256u;
 inline constexpr std::uint64_t kMaxEntityKindRegistryRecords = 4096u;
+inline constexpr std::uint64_t kMaxEntityClips = 64u;
 
 constexpr std::uint64_t chunk_volume() {
 	return static_cast<std::uint64_t>(core::kChunkDim) *
@@ -169,6 +170,56 @@ Decoded<S2CFogParams> S2CFogParams::decode(std::span<const std::byte> in) {
 }
 
 // --- S2CEntityKindRegistry ---------------------------------------------
+namespace {
+
+void write_entity_visual(ByteWriter &w, const std::optional<EntityVisualDef> &visual) {
+	w.boolean(visual.has_value());
+	if (!visual) {
+		return;
+	}
+	w.string(visual->texture);
+	w.u16(visual->frame_width);
+	w.u16(visual->frame_height);
+	w.u8(visual->facings);
+	w.f32(visual->origin_x);
+	w.f32(visual->origin_y);
+	w.varint(visual->clips.size());
+	for (const auto &c : visual->clips) {
+		w.string(c.clip);
+		w.u16(c.frames);
+		w.f32(c.fps);
+	}
+}
+
+std::optional<EntityVisualDef> read_entity_visual(ByteReader &r) {
+	if (!r.boolean()) {
+		return std::nullopt;
+	}
+	EntityVisualDef v;
+	v.texture = r.string();
+	v.frame_width = r.u16();
+	v.frame_height = r.u16();
+	v.facings = r.u8();
+	v.origin_x = r.f32();
+	v.origin_y = r.f32();
+	const std::uint64_t n = r.varint();
+	if (n > kMaxEntityClips) {
+		r.fail(core::ProtocolError::kLengthExceeded);
+		return v;
+	}
+	v.clips.reserve(static_cast<std::size_t>(n));
+	for (std::uint64_t i = 0; i < n && !r.failed(); ++i) {
+		EntityClipDef c;
+		c.clip = r.string();
+		c.frames = r.u16();
+		c.fps = r.f32();
+		v.clips.push_back(std::move(c));
+	}
+	return v;
+}
+
+} // namespace
+
 void S2CEntityKindRegistry::encode(std::vector<std::byte> &out) const {
 	ByteWriter w(out);
 	w.varint(kinds.size());
@@ -176,6 +227,7 @@ void S2CEntityKindRegistry::encode(std::vector<std::byte> &out) const {
 		w.string(k.name);
 		w.f32(k.width);
 		w.f32(k.height);
+		write_entity_visual(w, k.visual);
 	}
 }
 
@@ -193,6 +245,7 @@ Decoded<S2CEntityKindRegistry> S2CEntityKindRegistry::decode(
 		k.name = r.string();
 		k.width = r.f32();
 		k.height = r.f32();
+		k.visual = read_entity_visual(r);
 		m.kinds.push_back(std::move(k));
 	}
 	return finish(r, std::move(m));

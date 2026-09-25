@@ -362,6 +362,59 @@ TEST_CASE("entity kind registry round-trips, including an empty list") {
 	CHECK(r2.kinds == reg.kinds);
 }
 
+TEST_CASE("entity kind registry round-trips a real visual def") {
+	S2CEntityKindRegistry reg;
+	EntityKindRegistryRecord rec{ "test:slime", 0.6f, 0.6f };
+	EntityVisualDef visual;
+	visual.texture = "textures/entities/slime.png";
+	visual.frame_width = 128;
+	visual.frame_height = 128;
+	visual.facings = 4;
+	visual.origin_x = 0.5f;
+	visual.origin_y = 1.0f;
+	visual.clips.push_back({ "idle", 4, 6.0f });
+	visual.clips.push_back({ "walk", 6, 10.0f });
+	rec.visual = visual;
+	reg.kinds.push_back(rec);
+	reg.kinds.push_back({ "test:golem" }); // no visual at all
+
+	auto r2 = round_trip(reg);
+	REQUIRE(r2.kinds.size() == 2);
+	REQUIRE(r2.kinds[0].visual.has_value());
+	CHECK(r2.kinds[0].visual->texture == "textures/entities/slime.png");
+	CHECK(r2.kinds[0].visual->frame_width == 128);
+	CHECK(r2.kinds[0].visual->frame_height == 128);
+	CHECK(r2.kinds[0].visual->facings == 4);
+	REQUIRE(r2.kinds[0].visual->clips.size() == 2);
+	CHECK(r2.kinds[0].visual->clips[0].clip == "idle");
+	CHECK(r2.kinds[0].visual->clips[0].frames == 4);
+	CHECK(r2.kinds[0].visual->clips[1].clip == "walk");
+	CHECK(r2.kinds[0].visual->clips[1].fps == doctest::Approx(10.0f));
+	CHECK_FALSE(r2.kinds[1].visual.has_value());
+	CHECK(r2.kinds == reg.kinds);
+}
+
+TEST_CASE("entity kind registry decode rejects a visual with too many clips") {
+	S2CEntityKindRegistry reg;
+	EntityKindRegistryRecord rec{ "test:overstuffed" };
+	EntityVisualDef visual;
+	visual.texture = "textures/entities/overstuffed.png";
+	visual.frame_width = 128;
+	visual.frame_height = 128;
+	// Mirrors world.cpp's internal kMaxEntityClips = 64 -- one past the cap.
+	for (int i = 0; i <= 64; ++i) {
+		visual.clips.push_back({ "clip_" + std::to_string(i), 1, 1.0f });
+	}
+	rec.visual = visual;
+	reg.kinds.push_back(rec);
+
+	std::vector<std::byte> bytes;
+	reg.encode(bytes);
+	auto decoded = S2CEntityKindRegistry::decode(as_span(bytes));
+	CHECK_FALSE(decoded);
+	CHECK(decoded.error() == vb::core::ProtocolError::kLengthExceeded);
+}
+
 TEST_CASE("time of day round-trips") {
 	auto t = round_trip(S2CTimeOfDay{ 12345 });
 	CHECK(t.time_of_day == 12345);

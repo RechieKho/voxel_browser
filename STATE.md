@@ -20,6 +20,49 @@
 
 ## Current status (2026-09-25)
 
+**Same-day follow-up #6: real per-kind entity sprite art,
+`vb.register_entity{visual = {...}}`** (REMAINING_TASKS' long-tracked Phase
+4/6.1 gap -- the schema was finalized 2026-09-17 in
+`architecture_spec/rendering.md` §11.3 but nothing read it; every script
+entity rendered as a flat single-color, single-frame billboard). Protocol
+bumped **19 -> 20**: `EntityKindRegistryRecord` gains an optional `visual`
+(`protocol::EntityVisualDef` -- texture path, resolved frame_width/height,
+facings, origin, a `clips` list), absent for a kind that only sets
+`width`/`height` (e.g. `kitchen_sink:sentry` -- unaffected). `PackRuntime`'s
+`register_entity` binding shape-validates `visual` at registration (unknown
+variant / missing texture / bad facings / out-of-range origin / empty or
+malformed clips all throw) with zero image decoding on that (headless)
+side -- the real PNG's pixel dimensions are validated separately,
+client-side, by a new pure header `vb/render/entity_visual_layout.hpp`
+(`build_entity_visual_layout`), once `EntityRenderer::set_kind_visual()`
+(wired from `src/client/main.cpp`, same one-shot join-time spot the block
+texture atlas is built) actually decodes the synced/on-disk texture -- a
+mismatch there is a `VB_WARN` + flat-placeholder fallback, not a pack-load
+failure. `EntityRenderer::draw()` now indexes into the real spritesheet using
+the pose/clip machinery that already existed and was already unit tested
+(`select_pose`/`resolve_anim_clip`/`EntityPresentationState` -- none of it
+changed): a new `render::anim_clip_name(AnimClip)` bridges the clip enum to a
+pack's clip names (falling back to the first declared clip if a pack never
+named the resolved one, per spec), frame index comes from `clip_time * fps`
+wrapped via modulo (the finalized schema has no separate loop/hold-last-frame
+flag -- simplification noted explicitly, not a missed field). **Deliberately
+out of scope, left as real follow-ups:** per-instance
+`ScriptState.visual_override` (skins) and real base-pack art
+(`base:player`/`base:dropped_item` shipping actual spritesheets, still
+"5.1"); this pass proved the mechanism using synthetically-generated PNGs at
+test time (raylib `ExportImageToMemory`, `texture_atlas_test.cpp`'s own
+pattern), not new binary art checked into `content/`. Verified: full
+`vb_tests` 331/331 green (12 new cases across `protocol_test.cpp`,
+`pack_runtime_test.cpp`, a new `entity_visual_layout_test.cpp`, and
+`entity_visual_test.cpp`'s `anim_clip_name` coverage), clean `-Werror` build
+of `vb_tests`/`voxel_browser`/`voxel_browser_server` (temporarily
+reconfigured `build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`, confirmed
+clean, reconfigured back to this dir's OFF default afterward). The actual
+rendered sprite/animation (a human watching a real spritesheet animate on a
+billboard) was **not** manually eyeballed -- no GUI in this agent
+environment, same still-open caveat as every other recent rendering-adjacent
+pass.
+
 **Same-day follow-up #5: automatic despawn-on-health for generic script
 entities** (REMAINING_TASKS' Phase 6.1 "no health primitive exists; a pack
 tracks HP on `self` itself" gap). Opt-in per kind via

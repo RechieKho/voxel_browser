@@ -65,6 +65,7 @@ void PackRuntime::flush_storage() {}
 #include <set>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -252,6 +253,89 @@ std::uint32_t keybinds_from_table(const sol::table &t, std::uint32_t fallback,
 	return out;
 }
 
+// Named frame-size variants, exactly architecture_spec/rendering.md §11.3's
+// 2026-09-17 table -- an authoring/validation convenience, not an engine
+// type: only the resolved {frame_width, frame_height} pixel pair travels the
+// wire (protocol::EntityVisualDef), never the variant name itself.
+const std::pair<std::uint16_t, std::uint16_t> *entity_visual_variant(const std::string &name) {
+	static const std::unordered_map<std::string, std::pair<std::uint16_t, std::uint16_t>> kVariants{
+		{ "small", { 128, 128 } },
+		{ "tall", { 128, 256 } },
+		{ "flat", { 256, 128 } },
+		{ "medium", { 256, 256 } },
+		{ "medium_tall", { 256, 512 } },
+		{ "medium_flat", { 512, 256 } },
+		{ "large", { 512, 512 } },
+		{ "large_tall", { 512, 1024 } },
+		{ "large_flat", { 1024, 512 } },
+	};
+	const auto it = kVariants.find(name);
+	return it == kVariants.end() ? nullptr : &it->second;
+}
+
+// Parses and shape-validates `vb.register_entity{visual = {...}}` (spec
+// architecture_spec/rendering.md §11.3). Only the pack's *declared* shape is
+// checked here -- no image decoding happens on this (pack-runtime, headless)
+// side; the real PNG's pixel dimensions are validated client-side against
+// this def by render::build_entity_visual_layout() once the texture is
+// actually decoded.
+protocol::EntityVisualDef parse_entity_visual(const sol::table &t) {
+	const std::string variant_name = t.get_or("variant", std::string{});
+	const auto *variant = entity_visual_variant(variant_name);
+	if (variant == nullptr) {
+		throw sol::error("vb.register_entity: visual.variant '" + variant_name +
+				"' is not a recognized frame-size variant");
+	}
+	const std::string texture = t.get_or("texture", std::string{});
+	if (texture.empty()) {
+		throw sol::error("vb.register_entity: visual.texture is required");
+	}
+	const int facings = t.get_or("facings", 8);
+	if (facings != 4 && facings != 8) {
+		throw sol::error("vb.register_entity: visual.facings must be 4 or 8");
+	}
+	float origin_x = 0.5f;
+	float origin_y = 1.0f;
+	const sol::optional<sol::table> origin_table = t["origin"];
+	if (origin_table) {
+		origin_x = origin_table->get_or("x", 0.5f);
+		origin_y = origin_table->get_or("y", 1.0f);
+	}
+	if (origin_x < 0.0f || origin_x > 1.0f || origin_y < 0.0f || origin_y > 1.0f) {
+		throw sol::error("vb.register_entity: visual.origin.x/y must each be in [0, 1]");
+	}
+	const sol::optional<sol::table> clips_table = t["clips"];
+	if (!clips_table || clips_table->size() == 0) {
+		throw sol::error("vb.register_entity: visual.clips must be a non-empty array");
+	}
+
+	protocol::EntityVisualDef visual;
+	visual.texture = texture;
+	visual.frame_width = variant->first;
+	visual.frame_height = variant->second;
+	visual.facings = static_cast<std::uint8_t>(facings);
+	visual.origin_x = origin_x;
+	visual.origin_y = origin_y;
+
+	for (std::size_t i = 1; i <= clips_table->size(); ++i) {
+		const sol::table entry = (*clips_table)[i];
+		const std::string clip_name = entry.get_or("clip", std::string{});
+		if (clip_name.empty()) {
+			throw sol::error("vb.register_entity: every visual.clips entry needs a non-empty 'clip' name");
+		}
+		const int frames = entry.get_or("frames", 0);
+		if (frames <= 0) {
+			throw sol::error("vb.register_entity: visual.clips['" + clip_name + "'].frames must be positive");
+		}
+		const float fps = entry.get_or("fps", 0.0f);
+		if (fps <= 0.0f) {
+			throw sol::error("vb.register_entity: visual.clips['" + clip_name + "'].fps must be positive");
+		}
+		visual.clips.push_back({ clip_name, static_cast<std::uint16_t>(frames), fps });
+	}
+	return visual;
+}
+
 } // namespace
 
 struct BlockDef {
@@ -286,6 +370,16 @@ struct EntityKindDef {
 	// spawned before this existed. Server-side bookkeeping only, never
 	// replicated -- no client HUD reads a script entity's health.
 	std::optional<float> max_health;
+	// Real per-kind spritesheet (`vb.register_entity{visual = {...}}`,
+	// entity-management follow-up to the width/height item above -- spec
+	// architecture_spec/rendering.md §11.3's 2026-09-17 schema). Unset means
+	// this kind keeps the flat width/height placeholder, exactly as before
+	// this existed. Validated for shape (not real pixel dimensions -- no
+	// image decoding happens on this, the pack-runtime, side) at
+	// registration time; sent to clients as
+	// protocol::EntityKindRegistryRecord::visual by
+	// install_entity_kind_registry().
+	std::optional<protocol::EntityVisualDef> visual;
 };
 
 // Phase 6.1: one spawned `vb.world.spawn(kind, pos)` instance. `self` is a
@@ -910,6 +1004,10 @@ void PackRuntime::Impl::install_bindings() {
 		}
 		if (health) {
 			e.max_health = *health;
+		}
+		const sol::optional<sol::table> visual_table = def["visual"];
+		if (visual_table) {
+			e.visual = parse_entity_visual(*visual_table);
 		}
 		entity_kinds.push_back(std::move(e));
 		return static_cast<std::uint16_t>(entity_kinds.back().id);
@@ -2070,7 +2168,7 @@ void PackRuntime::install_entity_kind_registry(net::HandshakeServerHost &host) {
 		std::vector<protocol::EntityKindRegistryRecord> out;
 		out.reserve(self->entity_kinds.size());
 		for (const auto &e : self->entity_kinds) {
-			out.push_back({ e.name, e.width, e.height });
+			out.push_back({ e.name, e.width, e.height, e.visual });
 		}
 		return out;
 	};

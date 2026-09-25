@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -132,13 +133,53 @@ struct S2CFogParams {
 // (`id = entity_kinds.size() + 1` at registration time), so no id needs to
 // be sent per record. A player's EntityRecord::kind is always kInvalid (0),
 // never indexes into this list.
+// One animation clip's slice of a kind's spritesheet -- a column run within
+// a pose row. `clip` is matched by name client-side against
+// render::anim_clip_name(AnimClip) (entity-management follow-up to Phase
+// 3.5/4.2, spec architecture_spec/rendering.md §11.3's 2026-09-17 schema).
+struct EntityClipDef {
+	std::string clip;
+	std::uint16_t frames = 1;
+	float fps = 1.0f;
+
+	bool operator==(const EntityClipDef &) const = default;
+};
+
+// Kind-level default spritesheet, `vb.register_entity{visual = {...}}`
+// (rendering.md §11.3). `frame_width`/`frame_height` come from the pack's
+// chosen named variant (resolved server-side at registration, see
+// PackRuntime's register_entity binding) -- only the resolved pixel size
+// travels the wire, not the variant name itself. `facings` is 4 or 8,
+// validated at registration; the client derives pose row count as
+// `facings/2 + 1`. `origin_x`/`origin_y` are the normalized feet/anchor point
+// within a frame. The required sheet size (`frame_width * sum(clip frames)`
+// by `frame_height * (facings/2+1)`) is validated against the real decoded
+// PNG client-side (render::build_entity_visual_layout), not here -- this
+// struct only carries the pack's declared intent.
+struct EntityVisualDef {
+	std::string texture; // pack-relative path, synced like any other asset
+	std::uint16_t frame_width = 0;
+	std::uint16_t frame_height = 0;
+	std::uint8_t facings = 8;
+	float origin_x = 0.5f;
+	float origin_y = 1.0f;
+	std::vector<EntityClipDef> clips;
+
+	bool operator==(const EntityVisualDef &) const = default;
+};
+
 struct EntityKindRegistryRecord {
 	std::string name;
 	// Billboard footprint, metres -- mirrors render::EntityRenderer's
 	// placeholder quad dimensions (width x height) until real per-kind
-	// sprite art (REMAINING_TASKS' still-open `visual = {...}` item) exists.
+	// sprite art (`visual` below) is set; used for a kind that never sets one.
 	float width = 0.8f;
 	float height = 1.8f;
+	// Real per-kind spritesheet -- absent (nullopt) for a kind that never set
+	// `vb.register_entity{visual = {...}}` (e.g. kitchen_sink:sentry, which
+	// only sets width/height), same "missing = default" posture as every
+	// other opt-in registry field in this codebase.
+	std::optional<EntityVisualDef> visual;
 
 	bool operator==(const EntityKindRegistryRecord &) const = default;
 };
