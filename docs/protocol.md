@@ -4,8 +4,24 @@
 > as any change to a struct in `inc/vb/protocol/`, and bump
 > `kEngineProtocolVersion` in `cmake/version.hpp.in`.
 
-Current `ENGINE_PROTOCOL_VERSION`: **24**.
+Current `ENGINE_PROTOCOL_VERSION`: **25**.
 
+- **25** — New `S2CBlockDamage` (54, lane `kWorld`): `IVec3 pos`, `u16
+  punches`. Closes the deferred half of Phase 6.5 ("no wire message
+  replicates the damage value itself to nearby players yet") — `ServerSession`
+  broadcasts it whenever a block's live punch count (`block_punch_counts_`,
+  driven by `punch()`/6.18) changes, to every player who currently mirrors
+  the chunk containing `pos` (`WorldReplicator::player_has_chunk`), not just
+  the puncher. `punches == 0` means "no damage" (fully healed via
+  `update_block_punch_healing()`, or the block just broke) — the client
+  drops any crack-overlay state for that `pos` rather than treating 0 as a
+  value to render. No `max_damage` field: the receiving client already
+  knows the block's registered `BlockType::max_damage` from its own chunk
+  mirror + block registry, so this stays a pure delta. `ClientSession::
+  block_damage()` exposes the resulting `pos -> punches` map;
+  `client.break_progress()` (Phase 6.16's HUD primitive, previously always
+  `nullopt` awaiting exactly this) now reports the currently-looked-at
+  block's fraction (`punches / max_damage`) when it has live damage.
 - **24** — `S2CFogParams` (52) gains an optional underwater tint (Phase 7.5's
   override half, spec §7.5): `bool has_underwater_tint` followed by, only if
   true, `u8 underwater_tint_r`, `u8 underwater_tint_g`, `u8

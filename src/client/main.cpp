@@ -1365,13 +1365,29 @@ int main(int argc, char **argv) {
 				}
 
 				// Raw state only -- "engine provides raw state, Lua deals
-				// with presentation". client.break_progress() now awaits the
-				// still-deferred damage-*value* replication half of Phase 6.5
-				// (REMAINING_TASKS.md 6.17): the engine no longer runs its
-				// own local hold timer to approximate this from, so there's
-				// nothing authoritative to report yet -- content/base/ui/
-				// hud.lua simply won't draw a bar until that lands.
-				ui_runtime.set_break_progress(std::nullopt);
+				// with presentation". client.break_progress() reports the
+				// currently-looked-at block's live damage fraction, now that
+				// S2C_BlockDamage (Phase 6.5's deferred half, closed
+				// 2026-09-27) replicates the server's real punch count for
+				// any block a nearby player has damaged -- not just this
+				// client's own punches. nullopt whenever nothing's targeted,
+				// the block has no damage on record, or it's an instant-break
+				// block (max_damage == 0, no fraction to report).
+				std::optional<float> break_progress;
+				if (look_hit.hit) {
+					const auto &damage = client->block_damage();
+					if (const auto it = damage.find(look_hit.voxel); it != damage.end()) {
+						const vb::core::BlockId block =
+								client->chunk_store().block_at(look_hit.voxel);
+						const auto &registry = client->chunk_store().registry();
+						if (registry.contains(block) &&
+								registry.get(block).max_damage > 0) {
+							break_progress = static_cast<float>(it->second) /
+									static_cast<float>(registry.get(block).max_damage);
+						}
+					}
+				}
+				ui_runtime.set_break_progress(break_progress);
 				ui_runtime.set_screen_size(GetScreenWidth(), GetScreenHeight());
 
 				// Same posture, for the 3 pieces of always-on HUD content
@@ -1509,10 +1525,27 @@ int main(int argc, char **argv) {
 							{ controller.position(), controller.target() });
 				}
 				if (look_hit.hit) {
-					DrawCubeWires({ static_cast<float>(look_hit.voxel.x) + 0.5f,
-										  static_cast<float>(look_hit.voxel.y) + 0.5f,
-										  static_cast<float>(look_hit.voxel.z) + 0.5f },
-							1.02f, 1.02f, 1.02f, BLACK);
+					const Vector3 hit_center{
+						static_cast<float>(look_hit.voxel.x) + 0.5f,
+						static_cast<float>(look_hit.voxel.y) + 0.5f,
+						static_cast<float>(look_hit.voxel.z) + 0.5f
+					};
+					DrawCubeWires(hit_center, 1.02f, 1.02f, 1.02f, BLACK);
+					// Default generic crack overlay (REMAINING_TASKS.md 6.5):
+					// no crack-stage art exists yet (still-open "crack_texture
+					// override" half of that item), so the built-in default
+					// is a translucent black cube over the targeted block,
+					// darkening in step with its live break_progress fraction
+					// -- a real, if crude, "this block is taking damage" cue
+					// rather than nothing at all. Slightly larger than the
+					// block (1.004x) to avoid z-fighting against its own mesh
+					// faces.
+					if (break_progress) {
+						const auto alpha = static_cast<unsigned char>(
+								vb::core::clamp(*break_progress, 0.0f, 1.0f) * 180.0f);
+						DrawCube(hit_center, 1.004f, 1.004f, 1.004f,
+								Color{ 0, 0, 0, alpha });
+					}
 				}
 				EndMode3D();
 				draw_overlay(controller, status, chunk_count, entity_count,

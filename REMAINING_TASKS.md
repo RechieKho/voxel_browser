@@ -387,14 +387,20 @@ Full detail: `remaining_tasks/phase6.md`.
       status" for the full write-up.
 - [ ] Per-connection rate limiting on custom-keybind events — 6.3 (folds into
       Phase 3.2's still-unimplemented flood guard).
-- [ ] Replicate block-damage *value* (not just begin/stop/complete) to nearby
-      players — 6.5, prerequisite for a crack overlay.
-- [ ] Default generic crack overlay + `crack_texture` override — 6.5. The
-      real texture/atlas system this was blocked on landed 2026-09-23 (see
-      Phase 4's own item), but this specific piece is still `[ ]`: no
-      crack-overlay art exists, and 6.5's other still-open item (replicating
-      the live block-damage *value* to nearby players) is a real prerequisite
-      this doesn't have yet either.
+- [x] Replicate block-damage *value* (not just begin/stop/complete) to nearby
+      players — landed 2026-09-27. `S2C_BlockDamage` (protocol 25) fans out
+      every live punch-count change (`ServerSession::punch()`/
+      `update_block_punch_healing()`) to every player currently mirroring the
+      chunk, not just whoever's punching; `client.break_progress()` (6.16)
+      now reports a real fraction for the looked-at block instead of always
+      `nullopt`. A default generic crack overlay (a darkening cube over the
+      targeted block) ships alongside it. See `remaining_tasks/phase6.md`
+      6.5's own writeup for the full detail.
+- [ ] Real crack-stage texture art + `crack_texture` override — 6.5's last
+      remaining piece, unblocked by the above but not attempted this pass
+      (real asset-pipeline work: a pack-supplied texture replicated to the
+      client and sampled onto the targeted block's faces, not just a flat
+      darkening default).
 - [x] Movement/action key bindings extended into the 6.3 keybind registry
       (6.19) — `move_forward`/`move_back`/`move_left`/`move_right`/`jump`/
       `sprint`/`primary`/`secondary` are pre-registered by every

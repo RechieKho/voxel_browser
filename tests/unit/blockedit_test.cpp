@@ -271,6 +271,83 @@ TEST_CASE("punch() accumulates hits on a max_damage > 0 block and only "
 	CHECK(world.get_block(target) == vb::core::BlockId::kAir);
 }
 
+TEST_CASE("punch() replicates live block damage (S2C_BlockDamage) to every "
+		  "nearby player watching the chunk, not just the puncher") {
+	LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	const vb::core::BlockId tough = registry.add_or_get(
+			"test:tough_stone3", vb::world::BlockType{
+										.name = "test:tough_stone3",
+										.solid = true,
+										.opaque = true,
+										.max_damage = 3,
+								});
+	vb::world::World world(registry);
+	wg::WorldGenWorkerPool pool(
+			wg::WorldGenerator(wg::WorldGenParams{}, registry),
+			wg::WorldGenWorkerPool::kSynchronous);
+
+	HandshakeServerConfig cfg;
+	cfg.world_seed = 7;
+	ServerSession server(net.server(), cfg);
+	server.set_world_replicator(make_rep(world, pool));
+	REQUIRE(net.server().listen(0));
+
+	Transport &ta = net.create_client();
+	auto ida = ta.connect("x", 0);
+	REQUIRE(ida);
+	ClientSession a(ta, *ida, HandshakeClientConfig{ "A", "", "v", 1 });
+	Transport &tb = net.create_client();
+	auto idb = tb.connect("x", 0);
+	REQUIRE(idb);
+	ClientSession b(tb, *idb, HandshakeClientConfig{ "B", "", "v", 2 });
+
+	auto pump = [&](int n) {
+		for (int i = 0; i < n; ++i) {
+			server.tick(0.05);
+			a.tick(0.05);
+			b.tick(0.05);
+		}
+	};
+	pump(20);
+	REQUIRE(a.joined());
+	REQUIRE(b.joined());
+	const NetId a_id = a.join_accept()->your_net_id;
+
+	server.set_player_state(a_id, Vec3d{ 4, 40, 4 });
+	server.set_player_state(b.join_accept()->your_net_id, Vec3d{ 6, 40, 4 });
+	pump(6);
+	const IVec3 target = surface_voxel(world, 4, 4);
+	world.set_block(target, tough);
+	server.set_player_state(a_id,
+			Vec3d{ target.x + 0.5, target.y + 3.0, target.z + 0.5 },
+			vb::core::Vec2f{ 0.0f, -90.0f });
+	pump(3);
+
+	// B never punches anything -- only A does -- but is standing close enough
+	// to mirror the same chunk, so it should still see the live damage value.
+	CHECK(b.block_damage().find(target) == b.block_damage().end());
+
+	CHECK(server.punch(a_id).block_punches == 1);
+	pump(2);
+	REQUIRE(b.block_damage().find(target) != b.block_damage().end());
+	CHECK(b.block_damage().at(target) == 1);
+	// A itself is also a watcher of its own targeted chunk, same broadcast.
+	REQUIRE(a.block_damage().find(target) != a.block_damage().end());
+	CHECK(a.block_damage().at(target) == 1);
+
+	CHECK(server.punch(a_id).block_punches == 2);
+	pump(2);
+	CHECK(b.block_damage().at(target) == 2);
+
+	// The third punch breaks it -- both clients' replicated damage entries
+	// for `target` are dropped rather than left stuck at a stale value.
+	CHECK(server.punch(a_id).block_broken);
+	pump(2);
+	CHECK(b.block_damage().find(target) == b.block_damage().end());
+	CHECK(a.block_damage().find(target) == a.block_damage().end());
+}
+
 TEST_CASE("punch() self-heals an idle block's punch count back to 0 over "
 		  "time, and never breaks it along the way") {
 	LoopbackNetwork net;
@@ -326,11 +403,19 @@ TEST_CASE("punch() self-heals an idle block's punch count back to 0 over "
 
 	CHECK(server.punch(a_id).block_punches == 1);
 	CHECK(server.punch(a_id).block_punches == 2);
+	pump(2);
+	REQUIRE(a.block_damage().find(target) != a.block_damage().end());
+	CHECK(a.block_damage().at(target) == 2);
 
 	// Idle well past heal_after_seconds + enough heal_interval_seconds
 	// steps to fully repair 2 punches (0.1 + 2*0.1 = 0.3s; 1.0s of idle is
 	// plenty) -- no more punches land in between.
 	pump(20);
+
+	// Healing back to 0 broadcasts a clearing S2C_BlockDamage exactly like a
+	// break does -- the client never keeps a stale "2 punches" entry around
+	// once the server has quietly forgiven them all.
+	CHECK(a.block_damage().find(target) == a.block_damage().end());
 
 	const auto after_heal = server.punch(a_id);
 	CHECK(after_heal.block_punches == 1); // healed back to 0, this is fresh

@@ -312,6 +312,27 @@ struct S2CBlockEditResult {
 	static Decoded<S2CBlockEditResult> decode(std::span<const std::byte> in);
 };
 
+// --- live block-damage replication (Phase 6.5's deferred half, closed by
+// 6.18's punch system) ----------------------------------------------------
+// Broadcast by ServerSession whenever a block's punch count
+// (ServerSession::block_punch_counts_, driven by punch()) changes, to every
+// player who currently mirrors the chunk containing `pos`
+// (WorldReplicator::player_has_chunk) -- not just the puncher. `punches ==
+// 0` means "no damage" (fully healed, or the block just broke): the
+// receiving client drops any crack-overlay state for `pos` rather than
+// treating 0 as a value to render. No max_damage field -- the receiving
+// client already knows the block's registered BlockType::max_damage from
+// its own chunk mirror + block registry, so this stays a pure delta.
+struct S2CBlockDamage {
+	static constexpr MessageType kType = MessageType::kS2CBlockDamage;
+
+	core::IVec3 pos{};
+	std::uint16_t punches = 0;
+
+	void encode(std::vector<std::byte> &out) const;
+	static Decoded<S2CBlockDamage> decode(std::span<const std::byte> in);
+};
+
 // --- shared block-damage breaking (spec §10.7) --------------------------
 // Brackets a player holding a target: begin starts (or refreshes) them as a
 // contributor to that pos's damage pool, stop drops them. The damage state

@@ -374,6 +374,19 @@ TEST_CASE("fog params round-trip with an underwater tint override (Phase 7.5)") 
 	CHECK(p.underwater_tint_b == 200);
 }
 
+TEST_CASE("block damage round-trips (Phase 6.5's deferred replication half)") {
+	auto zero = round_trip(S2CBlockDamage{});
+	CHECK(zero.pos == vb::core::IVec3{});
+	CHECK(zero.punches == 0);
+
+	S2CBlockDamage msg;
+	msg.pos = { 10, -3, 42 };
+	msg.punches = 5;
+	auto r = round_trip(msg);
+	CHECK(r.pos == vb::core::IVec3{ 10, -3, 42 });
+	CHECK(r.punches == 5);
+}
+
 TEST_CASE("keybind registry round-trips, including an empty list") {
 	auto empty = round_trip(S2CKeybindRegistry{});
 	CHECK(empty.names.empty());

@@ -171,7 +171,7 @@
       no position on auth as a concept — see `ARCHITECTURE_SPEC.md` §18 Q6.
       Also used internally by `ScriptDb` for its key-to-filename hashing.
 
-### 6.5 Shared block-damage breaking (default + override crack texture) ✅ (2026-09-18, crack rendering deferred)
+### 6.5 Shared block-damage breaking (default + override crack texture) ✅ (2026-09-18; damage-value replication + default crack overlay landed 2026-09-27; crack_texture art still deferred)
 
 - [x] `BlockType` gains `max_damage` (0 = today's instant break, the
       default — no behavior change for any existing block); `vb.register_block{...}`
@@ -216,20 +216,43 @@
       whichever player was contributing when it completed (arbitrary among
       concurrent contributors) — this system only gates *when* that fires,
       never replaces it.
-- [ ] **Deferred, not attempted:** no wire message replicates the damage
-      *value* itself to nearby players yet (the spec's "ride the existing
-      interest/replication system... a transient interest-managed record"
-      design) — scoped down this session to just the begin/stop/complete
-      mechanism, since the only consumer of a replicated damage value is the
-      crack overlay below, which is itself blocked. `BlockDamageTickResult::
-      changed`/`cleared` already exist and are ignored by
-      `ServerSession::update_block_damage` for exactly this reason — wiring
-      them up is the natural next step once there's a client to show them to.
-- [ ] Default generic crack overlay (progressive stages by damage ratio) +
-      `crack_texture` override: **still blocked on** the still-pending real
-      texture/atlas system (4.3/5.1 — client is untextured cubes today), same
-      as before this session. No client UI sends `C2S_BlockBreakBegin`/`Stop`
-      yet either (`ClientSession::send_block_break_begin`/`send_block_break_stop`
+- [x] Damage-*value* replication to nearby players — landed 2026-09-27, and
+      targets the *live* mechanism (6.18's punch-based `block_punch_counts_`),
+      not the legacy `BlockDamageSystem`/`C2S_BlockBreakBegin`/`Stop` path
+      this bullet originally described, which no client has ever driven (see
+      below). New `S2C_BlockDamage` (protocol 54, version 24 -> 25,
+      `docs/protocol.md`): `IVec3 pos`, `u16 punches`, no `max_damage` field
+      (the receiving client already knows `BlockType::max_damage` from its
+      own chunk mirror + block registry). `ServerSession::
+      broadcast_block_damage()` sends it from every `punch()` count change
+      and from `update_block_punch_healing()`'s heal steps, to every playing
+      connection currently mirroring the chunk (`WorldReplicator::
+      player_has_chunk`) — not just the puncher, closing the actual gap this
+      bullet was about. `punches == 0` (break or full heal) means "clear,"
+      not "a value" — `ClientSession::block_damage()` erases the entry
+      rather than storing a stale 0, and also drops any entry for a chunk
+      that leaves the client's own view (`S2C_ChunkRemove`), since the
+      server stops broadcasting updates for it at that point.
+      `client.break_progress()` (Phase 6.16, previously always `nullopt`
+      pending exactly this) now reports the currently-looked-at block's real
+      `punches / max_damage` fraction. Default generic crack overlay: a
+      translucent black cube over the targeted block, darkening with that
+      fraction (`src/client/main.cpp`) — real texture-stage crack art and a
+      `crack_texture` override are still open, see the bullet below.
+      Verified: full `vb_tests` 355/355 green (a `protocol_test.cpp`
+      round-trip case; two new `blockedit_test.cpp` cases — a second,
+      non-punching client sees another player's live punch count and sees it
+      cleared on break; the existing self-heal case now also asserts the
+      replicated value clears on a full heal), clean `-Werror` build of
+      `vb_tests`/`voxel_browser`/`voxel_browser_server`.
+- [ ] Real crack-stage texture art + `crack_texture` override: the *value*
+      replication above unblocks this, but building it out (a pack-supplied
+      texture path replicated to the client, sampled onto the targeted
+      block's faces instead of the flat darkening default) is real
+      asset-pipeline work not attempted this pass — deliberately scoped
+      down to keep this session's change reviewable. No client UI sends
+      `C2S_BlockBreakBegin`/`Stop` yet either (`ClientSession::
+      send_block_break_begin`/`send_block_break_stop`
       exist as a real, tested wire API — `src/client/main.cpp`'s existing 5.2
       hold-to-break timer is untouched and still governs every
       `max_damage == 0` block, which is every block in `content/base` today).

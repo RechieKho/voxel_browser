@@ -385,10 +385,15 @@ ServerSession::PunchResult ServerSession::punch(core::NetId puncher) {
 							protocol::BlockEditAction::kBreak, block_hit.voxel)) {
 					block_punch_counts_.erase(block_hit.voxel);
 					result.block_broken = true;
+					broadcast_block_damage(block_hit.voxel, 0);
+				} else {
+					// A veto (apply_script_block_edit returned false) leaves the
+					// count at max_damage -- the very next punch retries the
+					// break rather than needing max_damage+1 hits.
+					broadcast_block_damage(block_hit.voxel, state.punches);
 				}
-				// A veto (apply_script_block_edit returned false) leaves the
-				// count at max_damage -- the very next punch retries the
-				// break rather than needing max_damage+1 hits.
+			} else {
+				broadcast_block_damage(block_hit.voxel, state.punches);
 			}
 		}
 	}
@@ -402,12 +407,26 @@ ServerSession::PunchResult ServerSession::punch(core::NetId puncher) {
 // seconds until it's back to full health (erased from the map) or hit
 // again (both timers reset in punch() itself). A negative heal_after_
 // seconds disables this entirely -- every entry just idles forever.
+void ServerSession::broadcast_block_damage(core::IVec3 pos, std::uint16_t punches) {
+	if (!replicator_) {
+		return;
+	}
+	const core::ChunkCoord cc = core::chunk_of(pos);
+	const protocol::S2CBlockDamage msg{ pos, punches };
+	for (auto &[conn, state] : conns_) {
+		if (state.playing && replicator_->player_has_chunk(state.net_id, cc)) {
+			send_message(transport_, conn, msg);
+		}
+	}
+}
+
 void ServerSession::update_block_punch_healing(double dt_seconds) {
 	if (punch_params_.heal_after_seconds < 0.0) {
 		return;
 	}
 	for (auto it = block_punch_counts_.begin(); it != block_punch_counts_.end();) {
 		PunchDamageState &state = it->second;
+		const std::uint16_t before = state.punches;
 		state.idle_seconds += dt_seconds;
 		if (state.idle_seconds >= punch_params_.heal_after_seconds) {
 			state.heal_progress += dt_seconds;
@@ -418,8 +437,12 @@ void ServerSession::update_block_punch_healing(double dt_seconds) {
 			}
 		}
 		if (state.punches == 0) {
+			broadcast_block_damage(it->first, 0);
 			it = block_punch_counts_.erase(it);
 		} else {
+			if (state.punches != before) {
+				broadcast_block_damage(it->first, state.punches);
+			}
 			++it;
 		}
 	}
@@ -1462,6 +1485,19 @@ bool ClientSession::apply_gameplay_frame(const protocol::Frame &frame) {
 		case MessageType::kS2CChunkRemove: {
 			if (auto m = protocol::S2CChunkRemove::decode(frame.payload)) {
 				chunks_.apply_remove(*m);
+				// A chunk leaving this client's view means the server has
+				// stopped broadcasting S2C_BlockDamage for it (broadcast_
+				// block_damage() only reaches players who currently mirror
+				// the chunk) -- drop any stale entries now so a re-entered
+				// chunk never starts showing a leftover crack from before it
+				// was last seen.
+				for (auto it = block_damage_.begin(); it != block_damage_.end();) {
+					if (core::chunk_of(it->first) == m->coord) {
+						it = block_damage_.erase(it);
+					} else {
+						++it;
+					}
+				}
 			}
 			return true;
 		}
@@ -1517,6 +1553,15 @@ bool ClientSession::apply_gameplay_frame(const protocol::Frame &frame) {
 				inventory_ = std::move(m->slots);
 			} else {
 				VB_ERROR("net", "malformed S2C_Inventory: ",
+						core::message(m.error()));
+			}
+			return true;
+		}
+		case MessageType::kS2CBlockDamage: {
+			if (auto m = protocol::S2CBlockDamage::decode(frame.payload)) {
+				apply_block_damage(*m);
+			} else {
+				VB_ERROR("net", "malformed S2C_BlockDamage: ",
 						core::message(m.error()));
 			}
 			return true;
@@ -1608,6 +1653,14 @@ void ClientSession::apply_fog_params(const protocol::S2CFogParams &msg) {
 	VB_INFO("net", "received fog params (start=", msg.fog_start,
 			", end=", msg.fog_end, ")");
 	fog_override_ = msg;
+}
+
+void ClientSession::apply_block_damage(const protocol::S2CBlockDamage &msg) {
+	if (msg.punches == 0) {
+		block_damage_.erase(msg.pos);
+	} else {
+		block_damage_[msg.pos] = msg.punches;
+	}
 }
 
 void ClientSession::apply_snapshot(const protocol::S2CEntitySnapshot &snap) {

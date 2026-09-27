@@ -436,6 +436,13 @@ private:
 	void update_block_damage();
 	void update_block_punch_healing(double dt_seconds);
 	void update_region_occupancy();
+	// Phase 6.5's deferred half (closed 2026-09-27): sends S2C_BlockDamage
+	// to every playing connection that currently mirrors the chunk containing
+	// `pos` (WorldReplicator::player_has_chunk), not just whoever's punching
+	// it -- called from punch() on every punch-count change and from
+	// update_block_punch_healing() on every heal step. `punches == 0` covers
+	// both "healed back to full" and "just broke" alike.
+	void broadcast_block_damage(core::IVec3 pos, std::uint16_t punches);
 	void broadcast_snapshots();
 	void broadcast_world();
 	void broadcast_time_of_day();
@@ -732,6 +739,17 @@ public:
 		return fog_override_;
 	}
 
+	// Live block-damage replicated by the server (Phase 6.5's deferred half,
+	// closed 2026-09-27): pos -> raw punch count, populated by S2C_BlockDamage
+	// and only ever containing entries currently taking damage (a pos is
+	// erased the instant its punches reach 0, never left at a stale 0 entry).
+	// Callers divide by BlockType::max_damage (chunk_store().registry())
+	// themselves for a fraction -- same "engine reports raw state,
+	// presentation computes the rest" posture break_progress() always had.
+	const std::unordered_map<core::IVec3, std::uint16_t> &block_damage() const {
+		return block_damage_;
+	}
+
 	// This player's inventory (spec §5.1), kept in sync by S2C_Inventory.
 	// Empty until the first snapshot arrives (e.g. before any player:give()).
 	const std::vector<protocol::InventorySlot> &inventory() const {
@@ -761,6 +779,7 @@ private:
 	void apply_move_params(const protocol::S2CMoveParams &msg);
 	void apply_day_night_curve(const protocol::S2CDayNightCurve &msg);
 	void apply_fog_params(const protocol::S2CFogParams &msg);
+	void apply_block_damage(const protocol::S2CBlockDamage &msg);
 	void apply_snapshot(const protocol::S2CEntitySnapshot &snap);
 	void reconcile(const protocol::EntityRecord &authoritative,
 			std::uint32_t acked_seq);
@@ -807,6 +826,7 @@ private:
 			entity_visual_overrides_;
 	world::DayNightCurve day_night_curve_; // empty = default_day_night_curve()
 	std::optional<protocol::S2CFogParams> fog_override_;
+	std::unordered_map<core::IVec3, std::uint16_t> block_damage_;
 
 	physics::MoveState predicted_;
 	physics::MoveParams move_params_;

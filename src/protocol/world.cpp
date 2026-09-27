@@ -418,6 +418,21 @@ Decoded<S2CBlockEditResult> S2CBlockEditResult::decode(
 	return finish(r, std::move(m));
 }
 
+// --- S2CBlockDamage --------------------------------------------------------
+void S2CBlockDamage::encode(std::vector<std::byte> &out) const {
+	ByteWriter w(out);
+	write_ivec3(w, pos);
+	w.u16(punches);
+}
+
+Decoded<S2CBlockDamage> S2CBlockDamage::decode(std::span<const std::byte> in) {
+	ByteReader r(in);
+	S2CBlockDamage m;
+	m.pos = read_ivec3(r);
+	m.punches = r.u16();
+	return finish(r, std::move(m));
+}
+
 // --- C2SBlockBreakBegin / C2SBlockBreakStop -------------------------------
 void C2SBlockBreakBegin::encode(std::vector<std::byte> &out) const {
 	ByteWriter w(out);

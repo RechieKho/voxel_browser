@@ -20,6 +20,56 @@
 
 ## Current status (2026-09-27)
 
+**Replicated live block-damage (punch count) to nearby players, closing
+Phase 6.5's deferred half** (REMAINING_TASKS' "Replicate block-damage value
+to nearby players" gap). Targets the mechanism that's actually live today --
+6.18's punch-based `ServerSession::block_punch_counts_` -- not the original
+6.5-era `world::BlockDamageSystem`/`C2S_BlockBreakBegin`/`Stop` path, which no
+client has ever driven (`content/base/mechanics.lua` calls `player:punch()`,
+not `send_block_break_begin`) and stays exactly as dead as it was before this
+pass. New `S2C_BlockDamage` (`inc/vb/protocol/world.hpp`, message id 54,
+`ENGINE_PROTOCOL_VERSION` 24 -> 25): `IVec3 pos`, `u16 punches`, deliberately
+no `max_damage` field -- the receiving client already knows
+`BlockType::max_damage` from its own chunk mirror + block registry, so this
+stays a pure delta. `ServerSession::broadcast_block_damage(pos, punches)`
+(`src/net/session.cpp`) sends it to every playing connection currently
+mirroring the chunk (`WorldReplicator::player_has_chunk`) -- not just
+whoever's punching -- called from three sites: `punch()`'s punch-count
+increment, `punch()`'s break-completion (sends `punches = 0`), and
+`update_block_punch_healing()`'s per-tick heal loop (sends the new value, or
+`0` on full heal). `punches == 0` means "cleared" both ways (broken or fully
+healed) -- `ClientSession::block_damage()` (`inc/vb/net/session.hpp`) erases
+the entry rather than ever storing a stale `0`. **Gotcha carried over from
+this same client-side map:** a chunk leaving a client's own view
+(`S2C_ChunkRemove`) means the server silently stops broadcasting further
+updates for it (nothing left mirroring it to broadcast to) -- without
+cleanup, a damaged block's last-known punch count would linger forever and
+resurface wrong if the player wandered back. Fixed by sweeping
+`block_damage_` for any entry in the removed chunk right inside the
+`kS2CChunkRemove` case. `client.break_progress()` (Phase 6.16's HUD
+primitive, previously hardcoded to always `nullopt` with a comment awaiting
+exactly this) now computes a real fraction (`punches / max_damage`) for
+whichever block the local player is currently looking at
+(`src/client/main.cpp`). A default generic crack overlay ships alongside it:
+a translucent black cube drawn over the targeted block, darkening in step
+with that fraction (`DrawCube` at `alpha = fraction * 180`, scaled 1.004x to
+avoid z-fighting against the block's own mesh) -- real crack-stage texture
+art and a pack-facing `crack_texture` override are unblocked by this but
+**not** attempted this pass (real asset-pipeline work, deliberately scoped
+out to keep this change reviewable; see `remaining_tasks/phase6.md` 6.5).
+Verified: full `vb_tests` 355/355 green (a `protocol_test.cpp` round-trip
+case for `S2CBlockDamage`; a new `blockedit_test.cpp` case proving a
+non-punching second player watching the same chunk sees another player's
+live punch count update and clear on break; the existing self-heal test case
+now also asserts the replicated value clears on a full heal, not just the
+server-side count), clean `-Werror` build of `vb_tests`/`voxel_browser`/
+`voxel_browser_server` (temporarily reconfigured `build-net-lua` with
+`-DVB_WARNINGS_AS_ERRORS=ON`, confirmed clean, reconfigured back to this
+dir's OFF default afterward). The actual rendered crack overlay (a human
+punching a block and watching it darken) was **not** manually eyeballed --
+no GUI in this agent environment, same still-open caveat as every other
+recent rendering-adjacent pass.
+
 **Wired HUD widgets to `report_click`/`report_change`/`report_list_change`**
 (REMAINING_TASKS' Phase 6.16 gap: "HUD widgets aren't wired to
 report_click/report_change (display-only for now)"). `vb::render::UiRenderer::
