@@ -398,7 +398,6 @@ struct Singleplayer {
 			for (auto &l : server.take_leaves()) {
 				pack_runtime.dispatch_player_leave(l);
 			}
-			pack_runtime.dispatch_tick(kFixedDt);
 			tick_accum_ -= kFixedDt;
 			++steps;
 		}

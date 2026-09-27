@@ -89,7 +89,6 @@ TEST_CASE("pack script vetoes a block break and observes on_break") {
 		for (int i = 0; i < n; ++i) {
 			server.tick(0.05);
 			client.tick(0.05);
-			rt.dispatch_tick(0.05);
 		}
 	};
 
@@ -173,7 +172,6 @@ TEST_CASE("block breaking is opt-in content, not an engine default: "
 		for (int i = 0; i < n; ++i) {
 			server.tick(0.05);
 			client.tick(0.05);
-			rt.dispatch_tick(0.05);
 		}
 	};
 
@@ -275,7 +273,6 @@ TEST_CASE("shared block-damage breaking: begin -> tick -> completes the break "
 		for (int i = 0; i < n; ++i) {
 			server.tick(0.05);
 			client.tick(0.05);
-			rt.dispatch_tick(0.05);
 		}
 	};
 
@@ -338,7 +335,6 @@ TEST_CASE("a target with max_damage == 0 never reaches the damage system") {
 		for (int i = 0; i < n; ++i) {
 			server.tick(0.05);
 			client.tick(0.05);
-			rt.dispatch_tick(0.05);
 		}
 	};
 
@@ -446,7 +442,6 @@ TEST_CASE("pack script vetoes and replaces player input via a handler chain") {
 		for (int i = 0; i < n; ++i) {
 			server.tick(0.05);
 			client.tick(0.05);
-			rt.dispatch_tick(0.05);
 		}
 	};
 
@@ -543,7 +538,6 @@ TEST_CASE("player:get_selected_slot()/get_held_item() track a real client's "
 		for (int i = 0; i < n; ++i) {
 			server.tick(0.05);
 			client.tick(0.05);
-			rt.dispatch_tick(0.05);
 		}
 	};
 	pump(16);
@@ -613,7 +607,6 @@ TEST_CASE("player_leave dispatch fires with the right net id") {
 	for (int i = 0; i < 20; ++i) {
 		server.tick(0.05);
 		client.tick(0.05);
-		rt.dispatch_tick(0.05);
 	}
 	REQUIRE(client.joined());
 	const NetId expected_id = client.join_accept()->your_net_id;
@@ -627,7 +620,6 @@ TEST_CASE("player_leave dispatch fires with the right net id") {
 			captured_id = l.net_id;
 			rt.dispatch_player_leave(l);
 		}
-		rt.dispatch_tick(0.05);
 	}
 
 	CHECK(captured_id == expected_id);
@@ -931,7 +923,6 @@ TEST_CASE("player:give() pushes a live S2C_Inventory to the client") {
 		for (int i = 0; i < n; ++i) {
 			server.tick(0.05);
 			client.tick(0.05);
-			rt.dispatch_tick(0.05);
 		}
 	};
 	pump(16);
@@ -975,7 +966,6 @@ TEST_CASE("vb.world.spawn_item_drop replicates to a client and is picked up on a
 		for (int i = 0; i < n; ++i) {
 			server.tick(0.05);
 			client.tick(0.05);
-			rt.dispatch_tick(0.05);
 		}
 	};
 	pump(16);
@@ -1048,7 +1038,6 @@ TEST_CASE("vb.register_entity{represents=\"item_drop\"} tags real drops with "
 		for (int i = 0; i < n; ++i) {
 			server.tick(0.05);
 			client.tick(0.05);
-			rt.dispatch_tick(0.05);
 		}
 	};
 	pump(16);
@@ -1180,7 +1169,6 @@ TEST_CASE("vb.register_block{pickup_radius=...} widens a dropped item's "
 		for (int i = 0; i < n; ++i) {
 			server.tick(0.05);
 			client.tick(0.05);
-			rt.dispatch_tick(0.05);
 		}
 	};
 	pump(16);
@@ -1238,7 +1226,6 @@ TEST_CASE(
 		for (int i = 0; i < n; ++i) {
 			server.tick(0.05);
 			client.tick(0.05);
-			rt.dispatch_tick(0.05);
 		}
 	};
 	pump(16);
@@ -1331,7 +1318,6 @@ TEST_CASE("vb.register_entity + vb.world.spawn: self persists across on_tick, "
 		for (int i = 0; i < n; ++i) {
 			server.tick(0.05);
 			client.tick(0.05);
-			rt.dispatch_tick(0.05);
 		}
 	};
 	pump(16);
@@ -1424,7 +1410,6 @@ TEST_CASE("vb.register_entity{health=}: damage() auto-despawns at 0 without "
 		for (int i = 0; i < n; ++i) {
 			server.tick(0.05);
 			client.tick(0.05);
-			rt.dispatch_tick(0.05);
 		}
 	};
 	pump(16);
@@ -1504,7 +1489,6 @@ TEST_CASE("vb.world.spawn(kind, pos, {visual_override=}) reaches a joining "
 		for (int i = 0; i < n; ++i) {
 			server.tick(0.05);
 			client.tick(0.05);
-			rt.dispatch_tick(0.05);
 		}
 	};
 	pump(16);
@@ -1596,7 +1580,6 @@ TEST_CASE("region_enter/region_exit (Phase 7.3): fires once per crossing, "
 		for (int i = 0; i < n; ++i) {
 			server.tick(0.05);
 			client.tick(0.05);
-			rt.dispatch_tick(0.05);
 		}
 	};
 
@@ -1683,7 +1666,6 @@ TEST_CASE("player_landed (Phase 6.22): fires exactly once on impact, with a "
 		for (int i = 0; i < n; ++i) {
 			server.tick(0.05);
 			client.tick(0.05);
-			rt.dispatch_tick(0.05);
 		}
 	};
 

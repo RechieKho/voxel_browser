@@ -889,6 +889,17 @@ void ServerSession::build_systems() {
 	systems_.add("check_respawns", [this](entt::registry &, const ecs::TickContext &) {
 		check_respawns();
 	});
+	// Formalizes the "EntityKind tick/spawn/hit/death callbacks wired into
+	// real systems" gap: runs before sync_interest/broadcast_snapshots below
+	// so a script-driven entity move (self:set_pos() from on_tick) reaches
+	// this same tick's snapshot instead of next tick's, matching the spec's
+	// ScriptPreTickSystem placement ahead of interest/replication. A no-op
+	// when no PackRuntime is attached (on_script_tick_ unset).
+	systems_.add("script_tick", [this](entt::registry &, const ecs::TickContext &ctx) {
+		if (on_script_tick_) {
+			on_script_tick_(ctx.dt_seconds);
+		}
+	});
 	systems_.add("update_item_drops",
 			[this](entt::registry &, const ecs::TickContext &ctx) {
 				update_item_drops(ctx.dt_seconds);

@@ -328,6 +328,24 @@ public:
 		on_landed_ = std::move(handler);
 	}
 
+	// Formalizes REMAINING_TASKS' Phase 4 "EntityKind tick/spawn/hit/death
+	// callbacks wired into real systems" gap now that SystemRunner (Phase
+	// 3.1) actually exists: PackRuntime::dispatch_tick (global `tick` event +
+	// entity on_tick/on_hit/on_death dispatch + timers) used to be called as
+	// a separate step in each embedder's own loop, strictly *after*
+	// session.tick() had already run every SystemRunner phase for that tick
+	// (server/main.cpp, client/main.cpp's Singleplayer::tick) -- meaning a
+	// script-driven entity move only reached sync_interest/broadcast_snapshots
+	// one tick late. This hook lets build_systems() run it as a real,
+	// ordered phase instead, same "ServerSession has no idea this is
+	// Lua-backed" decoupling as spawn_script_entity below -- PackRuntime
+	// wires it in attach_session(). Unset means no script runtime is
+	// attached (e.g. a test building a bare ServerSession), same "unset = no
+	// side effect" posture as every other hook here.
+	void set_script_tick_hook(std::function<void(double)> handler) {
+		on_script_tick_ = std::move(handler);
+	}
+
 	// Phase 6.1 (vb.register_entity / vb.world.spawn): a generic Lua-kind
 	// entity, replicated the exact same way spawn_item_drop's entries are --
 	// no dedicated wire message, just another interest-grid entry keyed by a
@@ -503,6 +521,7 @@ private:
 	world::BlockDamageSystem block_damage_;
 	BlockBreakHooks block_break_hooks_;
 	std::function<void(core::NetId, double)> on_landed_;
+	std::function<void(double)> on_script_tick_;
 	// Phase 7.3: last-known region-block occupancy per playing net id --
 	// absent = "not currently inside a region block". Compared each tick in
 	// update_region_occupancy() to fire enter/exit exactly on the crossing,

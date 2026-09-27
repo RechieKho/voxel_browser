@@ -224,9 +224,33 @@ Full detail: `remaining_tasks/phase4.md`.
       reconfigured `build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`,
       confirmed clean, reconfigured back to this dir's OFF default
       afterward).
-- [ ] `EntityKind` tick/spawn/hit/death callbacks wired into real systems —
-      superseded in practice by Phase 6.1's hardcoded-system approach; the
-      formal `SystemRunner` itself is still `[ ]` (see Phase 3.1).
+- [x] `EntityKind` tick/spawn/hit/death callbacks wired into real systems —
+      landed 2026-09-27, now that `SystemRunner` itself exists (Phase 3.1,
+      2026-09-25). `PackRuntime::dispatch_tick` (the `tick` event + entity
+      `on_tick`/`on_hit`/`on_death` dispatch + global timers) used to be a
+      separate call each embedder's own loop made *after* `ServerSession::
+      tick()` had already run every phase for that tick (`server/main.cpp`,
+      `client/main.cpp`'s `Singleplayer::tick()`) — a script-driven entity
+      move only reached `sync_interest`/`broadcast_snapshots` one tick late.
+      New `ServerSession::set_script_tick_hook(fn(double))` (`inc/vb/net/
+      session.hpp`) is a new `"script_tick"` `SystemRunner` phase, placed
+      right after `check_respawns` and before `update_item_drops`/
+      `sync_interest`/`broadcast_snapshots` — same "`ServerSession` has no
+      idea this is Lua-backed" decoupling every other hook here already uses
+      (`set_landed_hook` et al.), not a direct `PackRuntime` reference.
+      `PackRuntime::attach_session()` installs it unconditionally (unlike the
+      conditional hooks above it — `dispatch_tick` does real work, global
+      timers included, even for a pack with no entity-kind callbacks at
+      all). Both embedders' loops no longer call `pack_runtime.dispatch_tick()`
+      directly. Verified: full `vb_tests` 381/381 green (updated the ~19
+      existing `attach_session`-using pump loops in `pack_runtime_integration_
+      test.cpp`/`content_pack_test.cpp`/`kitchen_sink_pack_test.cpp` to drop
+      their now-redundant explicit `rt.dispatch_tick()` call — leaving it in
+      would have double-fired every entity tick/timer per pump step), clean
+      `-Werror` build of `vb_tests`/`voxel_browser`/`voxel_browser_server`
+      (temporarily reconfigured `build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=
+      ON`, confirmed clean, reconfigured back to this dir's OFF default
+      afterward).
 - [x] `register_entity`'s `visual = {...}` sub-table (variant/facings/clips)
       for 3.5's `entity_renderer` — landed 2026-09-25. Protocol version bumped
       **19 -> 20**: `EntityKindRegistryRecord` gains an optional `visual`

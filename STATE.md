@@ -20,7 +20,50 @@
 
 ## Current status (2026-09-27)
 
-**Sandboxed `require` + per-callback wall-clock budget (Phase 4.1, closed).**
+**`EntityKind` tick/spawn/hit/death callbacks folded into a real `SystemRunner`
+phase (Phase 4 gap, closed).** `PackRuntime::dispatch_tick` used to be called
+as a separate step in each embedder's own loop (`server/main.cpp`, `client/
+main.cpp`'s `Singleplayer::tick()`), strictly *after* `ServerSession::tick()`
+had already finished every `SystemRunner` phase for that tick — a
+script-driven entity move (`self:set_pos()` from `on_tick`) reached
+`sync_interest`/`broadcast_snapshots` one tick late. This was a deliberate,
+twice-reaffirmed deferral (2026-09-17's original hardcoded-map precedent,
+reaffirmed 2026-09-25 when `SystemRunner` itself landed but `dispatch_tick`
+was explicitly kept externally driven) — REMAINING_TASKS' own line describing
+it as blocked on "the formal `SystemRunner` itself" was stale by the time this
+was picked up, since that landed 2026-09-25. New `ServerSession::
+set_script_tick_hook(fn(double))` (`inc/vb/net/session.hpp`) registers a new
+`"script_tick"` phase in `build_systems()`, placed right after
+`check_respawns` and before `update_item_drops`/`sync_interest`/
+`broadcast_snapshots` — `ServerSession` still has zero direct `PackRuntime`
+reference, same `std::function` hook-seam decoupling as `set_landed_hook`/
+`set_region_hooks`/etc.; `PackRuntime::attach_session()` installs it
+unconditionally (unlike the conditional hooks right above it in that
+function — `dispatch_tick` does real work, global timers included, even for a
+pack that registers no entity-kind callbacks at all). Both embedders'
+per-tick loops no longer call `pack_runtime.dispatch_tick()` directly.
+**Real behavior change, not just a refactor:** a script entity's `on_tick`
+move now shows up in the *same* tick's outgoing snapshot instead of the next
+one — a strict latency improvement, matching the spec's original
+`ScriptPreTickSystem` placement ahead of interest/replication, but worth
+knowing if a future timing-sensitive test seems to be off by one tick from
+what an older mental model would predict.
+**Gotcha hit wiring this up:** roughly 19 existing test call sites (across
+`pack_runtime_integration_test.cpp`, `content_pack_test.cpp`,
+`kitchen_sink_pack_test.cpp`) call `rt.attach_session(server)` and then pump
+`server.tick(0.05); client.tick(0.05); rt.dispatch_tick(0.05);` in a loop —
+each of those explicit `rt.dispatch_tick()` calls became a redundant *second*
+dispatch per pump step once `attach_session()` started installing the hook
+(entity ticks/timers would fire twice per loop iteration). Fixed by deleting
+the now-redundant explicit call from every one of those pump loops (`pack_
+runtime_test.cpp`'s own direct `rt.dispatch_tick()` calls are untouched —
+those tests never attach a session, so no hook is ever installed there).
+Verified: full `vb_tests` 381/381 green, clean `-Werror` build of `vb_tests`/
+`voxel_browser`/`voxel_browser_server` (temporarily reconfigured
+`build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`, confirmed clean,
+reconfigured back to this dir's OFF default afterward).
+
+Before that, most recent landed item was **sandboxed `require` + per-callback wall-clock budget (Phase 4.1, closed).**
 `vb::script::Vm` reinstates a safe `require` global that resolves only
 against an in-memory virtual module map (`Vm::install_require`, built by
 `load_content_pack`'s own directory walk — every pack `.lua` file except

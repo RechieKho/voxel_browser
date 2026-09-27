@@ -2855,6 +2855,15 @@ void PackRuntime::attach_session(net::ServerSession &session) {
 	if (self->item_drop_kind_id) {
 		session.set_item_drop_visual_kind(*self->item_drop_kind_id);
 	}
+	// Formalizes dispatch_tick (global `tick` event + entity on_tick/on_hit/
+	// on_death + timers) as a real ServerSession::build_systems() phase
+	// instead of a separate step each embedder's own loop used to call after
+	// session.tick() had already finished the whole SystemRunner for that
+	// tick -- see ServerSession::set_script_tick_hook's own comment. Always
+	// installed (unlike the conditional hooks above): dispatch_tick does
+	// real work -- global timers, the `tick` event -- regardless of whether
+	// this pack registered any entity-kind callbacks at all.
+	session.set_script_tick_hook([this](double dt) { dispatch_tick(dt); });
 }
 
 void PackRuntime::dispatch_player_join_completed(

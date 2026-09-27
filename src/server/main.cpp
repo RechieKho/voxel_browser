@@ -367,7 +367,6 @@ int main(int argc, char **argv) {
 			pack_runtime.dispatch_player_leave(left);
 			std::cout << "server: a player left (" << left.reason << ")\n";
 		}
-		pack_runtime.dispatch_tick(tick_dt_seconds);
 
 		if (autosave_ticks > 0 && tick % autosave_ticks == 0) {
 			autosave_sweep();

@@ -112,7 +112,6 @@ TEST_CASE("content/base crafting: wood -> planks -> sticks via /craft chat") {
 		for (int i = 0; i < n; ++i) {
 			server.tick(0.05);
 			client.tick(0.05);
-			rt.dispatch_tick(0.05);
 		}
 	};
 	pump(16);
