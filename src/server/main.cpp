@@ -311,6 +311,11 @@ int main(int argc, char **argv) {
 	// today's unset behavior -- only bites once an operator opts in.
 	session.set_max_connections_per_ip(
 			static_cast<int>(config.max_connections_per_ip));
+	// Same "0 = unlimited, only bites once an operator opts in" posture as
+	// max_connections_per_ip just above -- defense in depth on top of the
+	// closed-schema per-message caps (Phase 3.2/6.3's tracked flood-guard
+	// item), not a replacement for them.
+	session.set_max_messages_per_second(config.max_messages_per_second);
 	// Phase 6.8: fold server.toml's day_length_seconds in as the base, then
 	// let a pack's vb.daynight.set_day_length(...) override on top of it --
 	// mirrors move_params.gravity's config-then-pack-override precedent.

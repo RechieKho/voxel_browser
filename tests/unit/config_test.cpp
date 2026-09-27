@@ -31,6 +31,7 @@ TEST_CASE("server config: defaults when the document is empty") {
 	CHECK(c->auth_mode == ConfigAuthMode::kNone);
 	CHECK(c->content_pack == "content/base");
 	CHECK(c->max_connections_per_ip == 0); // 0 = unlimited
+	CHECK(c->max_messages_per_second == doctest::Approx(0.0)); // 0 = unlimited
 }
 
 TEST_CASE("server config: values are read from TOML") {
@@ -44,6 +45,7 @@ TEST_CASE("server config: values are read from TOML") {
 		void_kill_y = -32.0
 		day_length_seconds = 600.0
 		max_connections_per_ip = 3
+		max_messages_per_second = 50.0
 		auth_mode = "token"
 		motd = "hi"
 	)");
@@ -57,6 +59,7 @@ TEST_CASE("server config: values are read from TOML") {
 	CHECK(c->void_kill_y == doctest::Approx(-32.0));
 	CHECK(c->day_length_seconds == doctest::Approx(600.0));
 	CHECK(c->max_connections_per_ip == 3);
+	CHECK(c->max_messages_per_second == doctest::Approx(50.0));
 	CHECK(c->auth_mode == ConfigAuthMode::kToken);
 	CHECK(c->motd == "hi");
 }

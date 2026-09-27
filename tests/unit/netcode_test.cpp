@@ -214,6 +214,61 @@ TEST_CASE("chat: a broadcast reaches every playing client, including the sender"
 	CHECK(b->take_chat_messages().empty());
 }
 
+// Phase 3.2/6.3's tracked "per-player rate limit / flood guard" item:
+// set_max_messages_per_second bounds how often a *playing* connection's
+// messages are processed at all, on top of (not instead of) the existing
+// closed-schema per-message caps (C2SInputBatch::kMaxCmds, the keybind
+// bitset). Chat is a convenient message type to drive this through end to
+// end -- one C2S_Chat per send_chat() call, no batching, so "N calls, M
+// broadcasts" is unambiguous.
+TEST_CASE("flood guard: set_max_messages_per_second drops excess messages, "
+		"refills over time") {
+	LoopbackNetwork net;
+	ServerSession server(net.server(), [] {
+		HandshakeServerConfig c;
+		c.world_seed = 1;
+		return c;
+	}());
+	REQUIRE(net.server().listen(0));
+	server.set_max_messages_per_second(1.0); // 1 msg/sec, 1-token bucket
+
+	vb::net::Transport &ta = net.create_client();
+	auto ida = ta.connect("x", 0);
+	REQUIRE(ida);
+	std::optional<ClientSession> a;
+	a.emplace(ta, *ida, HandshakeClientConfig{ "Alice", "", "v", 1 });
+
+	auto pump = [&](int n) {
+		for (int i = 0; i < n; ++i) {
+			server.tick(0.05);
+			a->tick(0.05);
+		}
+	};
+	pump(16);
+	REQUIRE(a->joined());
+	a->take_chat_messages(); // drain the join-notice line, not under test
+
+	// Three messages sent back-to-back, before the bucket (seeded full at
+	// connect, capacity 1) has any chance to refill: only the first is
+	// processed, the other two are silently dropped.
+	a->send_chat("one");
+	a->send_chat("two");
+	a->send_chat("three");
+	pump(2);
+	const auto burst_msgs = a->take_chat_messages();
+	REQUIRE(burst_msgs.size() == 1);
+	CHECK(burst_msgs[0] == "Alice: one");
+
+	// Refill: at 1 token/sec, ~20 ticks of 0.05s each earns back the one
+	// token the burst above spent.
+	pump(20);
+	a->send_chat("four");
+	pump(2);
+	const auto refilled_msgs = a->take_chat_messages();
+	REQUIRE(refilled_msgs.size() == 1);
+	CHECK(refilled_msgs[0] == "Alice: four");
+}
+
 TEST_CASE("day/night: time_of_day advances server-side and syncs to clients") {
 	LoopbackNetwork net;
 	ServerSession server(net.server(), [] {

@@ -148,7 +148,34 @@ Full detail: `remaining_tasks/phase3.md`.
       remote-entity interpolation bookkeeping now lives in a real
       `entt::registry` (`ecs::InterpBuffer`/`ecs::EntityKind`), not the old
       ad hoc `RemoteSample` struct. See `remaining_tasks/phase3.md`.
-- [ ] Per-player rate limit / flood guard belongs with `GnsTransport`.
+- [x] Per-player rate limit / flood guard — landed 2026-09-27 as
+      `ServerSession::set_max_messages_per_second(double)` /
+      `ServerConfig::max_messages_per_second` (`server.toml`, default 0 =
+      unlimited). A token bucket per playing connection (one token per
+      post-join message, any type -- input batch, block edit, chat, UI
+      event, block-break begin/stop -- refilled at the configured rate,
+      capacity == one second's worth of burst), checked in
+      `system_network_io()` before a message is dispatched to its handler;
+      an empty bucket drops the message (not the connection). Defense in
+      depth on top of the existing closed-schema per-message caps
+      (`C2SInputBatch::kMaxCmds`, the fixed-width keybind bitset) -- those
+      bound how much one message can do, this bounds how often a connection
+      can send one at all. Exposed read-only via `vb.config.get(
+      "max_messages_per_second")` (Phase 6.13's surface), same posture as
+      `max_connections_per_ip`. See Phase 6's own entry below for the
+      matching "closes the custom-keybind-flood item too" note. Verified:
+      full `vb_tests` 380/380 green over `LoopbackTransport` (a new
+      `netcode_test.cpp` case drives 3 back-to-back chat sends through a
+      1 msg/sec limit, confirms only the first lands, then confirms a 4th
+      lands again after ~1s of ticks refill the bucket; `config_test.cpp`/
+      `pack_runtime_test.cpp` cases cover the TOML default/parse and
+      `vb.config.get` round-trip) — 2 real-UDP `gns_transport_test.cpp`
+      cases skipped in this run (this agent environment's Windows Firewall
+      blocks unattended real-UDP listen/connect), clean `-Werror` build of
+      `vb_tests`/`voxel_browser`/`voxel_browser_server` (temporarily
+      reconfigured `build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`,
+      confirmed clean, reconfigured back to this dir's OFF default
+      afterward).
 - [ ] Step-up jerk: physics is exact but visually abrupt; needs a render-only
       eye-height smoothing layer client-side (not attempted).
 - [ ] Wall-clock `server_time_est` + smoothing on the client (needs
@@ -532,8 +559,14 @@ Full detail: `remaining_tasks/phase6.md`.
       (the `visual = {...}` schema below) landed as its own separate pass on
       2026-09-25, see Phase 4's own entry above. See `STATE.md`'s "Current
       status" for the full write-up.
-- [ ] Per-connection rate limiting on custom-keybind events — 6.3 (folds into
-      Phase 3.2's still-unimplemented flood guard).
+- [x] Per-connection rate limiting on custom-keybind events — 6.3, closed
+      2026-09-27 as part of Phase 3's flood guard (see that phase's own
+      entry): custom-keybind bits ride inside `InputCmd`/`C2SInputBatch`
+      like every other input field, so the generic
+      `set_max_messages_per_second` token bucket (one token per message,
+      any type) covers a custom-keybind flood the same way it covers an
+      input-batch or chat flood — no keybind-specific limiter was needed on
+      top of it.
 - [x] Replicate block-damage *value* (not just begin/stop/complete) to nearby
       players — landed 2026-09-27. `S2C_BlockDamage` (protocol 25) fans out
       every live punch-count change (`ServerSession::punch()`/

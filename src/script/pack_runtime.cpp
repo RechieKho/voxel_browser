@@ -1538,6 +1538,9 @@ void PackRuntime::Impl::install_bindings() {
 		if (key == "max_connections_per_ip") {
 			return sol::make_object(lua_state(), c.max_connections_per_ip);
 		}
+		if (key == "max_messages_per_second") {
+			return sol::make_object(lua_state(), c.max_messages_per_second);
+		}
 		if (key == "auth_mode") {
 			return sol::make_object(lua_state(),
 					c.auth_mode == core::ConfigAuthMode::kToken ? std::string("token")

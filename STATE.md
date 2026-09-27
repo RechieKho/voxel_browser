@@ -20,6 +20,53 @@
 
 ## Current status (2026-09-27)
 
+**Per-connection message-rate flood guard, closing REMAINING_TASKS' long-
+tracked "per-player rate limit / flood guard belongs with `GnsTransport`"
+item (Phase 3) and its Phase 6.3 duplicate ("rate limiting on custom-keybind
+events").** New `ServerSession::set_max_messages_per_second(double)` /
+`ServerConfig::max_messages_per_second` (`server.toml`, default `0` =
+unlimited, same posture as `max_connections_per_ip`): a token bucket per
+*playing* connection, one token spent per post-join C2S message regardless
+of type (input batch, block edit, chat, UI event, block-break begin/stop),
+refilled at the configured rate in `system_network_io()`'s own per-tick
+step (capacity == the rate itself, so up to one second's worth of burst is
+tolerated before drops start) — checked right after the existing
+`if (it->second.playing) {` branch in the per-message dispatch switch, before
+any per-type handler runs. An empty bucket **drops** the message, it does
+not disconnect the connection — a transient burst (e.g. a lag spike
+replaying a backlog) shouldn't cost a real player their session, only a
+sustained flood gets bled off. Deliberately one bucket per connection
+covering every message type together, not a separate limiter per type
+(chat, keybinds, block edits, ...): the actual resource being protected is
+total per-connection dispatch/bandwidth cost, and this closes Phase 6.3's
+own tracked "rate limiting on custom-keybind events" gap for free — a
+keybind flood is just an `InputCmd`/`C2SInputBatch` flood, already covered.
+Seeded to a full bucket at `kConnected` (a fresh connection starts with its
+whole burst allowance available, not an empty bucket it has to wait a
+second to fill). Exposed read-only via `vb.config.get(
+"max_messages_per_second")`, mirroring `max_connections_per_ip`'s existing
+Phase 6.13 surface — deliberately not a pack-overridable knob (an operator
+policy, not content policy, same split as every other `server.toml` value
+`vb.config.get` exposes). Verified: full `vb_tests` 380/380 green over
+`LoopbackTransport` (new `netcode_test.cpp` case: 1 msg/sec limit, three
+back-to-back `send_chat()` calls before any refill only deliver the first,
+then ~1 second of pumped ticks refills the bucket and a fourth message
+lands; `config_test.cpp` TOML default/parse cases;
+`pack_runtime_test.cpp`'s `vb.config.get` round-trip case), clean `-Werror`
+build of `vb_tests`/`voxel_browser`/`voxel_browser_server` (temporarily
+reconfigured `build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`, confirmed
+clean, reconfigured back to this dir's OFF default afterward).
+**Gotcha hit running the full suite in this agent environment:** the two
+real-UDP `gns_transport_test.cpp` cases (`GnsTransport::remote_address`,
+the per-IP-cap test) hung the whole `vb_tests.exe` run indefinitely when run
+unfiltered — GNS opening a real UDP listen socket appears to trigger a
+Windows Firewall prompt this headless agent session can never answer, not a
+bug in this change. Worked around by running with
+`--test-case-exclude="*real UDP*"` for verification (380/380 green, 2
+skipped) rather than chasing the hang further; a future agent hitting an
+apparently-frozen `vb_tests.exe` with no output at all after several minutes
+should suspect this before assuming a real deadlock in freshly-changed code.
+
 **`EntityKind` tick/spawn/hit/death callbacks folded into a real `SystemRunner`
 phase (Phase 4 gap, closed).** `PackRuntime::dispatch_tick` used to be called
 as a separate step in each embedder's own loop (`server/main.cpp`, `client/

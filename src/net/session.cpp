@@ -631,9 +631,17 @@ std::string_view ServerSession::player_name(core::NetId id) const {
 	return {};
 }
 
-void ServerSession::system_network_io() {
+void ServerSession::system_network_io(double dt_seconds) {
 	scratch_.clear();
 	transport_.poll(scratch_);
+
+	if (max_messages_per_second_ > 0.0) {
+		for (auto &[c, state] : conns_) {
+			(void)c;
+			state.msg_tokens = std::min(max_messages_per_second_,
+					state.msg_tokens + max_messages_per_second_ * dt_seconds);
+		}
+	}
 
 	for (auto &ev : scratch_) {
 		switch (ev.kind) {
@@ -656,6 +664,7 @@ void ServerSession::system_network_io() {
 				}
 				auto it = conns_.try_emplace(ev.conn, ServerHandshake(config_, host_)).first;
 				it->second.remote_address = addr;
+				it->second.msg_tokens = max_messages_per_second_; // full burst allowance up front
 				VB_DEBUG("net", "connection ", static_cast<std::uint64_t>(ev.conn),
 						" opened");
 				break;
@@ -672,6 +681,16 @@ void ServerSession::system_network_io() {
 					break;
 				}
 				if (it->second.playing) {
+					// Flood guard (set_max_messages_per_second): one token per
+					// message, regardless of type -- dropped, not disconnected,
+					// if the bucket is empty (see that setter's own comment for
+					// why this is deliberately forgiving rather than punitive).
+					if (max_messages_per_second_ > 0.0) {
+						if (it->second.msg_tokens < 1.0) {
+							break;
+						}
+						it->second.msg_tokens -= 1.0;
+					}
 					if (frame->header.type == protocol::MessageType::kC2SInputBatch) {
 						if (auto b = protocol::C2SInputBatch::decode(frame->payload)) {
 							handle_input_batch(it->second, *b);
@@ -875,8 +894,8 @@ void ServerSession::tick(double dt_seconds) {
 }
 
 void ServerSession::build_systems() {
-	systems_.add("network_io", [this](entt::registry &, const ecs::TickContext &) {
-		system_network_io();
+	systems_.add("network_io", [this](entt::registry &, const ecs::TickContext &ctx) {
+		system_network_io(ctx.dt_seconds);
 	});
 	systems_.add("handshake_timeouts",
 			[this](entt::registry &, const ecs::TickContext &ctx) {

@@ -40,6 +40,13 @@ struct ServerConfig {
 	// has no network identity to cap on, see ServerSession::
 	// set_max_connections_per_ip's own comment.
 	std::uint32_t max_connections_per_ip = 0;
+	// Per-connection message-rate flood guard (§8.3 hardening, defense in
+	// depth on top of the closed-schema InputCmd/keybind bitset caps) -- 0
+	// (default) = unlimited. A token bucket refilled at this many
+	// post-join messages/second, capacity equal to one second's worth (a
+	// short burst is tolerated, sustained flooding is not); see
+	// ServerSession::set_max_messages_per_second's own comment.
+	double max_messages_per_second = 0.0;
 	ConfigAuthMode auth_mode = ConfigAuthMode::kNone;
 	std::string motd;
 	// World persistence (ARCHITECTURE_SPEC.md §18's "region file format",

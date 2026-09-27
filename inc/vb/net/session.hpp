@@ -185,6 +185,26 @@ public:
 	// configured value; it only bites over a real GnsTransport.
 	void set_max_connections_per_ip(int n) { max_connections_per_ip_ = n; }
 
+	// Per-connection message-rate flood guard (§8.3 hardening, tracked in
+	// REMAINING_TASKS' "per-player rate limit / flood guard" item): defense
+	// in depth on top of the closed-schema caps that already exist per
+	// message type (C2SInputBatch::kMaxCmds, the fixed-width keybind
+	// bitset) -- those bound how much damage *one* message can do, not how
+	// *often* a connection can send messages at all. A token bucket per
+	// playing connection, refilled by `n` tokens/second (capacity == `n`,
+	// so up to one second's worth of burst is tolerated) in
+	// system_network_io()'s own per-tick refill step; a message arriving
+	// with an empty bucket is silently dropped (not disconnected -- a
+	// transient burst, e.g. a lag spike replaying a backlog, shouldn't cost
+	// a real player their connection) rather than processed. Applies
+	// generically to every post-join C2S message type alike (input batch,
+	// block edit, chat, UI event, block-break begin/stop) -- one token per
+	// message regardless of type, since the goal is bounding total
+	// dispatch/bandwidth cost per connection, not policing any one message
+	// kind. `0` (default) = unlimited, matching every other optional policy
+	// knob in this class; set before players join.
+	void set_max_messages_per_second(double n) { max_messages_per_second_ = n; }
+
 	// Phase 6.6: generic damage primitive -- the only way to reduce a
 	// player's health besides the void-kill check above. `cause` is opaque
 	// to the engine (e.g. "fall", "pvp", "void") and threaded through
@@ -436,6 +456,11 @@ private:
 		// IP string over GnsTransport. Used only for the per-IP connection
 		// cap (set_max_connections_per_ip).
 		std::optional<std::string> remote_address;
+		// set_max_messages_per_second's token bucket. Seeded to a full bucket
+		// at kConnected (a fresh connection starts with a full burst
+		// allowance, not an empty one it has to wait a second to fill).
+		// Meaningless (never drained) while max_messages_per_second_ == 0.
+		double msg_tokens = 0.0;
 		double age = 0.0;
 		bool playing = false;
 		bool input_driven = false;
@@ -485,7 +510,7 @@ private:
 	// tick() blocks a name+slot; system_sync_interest is the one genuinely
 	// new system (see its definition).
 	void build_systems();
-	void system_network_io();
+	void system_network_io(double dt_seconds);
 	void system_handshake_timeouts(double dt_seconds);
 	void system_advance_time_of_day(double dt_seconds);
 	void system_sync_interest();
@@ -561,6 +586,7 @@ private:
 	double time_of_day_broadcast_accum_ = 0.0;
 	double void_kill_y_ = -64.0;
 	int max_connections_per_ip_ = 0; // 0 = unlimited
+	double max_messages_per_second_ = 0.0; // 0 = unlimited
 	std::function<RespawnDecision(core::NetId, std::string_view, float)>
 			on_respawn_;
 	std::function<InputHookResult(core::NetId, const protocol::InputCmd &)>
