@@ -80,6 +80,15 @@ TEST_CASE("select_pose: facings=1 is trivial (the Phase 3 placeholder)") {
 	CHECK(select_pose(0, 1) == PoseSelection{ 0, false });
 }
 
+TEST_CASE("select_pose: mirror=false never mirrors, one row per facing") {
+	CHECK(select_pose(0, 4, false) == PoseSelection{ 0, false });
+	CHECK(select_pose(1, 4, false) == PoseSelection{ 1, false });
+	CHECK(select_pose(2, 4, false) == PoseSelection{ 2, false });
+	// bucket 3 would mirror pose 1 under mirror=true (see the facings=4 case
+	// above) -- with mirror=false it's its own distinct, unmirrored row.
+	CHECK(select_pose(3, 4, false) == PoseSelection{ 3, false });
+}
+
 TEST_CASE("DirectionBucketTracker ignores a single-frame flicker") {
 	DirectionBucketTracker tracker(3);
 	CHECK(tracker.update(0) == 0);
@@ -114,6 +123,17 @@ TEST_CASE("EntityPresentationState tracks the entity's latest position") {
 	CHECK(state.position().x == doctest::Approx(1.0));
 	CHECK(state.position().y == doctest::Approx(2.0));
 	CHECK(state.position().z == doctest::Approx(3.0));
+}
+
+TEST_CASE("EntityPresentationState with mirror=false never reports a mirrored pose") {
+	// facings=4, mirror=false, stable_frames=1 so a single update() commits.
+	EntityPresentationState state(4, false, 1);
+	// Camera due +X of the entity, entity facing its own -Z (yaw 0) -> the
+	// same viewing angle that select_pose(3, 4) (mirrored) vs.
+	// select_pose(3, 4, false) (not) distinguishes in entity_visual_test.cpp
+	// above.
+	state.update({ 0, 0, 0 }, 0.0, {}, kAnimOnGround, { -5, 0, 0 }, 0.0);
+	CHECK_FALSE(state.frame().pose.mirrored);
 }
 
 TEST_CASE("anim_clip_name covers every AnimClip with rendering.md's base clip names") {

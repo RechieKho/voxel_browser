@@ -312,6 +312,7 @@ protocol::EntityVisualDef parse_entity_visual(const sol::table &t) {
 	if (facings != 4 && facings != 8) {
 		throw sol::error("vb.register_entity: visual.facings must be 4 or 8");
 	}
+	const bool mirror = t.get_or("mirror", true);
 	float origin_x = 0.5f;
 	float origin_y = 1.0f;
 	const sol::optional<sol::table> origin_table = t["origin"];
@@ -334,6 +335,7 @@ protocol::EntityVisualDef parse_entity_visual(const sol::table &t) {
 	visual.facings = static_cast<std::uint8_t>(facings);
 	visual.origin_x = origin_x;
 	visual.origin_y = origin_y;
+	visual.mirror = mirror;
 
 	for (std::size_t i = 1; i <= clips_table->size(); ++i) {
 		const sol::table entry = (*clips_table)[i];
@@ -388,6 +390,10 @@ protocol::EntityVisualOverride parse_entity_visual_override(const sol::table &t)
 			throw sol::error("visual_override: facings must be 4 or 8");
 		}
 		out.facings = static_cast<std::uint8_t>(*facings);
+	}
+	const sol::optional<bool> mirror = t["mirror"];
+	if (mirror) {
+		out.mirror = *mirror;
 	}
 	const sol::optional<sol::table> origin_table = t["origin"];
 	if (origin_table) {

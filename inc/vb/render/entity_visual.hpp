@@ -141,8 +141,12 @@ inline int direction_bucket(double bearing_to_camera_deg, double entity_yaw_deg,
 }
 
 // Which unique authored pose to use for a direction bucket, and whether to
-// mirror it. Packs author floor(facings/2)+1 unique poses (front..back); the
-// engine mirrors the rest (e.g. facings=8 -> 5 unique poses; facings=4 -> 3).
+// mirror it. With `mirror = true` (default), packs author floor(facings/2)+1
+// unique poses (front..back) and the engine mirrors the rest (e.g. facings=8
+// -> 5 unique poses; facings=4 -> 3). With `mirror = false`, a pack authors
+// one distinct row per facing (rows == facings, e.g. a real "left" pose
+// instead of a horizontally-flipped "right" one) and nothing is ever
+// mirrored -- `bucket` maps straight to `pose_index`.
 struct PoseSelection {
 	int pose_index = 0;
 	bool mirrored = false;
@@ -150,8 +154,11 @@ struct PoseSelection {
 	bool operator==(const PoseSelection &) const = default;
 };
 
-inline PoseSelection select_pose(int bucket, int facings) {
+inline PoseSelection select_pose(int bucket, int facings, bool mirror = true) {
 	facings = std::max(facings, 1);
+	if (!mirror) {
+		return { bucket, false };
+	}
 	const int half = facings / 2;
 	if (bucket <= half) {
 		return { bucket, false };
@@ -206,7 +213,7 @@ public:
 		double clip_time = 0.0; // seconds into the current clip
 	};
 
-	explicit EntityPresentationState(int facings = 8, int stable_frames = 3) : facings_(facings), bucket_tracker_(stable_frames) {}
+	explicit EntityPresentationState(int facings = 8, bool mirror = true, int stable_frames = 3) : facings_(facings), mirror_(mirror), bucket_tracker_(stable_frames) {}
 
 	// `entity_yaw_deg` is the entity's own facing (Rotation.yaw); `camera_pos`
 	// is the viewer's eye position. Advances clip_time by dt_seconds unless the
@@ -227,7 +234,7 @@ public:
 		const double bearing = bearing_degrees(entity_pos, camera_pos);
 		const int raw_bucket = direction_bucket(bearing, entity_yaw_deg, facings_);
 		const int stable_bucket = bucket_tracker_.update(raw_bucket);
-		frame_.pose = select_pose(stable_bucket, facings_);
+		frame_.pose = select_pose(stable_bucket, facings_, mirror_);
 	}
 
 	const Frame &frame() const { return frame_; }
@@ -235,6 +242,7 @@ public:
 
 private:
 	int facings_;
+	bool mirror_;
 	DirectionBucketTracker bucket_tracker_;
 	Frame frame_{};
 	core::Vec3d position_{};

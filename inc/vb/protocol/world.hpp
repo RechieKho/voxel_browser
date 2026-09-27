@@ -150,12 +150,17 @@ struct EntityClipDef {
 // chosen named variant (resolved server-side at registration, see
 // PackRuntime's register_entity binding) -- only the resolved pixel size
 // travels the wire, not the variant name itself. `facings` is 4 or 8,
-// validated at registration; the client derives pose row count as
-// `facings/2 + 1`. `origin_x`/`origin_y` are the normalized feet/anchor point
-// within a frame. The required sheet size (`frame_width * sum(clip frames)`
-// by `frame_height * (facings/2+1)`) is validated against the real decoded
-// PNG client-side (render::build_entity_visual_layout), not here -- this
-// struct only carries the pack's declared intent.
+// validated at registration. `mirror` (default true, matching the original
+// schema before this field existed) selects the pose-row count: `true`
+// derives it as `facings/2 + 1` and the engine mirrors the missing half
+// horizontally at render time (one authored "side" pose serves both left and
+// right); `false` requires a fully authored row per facing (`rows ==
+// facings`, e.g. 4 distinct rows for facings=4: front/right/back/left) and
+// the engine never flips anything. `origin_x`/`origin_y` are the normalized
+// feet/anchor point within a frame. The required sheet size
+// (`frame_width * sum(clip frames)` by `frame_height * rows`) is validated
+// against the real decoded PNG client-side (render::build_entity_visual_
+// layout), not here -- this struct only carries the pack's declared intent.
 struct EntityVisualDef {
 	std::string texture; // pack-relative path, synced like any other asset
 	std::uint16_t frame_width = 0;
@@ -163,6 +168,7 @@ struct EntityVisualDef {
 	std::uint8_t facings = 8;
 	float origin_x = 0.5f;
 	float origin_y = 1.0f;
+	bool mirror = true;
 	std::vector<EntityClipDef> clips;
 
 	bool operator==(const EntityVisualDef &) const = default;
@@ -186,6 +192,7 @@ struct EntityVisualOverride {
 	std::optional<std::uint8_t> facings;
 	std::optional<float> origin_x;
 	std::optional<float> origin_y;
+	std::optional<bool> mirror;
 	std::optional<std::vector<EntityClipDef>> clips;
 
 	bool operator==(const EntityVisualOverride &) const = default;

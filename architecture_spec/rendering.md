@@ -109,6 +109,9 @@ visual = {
   texture = "textures/entities/player.png",
   facings = 8,                   -- rows = floor(facings/2)+1 unique poses
                                   -- (§11.3 pose mirroring), engine mirrors rest
+  mirror = true,                 -- default; false = author a full `facings`
+                                  -- rows instead (a real left pose, not a
+                                  -- flipped right one) and nothing is mirrored
   origin = { x = 0.5, y = 1.0 }, -- normalized anchor within a frame (feet point)
   clips = {                      -- column layout, shared across every pose row
     { clip = "idle",   frames = 4, fps = 6  },
@@ -131,8 +134,9 @@ built-in kinds (`base:player`, `base:dropped_item`) simply ship their own
 `visual` table as sensible defaults in `content/base`, the same mechanism a
 third-party pack would use, not a special-cased engine path. The required
 sheet size is derived and validated exactly at load time: `width ==
-frame_width * sum(frames)`, `height == frame_height * (floor(facings/2)+1)` —
-a mismatch is a pack load error, not a silent misdraw. A kind that omits a
+frame_width * sum(frames)`, `height == frame_height * rows` where `rows =
+mirror and (floor(facings/2)+1) or facings` — a mismatch is a pack load
+error, not a silent misdraw. A kind that omits a
 clip `resolve_anim_clip()` can still resolve to (e.g. `base:dropped_item`
 never running or jumping) falls back to the first declared clip (conventionally
 `idle`) rather than erroring at runtime.
@@ -141,7 +145,8 @@ never running or jumping) falls back to the first declared clip (conventionally
 `visual` table in its `ScriptState` under a reserved key (`entity.
 visual_override = {...}`), merged field-by-field over its kind's default —
 this is the *only* per-instance case (e.g. a player skin overriding just
-`texture` while inheriting `variant`/`clips`/`facings`/`origin` unchanged);
+`texture` while inheriting `variant`/`clips`/`facings`/`mirror`/`origin`
+unchanged);
 every other entity kind is expected to look the same across all its
 instances and only needs the kind-level default. No new storage mechanism:
 `ScriptState` already exists as arbitrary per-entity Lua data (§4's entity

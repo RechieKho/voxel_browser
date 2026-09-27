@@ -31,7 +31,8 @@ struct EntityVisualLayout {
 	int frame_width = 0;
 	int frame_height = 0;
 	int facings = 8;
-	int rows = 1; // facings/2 + 1 -- the pose-row count select_pose() indexes into
+	bool mirror = true; // whether the engine flips the authored rows for the unauthored half
+	int rows = 1; // mirror ? facings/2+1 : facings -- the pose-row count select_pose() indexes into
 	float origin_x = 0.5f;
 	float origin_y = 1.0f;
 	std::vector<EntityClipLayout> clips;
@@ -54,7 +55,8 @@ inline std::optional<EntityVisualLayout> build_entity_visual_layout(
 	layout.frame_width = def.frame_width;
 	layout.frame_height = def.frame_height;
 	layout.facings = def.facings;
-	layout.rows = def.facings / 2 + 1;
+	layout.mirror = def.mirror;
+	layout.rows = def.mirror ? (def.facings / 2 + 1) : def.facings;
 	layout.origin_x = def.origin_x;
 	layout.origin_y = def.origin_y;
 
@@ -96,6 +98,9 @@ inline protocol::EntityVisualDef merge_visual_override(
 	}
 	if (over.facings) {
 		out.facings = *over.facings;
+	}
+	if (over.mirror) {
+		out.mirror = *over.mirror;
 	}
 	if (over.origin_x && over.origin_y) {
 		out.origin_x = *over.origin_x;

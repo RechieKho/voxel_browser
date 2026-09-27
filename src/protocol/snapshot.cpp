@@ -35,6 +35,10 @@ void write_visual_override(ByteWriter &w, const EntityVisualOverride &v) {
 	if (v.facings) {
 		w.u8(*v.facings);
 	}
+	w.boolean(v.mirror.has_value());
+	if (v.mirror) {
+		w.boolean(*v.mirror);
+	}
 	const bool has_origin = v.origin_x.has_value() && v.origin_y.has_value();
 	w.boolean(has_origin);
 	if (has_origin) {
@@ -63,6 +67,9 @@ EntityVisualOverride read_visual_override(ByteReader &r) {
 	}
 	if (r.boolean()) {
 		v.facings = r.u8();
+	}
+	if (r.boolean()) {
+		v.mirror = r.boolean();
 	}
 	if (r.boolean()) {
 		v.origin_x = r.f32();

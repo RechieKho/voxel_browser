@@ -18,6 +18,13 @@ vb.register_entity({
 		variant = "small",
 		texture = "textures/player.png",
 		facings = 4,
+		-- mirror=false: this debug sprite bakes a distinct letter per row
+		-- (front/right/back/left) so a human can eyeball the facing system
+		-- working correctly; the default mirror=true would need only 3 rows
+		-- (front/side/back) and reuse the side row, flipped, for the other
+		-- side -- which is exactly the "not obvious if I'm looking at left
+		-- or right" confusion this was requested to fix.
+		mirror = false,
 		origin = { x = 0.5, y = 1.0 },
 		clips = {
 			{ clip = "idle", frames = 2, fps = 2.0 },

@@ -4,8 +4,30 @@
 > as any change to a struct in `inc/vb/protocol/`, and bump
 > `kEngineProtocolVersion` in `cmake/version.hpp.in`.
 
-Current `ENGINE_PROTOCOL_VERSION`: **22**.
+Current `ENGINE_PROTOCOL_VERSION`: **23**.
 
+- **23** — `EntityVisualDef` (within `S2C_EntityKindRegistry`'s optional
+  `visual`, 53) gains a `bool mirror` field, appended right after `origin_y`
+  (before `clip_count`); `EntityVisualOverride` (within `S2C_EntitySnapshot`'s
+  optional `visual_override`, 60) gains the matching optional `mirror`
+  (its own presence bool, appended right after `facings`'s). User-requested:
+  the debug player sprite made it obvious `select_pose()`'s mirroring (one
+  authored "side" pose flipped horizontally for the opposite side) reads as
+  "no real left-facing art," not just a cosmetic nit — `mirror = false` (a
+  pack opts in per kind or per instance override; default `true` preserves
+  every existing pack's behavior unchanged) requires a fully authored row per
+  facing instead (`render::build_entity_visual_layout`'s row count becomes
+  `mirror ? facings/2+1 : facings`) and `select_pose()` never flips anything
+  for that kind. Landed alongside a real bug fix, unrelated to the wire
+  format: `render::EntityRenderer`'s per-entity `EntityPresentationState` was
+  permanently constructed with a hardcoded facings=8 (`kDefaultFacings`)
+  regardless of the entity's actual registered kind — a facings=4 kind (e.g.
+  `base:player`) had its pose picked using 8-sector bucket math against a
+  3-row (or now 4-row) spritesheet, silently indexing rows outside its own
+  texture. `EntityRenderer::sync()` now re-resolves the real facings/mirror
+  from whichever `KindVisual` `draw()` will actually use (instance override,
+  else kind default) every frame and rebuilds `state` only when that value
+  changes.
 - **22** — `InputCmd` (within `C2S_InputBatch`, 80) gains a `u8 selected_slot`
   field, appended after `keybinds`: which inventory slot (0-based) the player
   currently has selected, reported every cmd exactly like `buttons`/

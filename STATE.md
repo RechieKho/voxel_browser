@@ -18,9 +18,73 @@
 
 ---
 
-## Current status (2026-09-25)
+## Current status (2026-09-27)
 
-**Same-day follow-up #9: held item / hotbar selection** (entity-management
+**User-requested: distinct per-facing debug art for `base:player`, plus a
+real bug fix in pose selection.** User feedback on the real base-pack player
+sprite (STATE.md's "Same-day follow-up #7" below): "not very obvious [...]
+if I'm looking at the front or back, or left or right side" — the front/
+side/back silhouettes were too visually similar to debug the facing system
+by eye. First pass baked a big letter (F/R/B) into each of the 3 authored
+rows; the user then asked "so we don't have left side?", surfacing that
+`select_pose()`'s mirroring (one authored "side" pose flipped horizontally
+for the opposite side, `facings=4` -> 3 authored rows) has no way to bake a
+distinct "L" — it's the same pixels, just flipped at draw time. Asked
+whether to (a) keep the mirrored "R" as good-enough, (b) bump to facings=8,
+or (c) add real engine support for a distinct, unmirrored left pose; user
+picked (c). Landed as a new `mirror` field (default `true`, so every
+existing pack is unaffected): `protocol::EntityVisualDef::mirror` (kind
+default, `S2C_EntityKindRegistry`) and `protocol::EntityVisualOverride::
+mirror` (per-instance, `EntityRecord::visual_override`) —
+`kEngineProtocolVersion` bumped **22 -> 23**. `render::build_entity_visual_
+layout()`'s row count becomes `mirror ? facings/2+1 : facings`; `render::
+select_pose(bucket, facings, mirror=true)` gained the `mirror` parameter and
+returns `{bucket, false}` unconditionally when `mirror=false` (no flipping,
+ever); `render::EntityPresentationState`'s constructor gained a `mirror`
+parameter threaded through to its own `select_pose()` call. `vb.register_
+entity{visual = {mirror = false}}` / `vb.world.spawn(kind, pos, {visual_
+override = {mirror = false}}})` are the new Lua knobs (`PackRuntime`'s
+`parse_entity_visual`/`parse_entity_visual_override`).
+**Real bug found and fixed while wiring this up, unrelated to the `mirror`
+feature itself:** `render::EntityRenderer`'s per-tracked-entity
+`EntityPresentationState` was **permanently constructed with a hardcoded
+`kDefaultFacings = 8`** (`impl_->states.try_emplace(id, kDefaultFacings)`)
+and never updated once the entity's real kind (or instance override)
+resolved a *different* facings count -- so `base:player` (facings=4) was
+having its pose picked with 8-sector bucket math the whole time, silently
+indexing rows that could fall outside its own 3-row (now up-to-4-row)
+spritesheet. Nobody had caught this because nobody had ever manually
+eyeballed the rendered result (see every prior entity-visual entry's own
+"not manually eyeballed, no GUI in this agent environment" caveat) --
+this user-driven debug-art request is what finally surfaced it. Fixed by
+having `EntityRenderer::sync()` re-resolve the real facings/mirror every
+frame (cheap: two map lookups) from whichever `KindVisual` `draw()` will
+actually use for that id -- instance override wins over the kind default,
+matching `draw()`'s own priority -- and only rebuilding `TrackedEntity::
+state` (which would otherwise reset `clip_time`/the direction-bucket
+tracker every single frame) when the resolved value actually changes.
+`content/base/entities/player.lua` now sets `mirror = false`, and
+`content/base/textures/player.png` was regenerated (768x512, 4 real rows:
+front/right/back/left) with a big letter per row (F/R/B/L) baked in via a
+throwaway stdlib-only PNG writer (same pattern as "Same-day follow-up #7"
+below) -- deliberately placeholder/debug-styled, not real character art,
+since the point of this pass is making the facing system's correctness
+obvious to a human, not shipping final art. `content/base/textures/
+dropped_item.png` was intentionally left untouched (not a facing-confusion
+case the user raised). Verified: full `vb_tests` 346/346 green (a
+`build_entity_visual_layout` mirror=false row-count case, `select_pose`/
+`EntityPresentationState` mirror=false no-flip cases, a `merge_visual_
+override` mirror-only-override case), clean `-Werror` build of `vb_tests`/
+`voxel_browser`/`voxel_browser_server` (temporarily reconfigured
+`build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`, confirmed clean,
+reconfigured back to this dir's OFF default afterward). The actual rendered
+left/right distinction (a human walking around a real player billboard and
+watching the F/R/B/L letters change) was **not** manually eyeballed -- no
+GUI in this agent environment, same still-open caveat as every other recent
+rendering-adjacent pass; this pass's own bug fix is a strong argument for
+getting a real human eyeballing pass scheduled, not just more unit tests.
+
+Before that, most recent landed item was **Same-day follow-up #9: held item / hotbar selection** (entity-management
 follow-up, closes REMAINING_TASKS' 6.20 gap: "Placed block is still a
 hardcoded `base_stone_id` ... no 'held item'/hotbar-selection primitive
 exists"). Protocol bumped **21 -> 22**: `InputCmd` (`C2S_InputBatch`) gains a

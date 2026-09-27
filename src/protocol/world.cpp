@@ -183,6 +183,7 @@ void write_entity_visual(ByteWriter &w, const std::optional<EntityVisualDef> &vi
 	w.u8(visual->facings);
 	w.f32(visual->origin_x);
 	w.f32(visual->origin_y);
+	w.boolean(visual->mirror);
 	w.varint(visual->clips.size());
 	for (const auto &c : visual->clips) {
 		w.string(c.clip);
@@ -202,6 +203,7 @@ std::optional<EntityVisualDef> read_entity_visual(ByteReader &r) {
 	v.facings = r.u8();
 	v.origin_x = r.f32();
 	v.origin_y = r.f32();
+	v.mirror = r.boolean();
 	const std::uint64_t n = r.varint();
 	if (n > kMaxEntityClips) {
 		r.fail(core::ProtocolError::kLengthExceeded);

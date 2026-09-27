@@ -58,6 +58,13 @@ struct TrackedEntity {
 	core::EntityKindId kind = core::EntityKindId::kInvalid;
 	float width = kPlaceholderWidth;
 	float height = kPlaceholderHeight;
+	// The facings/mirror `state` was actually constructed with -- sync() below
+	// re-checks these against whichever KindVisual now applies (arriving
+	// mid-flight, since the kind registry and the first snapshot for an
+	// entity aren't ordering-guaranteed) and rebuilds `state` on a change, so
+	// pose selection never runs against a stale/default facings count.
+	int facings = kDefaultFacings;
+	bool mirror = true;
 
 	explicit TrackedEntity(int facings) : state(facings) {}
 };
@@ -210,6 +217,33 @@ void EntityRenderer::sync(const net::ClientSession &client,
 					impl_->instance_visuals.insert_or_assign(id, std::move(*visual));
 				}
 			}
+		}
+		// Real bug fix: `state` used to be permanently constructed with
+		// kDefaultFacings (8) and never updated once the entity's real kind
+		// (or instance override) resolved a different facings/mirror -- pose
+		// selection silently ran against the wrong sector count/row-mirroring
+		// for any kind whose visual declared facings=4 (e.g. base:player),
+		// picking rows that could fall outside its own spritesheet.
+		// Re-resolve every sync() (cheap, two map lookups) from whichever
+		// KindVisual draw() will actually use for this id -- instance
+		// override wins over the kind default, matching draw()'s own
+		// priority -- and only rebuild `state` (which would otherwise reset
+		// clip_time/the bucket tracker every frame) when it actually changed.
+		int resolved_facings = kDefaultFacings;
+		bool resolved_mirror = true;
+		if (const auto inst_it = impl_->instance_visuals.find(id);
+				inst_it != impl_->instance_visuals.end()) {
+			resolved_facings = inst_it->second.layout.facings;
+			resolved_mirror = inst_it->second.layout.mirror;
+		} else if (const auto kind_it = impl_->kind_visuals.find(rec.kind);
+				kind_it != impl_->kind_visuals.end()) {
+			resolved_facings = kind_it->second.layout.facings;
+			resolved_mirror = kind_it->second.layout.mirror;
+		}
+		if (it->second.facings != resolved_facings || it->second.mirror != resolved_mirror) {
+			it->second.facings = resolved_facings;
+			it->second.mirror = resolved_mirror;
+			it->second.state = EntityPresentationState(resolved_facings, resolved_mirror);
 		}
 		const core::Vec3d pos = client.interpolated_pos(id);
 		it->second.state.update(pos, static_cast<double>(rec.rot.x), rec.vel,

@@ -91,9 +91,14 @@ rt.dispatch_tick(dt);
   `architecture_spec/rendering.md` §11.3) is now real: `variant` (one of the
   9 named frame-size presets, `small` through `large_flat` — see the table
   in `rendering.md`), `texture` (pack-relative path, synced like any asset),
-  `facings` (4 or 8, default 8), `origin = {x=, y=}` (normalized anchor
-  within a frame, default `{0.5, 1.0}` = bottom-centre feet point, each
-  component in `[0, 1]`), and `clips` (a non-empty array of
+  `facings` (4 or 8, default 8), `mirror` (default `true` — one authored
+  "side" pose is flipped horizontally for the opposite side, so a pack
+  authors `facings/2+1` rows; `false` requires a fully authored row per
+  facing instead, `facings` rows total, e.g. a real left-facing pose distinct
+  from the right one, and the engine never flips anything), `origin = {x=,
+  y=}` (normalized anchor within a frame, default `{0.5, 1.0}` =
+  bottom-centre feet point, each component in `[0, 1]`), and `clips` (a
+  non-empty array of
   `{clip=, frames=, fps=}`, `frames`/`fps` both positive) — all validated at
   registration (`PackRuntime`'s `parse_entity_visual`); the sheet's real
   pixel dimensions are validated separately, client-side, once the texture is
@@ -104,7 +109,7 @@ rt.dispatch_tick(dt);
   `ScriptState.visual_override`, e.g. skins) is now real too:
   `vb.world.spawn(kind, pos, { visual_override = {...} })` takes the same
   shape as `register_entity`'s `visual` table but with every field optional
-  (`variant`/`texture`/`facings`/`origin`/`clips`) — an omitted field
+  (`variant`/`texture`/`facings`/`mirror`/`origin`/`clips`) — an omitted field
   inherits the kind's own `visual` unchanged (`render::merge_visual_override`,
   client-side), so a pack can override just `texture` (a player-skin variant)
   while keeping the kind's `facings`/`clips`/`origin`. Validated the same way

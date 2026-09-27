@@ -249,6 +249,18 @@ Full detail: `remaining_tasks/phase4.md`.
       the full write-up, including a gotcha around `install_entity_kind_
       registry(host)` ordering relative to `ServerSession`'s constructor.
       Full `vb_tests` 334/334 green, clean `-Werror` build.
+      **Follow-up (2026-09-27), user-requested:** the real art's front/side/
+      back poses were too visually similar to tell apart by eye ("not very
+      obvious... front or back, or left or right"). `base:player` swapped to
+      debug-styled art (a big F/R/B/L letter baked into each row) and a new
+      `vb.register_entity{visual = {mirror = false}}` engine feature (default
+      `true`, every other pack unaffected) lets a kind author a real,
+      distinct pose per facing instead of mirroring one "side" pose for both
+      left and right — `kEngineProtocolVersion` 22 -> 23. Also fixed a real
+      pre-existing bug this surfaced: `EntityRenderer` picked a facings=4
+      kind's pose using hardcoded facings=8 sector math the whole time (never
+      updated from the entity's actual registered kind). See `STATE.md`'s
+      2026-09-27 entry for the full write-up.
 - [x] Real texture/atlas system landed 2026-09-23 (see
       `state/changelog-recent.md`): `vb.register_block{texture=...}` ->
       `S2C_BlockRegistry` -> a per-session `vb::render::TextureAtlas` built

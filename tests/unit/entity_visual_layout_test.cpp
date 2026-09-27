@@ -45,6 +45,20 @@ TEST_CASE("build_entity_visual_layout resolves facings=4 to 3 rows") {
 	const auto layout = build_entity_visual_layout(def, 128 * 10, 128 * 3);
 	REQUIRE(layout.has_value());
 	CHECK(layout->rows == 3);
+	CHECK(layout->mirror == true);
+}
+
+TEST_CASE("build_entity_visual_layout with mirror=false requires a full row per facing") {
+	EntityVisualDef def = make_def();
+	def.facings = 4;
+	def.mirror = false;
+	// The old mirror=true sheet size (3 rows) is now the wrong height...
+	CHECK_FALSE(build_entity_visual_layout(def, 128 * 10, 128 * 3).has_value());
+	// ...4 rows (one per facing, none mirrored) is required instead.
+	const auto layout = build_entity_visual_layout(def, 128 * 10, 128 * 4);
+	REQUIRE(layout.has_value());
+	CHECK(layout->rows == 4);
+	CHECK(layout->mirror == false);
 }
 
 TEST_CASE("build_entity_visual_layout rejects a width mismatch") {
@@ -115,6 +129,18 @@ TEST_CASE("merge_visual_override replaces frame size/origin/facings/clips wholes
 	CHECK(merged.frame_height == 256);
 	CHECK(merged.facings == 4);
 	CHECK(merged.origin_y == doctest::Approx(0.5f));
+	CHECK(merged.mirror == def.mirror); // not given -- inherited
 	REQUIRE(merged.clips.size() == 1);
 	CHECK(merged.clips[0].clip == "only");
+}
+
+TEST_CASE("merge_visual_override overrides mirror independently of everything else") {
+	const EntityVisualDef def = make_def(); // mirror defaults true
+	EntityVisualOverride ov;
+	ov.mirror = false;
+
+	const EntityVisualDef merged = merge_visual_override(def, ov);
+	CHECK(merged.mirror == false);
+	CHECK(merged.facings == def.facings); // untouched
+	CHECK(merged.texture == def.texture); // untouched
 }
