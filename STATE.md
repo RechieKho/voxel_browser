@@ -20,7 +20,60 @@
 
 ## Current status (2026-09-27)
 
-**Chunk frustum culling + a transparent second pass** (REMAINING_TASKS'
+**Fall damage (REMAINING_TASKS' Phase 6 "no fall damage" gap, closed as
+6.22).** New `net::ServerSession::set_landed_hook(fn(NetId, double
+impact_speed))` — fires once per player exactly on the tick a fall is
+arrested by hitting ground, never per-tick while airborne or already
+grounded. Wired inside `handle_input_batch`'s existing per-cmd loop
+(`src/net/session.cpp`): captures `was_on_ground = move.on_ground` and
+`fall_speed_before = -move.velocity.y` *before* each `physics::step_movement`
+call, fires the hook right after if `!was_on_ground && move.on_ground &&
+fall_speed_before > 0.0`. **Deliberately reads the pre-step velocity, not a
+new post-collision value threaded out of `MoveState`:** `step_movement`
+already zeroes `velocity.y` internally the instant a downward sweep hits
+something solid (`src/physics/movement.cpp`'s `grounded = true; out.velocity.y
+= 0.0;`), so by the time it returns there's nothing left to read the real
+impact speed from without widening `MoveState`'s public struct (and every
+existing physics test's understanding of it) just for this one value. Using
+the *incoming* velocity is off by at most one tick's worth of gravity
+(`params.gravity * dt`, a few tenths of a m/s at a typical 20-50ms tick) —
+judged an acceptable approximation for a damage formula, not worth the extra
+surface area. `PackRuntime` wires this the same "opt-in, zero cost when
+unused" way every other hook here does: a new `vb.on("player_landed",
+function(player, impact_speed) ... end)` event, only installed
+(`ServerSession::set_landed_hook`) when a pack actually registers one.
+Pure notification, no veto/return value, same posture as `region_enter`/
+`region_exit` — the engine computes and reports the raw speed only, zero
+built-in fall-damage formula or threshold. `content/base/fall_damage.lua`
+(new) is the reference policy: no damage below a flat 8 m/s safe-speed
+threshold, then 1 HP per m/s above it, via the existing
+`player:damage(amount, "fall")` primitive (6.6) — the first real content
+caller of that primitive (previously only the decision hook existed, nothing
+triggered it). No protocol change: this is a server-local hook, nothing
+about a landing is ever replicated to any client. Verified: full `vb_tests`
+371/371 green (1 new `pack_runtime_integration_test.cpp` case — spawns a real
+player 5 blocks above real generated terrain via a `LoopbackTransport`,
+drives real `InputCmd`s with `dt=0.05` and no jump/move through real
+`pump()` ticks, confirms the hook fires exactly once with a plausible impact
+speed and never fires again across 10 more ticks resting on the ground),
+clean `-Werror` build of `vb_tests`/`voxel_browser`/`voxel_browser_server`
+(temporarily reconfigured `build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`,
+confirmed clean, reconfigured back to this dir's OFF default afterward).
+**Gotcha hit while writing the integration test, worth knowing before writing
+another physics-driven one:** `protocol::InputCmd::dt` defaults to `0.0f`,
+and `physics::step_movement` early-returns unchanged (`if (dt <= 0.0) return
+out;`) on a zero `dt` — a test cmd built as `InputCmd falling;` with every
+other field left at its default silently never moves the player at all (no
+crash, no assertion failure until the final `REQUIRE` about ticks later,
+which made this look like a hook-wiring bug at first rather than a test
+setup bug). Every existing input-driven integration test before this one
+happened to not care because none of them depended on real gravity/movement
+actually advancing the position — they used the input hook path
+(`player_input`) to react to buttons regardless of whether the physics step
+did anything. Fixed by explicitly setting `falling.dt = 0.05f` to match
+`pump()`'s own per-tick `0.05` argument.
+
+Before that, most recent landed item was **chunk frustum culling + a transparent second pass** (REMAINING_TASKS'
 long-standing Phase 2 remaining item: "Frustum culling, transparent second
 pass, texture atlas — Phase 4" — the texture atlas itself landed separately
 2026-09-23). New `inc/vb/render/frustum.hpp`, header-only and raylib-free

@@ -155,8 +155,19 @@ void ServerSession::handle_input_batch(Conn &conn,
 						[this](core::ChunkCoord c) {
 							return replicator_->world().has_chunk(c);
 						})) {
+			const bool was_on_ground = move.on_ground;
+			// Captured before step_movement integrates this tick's gravity --
+			// the actual impact speed differs by at most one tick's worth of
+			// gravity (a few hundredths of a second), which fall-damage policy
+			// doesn't need exactly; avoids widening MoveState's public
+			// contract just to smuggle this one value out.
+			const double fall_speed_before = -move.velocity.y;
 			move = physics::step_movement(move, to_move_input(effective),
 					move_params_, world);
+			if (on_landed_ && !was_on_ground && move.on_ground &&
+					fall_speed_before > 0.0) {
+				on_landed_(conn.net_id, fall_speed_before);
+			}
 		}
 		input.last_seq = cmd.seq;
 		input.selected_slot = effective.selected_slot;

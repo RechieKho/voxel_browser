@@ -691,6 +691,12 @@ struct PackRuntime::Impl {
 	void run_region_event(
 			const std::string &event, core::NetId player, core::IVec3 pos, core::BlockId block);
 
+	// Phase 6.22: fires vb.on("player_landed", player, impact_speed) -- raw
+	// notification only (see net::ServerSession::set_landed_hook's own
+	// comment for why the engine computes and reports this value but ships no
+	// fall-damage formula itself).
+	void run_landed_event(core::NetId player, double impact_speed);
+
 	// Phase 6.1: vb.world.spawn / self:damage / self:remove dispatch. See
 	// ScriptEntity's comment above for the overall design.
 	core::NetId self_net_id(const sol::table &self) const;
@@ -1755,7 +1761,7 @@ void PackRuntime::Impl::install_bindings() {
 		"player_leave", "block_break", "block_place", "player_interact",
 		"chat", "tick", "ui_event", "player_death", "player_input",
 		"block_break_begin", "block_break_tick", "block_health_tick",
-		"region_enter", "region_exit" };
+		"region_enter", "region_exit", "player_landed" };
 	vb["on"] = [this](const std::string &event, sol::protected_function fn) {
 		if (kValidEvents.find(event) == kValidEvents.end()) {
 			throw sol::error("vb.on: unknown event '" + event + "'");
@@ -2324,6 +2330,11 @@ void PackRuntime::Impl::run_region_event(const std::string &event,
 	fire(event, p, pos_tbl, block_name);
 }
 
+void PackRuntime::Impl::run_landed_event(core::NetId player, double impact_speed) {
+	PlayerHandle p{ player, this };
+	fire("player_landed", p, impact_speed);
+}
+
 PackRuntime::PackRuntime(net::Transport &transport,
 		world::BlockRegistry &registry, std::filesystem::path storage_path,
 		VmLimits limits) : impl_(std::make_unique<Impl>(transport, registry,
@@ -2815,6 +2826,17 @@ void PackRuntime::attach_session(net::ServerSession &session) {
 			self->run_region_event("region_exit", player, pos, block);
 		};
 		session.set_region_hooks(std::move(hooks));
+	}
+	// Phase 6.22: only installed when a pack actually registered
+	// vb.on("player_landed", ...) -- same zero-extra-cost-when-unused posture
+	// as every other opt-in hook above (ServerSession's handle_input_batch
+	// still computes was_on_ground/fall_speed_before unconditionally, since
+	// that's cheap arithmetic already in the loop, but never calls into Lua
+	// unless a pack asked for it).
+	if (self->handlers.count("player_landed") != 0) {
+		session.set_landed_hook([self](core::NetId player, double impact_speed) {
+			self->run_landed_event(player, impact_speed);
+		});
 	}
 	// Entity-management follow-up: forwards a pack's `represents = "player"`/
 	// `"item_drop"` claim (vb.register_entity) onto ServerSession's own

@@ -1646,4 +1646,84 @@ TEST_CASE("region_enter/region_exit (Phase 7.3): fires once per crossing, "
 	}
 }
 
+TEST_CASE("player_landed (Phase 6.22): fires exactly once on impact, with a "
+		  "real gravity-driven fall, not while airborne or once already "
+		  "resting on the ground") {
+	LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("landed_hook"));
+	REQUIRE(rt.load_pack_file(R"(
+		vb.on("player_landed", function(player, impact_speed)
+			player:give({ item = 1, count = math.floor(impact_speed) })
+		end)
+	)"));
+	rt.freeze();
+
+	vb::world::World world(registry);
+	wg::WorldGenWorkerPool pool(
+			wg::WorldGenerator(wg::WorldGenParams{}, registry),
+			wg::WorldGenWorkerPool::kSynchronous);
+
+	HandshakeServerConfig cfg;
+	cfg.world_seed = 7;
+	ServerSession server(net.server(), cfg);
+	auto replicator = std::make_unique<WorldReplicator>(world, pool, registry, 1, 2);
+	rt.attach_world(*replicator);
+	server.set_world_replicator(std::move(replicator));
+	rt.attach_session(server);
+	REQUIRE(net.server().listen(0));
+
+	Transport &ta = net.create_client();
+	auto ida = ta.connect("x", 0);
+	REQUIRE(ida);
+	ClientSession client(ta, *ida, HandshakeClientConfig{ "A", "", "v", 1 });
+
+	auto pump = [&](int n) {
+		for (int i = 0; i < n; ++i) {
+			server.tick(0.05);
+			client.tick(0.05);
+			rt.dispatch_tick(0.05);
+		}
+	};
+
+	pump(20);
+	REQUIRE(client.joined());
+	const NetId a_id = client.join_accept()->your_net_id;
+
+	const IVec3 ground = surface_voxel(world, 4, 4);
+	constexpr double kDropHeight = 5.0; // blocks -- well above the 8 m/s "safe" threshold
+	server.set_player_state(a_id,
+			Vec3d{ ground.x + 0.5, ground.y + 1.0 + kDropHeight, ground.z + 0.5 });
+
+	vb::protocol::InputCmd falling; // move/jump all default-false: pure free-fall
+	falling.dt = 0.05f; // must match pump()'s own per-tick dt below
+	std::uint32_t seq = 1;
+	// Enough real 0.05s ticks to fall kDropHeight blocks under this engine's
+	// gravity (28 m/s^2) and land -- generous margin over the ~0.6s the
+	// kinematics predict.
+	for (int i = 0; i < 40 && client.inventory().empty(); ++i) {
+		falling.seq = seq++;
+		client.push_input(falling);
+		pump(1);
+	}
+
+	const auto &inv = client.inventory();
+	REQUIRE(inv.size() == 1); // fired exactly once, not once per airborne tick
+	CHECK(inv[0].item == vb::world::base_block::stone);
+	// sqrt(2 * 28 * 5) ~= 16.7 m/s -- loose bounds around the discretely
+	// integrated value, well clear of the 0 that "fired while still airborne
+	// or never fired at all" would produce.
+	CHECK(inv[0].count >= 10);
+	CHECK(inv[0].count <= 22);
+
+	// Resting on the ground for many more ticks must not fire it again.
+	for (int i = 0; i < 10; ++i) {
+		falling.seq = seq++;
+		client.push_input(falling);
+		pump(1);
+	}
+	REQUIRE(client.inventory().size() == 1);
+}
+
 #endif // VB_WITH_LUA

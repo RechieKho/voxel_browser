@@ -314,6 +314,20 @@ public:
 	};
 	void set_region_hooks(RegionHooks hooks) { region_hooks_ = std::move(hooks); }
 
+	// Phase 6.22 (REMAINING_TASKS' "no fall damage" gap): fires once per
+	// player exactly on the tick their vertical fall is arrested by hitting
+	// ground (on_ground flips false -> true with a downward velocity), never
+	// per-tick while airborne or while already grounded. `impact_speed` is
+	// the player's downward speed (m/s, always > 0) the instant before
+	// landing -- the engine computes and reports this raw value only; it
+	// ships zero built-in fall-damage policy (no threshold, no formula), same
+	// "mechanism, not policy" posture as BlockBreakHooks/RegionHooks above.
+	// Unset means landing is simply never reported -- e.g. no PackRuntime
+	// attached.
+	void set_landed_hook(std::function<void(core::NetId, double)> handler) {
+		on_landed_ = std::move(handler);
+	}
+
 	// Phase 6.1 (vb.register_entity / vb.world.spawn): a generic Lua-kind
 	// entity, replicated the exact same way spawn_item_drop's entries are --
 	// no dedicated wire message, just another interest-grid entry keyed by a
@@ -488,6 +502,7 @@ private:
 	std::function<void(core::NetId, core::BlockId, std::uint16_t)> on_item_pickup_;
 	world::BlockDamageSystem block_damage_;
 	BlockBreakHooks block_break_hooks_;
+	std::function<void(core::NetId, double)> on_landed_;
 	// Phase 7.3: last-known region-block occupancy per playing net id --
 	// absent = "not currently inside a region block". Compared each tick in
 	// update_region_occupancy() to fire enter/exit exactly on the crossing,

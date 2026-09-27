@@ -389,9 +389,39 @@ surface (6.21 — `vb.action.set_params{reach=}`/`get_params()` and
 Full detail: `remaining_tasks/phase6.md`.
 
 **Remaining:**
-- [ ] No fall damage, PvP, mob damage, or hunger — 6.6 only added the
-      primitive (`player:damage`) and the decision hook (`player_death`); no
-      content calls either yet.
+- [x] **6.22: fall damage.** Landed 2026-09-27. New `net::ServerSession::
+      set_landed_hook(fn(NetId, double impact_speed))` — fires once per
+      player exactly on the tick a fall is arrested by hitting ground
+      (`handle_input_batch`'s per-cmd loop compares `on_ground` before/after
+      each `physics::step_movement` call; `impact_speed` is the pre-step
+      downward velocity, captured before that tick's own small gravity
+      increment rather than widening `physics::MoveState`'s public contract
+      just to smuggle the post-integration value out). Raw notification
+      only, no built-in formula/threshold — same "mechanism, not policy"
+      posture as `RegionHooks`/`BlockBreakHooks`; `vb.on("player_landed",
+      function(player, impact_speed) ... end)` is the new Lua event (only
+      installed when a pack actually registers one, same zero-extra-cost-
+      when-unused posture as every other opt-in hook). `content/base/
+      fall_damage.lua` (new) is the reference policy: no damage below an 8
+      m/s safe-speed threshold, then 1 HP per m/s above it, via the existing
+      `player:damage(amount, "fall")` primitive (6.6) — no protocol change
+      (server-local hook, nothing replicated). Still open: PvP/mob
+      damage/hunger, which this item doesn't touch. Verified: full
+      `vb_tests` 371/371 green (1 new `pack_runtime_integration_test.cpp`
+      case drives a real gravity fall over a `LoopbackTransport` — spawn a
+      player 5 blocks above real generated terrain with no jump input, pump
+      real 0.05s ticks, confirm the hook fires exactly once at a plausible
+      impact speed and never again while resting on the ground), clean
+      `-Werror` build of `vb_tests`/`voxel_browser`/`voxel_browser_server`
+      (temporarily reconfigured `build-net-lua` with
+      `-DVB_WARNINGS_AS_ERRORS=ON`, confirmed clean, reconfigured back to
+      this dir's OFF default afterward). Not manually eyeballed in a real
+      window (no GUI in this agent environment), same still-open caveat as
+      every other pass in this file — though this item has no rendering
+      component at all, so that caveat matters less here than usual.
+- [ ] No PvP, mob damage, or hunger — 6.6 only added the primitive
+      (`player:damage`) and the decision hook (`player_death`); fall damage
+      (just above) is the first real content caller of either.
 - [x] Automatic despawn-on-health trigger for generic script entities —
       landed 2026-09-25. Opt-in per kind via `vb.register_entity{health=...}`
       (`EntityKindDef::max_health`, rejects a non-positive value at

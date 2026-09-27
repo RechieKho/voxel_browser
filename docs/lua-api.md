@@ -253,13 +253,13 @@ rt.dispatch_tick(dt);
 - Events: `vb.on("player_join"|"player_leave"|"block_break"|"block_place"|
   "player_interact"|"chat"|"tick"|"ui_event"|"player_death"|"player_input"|
   "block_break_begin"|"block_break_tick"|"block_health_tick"|
-  "region_enter"|"region_exit", handler)`,
+  "region_enter"|"region_exit"|"player_landed", handler)`,
   vetoable via `return false` (except `tick`/`ui_event`, which have
   no veto semantics; `player_death` is a *decision* hook, not a veto —
   see below; `player_input`/`chat` may veto *or* replace, see below;
   `block_break_tick`/`block_health_tick` return numbers, not booleans —
-  see below; `region_enter`/`region_exit` are pure notifications, any
-  return value is ignored, see below).
+  see below; `region_enter`/`region_exit`/`player_landed` are pure
+  notifications, any return value is ignored, see below).
   `player_join` fires from `install_join_veto`'s `authenticate` wrapper (a
   real pre-join veto — note it hands the handler a plain player *name*
   string, not a `Player` handle, since no session/connection exists yet at
@@ -354,6 +354,19 @@ rt.dispatch_tick(dt);
   (`ServerSession::set_region_hooks`) when a pack registers at least one of
   the two events, same zero-extra-per-tick-cost posture as the block-damage
   hooks above.
+  Fall damage primitive (Phase 6.22): `player_landed(player, impact_speed)`
+  fires once per player exactly on the tick a fall is arrested by hitting
+  ground (never per-tick while airborne or already grounded) — `impact_speed`
+  is the player's downward speed in m/s the instant before landing. Pure
+  notification, no veto/return value, same posture as `region_enter`/
+  `region_exit` — the engine computes and reports the raw speed only, it
+  ships zero fall-damage formula or threshold of its own. `content/base/
+  fall_damage.lua` is the reference policy: no damage below a flat
+  safe-speed threshold, then 1 HP per m/s above it, via the existing
+  `player:damage(amount, cause)` primitive (Phase 6.6) with `cause =
+  "fall"`. Only installed (`ServerSession::set_landed_hook`) when a pack
+  registers a `player_landed` handler, same zero-extra-cost-when-unused
+  posture as every other opt-in hook above.
 - Scheduling: `vb.after(seconds, fn)` (one-shot), `vb.every(seconds, fn)`
   (repeating; catches up on a stalled tick, capped at 8 fires/dispatch).
   Storage: `vb.storage.key = value` — a metatable-backed proxy over a
