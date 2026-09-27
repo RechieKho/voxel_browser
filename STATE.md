@@ -20,7 +20,62 @@
 
 ## Current status (2026-09-27)
 
-**Real crack-stage texture art + `crack_texture` override, closing Phase
+**Chunk frustum culling + a transparent second pass** (REMAINING_TASKS'
+long-standing Phase 2 remaining item: "Frustum culling, transparent second
+pass, texture atlas — Phase 4" — the texture atlas itself landed separately
+2026-09-23). New `inc/vb/render/frustum.hpp`, header-only and raylib-free
+(same "pure math, unit-tested without a GL context" posture as
+`entity_visual_layout.hpp`): `build_frustum()` builds the 6 view-frustum
+planes directly from camera basis vectors (position/forward/up/fovy/aspect/
+near/far) via the "cross product of the far-plane corner vectors"
+construction, deliberately *not* by extracting planes from a combined
+view-projection matrix -- that would tie this pure header to raylib/rlgl's
+internal row/column matrix convention (verified against the OpenGL-style
+right=cross(forward,up) basis this codebase's own
+`core::forward_from_yaw_pitch` already assumes). `aabb_in_frustum()` is the
+standard conservative "positive vertex" AABB-vs-plane test -- never wrongly
+culls something actually inside, may keep a few boxes just outside a corner.
+`ChunkRenderer::draw()` (`src/render/chunk_renderer.cpp`) signature changed to
+take the `Camera3D` being rendered with (one call site,
+`src/client/main.cpp`); near/far are hardcoded to 0.01/1000.0 to match
+`BeginMode3D`'s own un-overridden `RL_CULL_DISTANCE_NEAR/FAR` defaults
+(nothing in this codebase calls `rlSetClipPlanes`) -- the frustum this builds
+must agree with what raylib actually rasterizes, or culling would disagree
+with the real clip planes. A chunk whose 32-block AABB is provably entirely
+outside the frustum gets no `DrawModel` call at all, not just an early
+depth-reject.
+Transparent second pass, same pass: `ChunkRenderer` now uploads **two** GPU
+models per chunk -- `split_transparent()` (new) partitions a chunk's meshed
+quads by the same flat fallback-color alpha `fill_mesh_arrays` already used
+for vertex-color alpha (today: only `base:leaves`, `a=220`), reading it once
+per quad rather than per vertex since a quad's 4 vertices already share one
+`block_id` and are contiguous by construction
+(`chunk_mesh_snapshot.cpp`'s own per-face `first` numbering) -- not a
+per-texel alpha check, and not a new `BlockType` field (a real alpha-cutout
+textured block would need its own opt-in flag, not attempted here). `draw()`
+renders every visible chunk's opaque model first (any order -- depth buffer
+sorts it out), then every chunk with transparent geometry a second time with
+`rlDisableDepthMask()` set and sorted back-to-front by chunk-center distance
+from the camera, flushing the render batch (`rlDrawRenderBatchActive()`)
+around the depth-mask toggle so it doesn't retroactively apply to
+already-batched opaque draws -- chunk granularity only, not per-triangle
+(matches this engine's block scale). `GpuChunk` went from one `Model`+capacity
+pair to two named `GpuMesh` slots (`opaque`/`transparent`); `upload_part()`
+(new) is the old single-mesh reuse-if-it-fits/recreate-if-it-doesn't logic,
+now run once per slot instead of once per chunk.
+Verified: full `vb_tests` 370/370 green (7 new `frustum_test.cpp` cases --
+ahead/behind/beside/beyond-far/nearer-than-near/straddling-the-boundary AABB
+cases, plus one proving a non-normalized, non-orthogonal `up` vector still
+works since both get re-derived internally), clean `-Werror` build of
+`vb_tests`/`voxel_browser`/`voxel_browser_server` (temporarily reconfigured
+`build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`, confirmed clean,
+reconfigured back to this dir's OFF default afterward). The actual rendered
+result (a human walking around and watching off-screen chunks stop being
+drawn, leaves/water blending correctly over terrain behind them) was **not**
+manually eyeballed -- no GUI in this agent environment, same still-open
+caveat as every other rendering-adjacent pass in this file.
+
+Before that, most recent landed item was **real crack-stage texture art + `crack_texture` override, closing Phase
 6.5 in full** (REMAINING_TASKS' last open piece of that item). New
 `vb::world::BlockType::crack_texture` (pack-relative crack-stage spritesheet
 path, empty = engine default) + `BlockRegistry::set_crack_texture()`

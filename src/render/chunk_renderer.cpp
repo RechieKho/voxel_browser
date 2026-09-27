@@ -1,12 +1,16 @@
 #include "vb/render/chunk_renderer.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstring>
+#include <utility>
 #include <vector>
 
 #include <raylib.h>
+#include <rlgl.h>
 
 #include "vb/core/ids.hpp"
+#include "vb/render/frustum.hpp"
 #include "vb/world/block.hpp"
 #include "vb/world/chunk.hpp"
 #include "vb/world/chunk_mesh_snapshot.hpp"
@@ -73,16 +77,25 @@ void main()
 
 } // namespace
 
-struct ChunkRenderer::GpuChunk {
+// One GPU mesh slot -- a chunk now has two of these (see GpuChunk below):
+// opaque geometry and transparent geometry (leaves/water), drawn as two
+// separate models in two separate passes so the transparent pass can run
+// with depth writes disabled and sorted back-to-front (ChunkRenderer::draw()).
+struct ChunkRenderer::GpuMesh {
 	Model model{};
-	std::uint64_t revision = 0;
 	bool valid = false;
 	// GPU buffer capacity in elements, >= what's currently drawn (see
 	// model_from_mesh's headroom below). A re-mesh whose new vertex/index
 	// count still fits reuses these buffers via UpdateMeshBuffer() instead of
-	// a full UnloadModel+recreate -- see ChunkRenderer::upload().
+	// a full UnloadModel+recreate -- see upload_part() below.
 	std::size_t vertex_capacity = 0;
 	std::size_t index_capacity = 0;
+};
+
+struct ChunkRenderer::GpuChunk {
+	GpuMesh opaque;
+	GpuMesh transparent;
+	std::uint64_t revision = 0;
 };
 
 namespace {
@@ -196,7 +209,78 @@ void update_gpu_mesh(Mesh &mesh, const world::MeshData &data, const std::vector<
 	mesh.triangleCount = static_cast<int>(data.indices.size() / 3);
 }
 
+// Splits one chunk's mesh into two: opaque and transparent (leaves/water)
+// quads, so ChunkRenderer can upload/draw them as two separate models
+// (Phase 2 remaining item: chunk transparent second pass). Every face
+// chunk_mesh_snapshot.cpp emits is one quad -- 4 contiguous vertices, all
+// sharing one `block_id` (one voxel's one face) -- so partitioning by quad
+// via each quad's first index is exact, never splits a face across the two
+// outputs. Transparency is read off the same fallback flat-color alpha
+// fill_mesh_arrays already uses for vertex-color alpha (today: only
+// base:leaves, at a=220 -- see fallback_color_for()), not a per-texel check
+// -- a real textured block with genuine alpha-cutout art would need its own
+// opt-in flag on BlockType, not attempted here.
+void split_transparent(const world::MeshData &data, world::MeshData &opaque, world::MeshData &transparent) {
+	const std::size_t quads = data.quad_count();
+	for (std::size_t q = 0; q < quads; ++q) {
+		const std::uint32_t v0 = data.indices[q * 6];
+		const bool is_transparent = fallback_color_for(data.vertices[v0].block_id).a < 255;
+		world::MeshData &dst = is_transparent ? transparent : opaque;
+		const auto base = static_cast<std::uint32_t>(dst.vertices.size());
+		for (std::uint32_t c = 0; c < 4; ++c) {
+			dst.vertices.push_back(data.vertices[v0 + c]);
+		}
+		dst.indices.push_back(base + 0);
+		dst.indices.push_back(base + 1);
+		dst.indices.push_back(base + 2);
+		dst.indices.push_back(base + 0);
+		dst.indices.push_back(base + 2);
+		dst.indices.push_back(base + 3);
+	}
+}
+
 } // namespace
+
+// Builds/updates one GPU mesh slot from `data` (already-partitioned opaque
+// or transparent geometry) -- the same reuse-if-it-fits/recreate-if-it-doesn't
+// logic ChunkRenderer::upload() used to run once per chunk now runs once per
+// (chunk, opaque-or-transparent) slot.
+void ChunkRenderer::upload_part(GpuMesh &slot, const world::MeshData &data) {
+	if (data.empty()) {
+		if (slot.valid) {
+			UnloadModel(slot.model);
+		}
+		slot = GpuMesh{};
+		return;
+	}
+
+	const std::size_t needed_v = data.vertices.size();
+	const std::size_t needed_i = data.indices.size();
+	if (slot.valid && needed_v <= slot.vertex_capacity && needed_i <= slot.index_capacity) {
+		// Fits within the existing GPU buffers -- update in place, no
+		// UnloadModel/UploadMesh churn (see the comment on GpuMesh).
+		update_gpu_mesh(slot.model.meshes[0], data, atlas_rects_);
+	} else {
+		if (slot.valid) {
+			UnloadModel(slot.model);
+		}
+		slot.vertex_capacity = capacity_for(needed_v);
+		slot.index_capacity = capacity_for(needed_i);
+		slot.model = model_from_mesh(data, slot.vertex_capacity, slot.index_capacity, atlas_rects_);
+		// Phase 7.2: every chunk shares the one fog shader loaded in the
+		// constructor -- LoadModelFromMesh (inside model_from_mesh) assigns
+		// raylib's own default material/shader, which this replaces.
+		slot.model.materials[0].shader = fog_shader_;
+		// Real texture/atlas system: bind the shared atlas texture (a no-op,
+		// still raylib's default white 1x1, until set_atlas() has been
+		// called -- see the class's kLoading-time call site in
+		// src/client/main.cpp).
+		if (has_atlas_) {
+			slot.model.materials[0].maps[MATERIAL_MAP_DIFFUSE].texture = atlas_;
+		}
+		slot.valid = true;
+	}
+}
 
 ChunkRenderer::ChunkRenderer(std::size_t mesh_threads) : pool_(mesh_threads) {
 	fog_shader_ = LoadShaderFromMemory(kFogVs, kFogFs);
@@ -209,8 +293,11 @@ ChunkRenderer::ChunkRenderer(std::size_t mesh_threads) : pool_(mesh_threads) {
 ChunkRenderer::~ChunkRenderer() {
 	for (auto &[coord, gpu] : gpu_) {
 		(void)coord;
-		if (gpu.valid) {
-			UnloadModel(gpu.model);
+		if (gpu.opaque.valid) {
+			UnloadModel(gpu.opaque.model);
+		}
+		if (gpu.transparent.valid) {
+			UnloadModel(gpu.transparent.model);
 		}
 	}
 	UnloadShader(fog_shader_);
@@ -242,8 +329,11 @@ void ChunkRenderer::drop(core::ChunkCoord coord) {
 	if (it == gpu_.end()) {
 		return;
 	}
-	if (it->second.valid) {
-		UnloadModel(it->second.model);
+	if (it->second.opaque.valid) {
+		UnloadModel(it->second.opaque.model);
+	}
+	if (it->second.transparent.valid) {
+		UnloadModel(it->second.transparent.model);
 	}
 	gpu_.erase(it);
 }
@@ -251,41 +341,11 @@ void ChunkRenderer::drop(core::ChunkCoord coord) {
 void ChunkRenderer::upload(core::ChunkCoord coord, const world::MeshData &data,
 		std::uint64_t revision) {
 	GpuChunk &slot = gpu_[coord];
-	if (data.empty()) {
-		if (slot.valid) {
-			UnloadModel(slot.model);
-		}
-		slot = GpuChunk{};
-		slot.revision = revision;
-		return;
-	}
-
-	const std::size_t needed_v = data.vertices.size();
-	const std::size_t needed_i = data.indices.size();
-	if (slot.valid && needed_v <= slot.vertex_capacity && needed_i <= slot.index_capacity) {
-		// Fits within the existing GPU buffers -- update in place, no
-		// UnloadModel/UploadMesh churn (see the comment on GpuChunk).
-		update_gpu_mesh(slot.model.meshes[0], data, atlas_rects_);
-	} else {
-		if (slot.valid) {
-			UnloadModel(slot.model);
-		}
-		slot.vertex_capacity = capacity_for(needed_v);
-		slot.index_capacity = capacity_for(needed_i);
-		slot.model = model_from_mesh(data, slot.vertex_capacity, slot.index_capacity, atlas_rects_);
-		// Phase 7.2: every chunk shares the one fog shader loaded in the
-		// constructor -- LoadModelFromMesh (inside model_from_mesh) assigns
-		// raylib's own default material/shader, which this replaces.
-		slot.model.materials[0].shader = fog_shader_;
-		// Real texture/atlas system: bind the shared atlas texture (a no-op,
-		// still raylib's default white 1x1, until set_atlas() has been
-		// called -- see the class's kLoading-time call site in
-		// src/client/main.cpp).
-		if (has_atlas_) {
-			slot.model.materials[0].maps[MATERIAL_MAP_DIFFUSE].texture = atlas_;
-		}
-		slot.valid = true;
-	}
+	world::MeshData opaque_data;
+	world::MeshData transparent_data;
+	split_transparent(data, opaque_data, transparent_data);
+	upload_part(slot.opaque, opaque_data);
+	upload_part(slot.transparent, transparent_data);
 	slot.revision = revision;
 }
 
@@ -357,17 +417,86 @@ void ChunkRenderer::set_fog(core::Vec3d view_pos, world::SkyColor sky, float sta
 	SetShaderValue(fog_shader_, fog_loc_end_, &end, SHADER_UNIFORM_FLOAT);
 }
 
-void ChunkRenderer::draw() const {
+namespace {
+
+Vector3 chunk_draw_pos(core::ChunkCoord coord) {
+	const core::IVec3 o = core::chunk_origin(coord);
+	return Vector3{ static_cast<float>(o.x), static_cast<float>(o.y), static_cast<float>(o.z) };
+}
+
+core::Vec3d chunk_center(core::ChunkCoord coord) {
+	const core::IVec3 o = core::chunk_origin(coord);
+	constexpr double kHalf = core::kChunkDim / 2.0;
+	return { static_cast<double>(o.x) + kHalf, static_cast<double>(o.y) + kHalf,
+		static_cast<double>(o.z) + kHalf };
+}
+
+// Matches BeginMode3D's own hardcoded near/far cull distances (rcore.c uses
+// rlGetCullDistanceNear()/Far(), whose un-overridden defaults are these --
+// see rlgl.h's RL_CULL_DISTANCE_NEAR/FAR; nothing in this codebase calls
+// rlSetClipPlanes to change them) -- the frustum this builds must match what
+// raylib actually rasterizes, or culling would disagree with the real
+// far/near clip planes.
+constexpr double kCullNear = 0.01;
+constexpr double kCullFar = 1000.0;
+
+} // namespace
+
+void ChunkRenderer::draw(const Camera3D &camera) const {
+	const core::Vec3d position{ camera.position.x, camera.position.y, camera.position.z };
+	const core::Vec3d forward{ camera.target.x - camera.position.x,
+		camera.target.y - camera.position.y, camera.target.z - camera.position.z };
+	const core::Vec3d up{ camera.up.x, camera.up.y, camera.up.z };
+	const double aspect =
+			static_cast<double>(GetRenderWidth()) / static_cast<double>(GetRenderHeight());
+	const Frustum frustum =
+			build_frustum(position, forward, up, camera.fovy, aspect, kCullNear, kCullFar);
+
+	// Pass 1: opaque geometry, any order -- the depth buffer alone sorts it
+	// out. Chunks with transparent geometry too are noted for pass 2 instead
+	// of drawn immediately, so their distance-sort below is against exactly
+	// the same camera position/frustum test as pass 1.
+	std::vector<std::pair<core::ChunkCoord, const GpuChunk *>> transparent_visible;
 	for (const auto &[coord, gpu] : gpu_) {
-		if (!gpu.valid) {
-			continue;
-		}
 		const core::IVec3 o = core::chunk_origin(coord);
-		DrawModel(gpu.model,
-				Vector3{ static_cast<float>(o.x), static_cast<float>(o.y),
-						static_cast<float>(o.z) },
-				1.0f, WHITE);
+		const core::Vec3d cmin{ static_cast<double>(o.x), static_cast<double>(o.y), static_cast<double>(o.z) };
+		const core::Vec3d cmax = cmin + core::Vec3d{ static_cast<double>(core::kChunkDim),
+			static_cast<double>(core::kChunkDim), static_cast<double>(core::kChunkDim) };
+		if (!aabb_in_frustum(frustum, cmin, cmax)) {
+			continue; // Phase 2 remaining item: chunk frustum culling
+		}
+		if (gpu.opaque.valid) {
+			DrawModel(gpu.opaque.model, chunk_draw_pos(coord), 1.0f, WHITE);
+		}
+		if (gpu.transparent.valid) {
+			transparent_visible.emplace_back(coord, &gpu);
+		}
 	}
+
+	if (transparent_visible.empty()) {
+		return;
+	}
+
+	// Pass 2: transparent geometry (leaves/water), depth-write disabled so
+	// two overlapping translucent chunks don't fight over which one occludes
+	// the other in the depth buffer, sorted back-to-front by chunk-center
+	// distance from the camera so they blend in roughly the right order --
+	// chunk granularity only, not per-triangle; good enough at this engine's
+	// block scale (see split_transparent()'s own comment on why a chunk-level
+	// second pass exists at all).
+	std::sort(transparent_visible.begin(), transparent_visible.end(),
+			[&](const auto &a, const auto &b) {
+				return (chunk_center(a.first) - position).length() >
+						(chunk_center(b.first) - position).length();
+			});
+
+	rlDrawRenderBatchActive(); // flush pass 1 before changing GL depth state
+	rlDisableDepthMask();
+	for (const auto &[coord, gpu] : transparent_visible) {
+		DrawModel(gpu->transparent.model, chunk_draw_pos(coord), 1.0f, WHITE);
+	}
+	rlDrawRenderBatchActive(); // flush pass 2 before restoring depth state
+	rlEnableDepthMask();
 }
 
 } // namespace vb::render

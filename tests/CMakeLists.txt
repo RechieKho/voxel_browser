@@ -17,6 +17,7 @@ add_executable(vb_tests
   unit/daynight_test.cpp
   unit/entity_visual_layout_test.cpp
   unit/entity_visual_test.cpp
+  unit/frustum_test.cpp
   unit/gns_transport_test.cpp
   unit/item_drops_test.cpp
   unit/kitchen_sink_pack_test.cpp

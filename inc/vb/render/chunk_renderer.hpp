@@ -53,8 +53,16 @@ public:
 	// BeginMode3D/EndMode3D requirement, unlike draw() itself.
 	void set_fog(core::Vec3d view_pos, world::SkyColor sky, float start, float end) const;
 
-	// Draw every uploaded chunk. Call inside BeginMode3D/EndMode3D.
-	void draw() const;
+	// Draw every uploaded chunk currently inside `camera`'s view frustum
+	// (Phase 2 remaining item: chunk frustum culling -- a chunk whose AABB is
+	// provably entirely outside `camera`'s frustum is skipped, no draw call
+	// issued at all). Two passes: opaque geometry first (any order -- the
+	// depth buffer sorts it out), then any chunk with transparent geometry
+	// (leaves/water) with depth *writes* disabled and drawn back-to-front by
+	// distance from `camera`, so overlapping transparent chunks blend in
+	// roughly the right order -- see chunk_renderer.cpp's split_transparent().
+	// Call inside BeginMode3D/EndMode3D, with the same camera passed to it.
+	void draw(const Camera3D &camera) const;
 
 	std::size_t uploaded_count() const { return gpu_.size(); }
 	std::size_t pending_mesh_count() const { return pool_.pending(); }
@@ -79,8 +87,10 @@ public:
 	Color underwater_tint(core::BlockId id) const;
 
 private:
+	struct GpuMesh;
 	struct GpuChunk;
 	void upload(core::ChunkCoord coord, const world::MeshData &data, std::uint64_t revision);
+	void upload_part(GpuMesh &slot, const world::MeshData &data);
 	void drop(core::ChunkCoord coord);
 
 	// Phase 7.2: one shader shared by every chunk's material (assigned in

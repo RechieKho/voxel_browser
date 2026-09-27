@@ -76,7 +76,54 @@ Full detail: `remaining_tasks/phase2.md`.
 **Remaining:**
 - [ ] Horizontal cross-chunk light propagation (sideways-only spill under a
       horizontal overhang spanning a chunk border) — still per-chunk-only.
-- [ ] Frustum culling, transparent second pass, texture atlas — Phase 4.
+- [x] Frustum culling, transparent second pass — landed 2026-09-27 (texture
+      atlas itself landed separately 2026-09-23, see Phase 4's own entry).
+      New `inc/vb/render/frustum.hpp` (header-only, no raylib dependency,
+      same "pure math, unit-tested without a GL context" posture as
+      `entity_visual_layout.hpp`): `build_frustum()` derives the 6 view-frustum
+      planes straight from camera basis vectors (position/forward/up/fovy/
+      aspect/near/far) via the standard "cross product of the far-plane
+      corner vectors" construction — deliberately *not* extracted from a
+      combined view-projection matrix, which would tie this pure header to
+      raylib/rlgl's internal row/column matrix convention; `aabb_in_frustum()`
+      is the standard conservative "positive vertex" AABB-vs-plane test.
+      `ChunkRenderer::draw()` (`src/render/chunk_renderer.cpp`) now takes the
+      `Camera3D` being rendered with (signature change, one call site in
+      `src/client/main.cpp`), builds a frustum from it every call (near/far
+      hardcoded to 0.01/1000.0 to match `BeginMode3D`'s own un-overridden
+      `RL_CULL_DISTANCE_NEAR/FAR` defaults — nothing in this codebase calls
+      `rlSetClipPlanes`), and skips any chunk whose 32-block AABB is provably
+      entirely outside it — no draw call at all for a culled chunk, not just
+      an early depth-reject.
+      Transparent second pass: `ChunkRenderer` now uploads **two** GPU models
+      per chunk instead of one — `split_transparent()` (new, `chunk_renderer.
+      cpp`) partitions a chunk's meshed quads by the same flat fallback-color
+      alpha `fill_mesh_arrays` already used for vertex-color alpha (today:
+      only `base:leaves`, `a=220` — see `fallback_color_for()`), since every
+      quad's 4 vertices already share one `block_id` and are contiguous by
+      construction (`chunk_mesh_snapshot.cpp`'s own per-face `first` numbering)
+      -- not a per-texel alpha check, and not a new `BlockType` field. `draw()`
+      renders every visible chunk's **opaque** model first (any order, the
+      depth buffer alone sorts it out), then every chunk with transparent
+      geometry a second time with `rlDisableDepthMask()` set and sorted
+      back-to-front by chunk-center distance from the camera (`rlDrawRenderBatchActive()`
+      flushes around the depth-mask toggle so it doesn't retroactively apply
+      to already-batched pass-1 draws) — chunk granularity only, not
+      per-triangle, matches this engine's block scale. `GpuChunk` is now two
+      `GpuMesh` slots (`opaque`/`transparent`) instead of one `Model`+capacity
+      pair; `upload_part()` (new) is the old single-mesh reuse-if-it-fits/
+      recreate-if-it-doesn't logic, now run once per slot.
+      Verified: full `vb_tests` 370/370 green (7 new `frustum_test.cpp` cases:
+      ahead/behind/beside/beyond-far/nearer-than-near/straddling-the-boundary
+      AABB cases plus one proving a non-normalized non-orthogonal `up` still
+      works), clean `-Werror` build of `vb_tests`/`voxel_browser`/
+      `voxel_browser_server` (temporarily reconfigured `build-net-lua` with
+      `-DVB_WARNINGS_AS_ERRORS=ON`, confirmed clean, reconfigured back to this
+      dir's OFF default afterward). The actual rendered result (a human
+      walking around and watching off-screen chunks stop being drawn, and
+      leaves/water blend correctly over terrain behind them) was **not**
+      manually eyeballed — no GUI in this agent environment, same still-open
+      caveat as every other rendering-adjacent pass in this file.
 
 ---
 

@@ -1537,7 +1537,7 @@ int main(int argc, char **argv) {
 				BeginMode3D(camera);
 				DrawGrid(64, 4.0f);
 				if (chunk_renderer) {
-					chunk_renderer->draw();
+					chunk_renderer->draw(camera);
 				}
 				if (entity_renderer) {
 					entity_renderer->draw(
