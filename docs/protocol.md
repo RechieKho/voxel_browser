@@ -4,8 +4,27 @@
 > as any change to a struct in `inc/vb/protocol/`, and bump
 > `kEngineProtocolVersion` in `cmake/version.hpp.in`.
 
-Current `ENGINE_PROTOCOL_VERSION`: **25**.
+Current `ENGINE_PROTOCOL_VERSION`: **26**.
 
+- **26** — `BlockRegistryRecord` (`S2C_BlockRegistry`, 40) gains `string
+  crack_texture` -- mirrors `vb::world::BlockType::crack_texture` (spec
+  §5.2/§10.7): an optional pack-relative crack-stage spritesheet path (`vb::
+  render::CrackAtlas::kStages` equal-width square frames, left to right),
+  empty = the client's own built-in generic crack overlay. Closes
+  REMAINING_TASKS.md 6.5's last piece ("real crack-stage texture art +
+  crack_texture override"). Set via `vb.register_block{crack_texture=...}`
+  (`BlockRegistry::set_crack_texture()`, same "attach without disturbing
+  other already-frozen fields" posture as `texture`/`set_texture()`).
+  Alongside this, a real pre-existing bug was fixed in the same commit: all
+  three sites that build/apply a `BlockRegistryRecord`
+  (`src/server/main.cpp`'s and `src/client/main.cpp`'s `host.block_registry`
+  callbacks, and `ClientSession::apply_block_registry()` in
+  `src/net/session.cpp`) used an aggregate-init listing only the record's
+  first 5-6 fields, silently dropping `max_damage` (and now `crack_texture`)
+  the whole time -- no client ever actually received a nonzero `max_damage`
+  for any block, so `client.break_progress()` (introduced in **25**, below)
+  was permanently `nullopt` in practice until this fix, regardless of a
+  block's real `max_damage`.
 - **25** — New `S2CBlockDamage` (54, lane `kWorld`): `IVec3 pos`, `u16
   punches`. Closes the deferred half of Phase 6.5 ("no wire message
   replicates the damage value itself to nearby players yet") — `ServerSession`
@@ -385,7 +404,7 @@ assembled virtual pack filesystem (`path -> bytes`) is exposed but unread.
 
 | Type (id)              | Fields                                                        |
 | ----------------------- | ----------------------------------------------------------- |
-| `S2C_BlockRegistry` (40) | `varint n` + `n × {string name, bool solid, bool opaque, bool liquid, u8 light_emission, string texture, u16 max_damage}` (index == `BlockId`) |
+| `S2C_BlockRegistry` (40) | `varint n` + `n × {string name, bool solid, bool opaque, bool liquid, u8 light_emission, string texture, u16 max_damage, string crack_texture}` (index == `BlockId`) |
 
 Sent between `C2S_Ready` and `S2C_JoinAccept` (Phase 4.3) only if
 `HandshakeServerHost::block_registry` returns a value; `nullopt` (default)

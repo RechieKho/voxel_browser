@@ -171,7 +171,7 @@
       no position on auth as a concept — see `ARCHITECTURE_SPEC.md` §18 Q6.
       Also used internally by `ScriptDb` for its key-to-filename hashing.
 
-### 6.5 Shared block-damage breaking (default + override crack texture) ✅ (2026-09-18; damage-value replication + default crack overlay landed 2026-09-27; crack_texture art still deferred)
+### 6.5 Shared block-damage breaking (default + override crack texture) ✅ (2026-09-18; damage-value replication + default crack overlay landed 2026-09-27; real crack-stage art + crack_texture override closed same day, see REMAINING_TASKS.md's own entry)
 
 - [x] `BlockType` gains `max_damage` (0 = today's instant break, the
       default — no behavior change for any existing block); `vb.register_block{...}`

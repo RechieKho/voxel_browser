@@ -35,6 +35,10 @@ struct BlockRegistryRecord {
 	std::string texture;
 	// Phase 6.5 (spec §10.7): 0 = instant break, no shared damage pool.
 	std::uint16_t max_damage = 0;
+	// Phase 6.5 (spec §10.7/§5.2): mirrors vb::world::BlockType::crack_texture
+	// -- pack-relative crack-stage spritesheet path, empty = the client's own
+	// built-in generic crack overlay.
+	std::string crack_texture;
 
 	bool operator==(const BlockRegistryRecord &) const = default;
 };

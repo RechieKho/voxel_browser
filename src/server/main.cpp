@@ -207,7 +207,14 @@ int main(int argc, char **argv) {
 		out.reserve(registry.size());
 		for (std::size_t i = 0; i < registry.size(); ++i) {
 			const auto &t = registry.get(static_cast<vb::core::BlockId>(i));
-			out.push_back({ t.name, t.solid, t.opaque, t.liquid, t.light_emission, t.texture });
+			// Real bug fixed here: max_damage/crack_texture used to be
+			// silently dropped by this aggregate-init (only the first 6 of
+			// BlockRegistryRecord's fields were listed) -- no client ever
+			// saw a nonzero max_damage, so client.break_progress() (Phase
+			// 6.5) always read `registry.get(block).max_damage == 0` and
+			// stayed permanently nullopt for every max_damage>0 block.
+			out.push_back({ t.name, t.solid, t.opaque, t.liquid, t.light_emission,
+					t.texture, t.max_damage, t.crack_texture });
 		}
 		return out;
 	};

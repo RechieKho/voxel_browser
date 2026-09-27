@@ -76,7 +76,16 @@ rt.dispatch_tick(dt);
   still attaches it (`BlockRegistry::set_texture`) — this is how
   `content/base/blocks/stone.lua`/`water.lua` give an already-hardcoded
   `BlockRegistry::base()` block a real texture without needing to touch
-  `src/world/block.cpp`; `region` — Phase 7.3, generic per-tick
+  `src/world/block.cpp`; `crack_texture` — Phase 6.5's last piece, same
+  re-declare-to-attach exception as `texture` (`BlockRegistry::
+  set_crack_texture`) — an optional pack-relative crack-stage spritesheet
+  path (`vb::render::CrackAtlas::kStages`, currently 8, equal-width square
+  frames laid out left to right; a wrong-shaped or undecodable image is
+  logged and the block falls back to the shared default row, exactly like a
+  bad `texture` falls back to a flat placeholder color). Unset (empty
+  string, the default) means the client draws its own built-in, procedurally
+  generated generic crack overlay for that block instead — no art pipeline
+  needed to get *some* progressive damage cue; `region` — Phase 7.3, generic per-tick
   occupancy tracking opt-in, independent of `liquid` (see `region_enter`/
   `region_exit` below) — defaults to `liquid`'s own value (a liquid block
   opts in automatically, matching `base:water`) unless given explicitly,
@@ -324,10 +333,12 @@ rt.dispatch_tick(dt);
   `block_health_tick` absent means permanent damage, no healing. Completion
   (summed damage reaching `max_damage`) drives the *existing*, unchanged
   `C2S_BlockEdit`/`block_break`/`on_break` pipeline — this system only gates
-  *when* that fires. No wire message replicates the damage value itself to
-  nearby players yet (blocked on the still-pending texture/atlas system for
-  the crack overlay, `REMAINING_TASKS.md` 6.5), so a second player can't see
-  another's break progress today, only feel its effect once it commits.
+  *when* that fires. The live punch count itself replicates to every player
+  currently mirroring the chunk (not just the puncher) via `S2C_BlockDamage`
+  (protocol 25) — `client.break_progress()` reports a real
+  `punches / max_damage` fraction for the looked-at block, and the client
+  renders a real crack-stage overlay for it (`vb::render::CrackAtlas`,
+  `crack_texture` above) — closing `REMAINING_TASKS.md` 6.5 in full.
   Generic region occupancy (Phase 7.3): `region_enter(player, pos,
   block_name)` / `region_exit(player, pos, block_name)` fire once per
   crossing (not once per tick spent inside), server-side, whenever a

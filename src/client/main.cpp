@@ -44,6 +44,8 @@
 #include "vb/protocol/world.hpp"
 #include "vb/render/camera.hpp"
 #include "vb/render/chunk_renderer.hpp"
+#include "vb/render/crack_atlas.hpp"
+#include "vb/render/crack_overlay.hpp"
 #include "vb/render/entity_renderer.hpp"
 #include "vb/render/main_menu.hpp"
 #include "vb/render/ui_renderer.hpp"
@@ -235,7 +237,11 @@ vb::net::HandshakeServerHost make_singleplayer_host(std::uint64_t seed,
 		out.reserve(registry.size());
 		for (std::size_t i = 0; i < registry.size(); ++i) {
 			const auto &t = registry.get(static_cast<vb::core::BlockId>(i));
-			out.push_back({ t.name, t.solid, t.opaque, t.liquid, t.light_emission, t.texture });
+			// Same real bug fix as src/server/main.cpp's own copy of this
+			// callback (see its comment): max_damage/crack_texture were
+			// silently dropped by the old 6-field aggregate-init.
+			out.push_back({ t.name, t.solid, t.opaque, t.liquid, t.light_emission,
+					t.texture, t.max_damage, t.crack_texture });
 		}
 		return out;
 	};
@@ -883,6 +889,12 @@ int main(int argc, char **argv) {
 	std::uint32_t input_seq = 0;
 	std::unique_ptr<vb::render::ChunkRenderer> chunk_renderer;
 	std::unique_ptr<vb::render::EntityRenderer> entity_renderer;
+	// REMAINING_TASKS.md 6.5's last piece: real crack-stage art + per-block
+	// crack_texture override, replacing the old flat translucent-cube
+	// overlay. Built once per session right alongside chunk_renderer's own
+	// texture atlas, below.
+	std::unique_ptr<vb::render::CrackOverlay> crack_overlay;
+	vb::render::CrackAtlas crack_atlas;
 	bool mouse_captured = false;
 	// Entity-management follow-up (held item / hotbar selection): which
 	// inventory slot (0-based) number keys 1-9 have selected, persisted
@@ -1061,6 +1073,13 @@ int main(int argc, char **argv) {
 				averages.push_back(atlas.average_color_for(id));
 			}
 			chunk_renderer->set_atlas(atlas.upload(), std::move(rects), std::move(averages));
+
+			// REMAINING_TASKS.md 6.5's last piece: same join-time, same vfs
+			// -- a block's crack_texture (if any) is synced/on-disk exactly
+			// like its regular texture.
+			crack_atlas = vb::render::CrackAtlas::build(client->chunk_store().registry(), vfs);
+			crack_overlay = std::make_unique<vb::render::CrackOverlay>();
+			crack_overlay->set_texture(crack_atlas.upload());
 		}
 		entity_renderer = std::make_unique<vb::render::EntityRenderer>();
 		// Entity-management follow-up: build any registered kind's real
@@ -1531,20 +1550,26 @@ int main(int argc, char **argv) {
 						static_cast<float>(look_hit.voxel.z) + 0.5f
 					};
 					DrawCubeWires(hit_center, 1.02f, 1.02f, 1.02f, BLACK);
-					// Default generic crack overlay (REMAINING_TASKS.md 6.5):
-					// no crack-stage art exists yet (still-open "crack_texture
-					// override" half of that item), so the built-in default
-					// is a translucent black cube over the targeted block,
-					// darkening in step with its live break_progress fraction
-					// -- a real, if crude, "this block is taking damage" cue
-					// rather than nothing at all. Slightly larger than the
-					// block (1.004x) to avoid z-fighting against its own mesh
-					// faces.
-					if (break_progress) {
-						const auto alpha = static_cast<unsigned char>(
-								vb::core::clamp(*break_progress, 0.0f, 1.0f) * 180.0f);
-						DrawCube(hit_center, 1.004f, 1.004f, 1.004f,
-								Color{ 0, 0, 0, alpha });
+					// Real crack-stage overlay (REMAINING_TASKS.md 6.5, closed
+					// 2026-09-27): a textured cube sampling the live-damaged
+					// block's own crack stage from crack_atlas -- its own
+					// pack-set crack_texture override if one decoded validly
+					// at join time, else the engine's shared built-in
+					// procedural crack pattern. Stage picks progressively
+					// more damaged art as break_progress climbs toward 1.0;
+					// alpha still darkens in step with it too, same "more
+					// damaged reads as more visible" cue the old flat cube
+					// gave.
+					if (break_progress && crack_overlay) {
+						const float fraction = vb::core::clamp(*break_progress, 0.0f, 1.0f);
+						const int stage = std::min(
+								static_cast<int>(fraction * vb::render::CrackAtlas::kStages),
+								vb::render::CrackAtlas::kStages - 1);
+						const vb::core::BlockId block =
+								client->chunk_store().block_at(look_hit.voxel);
+						const vb::render::AtlasRect rect = crack_atlas.rect_for(block, stage);
+						const auto alpha = static_cast<unsigned char>(fraction * 220.0f + 35.0f);
+						crack_overlay->draw(hit_center, rect, alpha);
 					}
 				}
 				EndMode3D();

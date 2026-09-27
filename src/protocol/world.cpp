@@ -57,6 +57,7 @@ void S2CBlockRegistry::encode(std::vector<std::byte> &out) const {
 		w.u8(b.light_emission);
 		w.string(b.texture);
 		w.u16(b.max_damage);
+		w.string(b.crack_texture);
 	}
 }
 
@@ -77,6 +78,7 @@ Decoded<S2CBlockRegistry> S2CBlockRegistry::decode(std::span<const std::byte> in
 		b.light_emission = r.u8();
 		b.texture = r.string();
 		b.max_damage = r.u16();
+		b.crack_texture = r.string();
 		m.blocks.push_back(std::move(b));
 	}
 	return finish(r, std::move(m));

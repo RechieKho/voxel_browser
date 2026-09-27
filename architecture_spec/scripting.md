@@ -168,13 +168,15 @@ mechanism-vs-policy split used for input interception (§10.6).
   the *existing*, unchanged `C2S_BlockEdit`/`BlockEditSystem`/`on_break`
   pipeline (§8.5, §10.5) to actually break the block — this system only
   gates when that pipeline fires, it doesn't replace it.
-- **Rendering — default + override, not Lua's job**: the engine ships one
-  baseline generic crack overlay (progressive stages by `damage/max_damage`)
-  so breaking looks right with zero scripting. A block may override it via
-  `crack_texture` (§5.2), same override-by-name convention as every other
-  registry in this doc. **Dependency:** this needs the real texture/atlas
-  system that's still pending (`REMAINING_TASKS.md` 4.3/5.1 — client is
-  untextured cubes today), so crack textures can't land before that does.
+- **Rendering — default + override, not Lua's job**: landed 2026-09-27
+  (`vb::render::CrackAtlas`/`CrackOverlay`). The engine ships one baseline
+  generic crack overlay (a procedurally-generated, progressively denser
+  crack-line pattern across `CrackAtlas::kStages` stages, indexed by
+  `damage/max_damage`) so breaking looks right with zero scripting. A block
+  may override it via `crack_texture` (§5.2) — a pack-relative `kStages`-frame
+  spritesheet, same override-by-name convention as `texture` itself; a
+  wrong-shaped or undecodable override falls back to the shared default row
+  rather than failing pack load.
 - **Cost**: `block_break_tick`/`block_health_tick` are bounded by the number
   of blocks currently being damaged, which is small and player-driven, not
   proportional to world size — same reasoning as why the custom-keybind

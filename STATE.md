@@ -20,7 +20,49 @@
 
 ## Current status (2026-09-27)
 
-**Replicated live block-damage (punch count) to nearby players, closing
+**Real crack-stage texture art + `crack_texture` override, closing Phase
+6.5 in full** (REMAINING_TASKS' last open piece of that item). New
+`vb::world::BlockType::crack_texture` (pack-relative crack-stage spritesheet
+path, empty = engine default) + `BlockRegistry::set_crack_texture()`
+mirroring `set_texture()`'s "attach without disturbing already-frozen
+fields" posture; `vb.register_block{crack_texture=...}` wires it through.
+Protocol bumped **25 -> 26**: `BlockRegistryRecord` gains `string
+crack_texture`. New `vb::render::CrackAtlas` (pure `build()`/GPU `upload()`
+split, like `TextureAtlas`): one shared row of `kStages` (8) cells is the
+engine's own procedurally-generated default crack pattern (deterministic
+per-stage line drawing — no art tools in this environment); a block with a
+valid `crack_texture` (a real `kStages`-frame spritesheet) gets its own row
+instead, falling back to the shared default row on any decode/shape failure.
+New `vb::render::CrackOverlay` (GPU-only) replaces the old flat translucent
+`DrawCube` in `src/client/main.cpp`'s `kPlaying` draw block: a persistent
+unit cube mesh whose texcoords are remapped into the resolved `CrackAtlas`
+rect (re-uploaded to the GPU only when the rect actually changes) and drawn
+with the atlas bound, alpha still climbing with `break_progress`.
+**Real pre-existing bug found and fixed in the same pass, unrelated to
+`crack_texture` itself:** all three sites that build/apply a
+`BlockRegistryRecord` (`src/server/main.cpp`'s and `src/client/main.cpp`'s
+`host.block_registry` callbacks, and `ClientSession::apply_block_registry()`
+in `src/net/session.cpp`) used an aggregate-init listing only the record's
+first 5-6 fields, silently dropping `max_damage` (and now `crack_texture`)
+on every hop — so no client had ever actually received a nonzero
+`max_damage` for any block, meaning `client.break_progress()` (the previous
+entry below) was permanently `nullopt` in practice regardless of a block's
+real `max_damage`, since the very first commit that introduced these
+callbacks. Caught by writing a regression test first (`block_registry_test.
+cpp`) and confirming it failed against the pre-fix code before fixing it.
+Verified: full `vb_tests` 363/363 green (8 new cases across
+`block_registry_test.cpp`, `pack_runtime_test.cpp`, `protocol_test.cpp`, and
+a new `crack_atlas_test.cpp` covering `CrackAtlas::build`'s default-row/
+override-row/wrong-shape-fallback/missing-from-vfs-fallback/stage-clamping
+behavior), clean `-Werror` build of `vb_tests`/`voxel_browser`/
+`voxel_browser_server` (temporarily reconfigured `build-net-lua` with
+`-DVB_WARNINGS_AS_ERRORS=ON`, confirmed clean, reconfigured back to this
+dir's OFF default afterward). The actual rendered crack-stage overlay (a
+human punching a block and watching a real textured crack pattern progress
+on it) was **not** manually eyeballed — no GUI in this agent environment,
+same still-open caveat as every other rendering-adjacent pass in this file.
+
+Before that, most recent landed item was **replicating live block-damage (punch count) to nearby players, closing
 Phase 6.5's deferred half** (REMAINING_TASKS' "Replicate block-damage value
 to nearby players" gap). Targets the mechanism that's actually live today --
 6.18's punch-based `ServerSession::block_punch_counts_` -- not the original

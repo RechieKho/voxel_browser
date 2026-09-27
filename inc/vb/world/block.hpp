@@ -37,6 +37,12 @@ struct BlockType {
 	// flow -- the engine ships no accrual/heal policy, that's entirely Lua's
 	// call via vb.on("block_break_tick"/"block_health_tick", ...).
 	std::uint16_t max_damage = 0;
+	// Phase 6.5 (spec §10.7/§5.2): optional pack-relative path to a
+	// kStages-frame crack-stage spritesheet (vb::render::CrackAtlas::kStages
+	// equal-width square frames, laid out left to right), synced like any
+	// other asset. Empty = the engine's own built-in generic crack overlay --
+	// same "default + override" posture as `texture` itself.
+	std::string crack_texture;
 	// Phase 6.9 (spec §11.1): how many of this item combine into one
 	// inventory slot before player:give() starts a new one. Non-stackable
 	// items (tools) should override this to 1.
@@ -92,6 +98,11 @@ public:
 	// solid/opaque/liquid/etc back to whatever it happened to also pass. A
 	// no-op if `id` is out of range.
 	void set_texture(core::BlockId id, std::string texture);
+
+	// Same posture as set_texture(), for `crack_texture` -- a pack
+	// re-declaring an already-registered block purely to attach a crack
+	// override must not disturb any other field add_or_get already froze.
+	void set_crack_texture(core::BlockId id, std::string crack_texture);
 
 	std::size_t size() const { return types_.size(); }
 	bool contains(core::BlockId id) const {

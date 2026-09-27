@@ -1600,7 +1600,13 @@ std::vector<std::string> ClientSession::take_chat_messages() {
 void ClientSession::apply_block_registry(const protocol::S2CBlockRegistry &msg) {
 	world::BlockRegistry reg;
 	for (const auto &b : msg.blocks) {
-		reg.add({ b.name, b.solid, b.opaque, b.liquid, b.light_emission, b.texture });
+		// Real bug fixed here (same class as src/server/main.cpp's and
+		// src/client/main.cpp's own copy of it): this aggregate-init used to
+		// list only the first 6 of BlockType's fields, so max_damage/
+		// crack_texture never survived onto the client's own mirrored
+		// registry even after S2CBlockRegistry itself started carrying them.
+		reg.add({ b.name, b.solid, b.opaque, b.liquid, b.light_emission, b.texture,
+				b.max_damage, b.crack_texture });
 	}
 	VB_INFO("net", "received block registry (", msg.blocks.size(), " blocks)");
 	chunks_.set_registry(std::move(reg));

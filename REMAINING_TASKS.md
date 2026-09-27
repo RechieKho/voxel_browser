@@ -396,11 +396,57 @@ Full detail: `remaining_tasks/phase6.md`.
       `nullopt`. A default generic crack overlay (a darkening cube over the
       targeted block) ships alongside it. See `remaining_tasks/phase6.md`
       6.5's own writeup for the full detail.
-- [ ] Real crack-stage texture art + `crack_texture` override — 6.5's last
-      remaining piece, unblocked by the above but not attempted this pass
-      (real asset-pipeline work: a pack-supplied texture replicated to the
-      client and sampled onto the targeted block's faces, not just a flat
-      darkening default).
+- [x] Real crack-stage texture art + `crack_texture` override — landed
+      2026-09-27, closing 6.5 in full. Protocol bumped **25 -> 26**:
+      `BlockRegistryRecord` (`S2C_BlockRegistry`) gains `string
+      crack_texture`, mirroring `vb::world::BlockType::crack_texture` (new
+      field; `BlockRegistry::set_crack_texture()` mirrors `set_texture()`'s
+      "attach without disturbing other already-frozen fields" posture for a
+      pack re-declaring an existing block). `vb.register_block{crack_texture
+      =...}` (`pack_runtime.cpp`) wires it through the same way `texture` is.
+      New `vb::render::CrackAtlas` (`inc/vb/render/crack_atlas.hpp`, pure
+      `build()`/GPU `upload()` split like `TextureAtlas`): one shared row of
+      `kStages` (8) cells holds the engine's own procedurally-generated
+      default crack pattern (deterministic per-stage line drawing, no art
+      tools in this environment); a block with a valid `crack_texture` (a
+      real `kStages`-frame spritesheet, decoded and sliced) gets its own
+      extra row instead — a wrong-shaped or undecodable override falls back
+      to the shared default row rather than failing pack load. New
+      `vb::render::CrackOverlay` (GPU-only, not unit tested) replaces the old
+      flat translucent-cube overlay in `src/client/main.cpp`'s `kPlaying`
+      draw block: a persistent unit cube mesh whose texcoords are remapped
+      into the resolved `CrackAtlas` rect (re-uploaded to the GPU only when
+      the rect actually changes, not every frame) and drawn with the atlas
+      texture bound, alpha still climbing with `break_progress` for the same
+      "more damaged reads as more visible" cue the flat cube gave. **Real
+      pre-existing bug found and fixed in the same pass, unrelated to
+      `crack_texture` itself:** all three call sites that build or apply a
+      `BlockRegistryRecord` (`src/server/main.cpp`'s and
+      `src/client/main.cpp`'s `host.block_registry` callbacks, and
+      `ClientSession::apply_block_registry()` in `src/net/session.cpp`) used
+      an aggregate-init listing only the record's first 5-6 fields — so
+      `max_damage` (and now `crack_texture`) was silently dropped on every
+      one of these three hops the whole time. In practice this meant no
+      client ever received a real nonzero `max_damage` for any block, so
+      `client.break_progress()` (6.5's 2026-09-27 replication half, just
+      above) was permanently `nullopt` regardless of what a block's real
+      `max_damage` was — caught by a new regression test
+      (`block_registry_test.cpp`) that failed against the unfixed code before
+      the fix, confirming it was real, not theoretical. Verified: full
+      `vb_tests` 363/363 green (8 new cases: a `block_registry_test.cpp`
+      end-to-end regression case for the bug above, 2 `pack_runtime_test.cpp`
+      cases for `crack_texture=`'s re-declare-attach and stored/default-empty
+      behavior, a `protocol_test.cpp` round-trip case, and a new
+      `crack_atlas_test.cpp` covering `CrackAtlas::build`'s default-row/
+      override-row/wrong-shape-fallback/missing-from-vfs-fallback/stage-
+      clamping behavior), clean `-Werror` build of `vb_tests`/
+      `voxel_browser`/`voxel_browser_server` (temporarily reconfigured
+      `build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`, confirmed clean,
+      reconfigured back to this dir's OFF default afterward). The actual
+      rendered crack-stage overlay (a human punching a block and watching a
+      real textured crack pattern darken/progress on it) was **not** manually
+      eyeballed — no GUI in this agent environment, same still-open caveat as
+      every other rendering-adjacent pass in this file.
 - [x] Movement/action key bindings extended into the 6.3 keybind registry
       (6.19) — `move_forward`/`move_back`/`move_left`/`move_right`/`jump`/
       `sprint`/`primary`/`secondary` are pre-registered by every

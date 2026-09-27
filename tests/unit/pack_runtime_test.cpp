@@ -103,6 +103,37 @@ TEST_CASE("vb.register_block{texture=...} re-declaring an existing block attache
 	CHECK_FALSE(registry.is_liquid(stone));
 }
 
+TEST_CASE("vb.register_block{crack_texture=...} re-declaring an existing block attaches it "
+		  "without resetting fields it doesn't mention (mirrors texture= exactly, REMAINING_TASKS 6.5)") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("register_crack_texture_existing"));
+
+	REQUIRE(rt.load_pack_file(R"(
+		vb.register_block({ name = "base:stone", solid = true, opaque = true,
+			liquid = false, light = 0, crack_texture = "textures/stone_crack.png" })
+	)"));
+
+	const auto stone = registry.find("base:stone");
+	CHECK(stone == vb::world::base_block::stone);
+	CHECK(registry.get(stone).crack_texture == "textures/stone_crack.png");
+	CHECK(registry.is_solid(stone));
+}
+
+TEST_CASE("vb.register_block{crack_texture=...} is stored and defaults to empty") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("register_crack_texture"));
+
+	REQUIRE(rt.load_pack_file(R"(
+		vb.register_block({ name = "test:cracked", crack_texture = "textures/cracked_crack.png" })
+		vb.register_block({ name = "test:plain" })
+	)"));
+
+	CHECK(registry.get(registry.find("test:cracked")).crack_texture == "textures/cracked_crack.png");
+	CHECK(registry.get(registry.find("test:plain")).crack_texture.empty());
+}
+
 TEST_CASE("vb.register_block{texture=...} is stored and defaults to empty (real texture/atlas system)") {
 	vb::net::LoopbackNetwork net;
 	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();

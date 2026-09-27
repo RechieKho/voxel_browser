@@ -33,6 +33,8 @@ struct BlockType {
                                   // damage-pool breaking, see §10.7
     TextureRef    crack_texture; // optional; unset falls back to the engine's
                                   // default generic crack atlas, see §10.7
+                                  // (landed 2026-09-27 as vb::render::
+                                  // CrackAtlas/CrackOverlay)
 };
 ```
 

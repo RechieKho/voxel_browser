@@ -269,8 +269,8 @@ integration.
 pool, not instant break — multiple players contribute concurrently, the
 engine ships **zero built-in accrual/heal policy** (entirely `block_break_tick`/
 `block_health_tick` handlers' call), and renders one baseline generic crack
-overlay by default (override via `crack_texture`) once the texture/atlas
-system lands. Full state-machine detail: see the scripting doc.
+overlay by default (override via `crack_texture`, landed 2026-09-27). Full
+state-machine detail: see the scripting doc.
 
 Full API tables, the block-break-event-flow walkthrough, and the complete
 block-damage design: `architecture_spec/scripting.md`.

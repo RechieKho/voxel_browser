@@ -1081,6 +1081,9 @@ void PackRuntime::Impl::install_bindings() {
 		type.texture = def.get_or("texture", std::string{});
 		// Phase 6.5 (spec §10.7): 0 (default) = today's instant break.
 		type.max_damage = static_cast<std::uint16_t>(def.get_or("max_damage", 0));
+		// Phase 6.5 (spec §5.2/§10.7): optional crack-stage spritesheet
+		// override, empty = engine's own built-in generic crack overlay.
+		type.crack_texture = def.get_or("crack_texture", std::string{});
 		// Phase 6.9 (spec §11.1): stack cap for this item, engine default
 		// unless overridden.
 		type.max_stack = static_cast<std::uint16_t>(
@@ -1098,6 +1101,9 @@ void PackRuntime::Impl::install_bindings() {
 		// Phase 2 block purely to attach a texture.
 		if (!type.texture.empty()) {
 			registry.set_texture(id, type.texture);
+		}
+		if (!type.crack_texture.empty()) {
+			registry.set_crack_texture(id, type.crack_texture);
 		}
 		auto it = std::find_if(blocks.begin(), blocks.end(),
 				[&](const BlockDef &b) { return b.name == name; });

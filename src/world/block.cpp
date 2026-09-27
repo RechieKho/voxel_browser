@@ -45,6 +45,13 @@ void BlockRegistry::set_texture(core::BlockId id, std::string texture) {
 	}
 }
 
+void BlockRegistry::set_crack_texture(core::BlockId id, std::string crack_texture) {
+	const auto idx = static_cast<std::size_t>(id);
+	if (idx < types_.size()) {
+		types_[idx].crack_texture = std::move(crack_texture);
+	}
+}
+
 const BlockType &BlockRegistry::get(core::BlockId id) const { return prop(id); }
 
 const BlockType &BlockRegistry::prop(core::BlockId id) const {

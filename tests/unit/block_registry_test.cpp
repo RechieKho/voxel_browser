@@ -54,6 +54,40 @@ TEST_CASE("server sends a custom block registry and the client applies it") {
 	CHECK(reg.is_solid(glow_id));
 }
 
+TEST_CASE("server sends max_damage and crack_texture and the client applies "
+		"both (regression: these two fields used to be silently dropped by "
+		"src/server/main.cpp's/src/client/main.cpp's own aggregate-init)") {
+	LoopbackNetwork net;
+	HandshakeServerConfig cfg;
+	HandshakeServerHost host;
+	host.block_registry =
+			[]() -> std::optional<std::vector<vb::protocol::BlockRegistryRecord>> {
+		vb::protocol::BlockRegistryRecord ore;
+		ore.name = "test:ore";
+		ore.solid = true;
+		ore.opaque = true;
+		ore.max_damage = 6;
+		ore.crack_texture = "textures/ore_crack.png";
+		return std::vector<vb::protocol::BlockRegistryRecord>{ { "base:air", false, false, false, 0 }, ore };
+	};
+	ServerSession server(net.server(), cfg, host);
+	REQUIRE(net.server().listen(0));
+
+	Transport &t = net.create_client();
+	auto id = t.connect("x", 0);
+	REQUIRE(id);
+	ClientSession client(t, *id, HandshakeClientConfig{ "P", "", "v", 1 });
+
+	pump(server, client, 10);
+	REQUIRE(client.joined());
+
+	const auto &reg = client.chunk_store().registry();
+	const auto ore_id = reg.find("test:ore");
+	REQUIRE(ore_id != vb::core::BlockId::kAir);
+	CHECK(reg.get(ore_id).max_damage == 6);
+	CHECK(reg.get(ore_id).crack_texture == "textures/ore_crack.png");
+}
+
 TEST_CASE("without a block_registry hook, the client keeps its own base() "
 		"registry") {
 	LoopbackNetwork net;

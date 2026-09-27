@@ -262,14 +262,19 @@ TEST_CASE("block registry round-trips, including an empty list") {
 	// Real texture/atlas system: a pack-relative texture path round-trips too.
 	reg.blocks.push_back({ .name = "test:stone", .solid = true, .opaque = true, .liquid = false,
 			.texture = "textures/stone.png" });
+	// crack_texture (6.5's last piece): also round-trips.
+	reg.blocks.push_back({ .name = "test:ore", .solid = true, .opaque = true, .liquid = false,
+			.max_damage = 6, .crack_texture = "textures/ore_crack.png" });
 	auto r2 = round_trip(reg);
-	REQUIRE(r2.blocks.size() == 5);
+	REQUIRE(r2.blocks.size() == 6);
 	CHECK(r2.blocks[0].name == "base:air");
 	CHECK_FALSE(r2.blocks[0].solid);
 	CHECK(r2.blocks[2].name == "test:glow");
 	CHECK(r2.blocks[2].light_emission == 15);
 	CHECK(r2.blocks[3].max_damage == 5); // Phase 6.5
 	CHECK(r2.blocks[4].texture == "textures/stone.png");
+	CHECK(r2.blocks[4].crack_texture.empty());
+	CHECK(r2.blocks[5].crack_texture == "textures/ore_crack.png");
 	CHECK(r2.blocks == reg.blocks);
 }
 
