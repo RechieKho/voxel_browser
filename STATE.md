@@ -20,7 +20,44 @@
 
 ## Current status (2026-09-27)
 
-**Phase 7.5's override half: `vb.render.set_fog{underwater_tint=}`,
+**Migrated the player list / chat log / hotbar HUD off hardcoded C++ into
+`ui.define_hud`** (REMAINING_TASKS' Phase 6.16 gap). New `WidgetType::kText`
+(`inc/vb/script/ui_runtime.hpp`) is a raw, colored, alignable text-draw
+primitive — `kLabel` goes through raygui's `GuiLabel`, which has no color
+parameter at all, so it couldn't reproduce the old green own-name / gray
+others-name distinction. Alignment (`left`/`center`/`right`, a new field on
+`Widget`) exists specifically because `vb::script::UiRuntime` has no raylib
+dependency and can't call `MeasureText` itself to right-align text (the old
+player list was right-aligned against the screen edge) — that measurement
+happens in `vb::render::UiRenderer::draw()` (`src/render/ui_renderer.cpp`,
+already raylib-linked) instead; `align` just tells it which anchor `x` means.
+Six new read-only `client.*` accessors (`player_name`, `players`, `chat_log`,
+`chat_open`, `inventory`, `selected_slot`) mirror the existing
+`client.break_progress()`/`client.screen_size()` shape, fed by three new
+`UiRuntime` setters (`set_player_list`/`set_chat`/`set_inventory`) called
+once per frame from `src/client/main.cpp` right next to the pre-existing
+`set_break_progress`/`set_screen_size` calls. `content/base/ui/hud.lua` grew
+three widget-building functions (`push_player_list`/`push_chat_log`/
+`push_hotbar`) that reproduce the old hardcoded layout pixel-for-pixel (same
+colors, same positions, same selected-slot outline logic) using `rect`/
+`text` widgets instead of direct `DrawText`/`DrawRectangle` calls.
+**Deliberately left alone:** the chat **input box** itself (typing,
+Enter-to-send) — that's real keyboard text-entry capture via a plain
+`GuiTextBox`, same posture as `MainMenu`, and was already explicitly scoped
+out of `UiRuntime` before this pass (its own comment said so); this pass
+didn't touch that scope decision. No new interactive HUD widgets were added
+either, so REMAINING_TASKS' separate "`report_click`/`report_change` not
+wired to HUD widgets" item is still open — nothing here needed it. Verified:
+full `vb_tests` 350/350 green (no test loads `content/base/ui/hud.lua`
+directly — it's client-runtime-only, never exercised by a unit test, same as
+every other Lua UI file in this codebase), clean build of `vb_tests`/
+`voxel_browser`/`voxel_browser_server` on `build-net-lua`. The actual
+rendered HUD (a human confirming the player list/chat/hotbar still look
+exactly as before) was **not** manually eyeballed — no GUI in this agent
+environment, same still-open caveat as every other rendering-adjacent pass
+in this file.
+
+Before that, most recent landed item was **Phase 7.5's override half: `vb.render.set_fog{underwater_tint=}`,
 closing REMAINING_TASKS' last open Phase 7 item (7.1-7.6 are now all done).**
 7.5's *default* (submerged liquid's own texture-average color) landed
 2026-09-23 alongside the real texture/atlas system; the override half was

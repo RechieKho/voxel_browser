@@ -72,6 +72,24 @@ UiFrameResult UiRenderer::draw(std::string_view ui_name,
 				}
 				break;
 			}
+			case script::WidgetType::kText: {
+				// Raw, non-raygui text draw (Phase 6.16 follow-up): the only
+				// primitive here that needs raylib's MeasureText, which is
+				// exactly why it lives in this raylib-linked layer rather
+				// than vb::script::UiRuntime -- `x` is the anchor `align`
+				// is relative to, not always the left edge Lua would
+				// otherwise have to guess by pre-measuring text width itself.
+				const int text_w = MeasureText(w.text.c_str(), w.font_size);
+				float draw_x = w.x;
+				if (w.align == script::TextAlign::kRight) {
+					draw_x = w.x - static_cast<float>(text_w);
+				} else if (w.align == script::TextAlign::kCenter) {
+					draw_x = w.x - static_cast<float>(text_w) / 2.0f;
+				}
+				DrawText(w.text.c_str(), static_cast<int>(draw_x), static_cast<int>(w.y),
+						w.font_size, Color{ w.fill_r, w.fill_g, w.fill_b, w.fill_a });
+				break;
+			}
 			case script::WidgetType::kList: {
 				std::vector<const char *> items;
 				items.reserve(w.items.size());

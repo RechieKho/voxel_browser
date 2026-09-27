@@ -39,6 +39,9 @@ void UiRuntime::report_change(const std::string &, std::string_view) {}
 void UiRuntime::report_list_change(const std::string &, int) {}
 void UiRuntime::set_break_progress(std::optional<float>) {}
 void UiRuntime::set_screen_size(int, int) {}
+void UiRuntime::set_player_list(std::string, std::vector<std::string>) {}
+void UiRuntime::set_chat(std::vector<std::string>, bool) {}
+void UiRuntime::set_inventory(std::vector<InventorySlotView>, int) {}
 const std::vector<Widget> &UiRuntime::render_hud() {
 	static const std::vector<Widget> kEmpty;
 	return kEmpty;
@@ -151,6 +154,9 @@ WidgetType widget_type_from(const std::string &s) {
 	if (s == "rect") {
 		return WidgetType::kRect;
 	}
+	if (s == "text") {
+		return WidgetType::kText;
+	}
 	if (s != "label") {
 		VB_WARN("script", "ui: unknown widget type '", s, "', treating as label");
 	}
@@ -178,10 +184,24 @@ Widget widget_from_table(const sol::table &wt) {
 			}
 		}
 	}
-	// kRect only: `color = {r,g,b,a?}` (fill, default opaque white) and an
-	// optional `border = {r,g,b,a?}` (default fully transparent -- no
-	// border drawn). 1-indexed like every other Lua color array in this
-	// codebase (vb.daynight.set_curve's `color = {r,g,b}`).
+	// kText only: `font_size` (default 16) and `align` ("left"/"center"/
+	// "right", default "left" -- see TextAlign's own comment for why this
+	// is a raw parameter rather than the engine guessing pixel widths for
+	// Lua).
+	w.font_size = wt.get_or("font_size", 16);
+	const std::string align_str = wt.get_or("align", std::string("left"));
+	if (align_str == "right") {
+		w.align = TextAlign::kRight;
+	} else if (align_str == "center") {
+		w.align = TextAlign::kCenter;
+	} else {
+		w.align = TextAlign::kLeft;
+	}
+
+	// kRect/kText: `color = {r,g,b,a?}` (fill, default opaque white) and an
+	// optional `border = {r,g,b,a?}` (kRect only; default fully transparent
+	// -- no border drawn). 1-indexed like every other Lua color array in
+	// this codebase (vb.daynight.set_curve's `color = {r,g,b}`).
 	sol::object color_obj = wt["color"];
 	if (color_obj.get_type() == sol::type::table) {
 		sol::table c = color_obj.as<sol::table>();
@@ -233,6 +253,17 @@ struct UiRuntime::Impl {
 	// this. Zero until the first set_screen_size() call.
 	int screen_w = 0;
 	int screen_h = 0;
+
+	// Player list / chat / hotbar raw state (see the header's own comments
+	// on the set_* calls below) -- read via client.player_name()/
+	// client.players()/client.chat_log()/client.chat_open()/
+	// client.inventory()/client.selected_slot().
+	std::string own_player_name;
+	std::vector<std::string> other_player_names;
+	std::vector<std::string> chat_log;
+	bool chat_open = false;
+	std::vector<UiRuntime::InventorySlotView> inventory;
+	int selected_slot = 1;
 
 	explicit Impl(VmLimits limits);
 
@@ -300,6 +331,36 @@ void UiRuntime::Impl::install_bindings() {
 		t["height"] = screen_h;
 		return t;
 	};
+	client_tbl["player_name"] = [this]() -> std::string { return own_player_name; };
+	client_tbl["players"] = [this]() -> sol::table {
+		sol::table t = lua_state().create_table();
+		int i = 1;
+		for (const auto &name : other_player_names) {
+			t[i++] = name;
+		}
+		return t;
+	};
+	client_tbl["chat_log"] = [this]() -> sol::table {
+		sol::table t = lua_state().create_table();
+		int i = 1;
+		for (const auto &line : chat_log) {
+			t[i++] = line;
+		}
+		return t;
+	};
+	client_tbl["chat_open"] = [this]() -> bool { return chat_open; };
+	client_tbl["inventory"] = [this]() -> sol::table {
+		sol::table t = lua_state().create_table();
+		int i = 1;
+		for (const auto &slot : inventory) {
+			sol::table entry = lua_state().create_table();
+			entry["name"] = slot.name;
+			entry["count"] = slot.count;
+			t[i++] = entry;
+		}
+		return t;
+	};
+	client_tbl["selected_slot"] = [this]() -> int { return selected_slot; };
 }
 
 void UiRuntime::Impl::evaluate_frame() {
@@ -500,6 +561,21 @@ void UiRuntime::set_break_progress(std::optional<float> fraction) {
 void UiRuntime::set_screen_size(int width, int height) {
 	impl_->screen_w = width;
 	impl_->screen_h = height;
+}
+
+void UiRuntime::set_player_list(std::string own_name, std::vector<std::string> other_names) {
+	impl_->own_player_name = std::move(own_name);
+	impl_->other_player_names = std::move(other_names);
+}
+
+void UiRuntime::set_chat(std::vector<std::string> log, bool chat_open) {
+	impl_->chat_log = std::move(log);
+	impl_->chat_open = chat_open;
+}
+
+void UiRuntime::set_inventory(std::vector<InventorySlotView> slots, int selected_slot) {
+	impl_->inventory = std::move(slots);
+	impl_->selected_slot = selected_slot;
 }
 
 const std::vector<Widget> &UiRuntime::render_hud() {

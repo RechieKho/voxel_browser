@@ -1374,6 +1374,35 @@ int main(int argc, char **argv) {
 				ui_runtime.set_break_progress(std::nullopt);
 				ui_runtime.set_screen_size(GetScreenWidth(), GetScreenHeight());
 
+				// Same posture, for the 3 pieces of always-on HUD content
+				// that used to be drawn directly by this file (Phase 6.16
+				// follow-up, closes REMAINING_TASKS' "player list / chat box
+				// / hotbar are still hardcoded C++" item) -- content/base/
+				// ui/hud.lua now decides how (or whether) to show these.
+				{
+					std::vector<std::string> other_names;
+					other_names.reserve(client->players().size());
+					for (const auto &[id, name] : client->players()) {
+						(void)id;
+						other_names.push_back(name);
+					}
+					ui_runtime.set_player_list(config.player_name, std::move(other_names));
+				}
+				ui_runtime.set_chat({ chat_log.begin(), chat_log.end() }, chat_open);
+				{
+					const auto &inv = client->inventory();
+					const auto &registry = client->chunk_store().registry();
+					std::vector<vb::script::UiRuntime::InventorySlotView> slots;
+					slots.reserve(inv.size());
+					for (const auto &slot : inv) {
+						std::string name = registry.contains(slot.item)
+								? registry.get(slot.item).name
+								: "?";
+						slots.push_back({ std::move(name), slot.count });
+					}
+					ui_runtime.set_inventory(std::move(slots), selected_slot + 1);
+				}
+
 				std::size_t chunk_count = 0;
 				std::size_t entity_count = 0;
 				if (chunk_renderer) {
@@ -1498,98 +1527,21 @@ int main(int argc, char **argv) {
 				// itself no longer draws a single pixel of it.
 				hud_renderer.draw("hud", ui_runtime.render_hud());
 
-				// Player list (spec §5.4): top-right, this client's name plus
-				// everyone S2C_PlayerList/S2C_PlayerJoin/S2C_PlayerLeave says
-				// is currently playing. Always visible (no toggle key --
-				// keeping it simple and avoiding a clash with Tab, already
-				// bound to mouse-capture release).
-				{
-					const auto &players = client->players();
-					const int line_h = 18;
-					int y = 12;
-					char header[64];
-					std::snprintf(header, sizeof(header), "players (%zu)",
-							players.size() + 1);
-					const int text_w = MeasureText(header, 16);
-					DrawText(header, GetScreenWidth() - text_w - 12, y, 16,
-							Color{ 200, 200, 210, 230 });
-					y += line_h;
-					if (!config.player_name.empty()) {
-						const int name_w = MeasureText(config.player_name.c_str(), 16);
-						DrawText(config.player_name.c_str(),
-								GetScreenWidth() - name_w - 12, y, 16,
-								Color{ 170, 220, 170, 230 });
-						y += line_h;
-					}
-					for (const auto &[id, name] : players) {
-						(void)id;
-						const int name_w = MeasureText(name.c_str(), 16);
-						DrawText(name.c_str(), GetScreenWidth() - name_w - 12, y, 16,
-								Color{ 200, 200, 210, 230 });
-						y += line_h;
-					}
-				}
-
-				// Chat HUD (spec §5.4): a bottom-left scrolling log, plus an
-				// Enter-to-open input box (plain raygui, no Lua -- same
-				// posture as MainMenu, not a UiRuntime widget).
-				{
+				// The player list, chat log, and hotbar used to be drawn
+				// directly here; they're now content/base/ui/hud.lua widgets
+				// (client.players()/client.chat_log()/client.inventory(),
+				// set above), drawn by the render_hud() call right above.
+				// Only the chat *input box* stays here: real keyboard
+				// text-entry capture, plain raygui like MainMenu, never a
+				// UiRuntime widget (spec §5.4's own deliberate scope).
+				if (chat_open) {
 					const int line_h = 18;
 					const int box_bottom = GetScreenHeight() - 16;
-					int y = box_bottom -
-							(chat_open ? (line_h + 8) : 0) -
-							static_cast<int>(chat_log.size()) * line_h;
-					for (const std::string &line : chat_log) {
-						DrawText(line.c_str(), 12, y, 16, Color{ 220, 220, 220, 230 });
-						y += line_h;
-					}
-					if (chat_open) {
-						chat_buf.resize(kChatBufferSize, '\0');
-						GuiTextBox(Rectangle{ 12.0f, static_cast<float>(box_bottom - line_h),
-										   360.0f, static_cast<float>(line_h + 4) },
-								chat_buf.data(), kChatBufferSize, true);
-						chat_buf.resize(std::strlen(chat_buf.c_str()));
-					}
-				}
-
-				// Hotbar (spec §5.1): a real inventory sync now exists
-				// (S2C_Inventory) -- renders every slot the server last sent,
-				// bottom-center, block name + count, outlining whichever slot
-				// number keys 1-9 selected (entity-management follow-up, above).
-				// Textures/atlas (5.1's own deferred item) aren't wired to
-				// anything client-side yet, so this is text-only like
-				// ui/inventory.lua's own known gap.
-				{
-					const auto &inv = client->inventory();
-					if (!inv.empty()) {
-						const auto &registry = client->chunk_store().registry();
-						constexpr int kSlotW = 96;
-						constexpr int kSlotH = 40;
-						constexpr int kGap = 6;
-						const int total_w = static_cast<int>(inv.size()) * (kSlotW + kGap) - kGap;
-						int x = (GetScreenWidth() - total_w) / 2;
-						const int y = GetScreenHeight() - kSlotH - 16;
-						for (std::size_t slot_idx = 0; slot_idx < inv.size(); ++slot_idx) {
-							const auto &slot = inv[slot_idx];
-							DrawRectangle(x, y, kSlotW, kSlotH, Color{ 30, 30, 34, 200 });
-							// Entity-management follow-up: outline whichever slot
-							// number keys 1-9 currently selected, so a player can
-							// see what player:get_held_item() will resolve to.
-							const bool selected =
-									slot_idx == static_cast<std::size_t>(selected_slot);
-							DrawRectangleLines(x, y, kSlotW, kSlotH,
-									selected ? Color{ 230, 220, 120, 255 }
-											 : Color{ 90, 90, 100, 230 });
-							std::string name = registry.contains(slot.item)
-									? registry.get(slot.item).name
-									: "?";
-							char line[64];
-							std::snprintf(line, sizeof(line), "%s x%u", name.c_str(),
-									static_cast<unsigned>(slot.count));
-							DrawText(line, x + 6, y + 12, 14, Color{ 220, 220, 220, 230 });
-							x += kSlotW + kGap;
-						}
-					}
+					chat_buf.resize(kChatBufferSize, '\0');
+					GuiTextBox(Rectangle{ 12.0f, static_cast<float>(box_bottom - line_h),
+									   360.0f, static_cast<float>(line_h + 4) },
+							chat_buf.data(), kChatBufferSize, true);
+					chat_buf.resize(std::strlen(chat_buf.c_str()));
 				}
 
 				if (ui_runtime.is_open()) {

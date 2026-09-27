@@ -41,17 +41,39 @@ enum class WidgetType : std::uint8_t {
 	// box at (x, y, w, h) in `fill_*`, plus a 1px outline in `border_*` when
 	// `border_a > 0`.
 	kRect,
+	// A raw, non-raygui text draw (Phase 6.16 follow-up: migrating the
+	// player list / chat log / hotbar off hardcoded engine drawing needed a
+	// colored, alignable text primitive -- kLabel goes through raygui's
+	// GuiLabel, which has no color parameter at all). Text metrics (needed
+	// for `align`) require raylib's MeasureText, which vb::script doesn't
+	// (and shouldn't) depend on -- that measurement happens in the
+	// raylib-linked render layer (vb::render::UiRenderer), not here; this
+	// struct only carries the request.
+	kText,
+};
+
+// kText only: `x` is the anchor edge/point `align` is relative to, not
+// always the left edge (mirrors how a pack picks between anchoring a widget
+// by its left edge vs. wanting it centered/right-aligned without knowing the
+// rendered text's pixel width up front, e.g. right-aligning the player list
+// against the screen edge).
+enum class TextAlign : std::uint8_t {
+	kLeft,
+	kCenter,
+	kRight,
 };
 
 struct Widget {
 	std::string id;
 	WidgetType type = WidgetType::kLabel;
 	float x = 0, y = 0, w = 0, h = 0;
-	std::string text; // label/panel/button text; textbox initial value
+	std::string text; // label/panel/button text; textbox initial value; kText content
 	std::vector<std::string> items; // list only
 	int list_index = -1; // list only
-	std::uint8_t fill_r = 255, fill_g = 255, fill_b = 255, fill_a = 255; // kRect only
+	std::uint8_t fill_r = 255, fill_g = 255, fill_b = 255, fill_a = 255; // kRect/kText color
 	std::uint8_t border_r = 0, border_g = 0, border_b = 0, border_a = 0; // kRect only; alpha 0 = no border
+	int font_size = 16; // kText only
+	TextAlign align = TextAlign::kLeft; // kText only
 };
 
 class UiRuntime {
@@ -130,6 +152,40 @@ public:
 	// absolute pixel positions (same as modal screens), so a HUD wanting to
 	// center something needs this raw value rather than a hardcoded guess.
 	void set_screen_size(int width, int height);
+
+	// The remaining set_* calls below (player list, chat, inventory) close
+	// REMAINING_TASKS.md's "player list / chat box / hotbar are still
+	// hardcoded C++, not migrated to ui.define_hud" gap -- same "engine
+	// provides raw state, Lua decides presentation" posture as
+	// break_progress/screen_size above, just for the 3 other pieces of
+	// always-on HUD content src/client/main.cpp used to draw directly.
+
+	// Sets the state `client.player_name()`/`client.players()` read back --
+	// `own_name` is this client's own name (drawn distinctly, matching the
+	// old hardcoded green), `other_names` every other currently-playing
+	// player's name in `S2C_PlayerList`/join/leave order. Neither list
+	// includes the other.
+	void set_player_list(std::string own_name, std::vector<std::string> other_names);
+
+	// Sets the state `client.chat_log()`/`client.chat_open()` read back.
+	// `chat_open` doesn't mean the HUD should draw the input box itself --
+	// that's still a plain raygui `GuiTextBox` in src/client/main.cpp, not a
+	// UiRuntime widget (real keyboard text-entry capture, same posture as
+	// MainMenu) -- a HUD needs it only to know whether to leave room for it.
+	void set_chat(std::vector<std::string> log, bool chat_open);
+
+	// One resolved (name already looked up against the block registry, this
+	// module has no registry access) inventory slot, for
+	// `client.inventory()`.
+	struct InventorySlotView {
+		std::string name;
+		std::uint32_t count = 0;
+	};
+
+	// Sets the state `client.inventory()`/`client.selected_slot()` read
+	// back. `selected_slot` is 1-based, matching every other Lua-visible
+	// slot index in this codebase (`PlayerHandle::get_selected_slot()`).
+	void set_inventory(std::vector<InventorySlotView> slots, int selected_slot);
 
 	// Evaluates the registered HUD render_fn (no-op, returning the last --
 	// likely empty -- list if none was ever registered via

@@ -408,8 +408,41 @@ Full detail: `remaining_tasks/phase6.md`.
       is fully closed.
 - [ ] HUD widgets aren't wired to `report_click`/`report_change` (display-only
       for now) — 6.16.
-- [ ] Player list / chat box / hotbar are still hardcoded C++, not migrated
-      to `ui.define_hud` — 6.16.
+- [x] Player list / chat log / hotbar migrated off hardcoded C++ into
+      `ui.define_hud` — landed 2026-09-27. New `WidgetType::kText` (`inc/vb/
+      script/ui_runtime.hpp`) is a raw, colored, alignable text draw —
+      distinct from `kLabel`, which goes through raygui's un-colorable
+      `GuiLabel` — with an `align` (`left`/`center`/`right`) field so Lua can
+      right-align/center text without being able to measure its own pixel
+      width; the actual `MeasureText` call for that lives in
+      `vb::render::UiRenderer::draw()` (`src/render/ui_renderer.cpp`), the
+      raylib-linked layer, not `vb::script::UiRuntime`, which has no raylib
+      dependency. Six new `client.*` read-only accessors mirror the existing
+      `client.break_progress()`/`client.screen_size()` pattern:
+      `player_name()`, `players()`, `chat_log()`, `chat_open()`,
+      `inventory()`, `selected_slot()` — set once per frame from
+      `src/client/main.cpp` via three new `UiRuntime` setters
+      (`set_player_list`/`set_chat`/`set_inventory`) right next to the
+      existing `set_break_progress`/`set_screen_size` calls.
+      `content/base/ui/hud.lua` now composes the player list (top-right,
+      own name in green), the chat scrollback log (bottom-left), and the
+      hotbar (bottom-center, selected-slot outline) itself out of `rect`/
+      `text` widgets, replicating the old hardcoded layout exactly. The chat
+      **input box** (typing, Enter-to-send) deliberately stays a plain
+      `GuiTextBox` in `src/client/main.cpp` — real keyboard text-entry
+      capture, same posture as `MainMenu`, never a `UiRuntime` widget (this
+      was the file's own pre-existing scope note, unchanged by this pass).
+      No new interactive HUD widgets were added, so `report_click`/
+      `report_change` HUD wiring (the item directly above) is still its own
+      separate `[ ]` — nothing in this pass needed it. Verified: full
+      `vb_tests` 350/350 green (no test exercises `content/base/ui/hud.lua`
+      directly — it's evaluated only at real client runtime, same
+      never-been-eyeballed caveat as every other rendering-adjacent item
+      here), clean build of `vb_tests`/`voxel_browser`/
+      `voxel_browser_server` on `build-net-lua`. The actual rendered result
+      (a human watching the player list/chat/hotbar draw identically to
+      before) was **not** manually eyeballed — no GUI in this agent
+      environment.
 - [ ] No punch-rate cooldown enforced engine-side; no swing animation; PvP has
       no armor/cooldown/knockback — 6.18, deliberate scope cuts.
 - [x] Held item / hotbar selection — landed 2026-09-25 (entity-management
