@@ -46,6 +46,9 @@ const std::vector<Widget> &UiRuntime::render_hud() {
 	static const std::vector<Widget> kEmpty;
 	return kEmpty;
 }
+void UiRuntime::report_hud_click(const std::string &) {}
+void UiRuntime::report_hud_change(const std::string &, std::string_view) {}
+void UiRuntime::report_hud_list_change(const std::string &, int) {}
 
 } // namespace vb::script
 
@@ -243,6 +246,12 @@ struct UiRuntime::Impl {
 	sol::protected_function hud_render_fn;
 	sol::table hud_state;
 	std::vector<Widget> hud_widgets_vec;
+	std::unordered_map<std::string, sol::table> hud_widget_by_id;
+	// Set just before invoking a widget's on_click/on_change callback (either
+	// map above), read by send_event() so a HUD widget's ui.send_event(...)
+	// carries ui_name = "hud" instead of whatever modal screen (or none) is
+	// separately open.
+	bool current_widget_is_hud = false;
 	// Raw engine state a HUD's render_fn can read via client.break_progress()
 	// -- nullopt when the player isn't currently breaking anything. Set once
 	// per frame by src/client/main.cpp's own input-handling code, which
@@ -271,7 +280,8 @@ struct UiRuntime::Impl {
 	void install_bindings();
 	void send_event(const std::string &kind, const sol::object &value);
 	void run_callback(const std::string &widget_id, const char *field,
-			const sol::object &arg, bool has_arg);
+			const sol::object &arg, bool has_arg,
+			std::unordered_map<std::string, sol::table> &widget_map, bool is_hud);
 	void evaluate_frame();
 	void evaluate_hud_frame();
 	void do_close();
@@ -287,7 +297,7 @@ void UiRuntime::Impl::send_event(const std::string &kind, const sol::object &val
 		return;
 	}
 	protocol::C2SUiEvent e;
-	e.ui_name = current_name;
+	e.ui_name = current_widget_is_hud ? "hud" : current_name;
 	e.widget_id = current_widget_id;
 	e.event_kind = kind;
 	e.value_json = lua_to_json(value).dump();
@@ -433,13 +443,19 @@ void UiRuntime::Impl::evaluate_hud_frame() {
 	}
 	sol::table widget_tables = widgets_obj.as<sol::table>();
 
+	hud_widget_by_id.clear();
 	hud_widgets_vec.clear();
 	for (const auto &kv : widget_tables) {
 		sol::object entry = kv.second;
 		if (entry.get_type() != sol::type::table) {
 			continue;
 		}
-		hud_widgets_vec.push_back(widget_from_table(entry.as<sol::table>()));
+		sol::table wt = entry.as<sol::table>();
+		Widget w = widget_from_table(wt);
+		if (!w.id.empty()) {
+			hud_widget_by_id[w.id] = wt;
+		}
+		hud_widgets_vec.push_back(std::move(w));
 	}
 }
 
@@ -465,9 +481,10 @@ void UiRuntime::Impl::do_close() {
 }
 
 void UiRuntime::Impl::run_callback(const std::string &widget_id, const char *field,
-		const sol::object &arg, bool has_arg) {
-	auto it = widget_by_id.find(widget_id);
-	if (it == widget_by_id.end()) {
+		const sol::object &arg, bool has_arg,
+		std::unordered_map<std::string, sol::table> &widget_map, bool is_hud) {
+	auto it = widget_map.find(widget_id);
+	if (it == widget_map.end()) {
 		return;
 	}
 	sol::object cb_obj = it->second[field];
@@ -476,6 +493,7 @@ void UiRuntime::Impl::run_callback(const std::string &widget_id, const char *fie
 	}
 	sol::protected_function cb = cb_obj.as<sol::protected_function>();
 	current_widget_id = widget_id;
+	current_widget_is_hud = is_hud;
 	vm.begin_call_budget();
 	sol::protected_function_result r = has_arg ? cb(arg) : cb();
 	if (!r.valid()) {
@@ -540,18 +558,35 @@ const std::vector<Widget> &UiRuntime::render_frame() {
 const std::vector<Widget> &UiRuntime::widgets() const { return impl_->widgets_vec; }
 
 void UiRuntime::report_click(const std::string &widget_id) {
-	impl_->run_callback(widget_id, "on_click", sol::lua_nil, false);
+	impl_->run_callback(widget_id, "on_click", sol::lua_nil, false,
+			impl_->widget_by_id, false);
 }
 
 void UiRuntime::report_change(const std::string &widget_id,
 		std::string_view text_value) {
 	sol::object v = sol::make_object(impl_->lua_state(), std::string(text_value));
-	impl_->run_callback(widget_id, "on_change", v, true);
+	impl_->run_callback(widget_id, "on_change", v, true, impl_->widget_by_id, false);
 }
 
 void UiRuntime::report_list_change(const std::string &widget_id, int new_index) {
 	sol::object v = sol::make_object(impl_->lua_state(), new_index);
-	impl_->run_callback(widget_id, "on_change", v, true);
+	impl_->run_callback(widget_id, "on_change", v, true, impl_->widget_by_id, false);
+}
+
+void UiRuntime::report_hud_click(const std::string &widget_id) {
+	impl_->run_callback(widget_id, "on_click", sol::lua_nil, false,
+			impl_->hud_widget_by_id, true);
+}
+
+void UiRuntime::report_hud_change(const std::string &widget_id,
+		std::string_view text_value) {
+	sol::object v = sol::make_object(impl_->lua_state(), std::string(text_value));
+	impl_->run_callback(widget_id, "on_change", v, true, impl_->hud_widget_by_id, true);
+}
+
+void UiRuntime::report_hud_list_change(const std::string &widget_id, int new_index) {
+	sol::object v = sol::make_object(impl_->lua_state(), new_index);
+	impl_->run_callback(widget_id, "on_change", v, true, impl_->hud_widget_by_id, true);
 }
 
 void UiRuntime::set_break_progress(std::optional<float> fraction) {

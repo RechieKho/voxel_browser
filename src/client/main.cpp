@@ -1525,7 +1525,16 @@ int main(int argc, char **argv) {
 				// content/base/ui/hud.lua reads client.break_progress() (set
 				// above) and decides whether/how to show it; the engine
 				// itself no longer draws a single pixel of it.
-				hud_renderer.draw("hud", ui_runtime.render_hud());
+				const auto hud_result = hud_renderer.draw("hud", ui_runtime.render_hud());
+				for (const auto &id : hud_result.clicked) {
+					ui_runtime.report_hud_click(id);
+				}
+				for (const auto &[id, text] : hud_result.changed_text) {
+					ui_runtime.report_hud_change(id, text);
+				}
+				for (const auto &[id, idx] : hud_result.changed_list) {
+					ui_runtime.report_hud_list_change(id, idx);
+				}
 
 				// The player list, chat log, and hotbar used to be drawn
 				// directly here; they're now content/base/ui/hud.lua widgets

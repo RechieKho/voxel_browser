@@ -20,7 +20,54 @@
 
 ## Current status (2026-09-27)
 
-**Migrated the player list / chat log / hotbar HUD off hardcoded C++ into
+**Wired HUD widgets to `report_click`/`report_change`/`report_list_change`**
+(REMAINING_TASKS' Phase 6.16 gap: "HUD widgets aren't wired to
+report_click/report_change (display-only for now)"). `vb::render::UiRenderer::
+draw()` already returns a `UiFrameResult` (clicked/changed_text/changed_list)
+generically for *any* widget list passed to it — modal screens and the HUD
+alike — but `src/client/main.cpp`'s `hud_renderer.draw("hud", ...)` call
+discarded that result outright, so a HUD `button`/`textbox`/`list` widget's
+`on_click`/`on_change` Lua callback could never actually fire. Fixed by
+capturing it and routing it through three new `UiRuntime` methods --
+`report_hud_click`/`report_hud_change`/`report_hud_list_change` -- mirroring
+the existing modal-screen `report_click`/`report_change`/`report_list_change`
+exactly, right next to that call in `src/client/main.cpp`.
+**Why not just reuse the existing `report_click` etc.:** those look a widget
+id up in `UiRuntime::Impl::widget_by_id`, a map rebuilt every `render_frame()`
+call for whichever modal screen is currently open (or empty if none is) --
+a HUD's own widgets are never in it, since `evaluate_hud_frame()` populates a
+separate `hud_widgets_vec` with no id map at all. Added the missing
+`hud_widget_by_id` map (built in `evaluate_hud_frame()`, same shape as
+`widget_by_id`) and generalized `Impl::run_callback()` to take *which* map to
+look the id up in, plus a `bool is_hud` used only to pick the right
+`C2S_UiEvent.ui_name` if the callback calls `ui.send_event(...)` -- a HUD
+widget has no modal screen name to attach the event to, so it sends
+`ui_name = "hud"` instead of `current_name` (which is empty when no modal
+screen happens to be open, but must never leak a *stale* modal name if one
+happens to be open at the same time a HUD widget is clicked -- the two are
+otherwise independent by design, per the existing "modal screen opening/
+closing alongside it doesn't reset hud state" test). No protocol change --
+`C2S_UiEvent.ui_name` is already just a free-form string the server hands
+back to `vb.on("ui_event", ...)`, so `"hud"` needs no reservation or special
+casing server-side. Verified: full `vb_tests` 353/353 green (3 new
+`ui_runtime_test.cpp` cases -- `report_hud_click`/`report_hud_change`/
+`report_hud_list_change` firing the right callback, plus a same-id-different-map
+case proving `report_click("hud_btn")` does *not* reach a HUD widget's
+callback; 1 new `pack_runtime_integration_test.cpp` end-to-end case proving a
+real HUD widget's `ui.send_event` reaches a real server's `vb.on("ui_event",
+...)` with `ui_name == "hud"`), clean `-Werror` build of `vb_tests`/
+`voxel_browser`/`voxel_browser_server` (temporarily reconfigured
+`build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`, confirmed clean,
+reconfigured back to this dir's OFF default afterward). **No new interactive
+HUD widget was added to `content/base/ui/hud.lua`** -- the player list/chat
+log/hotbar are all still non-interactive `rect`/`text` widgets (previous
+entry below); this pass only closes the *engine-side* wiring gap so a future
+pack (or `content/examples/kitchen_sink`) *can* add one. The actual
+click-fires-callback behavior in a real window was **not** manually
+eyeballed -- no GUI in this agent environment, same still-open caveat as
+every other rendering-adjacent pass in this file.
+
+Before that, most recent landed item was **migrating the player list / chat log / hotbar HUD off hardcoded C++ into
 `ui.define_hud`** (REMAINING_TASKS' Phase 6.16 gap). New `WidgetType::kText`
 (`inc/vb/script/ui_runtime.hpp`) is a raw, colored, alignable text-draw
 primitive — `kLabel` goes through raygui's `GuiLabel`, which has no color

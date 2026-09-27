@@ -137,9 +137,10 @@ public:
 	// frame regardless of whether a modal screen (open()/close() above) is
 	// also open, with its own persistent `state` table (no ctx_json --
 	// there's no "opening" a HUD). Read the raw values a HUD might want via
-	// e.g. `client.break_progress()`/`client.screen_size()` below. Display-
-	// only for now: hud widgets aren't wired to report_click/report_change
-	// (no interactive HUD element exists yet).
+	// e.g. `client.break_progress()`/`client.screen_size()` below. A HUD
+	// widget's on_click/on_change callback can call ui.send_event(...) like
+	// any modal-screen widget -- the resulting C2S_UiEvent carries
+	// `ui_name = "hud"` (there's no modal screen name to use).
 
 	// Sets the raw local state a HUD's render_fn can read back via
 	// `client.break_progress()` -- nullopt when not currently breaking
@@ -192,6 +193,15 @@ public:
 	// ui.define_hud) and returns the fresh widget list. Call once per UI
 	// frame, unconditionally (unlike render_frame(), not gated on is_open()).
 	const std::vector<Widget> &render_hud();
+
+	// HUD counterparts of report_click/report_change/report_list_change
+	// above -- called by vb::render::UiRenderer's draw() result for the HUD's
+	// own widget list (a separate id->callback map from whatever modal screen
+	// is or isn't currently open, since a HUD is always active independent of
+	// open()/close()).
+	void report_hud_click(const std::string &widget_id);
+	void report_hud_change(const std::string &widget_id, std::string_view text_value);
+	void report_hud_list_change(const std::string &widget_id, int new_index);
 
 	struct Impl;
 

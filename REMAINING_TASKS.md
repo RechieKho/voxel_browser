@@ -406,8 +406,8 @@ Full detail: `remaining_tasks/phase6.md`.
       Shift mapping) landed separately as Phase 5.3's keybindings screen,
       below — this item's own scope (name registry, not physical keys)
       is fully closed.
-- [ ] HUD widgets aren't wired to `report_click`/`report_change` (display-only
-      for now) — 6.16.
+- [x] HUD widgets wired to `report_click`/`report_change`/`report_list_change`
+      — landed 2026-09-27. See `STATE.md`'s "Current status" for the write-up.
 - [x] Player list / chat log / hotbar migrated off hardcoded C++ into
       `ui.define_hud` — landed 2026-09-27. New `WidgetType::kText` (`inc/vb/
       script/ui_runtime.hpp`) is a raw, colored, alignable text draw —

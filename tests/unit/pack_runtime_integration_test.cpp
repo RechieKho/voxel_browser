@@ -739,6 +739,74 @@ TEST_CASE("client UI round trip: server open_ui -> click -> server ui_event") {
 	)"));
 }
 
+TEST_CASE("client HUD round trip: a HUD widget's on_click -> ui.send_event "
+		"reaches the server with ui_name = \"hud\" (REMAINING_TASKS' 'HUD "
+		"widgets aren't wired to report_click/report_change' gap)") {
+	LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::world::World world(registry);
+	wg::WorldGenWorkerPool pool(
+			wg::WorldGenerator(wg::WorldGenParams{}, registry),
+			wg::WorldGenWorkerPool::kSynchronous);
+
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("hud_ui"));
+	REQUIRE(rt.load_pack_file(R"(
+		seen_ui_name = nil
+		seen_widget_id = nil
+		vb.on("ui_event", function(player, ui_name, widget_id, kind, value)
+			seen_ui_name = ui_name
+			seen_widget_id = widget_id
+		end)
+	)"));
+	rt.freeze();
+
+	HandshakeServerConfig cfg;
+	cfg.world_seed = 7;
+	ServerSession server(net.server(), cfg);
+	auto replicator = std::make_unique<WorldReplicator>(world, pool, registry,
+			/*view*/ 1, /*vview*/ 2);
+	rt.attach_world(*replicator);
+	server.set_world_replicator(std::move(replicator));
+	rt.attach_session(server);
+	REQUIRE(net.server().listen(0));
+
+	Transport &ta = net.create_client();
+	auto ida = ta.connect("x", 0);
+	REQUIRE(ida);
+	ClientSession client(ta, *ida, HandshakeClientConfig{ "A", "", "v", 1 });
+
+	vb::script::UiRuntime ui_runtime;
+	ui_runtime.attach_session(client);
+	REQUIRE(ui_runtime.load_pack_file(R"(
+		ui.define_hud(function(state)
+			return {
+				widgets = {
+					{ id = "hud_btn", type = "button", x = 0, y = 0, w = 10, h = 10,
+					  text = "Poke", on_click = function() ui.send_event("poked", true) end },
+				}
+			}
+		end)
+	)"));
+
+	for (int i = 0; i < 20; ++i) {
+		server.tick(0.05);
+		client.tick(0.05);
+		ui_runtime.render_hud();
+	}
+	REQUIRE(client.joined());
+
+	ui_runtime.report_hud_click("hud_btn");
+	for (int i = 0; i < 4; ++i) {
+		server.tick(0.05);
+		client.tick(0.05);
+	}
+
+	REQUIRE(rt.load_pack_file(R"(
+		assert(seen_ui_name == "hud")
+		assert(seen_widget_id == "hud_btn")
+	)"));
+}
+
 TEST_CASE("pack script vetoes chat from a specific player") {
 	LoopbackNetwork net;
 	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();

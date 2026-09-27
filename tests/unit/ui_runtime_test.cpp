@@ -221,4 +221,58 @@ TEST_CASE("the HUD's state table persists across render_hud() calls, "
 	CHECK(ui.render_hud()[0].text == "3");
 }
 
+TEST_CASE("report_hud_click invokes a HUD widget's on_click callback, "
+		"distinct from a modal screen's own widget_by_id map (REMAINING_TASKS' "
+		"'HUD widgets aren't wired to report_click/report_change' gap)") {
+	UiRuntime ui;
+	REQUIRE(ui.load_pack_file(R"(
+		hud_clicked = false
+		ui.define_hud(function(state)
+			return {
+				widgets = {
+					{ id = "hud_btn", type = "button", x=0,y=0,w=1,h=1, text = "x",
+					  on_click = function() hud_clicked = true end },
+				}
+			}
+		end)
+		ui.define("modal", function(state) return { widgets = {} } end)
+	)"));
+
+	ui.render_hud();
+	// A same-named widget id on the modal side must not be reachable via
+	// report_hud_click -- the two maps are genuinely separate.
+	ui.report_click("hud_btn");
+	CHECK(ui.load_pack_file("assert(hud_clicked == false)"));
+
+	ui.report_hud_click("hud_btn");
+	CHECK(ui.load_pack_file("assert(hud_clicked == true)"));
+}
+
+TEST_CASE("report_hud_change/report_hud_list_change invoke a HUD widget's "
+		"on_change callback") {
+	UiRuntime ui;
+	REQUIRE(ui.load_pack_file(R"(
+		last_text = nil
+		last_index = nil
+		ui.define_hud(function(state)
+			return {
+				widgets = {
+					{ id = "box", type = "textbox", x=0,y=0,w=1,h=1, text = "",
+					  on_change = function(v) last_text = v end },
+					{ id = "list", type = "list", x=0,y=0,w=1,h=1, items = {"a","b"},
+					  on_change = function(v) last_index = v end },
+				}
+			}
+		end)
+	)"));
+
+	ui.render_hud();
+	ui.report_hud_change("box", "typed");
+	ui.report_hud_list_change("list", 1);
+	CHECK(ui.load_pack_file(R"(
+		assert(last_text == "typed")
+		assert(last_index == 1)
+	)"));
+}
+
 #endif // VB_WITH_LUA

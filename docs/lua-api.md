@@ -466,7 +466,13 @@ back which widgets fired an interaction — no sol2 in the render half.
   — "engine provides raw state, Lua deals with presentation": the engine
   still owns the actual hold-timer/reach/target-tracking logic (that's
   gameplay input handling), and offers only the meaning-free `rect`
-  primitive, not a "progress bar" concept of its own.
+  primitive, not a "progress bar" concept of its own. HUD widgets can be
+  interactive too: a `button`/`textbox`/`list` widget's `on_click`/`on_change`
+  fires exactly like a modal screen's own, via a separate HUD-only
+  `report_hud_click`/`report_hud_change`/`report_hud_list_change` path
+  (`src/client/main.cpp`'s HUD draw call) — `ui.send_event(...)` called from
+  inside one of those carries `ui_name = "hud"` (there's no modal screen name
+  to use).
 - **Raw client-local state: the `client` table** (Phase 6.16, sibling to
   `ui` above) — read-only engine state a HUD (or any UI script) can query;
   nothing here draws a pixel, callers decide whether/how to show it:
