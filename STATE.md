@@ -20,6 +20,21 @@
 
 ## Current status (2026-09-27)
 
+**Sandboxed `require` + per-callback wall-clock budget (Phase 4.1, closed).**
+`vb::script::Vm` reinstates a safe `require` global that resolves only
+against an in-memory virtual module map (`Vm::install_require`, built by
+`load_content_pack`'s own directory walk — every pack `.lua` file except
+`ui/*.lua`), with `package.loaded`-style caching and cycle detection; the
+existing instruction-count hook now also samples a `std::chrono::
+steady_clock` deadline every 1000 instructions (`VmLimits::
+wall_clock_budget_ms`, default 250) so a callback with few but slow
+instructions still gets cut off, not just one that runs too many VM ops.
+Both failure modes still classify to the existing `ScriptError::
+kBudgetExceeded` — no new enum value. Full writeup + gotchas (the
+`AllocState`/`lua_getallocf` trick for reaching hook state, why the virtual
+FS isn't `ClientAssetCache`'s synced map) is in `REMAINING_TASKS.md`'s Phase
+4 section, not repeated here.
+
 **Fall damage (REMAINING_TASKS' Phase 6 "no fall damage" gap, closed as
 6.22).** New `net::ServerSession::set_landed_hook(fn(NetId, double
 impact_speed))` — fires once per player exactly on the tick a fall is

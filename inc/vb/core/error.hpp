@@ -78,7 +78,7 @@ enum class ScriptError : std::uint8_t {
 	kNone = 0,
 	kSyntax, // chunk failed to compile
 	kRuntime, // error raised during execution
-	kBudgetExceeded, // instruction-count hook fired (runaway callback)
+	kBudgetExceeded, // instruction-count or wall-clock hook fired (runaway callback)
 	kOutOfMemory, // allocator ceiling hit
 	kSandboxViolation, // attempted to reach a stripped global
 	kNotFound, // module / callback not found
@@ -94,7 +94,7 @@ constexpr std::string_view message(ScriptError e) {
 		case ScriptError::kRuntime:
 			return "script runtime error";
 		case ScriptError::kBudgetExceeded:
-			return "script instruction budget exceeded";
+			return "script execution budget exceeded (instructions or wall-clock)";
 		case ScriptError::kOutOfMemory:
 			return "script memory ceiling exceeded";
 		case ScriptError::kSandboxViolation:

@@ -4,6 +4,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "vb/core/log.hpp"
@@ -11,6 +12,42 @@
 namespace vb::script {
 
 namespace {
+
+// Every `.lua` file under `content_pack`, keyed by its pack-root-relative
+// path (forward slashes), for Vm::install_require -- `ui/*.lua` is excluded,
+// same reasoning as the loader's own directory walk below: it runs in a
+// separate UiRuntime Vm that never sees PackRuntime's require() at all.
+std::unordered_map<std::string, std::string> collect_requirable_modules(
+		const std::filesystem::path &content_pack) {
+	std::unordered_map<std::string, std::string> out;
+	std::error_code ec;
+	if (!std::filesystem::is_directory(content_pack, ec)) {
+		return out;
+	}
+	for (auto it = std::filesystem::recursive_directory_iterator(content_pack, ec);
+			it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
+		if (ec) {
+			break;
+		}
+		const auto &entry = *it;
+		if (!entry.is_regular_file(ec) || entry.path().extension() != ".lua") {
+			continue;
+		}
+		const std::filesystem::path rel =
+				std::filesystem::relative(entry.path(), content_pack, ec);
+		if (ec || rel.empty() || rel.begin()->generic_string() == "ui") {
+			continue;
+		}
+		std::ifstream in(entry.path(), std::ios::binary);
+		if (!in) {
+			continue;
+		}
+		std::ostringstream ss;
+		ss << in.rdbuf();
+		out.emplace(rel.generic_string(), ss.str());
+	}
+	return out;
+}
 
 std::vector<std::filesystem::path> sorted_lua_files(const std::filesystem::path &dir) {
 	std::vector<std::filesystem::path> out;
@@ -59,6 +96,8 @@ bool load_one(PackRuntime &rt, const std::filesystem::path &pack_root,
 } // namespace
 
 bool load_content_pack(PackRuntime &rt, const std::filesystem::path &content_pack) {
+	rt.set_pack_modules(collect_requirable_modules(content_pack));
+
 	bool scripting_disabled_logged = false;
 
 	for (const char *sub : { "blocks", "entities", "biomes" }) {

@@ -377,11 +377,19 @@ asset cache size cap, last-connected servers list.
 `pack.toml` (name/version/engine_version_req/entry) + `init.lua` +
 root-level `*.lua` modules (e.g. `crafting.lua`) + `blocks/*.lua` +
 `entities/*.lua` + `ui/*.lua` + `textures/*.png` (+ `textures/entities/*.png`
-billboard atlases). **Real `require` doesn't exist yet** — the host
-(`vb::script::load_content_pack`) walks these directories itself in a fixed
-order (blocks → entities → biomes → other root `.lua` → `init.lua`),
-loading each into one shared Lua state. The base pack is both the reference
-Lua-API implementation and the CI smoke-test content.
+billboard atlases). The host (`vb::script::load_content_pack`) still walks
+`blocks/entities/biomes`/other root `.lua`/`init.lua` itself in that fixed
+order, loading each into one shared Lua state — that's still the only way
+`vb.register_block` et al. actually run. A real, sandboxed `require` (landed
+2026-09-27) is layered on top for optional shared helper modules: every
+`.lua` file under the pack root (except `ui/*.lua`, which runs in its own
+restricted `UiRuntime` VM) is installed as a requirable module keyed by its
+pack-relative path, so `require("lib.util")` resolves `lib/util.lua` against
+that in-memory map only — never the real filesystem — with stock Lua's
+package.loaded-style caching and cycle detection
+(`vb::script::Vm::install_require`/`require_module`, `src/script/vm.cpp`).
+The base pack is both the reference Lua-API implementation and the CI
+smoke-test content.
 
 Full loader-order rationale: `architecture_spec/content-pack-format.md`.
 

@@ -8,6 +8,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <string>
 
 #include "vb/net/loopback.hpp"
@@ -187,6 +188,41 @@ TEST_CASE("content/base crafting: wood -> planks -> sticks via /craft chat") {
 		REQUIRE_FALSE(msgs.empty());
 		CHECK(msgs.back() == "A: hello");
 	}
+}
+
+TEST_CASE("load_content_pack wires up require() over the pack's own directory tree") {
+	const std::filesystem::path pack =
+			std::filesystem::temp_directory_path() / "vb_content_pack_test_require";
+	std::error_code ec;
+	std::filesystem::remove_all(pack, ec);
+	std::filesystem::create_directories(pack / "lib");
+	{
+		std::ofstream out(pack / "lib" / "util.lua");
+		out << "return { double = function(x) return x * 2 end }";
+	}
+	{
+		std::ofstream out(pack / "init.lua");
+		out << "local util = require('lib.util')\n"
+			   "vb.storage.doubled = util.double(21)\n";
+	}
+
+	{
+		vb::net::LoopbackNetwork net;
+		vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+		vb::script::PackRuntime rt(net.server(), registry, pack / "storage.json");
+		REQUIRE(vb::script::load_content_pack(rt, pack));
+		rt.freeze();
+		REQUIRE(rt.storage_dirty());
+		rt.flush_storage();
+	}
+
+	std::ifstream f(pack / "storage.json");
+	REQUIRE(f);
+	std::ostringstream ss;
+	ss << f.rdbuf();
+	CHECK(ss.str().find("42") != std::string::npos);
+
+	std::filesystem::remove_all(pack, ec);
 }
 
 TEST_CASE("load_content_pack fails on a pack directory with a broken Lua file") {

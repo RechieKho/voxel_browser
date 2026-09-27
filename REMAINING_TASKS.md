@@ -176,8 +176,54 @@ Phase 5.1.
 Full detail: `remaining_tasks/phase4.md`.
 
 **Remaining:**
-- [ ] Custom `require` over the virtual pack FS + per-callback wall-clock
-      budget — needs the synced asset FS (4.4), still deferred.
+- [x] Custom `require` over the pack's own virtual module filesystem +
+      per-callback wall-clock budget — landed 2026-09-27. Reframed from the
+      original plan: rather than reusing `ClientAssetCache`'s synced-FS map
+      (4.4), which only ever exists on a *remote client*, never on the
+      server/`PackRuntime` side that actually needs `require`, the virtual
+      FS here is a small in-memory `path -> source text` map that
+      `vb::script::load_content_pack` (`src/script/pack_loader.cpp`) builds
+      once from its own recursive directory walk (every `.lua` under the
+      pack root except `ui/*.lua`, which runs in its own restricted
+      `UiRuntime` VM) and installs via the new `PackRuntime::
+      set_pack_modules()` -> `Vm::install_require()`. `Vm` (`inc/vb/script/
+      vm.hpp`, `src/script/vm.cpp`) reinstates a safe `require` global right
+      after `strip_sandbox()` nils the stock one: a dotted or slash-separated
+      module name resolves only against that map (`.` -> `/`, `.lua`
+      appended if missing), rejects a name containing `..` or a leading `/`,
+      caches a module's return value across repeated `require()` calls the
+      same way stock Lua's `package.loaded` does (no explicit `return`
+      caches as `true`), and detects a require cycle via an in-progress name
+      stack rather than deadlocking or stack-overflowing. Wall-clock budget:
+      `VmLimits` gains `wall_clock_budget_ms` (default 250); the existing
+      instruction-count hook (`count_hook`) now fires far more often
+      (`kHookPeriod` = 1000 instructions, independent of the caller's own,
+      possibly huge, `instruction_budget`) and checks a `std::chrono::
+      steady_clock` deadline first, so a callback with few but individually
+      slow instructions still gets cut off in real time, not just by VM
+      instruction count — both failure modes still classify to the existing
+      `core::ScriptError::kBudgetExceeded` (no new enum value; the two
+      distinct internal marker strings, `vb:instruction-budget-exceeded` and
+      `vb:wall-clock-budget-exceeded`, are what `classify()` keys off of).
+      `AllocState` (`inc/vb/script/vm_internal.hpp`) now carries the
+      hook's own running state (`instructions_run`, `deadline`,
+      `time_boxed`) since it's the one piece of state already reachable from
+      inside the hook via `lua_getallocf`. `Vm::sandbox_intact()`'s old
+      `absent("require")` assertion is inverted to `require` being present
+      and a function (`sol::type::function`) — everything else it checks
+      (`os`/`io`/`load`/`package`/trimmed `debug`) is unchanged. Existing
+      packs are unaffected (`content/base`/`kitchen_sink` never call
+      `require`); this is additive only. Verified: full `vb_tests` 381/381
+      green (10 new cases: 8 `script_test.cpp` `Vm`-level cases covering
+      resolve/dotted-path/caching/no-return-defaults-true/not-found/path-
+      traversal/circular-dependency/hot-swap-drops-cache, 1 wall-clock-vs-
+      huge-instruction-budget case, and 1 `content_pack_test.cpp` end-to-end
+      case driving a real `require('lib.util')` through `load_content_pack`
+      and confirming the result reaches `vb.storage`), clean `-Werror` build
+      of `vb_tests`/`voxel_browser`/`voxel_browser_server` (temporarily
+      reconfigured `build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`,
+      confirmed clean, reconfigured back to this dir's OFF default
+      afterward).
 - [ ] `EntityKind` tick/spawn/hit/death callbacks wired into real systems —
       superseded in practice by Phase 6.1's hardcoded-system approach; the
       formal `SystemRunner` itself is still `[ ]` (see Phase 3.1).

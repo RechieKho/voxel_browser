@@ -3,7 +3,9 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <string>
 #include <string_view>
+#include <unordered_map>
 
 #include "vb/core/config.hpp"
 #include "vb/core/ids.hpp"
@@ -68,6 +70,14 @@ public:
 	ScriptResult load_pack_file(std::string_view code,
 			std::string_view chunk_name = "pack");
 	void freeze();
+
+	// Phase 4.1: installs (or replaces) the pack's virtual module filesystem
+	// for a sandboxed `require` inside pack Lua code -- see
+	// vb::script::Vm::install_require for the exact resolution/caching rules.
+	// Call any time before a pack script might call require(), typically once
+	// before the first load_pack_file() (vb::script::load_content_pack does
+	// this automatically from its own directory walk).
+	void set_pack_modules(std::unordered_map<std::string, std::string> modules);
 
 	// Wraps host.authenticate so vb.on("player_join", handler) can veto a join
 	// before it completes. Call after freeze(), before constructing the

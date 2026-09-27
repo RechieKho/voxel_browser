@@ -25,6 +25,7 @@ void PackRuntime::install_keybind_registry(net::HandshakeServerHost &) {}
 void PackRuntime::attach_world(net::WorldReplicator &) {}
 void PackRuntime::attach_session(net::ServerSession &) {}
 void PackRuntime::set_server_config(const core::ServerConfig &) {}
+void PackRuntime::set_pack_modules(std::unordered_map<std::string, std::string>) {}
 physics::MoveParams PackRuntime::effective_move_params(physics::MoveParams base) const {
 	return base;
 }
@@ -2346,6 +2347,10 @@ PackRuntime &PackRuntime::operator=(PackRuntime &&) noexcept = default;
 ScriptResult PackRuntime::load_pack_file(std::string_view code,
 		std::string_view chunk_name) {
 	return impl_->vm.do_string(code, chunk_name);
+}
+
+void PackRuntime::set_pack_modules(std::unordered_map<std::string, std::string> modules) {
+	impl_->vm.install_require(std::move(modules));
 }
 
 void PackRuntime::freeze() {

@@ -6,11 +6,21 @@
 
 // Phase 5.1: loads a content pack's Lua files into a PackRuntime.
 //
-// `vb::script::Vm`'s sandbox nils out `require` (src/script/vm.cpp) --
-// REMAINING_TASKS.md 4.1 tracks a real virtual-FS `require` as a deferred
-// follow-up. Until that lands, a pack's `init.lua` cannot pull in its own
-// `blocks/*.lua`/`entities/*.lua` itself, so the host walks the pack
-// directory and loads each file as its own chunk, in a fixed order:
+// Every `.lua` file under `content_pack` (except `ui/*.lua`, see below) is
+// also installed as a requirable module (Phase 4.1, `PackRuntime::
+// set_pack_modules` -> `vb::script::Vm::install_require`), keyed by its
+// path relative to the pack root -- so `require("lib.util")` inside any pack
+// file resolves `lib/util.lua` against that same in-memory map, never the
+// real filesystem. That's for genuinely optional shared helper modules a
+// pack author wants to pull in explicitly; it does NOT replace the fixed
+// load order below, which remains the only way `vb.register_block` et al.
+// actually run -- `require`-ing e.g. `blocks/stone.lua` a second time just
+// returns its (already-run) cached result, it doesn't run it again.
+//
+// `init.lua` still cannot reach into `blocks/*.lua`/`entities/*.lua` on its
+// own via a plain directory-walk-replacing `require` -- the host walks the
+// pack directory and loads each of those as its own top-level chunk, in a
+// fixed order:
 // blocks/*.lua (sorted), then entities/*.lua (sorted), then biomes/*.lua
 // (sorted), then any other loose *.lua file directly at the pack root
 // (sorted), then init.lua last. Every file shares the same Lua globals
