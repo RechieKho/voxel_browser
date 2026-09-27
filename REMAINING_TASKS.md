@@ -493,7 +493,7 @@ Full detail: `remaining_tasks/phase6.md`.
 
 ---
 
-## Phase 7 — World & UX Polish (7.1-7.4, 7.6 done, 7.5's default landed, override open)
+## Phase 7 — World & UX Polish (7.1-7.6 done)
 
 > User-requested (2026-09-19): four UX gaps, scoped as their own phase since
 > none of them extend Phase 6's "default + override" system pattern the way
@@ -750,7 +750,7 @@ Full detail: `remaining_tasks/phase6.md`.
       real window) was **not** manually eyeballed — no GUI in this agent
       environment, same still-open caveat as every other Phase 7 item's own
       verification note.
-- **7.5 — Underwater fog tint should default to the liquid block's own
+- [x] **7.5 — Underwater fog tint should default to the liquid block's own
       color, overridable from Lua.** User-requested (2026-09-23), and
       **supersedes 7.2/7.3's 2026-09-19 decision** ("fog color is never an
       independent Lua-settable field... it's always whatever the current
@@ -772,17 +772,32 @@ Full detail: `remaining_tasks/phase6.md`.
       color exactly as this item originally scoped as its own interim step —
       that fallback is `vb::render::fallback_color_for()` now (moved out of
       `chunk_renderer.cpp`'s old `tint_for()`, same values, renamed).
-    - [ ] **Override** — still open: extend `vb.render.set_fog{...}` (or a
-      sibling call) to accept an underwater-specific color, replicated the
-      same `S2CFogParams`-style opt-in path as `fog_start`/`fog_end` (6.7/
-      6.8's "default + override" shape) — needs a protocol version bump
-      (current `ENGINE_PROTOCOL_VERSION` is **17**) since `S2CFogParams`
-      (`inc/vb/protocol/world.hpp`, type 52) is `f32 fog_start, f32 fog_end`
-      only today, no color field.
-      Design not otherwise pinned yet (exact Lua call shape, whether the
-      override is per-block-name or a single global underwater tint,
-      whether normal above-water fog keeps the sky-only rule unconditionally
-      or also becomes overridable) — decide during implementation.
+    - [x] **Override**, landed 2026-09-27: `vb.render.set_fog{start=,
+      ["end"]=, underwater_tint={r=, g=, b=}}` — `underwater_tint` is a new,
+      independently-optional field on the same call, each channel `0-255`,
+      validated the same way a bad `start`/`end` already was (all three
+      channels required if the table is given at all; out-of-range rejects
+      the whole call). Protocol bumped **23 -> 24**: `S2CFogParams` (type 52)
+      gains `bool has_underwater_tint` followed by, only if true, `u8
+      underwater_tint_r/g/b` — `has_underwater_tint = false` means "no
+      override, client keeps its own texture-average/placeholder default,"
+      not "black," same "absence is not a value" posture `fog_start`/
+      `fog_end` already had. `src/client/main.cpp`'s underwater branch checks
+      `client->fog_override()->has_underwater_tint` first and only falls back
+      to `ChunkRenderer::underwater_tint()`'s texture-average default when a
+      pack never set one. Above-water fog color is untouched and still never
+      independently settable (2026-09-19's decision, unchanged) — this is
+      strictly the underwater-only exception 7.5 always scoped it as.
+      Verified: full `vb_tests` 350/350 green (a `protocol_test.cpp`
+      round-trip case with the tint set, `pack_runtime_test.cpp` cases for
+      the override applying/being absent/being rejected on a missing channel
+      or an out-of-range one), clean `-Werror` build of `vb_tests`/
+      `voxel_browser`/`voxel_browser_server` (temporarily reconfigured
+      `build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`, confirmed clean,
+      reconfigured back to this dir's OFF default afterward). The actual
+      rendered tint swap (a human swimming with a pack-set override active)
+      was **not** manually eyeballed — no GUI in this agent environment, same
+      still-open caveat as every other recent rendering-adjacent pass.
 
 - [x] **7.6 — World persistence: chunks survive a server restart.** Landed
       2026-09-25, reversing ARCHITECTURE_SPEC.md §18 row 5's 2026-09-17

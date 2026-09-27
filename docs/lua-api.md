@@ -398,9 +398,15 @@ rt.dispatch_tick(dt);
   doesn't know each client's `view_distance`, so unlike
   `vb.physics.set_params`/`vb.daynight.set_curve` there's no server-side
   universal default this replaces, only a per-client fallback. Reaches
-  joining clients as `S2C_FogParams`. Deliberately **no color field** — fog
-  always blends into whatever `vb.daynight`'s current sky color already is
-  (`sky_color_for_time()`), never an independently drifting tint.
+  joining clients as `S2C_FogParams`. Deliberately **no color field for
+  above-water fog** — it always blends into whatever `vb.daynight`'s current
+  sky color already is (`sky_color_for_time()`), never an independently
+  drifting tint. **Underwater is the one exception** (Phase 7.5): an
+  optional `underwater_tint = {r=, g=, b=}` (each `0-255`) on the same
+  `set_fog{...}` table overrides the client's own default underwater tint
+  (the submerged liquid block's own texture, averaged) — omitting it leaves
+  that per-client default alone; giving it with a missing channel or an
+  out-of-range value is rejected the same way a bad `start`/`end` is.
 - Read-only server config (Phase 6.13): `vb.config.get(key)` returns the
   operator's `server.toml`/CLI value for `key` — `bind_address`, `port`,
   `content_pack`, `max_players`, `view_distance`, `tick_rate`, `world_seed`,

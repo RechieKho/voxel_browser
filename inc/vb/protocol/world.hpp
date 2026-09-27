@@ -113,12 +113,21 @@ struct S2CDayNightCurve {
 // send unprompted, since the server doesn't know each client's
 // view_distance. No color field -- fog always reads as "distance to the
 // current sky color" (vb::world::sky_color_for_time()), never an
-// independently drifting tint (decided 2026-09-19).
+// independently drifting tint (decided 2026-09-19). That decision was later
+// scoped down to *above-water* fog only (Phase 7.5, decided 2026-09-23):
+// underwater fog tints from the submerged liquid block's own texture
+// average by default, and `underwater_tint` below lets a pack override that
+// one specific color -- `has_underwater_tint = false` means "no override,
+// client picks its own texture-average/placeholder default", not "black".
 struct S2CFogParams {
 	static constexpr MessageType kType = MessageType::kS2CFogParams;
 
 	float fog_start = 0.0f;
 	float fog_end = 0.0f;
+	bool has_underwater_tint = false;
+	std::uint8_t underwater_tint_r = 0;
+	std::uint8_t underwater_tint_g = 0;
+	std::uint8_t underwater_tint_b = 0;
 
 	void encode(std::vector<std::byte> &out) const;
 	static Decoded<S2CFogParams> decode(std::span<const std::byte> in);

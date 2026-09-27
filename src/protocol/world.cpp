@@ -159,6 +159,12 @@ void S2CFogParams::encode(std::vector<std::byte> &out) const {
 	ByteWriter w(out);
 	w.f32(fog_start);
 	w.f32(fog_end);
+	w.boolean(has_underwater_tint);
+	if (has_underwater_tint) {
+		w.u8(underwater_tint_r);
+		w.u8(underwater_tint_g);
+		w.u8(underwater_tint_b);
+	}
 }
 
 Decoded<S2CFogParams> S2CFogParams::decode(std::span<const std::byte> in) {
@@ -166,6 +172,12 @@ Decoded<S2CFogParams> S2CFogParams::decode(std::span<const std::byte> in) {
 	S2CFogParams m;
 	m.fog_start = r.f32();
 	m.fog_end = r.f32();
+	m.has_underwater_tint = r.boolean();
+	if (m.has_underwater_tint) {
+		m.underwater_tint_r = r.u8();
+		m.underwater_tint_g = r.u8();
+		m.underwater_tint_b = r.u8();
+	}
 	return finish(r, std::move(m));
 }
 

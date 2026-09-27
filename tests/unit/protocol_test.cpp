@@ -353,6 +353,25 @@ TEST_CASE("fog params round-trip (Phase 7.2)") {
 	auto p = round_trip(S2CFogParams{ 96.0f, 160.0f });
 	CHECK(p.fog_start == doctest::Approx(96.0f));
 	CHECK(p.fog_end == doctest::Approx(160.0f));
+	CHECK_FALSE(p.has_underwater_tint);
+}
+
+TEST_CASE("fog params round-trip with an underwater tint override (Phase 7.5)") {
+	S2CFogParams src;
+	src.fog_start = 2.0f;
+	src.fog_end = 8.0f;
+	src.has_underwater_tint = true;
+	src.underwater_tint_r = 12;
+	src.underwater_tint_g = 34;
+	src.underwater_tint_b = 200;
+
+	auto p = round_trip(src);
+	CHECK(p.fog_start == doctest::Approx(2.0f));
+	CHECK(p.fog_end == doctest::Approx(8.0f));
+	CHECK(p.has_underwater_tint);
+	CHECK(p.underwater_tint_r == 12);
+	CHECK(p.underwater_tint_g == 34);
+	CHECK(p.underwater_tint_b == 200);
 }
 
 TEST_CASE("keybind registry round-trips, including an empty list") {

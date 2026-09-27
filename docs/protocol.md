@@ -4,8 +4,19 @@
 > as any change to a struct in `inc/vb/protocol/`, and bump
 > `kEngineProtocolVersion` in `cmake/version.hpp.in`.
 
-Current `ENGINE_PROTOCOL_VERSION`: **23**.
+Current `ENGINE_PROTOCOL_VERSION`: **24**.
 
+- **24** — `S2CFogParams` (52) gains an optional underwater tint (Phase 7.5's
+  override half, spec §7.5): `bool has_underwater_tint` followed by, only if
+  true, `u8 underwater_tint_r`, `u8 underwater_tint_g`, `u8
+  underwater_tint_b`. `has_underwater_tint = false` means "no pack override,
+  the client keeps computing its own texture-average/placeholder default,"
+  not "black" — same "absence is not a value" posture `fog_start`/`fog_end`
+  already had relative to the client's own `view_distance` default. Set via
+  `vb.render.set_fog{start=, ["end"]=, underwater_tint={r=, g=, b=}}` — the
+  new `underwater_tint` field is itself optional, sibling to the already-
+  required `start`/`end`. Above-water fog color is unaffected and still
+  never independently settable (2026-09-19's decision, unchanged).
 - **23** — `EntityVisualDef` (within `S2C_EntityKindRegistry`'s optional
   `visual`, 53) gains a `bool mirror` field, appended right after `origin_y`
   (before `clip_count`); `EntityVisualOverride` (within `S2C_EntitySnapshot`'s
@@ -401,7 +412,7 @@ rendered sky, not just server-side bookkeeping.
 
 | Type (id)           | Fields                     |
 | -------------------- | -------------------------- |
-| `S2C_FogParams` (52) | `f32 fog_start`, `f32 fog_end` |
+| `S2C_FogParams` (52) | `f32 fog_start`, `f32 fog_end`, `bool has_underwater_tint`, then if true `u8 underwater_tint_r`, `u8 underwater_tint_g`, `u8 underwater_tint_b` |
 
 Sent between `C2S_Ready` and `S2C_JoinAccept` (Phase 7.2) only if
 `HandshakeServerHost::fog_params` returns a value; `nullopt` (default) sends

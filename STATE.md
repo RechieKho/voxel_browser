@@ -20,7 +20,41 @@
 
 ## Current status (2026-09-27)
 
-**User-requested: distinct per-facing debug art for `base:player`, plus a
+**Phase 7.5's override half: `vb.render.set_fog{underwater_tint=}`,
+closing REMAINING_TASKS' last open Phase 7 item (7.1-7.6 are now all done).**
+7.5's *default* (submerged liquid's own texture-average color) landed
+2026-09-23 alongside the real texture/atlas system; the override half was
+deliberately left open pending a protocol bump. Landed now: an optional
+`underwater_tint = {r=, g=, b=}` (each `0-255`) sibling field on the existing
+`vb.render.set_fog{start=, ["end"]=}` call (`src/script/pack_runtime.cpp`) —
+all three channels are required if the table is given at all, and an
+out-of-range or partial one rejects the whole `set_fog` call, same posture as
+a bad `start`/`end`. Protocol bumped **23 -> 24**: `S2CFogParams`
+(`inc/vb/protocol/world.hpp`, type 52) gains `bool has_underwater_tint`
+followed by, only if true, `u8 underwater_tint_r/g/b` —
+`has_underwater_tint = false` means "no pack override, client keeps its own
+texture-average/placeholder default," not "black," the same "absence isn't a
+value" shape `fog_start`/`fog_end` already had relative to each client's own
+`view_distance` default. `src/client/main.cpp`'s underwater branch (the same
+`kPlaying`-state block that already computed the camera's own eye voxel) now
+checks `client->fog_override()->has_underwater_tint` first and only falls
+back to `ChunkRenderer::underwater_tint()`'s texture-average default when no
+pack override is present — the fallback path itself (landed 2026-09-23) is
+untouched. Above-water fog color remains permanently sky-only (2026-09-19's
+decision), unaffected by this — 7.5 was always scoped as an underwater-only
+exception, not a reopening of that rule. Verified: full `vb_tests` 350/350
+green (a new `protocol_test.cpp` round-trip case with the tint set, plus
+`pack_runtime_test.cpp` cases for the override applying, staying unset when
+omitted, and being rejected on a missing channel or an out-of-range value),
+clean `-Werror` build of `vb_tests`/`voxel_browser`/`voxel_browser_server`
+(temporarily reconfigured `build-net-lua` with
+`-DVB_WARNINGS_AS_ERRORS=ON`, confirmed clean, reconfigured back to this
+dir's OFF default afterward). The actual rendered tint swap (a human swimming
+with a pack-set override active) was **not** manually eyeballed — no GUI in
+this agent environment, same still-open caveat as every other recent
+rendering-adjacent pass.
+
+Before that, most recent landed item was **user-requested: distinct per-facing debug art for `base:player`, plus a
 real bug fix in pose selection.** User feedback on the real base-pack player
 sprite (STATE.md's "Same-day follow-up #7" below): "not very obvious [...]
 if I'm looking at the front or back, or left or right side" — the front/

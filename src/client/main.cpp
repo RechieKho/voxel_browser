@@ -1452,8 +1452,19 @@ int main(int argc, char **argv) {
 						// liquid's own texture's average color instead of
 						// echoing the sky -- water should tint the murk
 						// itself, not whatever time of day it happens to be.
-						const Color tint = chunk_renderer->underwater_tint(eye_block);
-						fog_color = vb::world::SkyColor{ tint.r, tint.g, tint.b };
+						// A pack's vb.render.set_fog{underwater_tint=} (7.5's
+						// override half) replaces that default outright when
+						// present.
+						if (const auto &fog = client->fog_override();
+								fog && fog->has_underwater_tint) {
+							fog_color = vb::world::SkyColor{
+								fog->underwater_tint_r, fog->underwater_tint_g,
+								fog->underwater_tint_b
+							};
+						} else {
+							const Color tint = chunk_renderer->underwater_tint(eye_block);
+							fog_color = vb::world::SkyColor{ tint.r, tint.g, tint.b };
+						}
 					}
 					chunk_renderer->set_fog(controller.position(), fog_color, fog_start, fog_end);
 				}

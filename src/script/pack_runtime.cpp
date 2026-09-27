@@ -1357,10 +1357,14 @@ void PackRuntime::Impl::install_bindings() {
 	// Phase 7.2: overrides the engine's default distance-fog fade (which
 	// otherwise matches each client's own view_distance -- the server
 	// doesn't know that value, so there's no default to advertise unless a
-	// pack sets one). Deliberately no 'color' field: fog always reads as
-	// "distance to the current sky color" (vb::world::sky_color_for_time()),
-	// never an independently drifting tint (decided 2026-09-19,
-	// REMAINING_TASKS.md Phase 7.2).
+	// pack sets one). Deliberately no 'color' field for *above-water* fog:
+	// it always reads as "distance to the current sky color"
+	// (vb::world::sky_color_for_time()), never an independently drifting
+	// tint (decided 2026-09-19, REMAINING_TASKS.md Phase 7.2).
+	// Phase 7.5 (decided 2026-09-23): underwater fog is the one exception --
+	// an optional 'underwater_tint = {r=, g=, b=}' table (each 0-255)
+	// overrides the client's own texture-average default for the currently
+	// submerged liquid block.
 	sol::table render_tbl = lua.create_table();
 	vb["render"] = render_tbl;
 	render_tbl["set_fog"] = [this](sol::table def) {
@@ -1374,6 +1378,21 @@ void PackRuntime::Impl::install_bindings() {
 		}
 		if (!(*end > *start)) {
 			throw sol::error("vb.render.set_fog: 'end' must be greater than 'start'");
+		}
+		const sol::optional<sol::table> tint = def["underwater_tint"];
+		if (tint) {
+			const sol::optional<double> r = (*tint)["r"];
+			const sol::optional<double> g = (*tint)["g"];
+			const sol::optional<double> b = (*tint)["b"];
+			if (!r || !g || !b) {
+				throw sol::error(
+						"vb.render.set_fog: 'underwater_tint' needs 'r', 'g', and 'b'");
+			}
+			const auto in_range = [](double v) { return v >= 0.0 && v <= 255.0; };
+			if (!in_range(*r) || !in_range(*g) || !in_range(*b)) {
+				throw sol::error(
+						"vb.render.set_fog: 'underwater_tint' channels must be 0-255");
+			}
 		}
 		fog_params_table = def;
 	};
@@ -2444,6 +2463,13 @@ std::optional<protocol::S2CFogParams> PackRuntime::effective_fog_params() const 
 	protocol::S2CFogParams out;
 	out.fog_start = static_cast<float>(def.get<double>("start"));
 	out.fog_end = static_cast<float>(def.get<double>("end"));
+	const sol::optional<sol::table> tint = def["underwater_tint"];
+	if (tint) {
+		out.has_underwater_tint = true;
+		out.underwater_tint_r = static_cast<std::uint8_t>(tint->get<double>("r"));
+		out.underwater_tint_g = static_cast<std::uint8_t>(tint->get<double>("g"));
+		out.underwater_tint_b = static_cast<std::uint8_t>(tint->get<double>("b"));
+	}
 	return out;
 }
 

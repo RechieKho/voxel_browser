@@ -712,6 +712,60 @@ TEST_CASE("without a vb.render.set_fog call, effective_fog_params returns "
 	CHECK_FALSE(rt.effective_fog_params().has_value());
 }
 
+TEST_CASE("vb.render.set_fog's underwater_tint overrides the default "
+		"underwater tint (Phase 7.5)") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("fog_tint"));
+
+	const auto r = rt.load_pack_file(R"(
+		vb.render.set_fog({
+			start = 2, ["end"] = 8,
+			underwater_tint = { r = 10, g = 20, b = 30 },
+		})
+	)");
+	REQUIRE(r);
+	rt.freeze();
+
+	const auto fog = rt.effective_fog_params();
+	REQUIRE(fog.has_value());
+	CHECK(fog->has_underwater_tint);
+	CHECK(fog->underwater_tint_r == 10);
+	CHECK(fog->underwater_tint_g == 20);
+	CHECK(fog->underwater_tint_b == 30);
+}
+
+TEST_CASE("vb.render.set_fog without underwater_tint leaves it unset "
+		"(Phase 7.5)") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("fog_no_tint"));
+
+	REQUIRE(rt.load_pack_file(R"(vb.render.set_fog({ start = 1, ["end"] = 2 }))"));
+	rt.freeze();
+
+	const auto fog = rt.effective_fog_params();
+	REQUIRE(fog.has_value());
+	CHECK_FALSE(fog->has_underwater_tint);
+}
+
+TEST_CASE("vb.render.set_fog rejects a malformed underwater_tint "
+		"(Phase 7.5)") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("fog_tint_bad"));
+
+	CHECK_FALSE(rt.load_pack_file(R"(vb.render.set_fog({
+		start = 1, ["end"] = 2, underwater_tint = { r = 1, g = 2 },
+	}))"));
+	CHECK_FALSE(rt.load_pack_file(R"(vb.render.set_fog({
+		start = 1, ["end"] = 2, underwater_tint = { r = 300, g = 0, b = 0 },
+	}))"));
+	CHECK_FALSE(rt.load_pack_file(R"(vb.render.set_fog({
+		start = 1, ["end"] = 2, underwater_tint = { r = -1, g = 0, b = 0 },
+	}))"));
+}
+
 TEST_CASE("vb.register_biome / vb.register_craft accept arbitrary def tables") {
 	vb::net::LoopbackNetwork net;
 	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
