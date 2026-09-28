@@ -13,6 +13,7 @@
 
 #include "vb/net/loopback.hpp"
 #include "vb/net/session.hpp"
+#include "vb/protocol/input.hpp"
 #include "vb/script/pack_loader.hpp"
 #include "vb/script/pack_runtime.hpp"
 #include "vb/world/block.hpp"
@@ -187,6 +188,106 @@ TEST_CASE("content/base crafting: wood -> planks -> sticks via /craft chat") {
 		REQUIRE_FALSE(msgs.empty());
 		CHECK(msgs.back() == "A: hello");
 	}
+}
+
+// REMAINING_TASKS.md's "No mob damage" gap: entities/zombie.lua is the
+// first real content/base user of entity:damage()/player:damage() beyond
+// fall damage/PvP -- a hostile mob that chases down and bites whoever
+// spawned it. No WorldReplicator needed at all: spawn_script_entity()
+// (src/net/session.cpp) has no world dependency, matching the crafting
+// test just above's own minimal setup.
+//
+// A real, reproducible engine bug was found while writing this (see
+// STATE.md's own entry): a PlayerHandle stored across calls and read back
+// from inside vb.on("tick", ...) or a script entity's own on_tick returns
+// garbage (wrong session pointer, wrong net_id) -- calling a method on the
+// *freshly passed-in* PlayerHandle argument from within the SAME handler
+// call is fine (every existing content/base script already does exactly
+// that), only *storing it for later, cross-call use from that specific
+// dispatch path* is broken. zombie.lua's chase/attack logic is therefore
+// driven from vb.on("player_input", ...) instead of the zombie's own
+// on_tick -- that handler already hands over a fresh PlayerHandle every
+// call (net::ServerSession::system_network_io's real per-input dispatch,
+// same path chat/crafting already use safely), used immediately, never
+// stored. Only the zombie's own entity handle (self:get_pos()/set_pos(),
+// which never touches a PlayerHandle at all) is stored across calls.
+TEST_CASE("content/base zombie: /zombie spawns a hostile mob that chases "
+		"down and kills the caller") {
+	using namespace vb::net;
+	using vb::core::NetId;
+	using vb::core::Vec3d;
+	using vb::protocol::InputCmd;
+
+	LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("zombie"));
+	REQUIRE(vb::script::load_content_pack(rt, base_pack_dir()));
+	rt.freeze();
+
+	HandshakeServerConfig cfg;
+	cfg.world_seed = 7;
+	ServerSession server(net.server(), cfg);
+	rt.attach_session(server);
+
+	std::optional<std::string> death_cause;
+	server.set_respawn_handler([&](NetId id, std::string_view cause, float) {
+		death_cause = std::string(cause);
+		return ServerSession::RespawnDecision{ 20.0f, server.spawn_point(id), "" };
+	});
+	REQUIRE(net.server().listen(0));
+
+	Transport &ta = net.create_client();
+	auto ida = ta.connect("x", 0);
+	REQUIRE(ida);
+	ClientSession client(ta, *ida, HandshakeClientConfig{ "A", "", "v", 1 });
+
+	auto pump = [&](int n) {
+		for (int i = 0; i < n; ++i) {
+			server.tick(0.05);
+			client.tick(0.05);
+		}
+	};
+	pump(16);
+	REQUIRE(client.joined());
+	const NetId a_id = client.join_accept()->your_net_id;
+
+	// Fly mode disables gravity (same reason netcode_test.cpp's own void-kill
+	// test enables it before a long pump window) -- otherwise the player
+	// would free-fall past void_kill_y_ (-64 by default) well before the
+	// zombie's bites add up.
+	vb::physics::MoveParams fly;
+	fly.fly = true;
+	server.set_move_params(fly);
+	server.set_player_state(a_id, Vec3d{ 0, 64, 0 });
+	pump(2);
+	client.send_chat("/zombie");
+	pump(2);
+	{
+		const auto msgs = client.take_chat_messages();
+		REQUIRE_FALSE(msgs.empty());
+		CHECK(msgs.back() == "[base] a zombie is hunting you");
+	}
+
+	// The chase/attack logic only runs on a real InputCmd (vb.on
+	// ("player_input", ...) needs one to fire), so this pushes a real
+	// (zero-move -- fly mode holds the player still regardless) idle
+	// command every tick, the same way a real client continuously streams
+	// input even while standing still. The zombie closes a 3m gap at 2m/s
+	// (~1.5s) then bites for 2 dmg every 1s -- killing a full-health (20
+	// hp) player takes ~11.5s of real time in the worst case; 300 ticks
+	// (15s) is comfortable headroom, still instant in test time (no real
+	// sleeps).
+	InputCmd idle;
+	idle.dt = 0.05f;
+	std::uint32_t seq = 1;
+	for (int i = 0; i < 300; ++i) {
+		idle.seq = seq++;
+		client.push_input(idle);
+		pump(1);
+	}
+
+	REQUIRE(death_cause.has_value());
+	CHECK(*death_cause == "zombie");
 }
 
 TEST_CASE("load_content_pack wires up require() over the pack's own directory tree") {

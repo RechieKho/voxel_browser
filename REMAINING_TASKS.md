@@ -807,15 +807,43 @@ Full detail: `remaining_tasks/phase6.md`.
       `voxel_browser`/`voxel_browser_server` (temporarily reconfigured
       `build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`, confirmed clean,
       reconfigured back to this dir's OFF default afterward).
-- [ ] No mob damage — 6.6 only added the primitive (`player:damage`) and
-      the decision hook (`player_death`); fall damage, PvP, and now hunger
-      (all just above) are the only real content callers of either so far.
-      Needs an actual hostile-mob concept (an `on_tick`-driven script entity
-      that seeks out and punches/damages a nearby player) — the engine
-      primitive (`entity:damage()`/`player:damage()`) already exists,
-      nothing new engine-side is obviously missing here the way PvP's "is
-      it even wired up" question turned out to be, or hunger's "no
-      primitive at all" gap was.
+- [x] **Mob damage — landed 2026-09-28** as `content/base/entities/
+      zombie.lua`: a real hostile mob (20 hp, `vb.register_entity{health=20}`)
+      spawned via `/zombie`, that chases down and bites (2 dmg every 1s once
+      in range) whichever player spawned it, using the existing
+      `entity:damage()`/`player:damage()` primitives — no new engine-side
+      mechanism was needed for the mob concept itself, confirming this
+      item's own original text.
+      **A real, previously-unknown engine bug was found and worked around
+      while building this** (not fixed — see the new Cross-Cutting entry
+      below for the bug itself, kept separate since it's a real, still-open
+      engine correctness gap in its own right, not specific to mob AI):
+      a `PlayerHandle` stored across calls (in an entity's own field, a
+      module-level Lua table, or even a bare upvalue — all three were
+      tested) and then read back from *inside* `vb.on("tick", ...)` or a
+      script entity's own `on_tick` returns silently corrupted data (wrong
+      `rt`/`session` pointers, wrong `net_id` — confirmed with ASan, not
+      just inferred from a crash). Calling a method on a **freshly
+      passed-in** `PlayerHandle` from within the *same* handler call (the
+      pattern every pre-existing content/base script already uses:
+      mechanics.lua, fall_damage.lua, crafting.lua) is completely
+      unaffected. `zombie.lua`'s chase/attack logic is therefore driven
+      from `vb.on("player_input", ...)` instead of the zombie's own
+      `on_tick` — that handler already hands over a fresh `PlayerHandle`
+      on every real `InputCmd` (`net::ServerSession::system_network_io`'s
+      dispatch, the same safe path chat/crafting/fall-damage already use),
+      used immediately, never stored; only the zombie's own entity handle
+      (`self:get_pos()`/`set_pos()`, which never touches a `PlayerHandle`
+      at all — proven safe from any context) is stored across calls, keyed
+      by the hunted player's *name* (a plain string, safe to snapshot,
+      unlike the handle itself).
+      Verified: full `vb_tests` 421/421 green (1 new
+      `content_pack_test.cpp` case driving a real `/zombie` command through
+      300 real `InputCmd`-pumped ticks to an actual kill, confirming
+      `cause == "zombie"`), clean `-Werror` build of `vb_tests`/
+      `voxel_browser`/`voxel_browser_server` (temporarily reconfigured
+      `build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`, confirmed clean,
+      reconfigured back to this dir's OFF default afterward).
 - [x] Automatic despawn-on-health trigger for generic script entities —
       landed 2026-09-25. Opt-in per kind via `vb.register_entity{health=...}`
       (`EntityKindDef::max_health`, rejects a non-positive value at
@@ -1451,6 +1479,58 @@ Full detail: `remaining_tasks/phase6.md`.
 
 ## Cross-Cutting / Continuous
 
+- [ ] **Real, unfixed engine bug found 2026-09-28 while building
+      `content/base/entities/zombie.lua` (Phase 6's "mob damage" item):
+      a `script::PlayerHandle` stored across calls and read back from
+      inside `vb.on("tick", ...)` or a script entity's own `on_tick`
+      silently returns corrupted data** — confirmed with ASan (Windows
+      MSVC + `clang_rt.asan_dynamic`, `-DVB_ENABLE_ASAN=ON`), not just
+      inferred from a crash: `PlayerHandle::get_name()`/`get_pos()` read a
+      garbage `rt` (`PackRuntime::Impl*`), a `nullptr`/garbage `session`,
+      and a garbage `net_id` (observed `0xFFFFFFFE`) when called this way,
+      instead of the real stored values. **Repro (minimal, reproduced
+      multiple times with a guaranteed-fresh rebuild each time — see
+      `content_pack_test.cpp`'s zombie test's own comment for the summary):**
+      `vb.on("chat", function(player, text) stashed = player end)` then,
+      from `vb.on("tick", function(dt) print(stashed:get_name()) end)`,
+      the printed name is wrong/empty on every subsequent tick, forever —
+      not a one-time race. **What's proven NOT the cause:** storage
+      location (module-level global, entity-table field, and a bare Lua
+      upvalue closure all reproduce it identically); it is not a same-tick
+      timing race (reproduces across many ticks after the store, not just
+      the first). **What IS the distinguishing factor:** reading a
+      *stored* `PlayerHandle`'s methods from within the `dispatch_tick`
+      call path (`PackRuntime::Impl::dispatch_tick` → `fire("tick", ...)`
+      *or* → `dispatch_entity_tick` → a kind's `on_tick`) is broken;
+      reading a **freshly passed-in** `PlayerHandle` argument from within
+      *any* handler (`chat`, `player_input`, `player_join`, `player_death`,
+      ...) — even storing *that* one and reading it back from a **later,
+      separate `chat`/`player_input`-style dispatch** — works perfectly
+      (also confirmed with ASan, `rt`/`session`/`net_id` all correct).
+      `run_veto()` and `fire()` (`src/script/pack_runtime.cpp`) are
+      structurally identical templates, so the bug isn't in either of
+      those directly — it's somewhere in how `dispatch_tick` specifically
+      reaches Lua (`ServerSession::on_script_tick_` → `PackRuntime::
+      attach_session`'s hook lambda → `PackRuntime::dispatch_tick` →
+      `Impl::dispatch_tick`), not yet root-caused further. **Worked
+      around, not fixed:** `zombie.lua`'s own chase/attack logic is driven
+      from `vb.on("player_input", ...)` instead (a fresh `PlayerHandle`
+      every real `InputCmd`, used immediately, never stored) — see that
+      item's own entry above for the full design. **Impact if unfixed:**
+      any *future* pack that tries the natural "capture a player in a
+      hook, act on them later from `on_tick`" pattern will hit this
+      silently (no crash in a non-ASan build — it just reads wrong data,
+      e.g. `player:damage()` becomes a no-op since `session` reads as
+      `nullptr`) — a real correctness trap for content authors, not just
+      an inconvenience. Whoever picks this up next: start from the exact
+      repro above (it's a ~15-line pack script), build `build-net-lua`
+      with `-DVB_ENABLE_ASAN=ON` (needs `clang_rt.asan_dynamic-x86_64.dll`
+      on `PATH`, found under the MSVC toolchain's `bin\Hostx64\x64`), and
+      get a fresh ASan stack trace before theorizing — several plausible-
+      sounding theories (GC collecting a live-referenced value, a `fire()`
+      vs `run_veto()` implementation difference, a moved/stale
+      `PackRuntime` pointer) were all checked and ruled out empirically
+      during this investigation.
 - [ ] Keep `ENGINE_PROTOCOL_VERSION` + `docs/protocol.md` in lockstep with every
       wire change.
 - [ ] Every new `vb/protocol` struct gets a round-trip + fuzz test.

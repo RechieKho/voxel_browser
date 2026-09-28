@@ -36,7 +36,74 @@ content-only (e.g. the user explicitly asks for a content-pack feature).
 
 ## Current status (2026-09-28)
 
-**Landed the hunger primitive, closing the hunger half of Phase 6's "No
+**Landed mob damage (`content/base/entities/zombie.lua`), closing the last
+concrete item in Phase 6's "No PvP, mob damage, or hunger" line -- and
+found (but did not fix) a real, previously-unknown engine bug along the
+way.** Picked per this file's own standing priority after the hunger pass
+below; this was the one item left where the backlog text's own claim
+("the engine primitive already exists, nothing new engine-side is
+obviously missing") turned out true for the *mob concept* itself, but
+building it surfaced something real underneath.
+**The mob:** a 20-hp zombie (`vb.register_entity{health=20}`), spawned via
+`/zombie`, that chases down and bites (2 dmg/1s once in range) whichever
+player spawned it -- `entity:damage()`/`player:damage()` were already
+sufficient, no new primitive needed.
+**The real bug, found while writing the obvious first draft (the zombie's
+own `on_tick` calling `self.target:get_pos()`/`player:damage()` on a
+stored `PlayerHandle`):** a `PlayerHandle` stored across calls and read
+back from inside `vb.on("tick", ...)` or a script entity's own `on_tick`
+returns **silently corrupted data** -- wrong `PackRuntime::Impl*`, a
+`nullptr`/garbage `net::ServerSession*`, a garbage `net_id`. Confirmed with
+a real ASan stack trace (not just inferred from a crash), reproduced
+identically across three different storage mechanisms (an entity-table
+field, a module-level Lua table, a bare closure upvalue) and confirmed it
+is *not* a same-tick timing race (wrong on every tick for many ticks after
+the store, not just the first). The exact same store-then-read pattern
+works **perfectly** when the "later read" happens from a *different*
+`chat`/`player_input`-style dispatch instead of `dispatch_tick`'s path --
+so the bug is specifically in how `PackRuntime::Impl::dispatch_tick`
+(reached via `ServerSession::on_script_tick_` → `attach_session`'s hook
+lambda → `Impl::dispatch_tick` → `fire("tick", ...)` or
+`dispatch_entity_tick` → a kind's `on_tick`) interacts with previously-
+stored Lua values, not in `run_veto()`/`fire()` themselves (structurally
+identical templates, ruled out as the direct cause). Not root-caused
+further -- see `REMAINING_TASKS.md`'s new Cross-Cutting entry for the full
+investigation writeup (several plausible theories -- GC collecting a
+live-referenced value, a `fire()` vs `run_veto()` difference, a stale/
+moved `PackRuntime` pointer -- were checked and ruled out empirically, not
+just assumed).
+**The workaround actually shipped:** `zombie.lua`'s chase/attack logic
+runs from `vb.on("player_input", ...)` instead of the zombie's own
+`on_tick` -- that handler hands over a **fresh** `PlayerHandle` on every
+real `InputCmd` (proven-safe path, the same one chat/crafting/fall-damage
+already use), used immediately, never stored. Only the zombie's own entity
+handle (`self:get_pos()`/`set_pos()`, which never touches a `PlayerHandle`
+at all -- proven safe from any context including `on_tick`) is stored
+across calls, keyed by the hunted player's *name* (a plain string, safe to
+snapshot, unlike the handle itself).
+**Gotcha for whoever picks up the real fix:** getting a real ASan stack
+trace on this Windows/MSVC box needs `clang_rt.asan_dynamic-x86_64.dll` on
+`PATH` at run time (`-DVB_ENABLE_ASAN=ON` alone links against it but the
+loader can't find it) -- found under the MSVC toolchain install, e.g.
+`...\VC\Tools\MSVC\<ver>\bin\Hostx64\x64\`; without it the instrumented
+`.exe` just fails to start with "error while loading shared libraries."
+Also: **always force a real rebuild before trusting a diagnostic run** --
+this investigation burned real time on stale-binary false signals twice
+(editing `content_pack_test.cpp` or `pack_runtime.cpp`, then running
+without confirming ninja actually recompiled first); a plain content/*.lua
+edit needs no C++ rebuild at all (loaded at runtime), which makes it easy
+to mistakenly assume the *previous* build is also stale when it isn't, or
+vice versa -- check the ninja build log line count, don't assume.
+Verified: full `vb_tests` 421/421 green (1 new `content_pack_test.cpp`
+case driving a real `/zombie` through 300 real `InputCmd`-pumped ticks to
+an actual kill), clean `-Werror` build of `vb_tests`/`voxel_browser`/
+`voxel_browser_server` (temporarily reconfigured `build-net-lua` with
+`-DVB_WARNINGS_AS_ERRORS=ON`, confirmed clean, reconfigured back to this
+dir's OFF default afterward -- and separately, `-DVB_ENABLE_ASAN=ON` was
+also reconfigured back OFF afterward, since that's not this dir's normal
+state either).
+
+Before that, most recent landed item was **landing the hunger primitive, closing the hunger half of Phase 6's "No
 PvP, mob damage, or hunger" line -- unlike PvP (found already wired up
 below), this one genuinely had no primitive at all before this pass.**
 Picked per this file's own standing priority (engine work over content)
