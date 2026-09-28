@@ -28,6 +28,9 @@ std::uint16_t GnsTransport::bound_port() const { return 0; }
 std::optional<std::string> GnsTransport::remote_address(ConnId) const {
 	return std::nullopt;
 }
+std::optional<double> GnsTransport::round_trip_time_seconds(ConnId) const {
+	return std::nullopt;
+}
 
 } // namespace vb::net
 
@@ -437,6 +440,24 @@ std::optional<std::string> GnsTransport::remote_address(ConnId conn) const {
 	char buf[SteamNetworkingIPAddr::k_cchMaxString];
 	info.m_addrRemote.ToString(buf, sizeof(buf), /*bWithPort=*/false);
 	return std::string(buf);
+}
+
+// REMAINING_TASKS.md Phase 3's "wall-clock server_time_est + smoothing"
+// gap: real one-way network latency (half of this) is what makes that
+// estimate meaningfully different from just "elapsed local time since the
+// last packet" -- LoopbackTransport has nothing to report here (its
+// default kept at 0). `m_nPing` is a running average GNS itself already
+// maintains from real packet round trips, in milliseconds; negative
+// (unmeasured yet, or an invalid/closed connection) reports as unknown
+// rather than a nonsensical negative duration.
+std::optional<double> GnsTransport::round_trip_time_seconds(ConnId conn) const {
+	SteamNetConnectionRealTimeStatus_t status;
+	const EResult result = SteamNetworkingSockets()->GetConnectionRealTimeStatus(
+			static_cast<HSteamNetConnection>(conn), &status, 0, nullptr);
+	if (result != k_EResultOK || status.m_nPing < 0) {
+		return std::nullopt;
+	}
+	return static_cast<double>(status.m_nPing) / 1000.0;
 }
 
 } // namespace vb::net

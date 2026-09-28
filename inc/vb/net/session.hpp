@@ -20,6 +20,7 @@
 #include "vb/ecs/components.hpp"
 #include "vb/ecs/system_runner.hpp"
 #include "vb/net/handshake.hpp"
+#include "vb/net/server_time_estimator.hpp"
 #include "vb/net/transport.hpp"
 #include "vb/net/world_replicator.hpp"
 #include "vb/physics/movement.hpp"
@@ -669,6 +670,16 @@ public:
 	}
 	std::uint32_t last_server_tick() const { return last_server_tick_; }
 
+	// Wall-clock estimate of the server's current tick, as a fractional
+	// (not just integer last-received) value -- REMAINING_TASKS.md Phase
+	// 3's "wall-clock server_time_est" gap. Feeds interpolated_pos()'s own
+	// interpolation target so a remote entity keeps easing smoothly toward
+	// its latest known sample every render frame, rather than only moving
+	// on the frames a new snapshot happens to arrive. `false` before the
+	// first snapshot of this session (join not yet complete).
+	bool server_time_est_primed() const { return server_time_.primed(); }
+	double server_time_est_seconds() const { return server_time_.estimate_seconds(); }
+
 	// --- local-player prediction (spec §8.4) -----------------------------
 
 	void set_move_params(physics::MoveParams p) { move_params_ = p; }
@@ -899,6 +910,7 @@ private:
 	std::unordered_map<core::NetId, entt::entity> net_to_entity_;
 	world::ClientChunkStore chunks_{ world::BlockRegistry::base() };
 	std::uint32_t last_server_tick_ = 0;
+	ServerTimeEstimator server_time_;
 	assetsync::ClientAssetCache *asset_cache_ = nullptr; // not owned; may be null
 	std::optional<protocol::S2COpenUi> pending_open_ui_;
 	std::vector<std::string> pending_chat_;

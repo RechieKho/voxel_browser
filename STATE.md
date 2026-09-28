@@ -36,7 +36,74 @@ content-only (e.g. the user explicitly asks for a content-pack feature).
 
 ## Current status (2026-09-28)
 
-**Item grid widget for `UiRuntime`, closing REMAINING_TASKS' Phase 4 "item
+**Wall-clock `server_time_est` + smoothing on the client, closing Phase 3's
+last remaining item.** Picked per this file's own standing priority
+(engine C++ work over content Lua) from the remaining open items — this
+one had been sitting blocked on "needs `GnsTransport` RTT" since Phase 3,
+now unblocked by the 2026-09-28 `GnsTransport` real-UDP test-coverage pass
+earlier today giving this session a reason to actually look at that
+transport's API surface again.
+**RTT plumbing:** `Transport` (`inc/vb/net/transport.hpp`) gained a new
+`round_trip_time_seconds(ConnId) const` virtual, defaulted to `nullopt`
+(same posture `remote_address()` already has) so `LoopbackTransport` needs
+no override at all -- it genuinely has nothing to report, matching this
+item's own "loopback has no latency to estimate" text.
+`GnsTransport::round_trip_time_seconds()` (`src/net/gns_transport.cpp`)
+overrides it with `ISteamNetworkingSockets::GetConnectionRealTimeStatus()`'s
+own `m_nPing` (milliseconds, a running average GNS already maintains from
+real round trips) -- `nullopt` on a failed lookup or before GNS has
+measured a real ping yet (`m_nPing < 0`), never a fabricated number.
+**The estimator:** new header-only `vb::net::ServerTimeEstimator`
+(`inc/vb/net/server_time_estimator.hpp`, same pure-math/unit-tested-
+without-a-live-session posture as `render::EyeHeightSmoother`) tracks a
+running wall-clock estimate of "what tick the server is at right now":
+`advance(dt_seconds)` keeps it progressing every `ClientSession::tick()`
+call, snapshot or not; `on_snapshot(server_seconds, one_way_latency_seconds)`
+nudges it toward what each arriving snapshot implies (that snapshot's own
+tick converted to seconds, plus half the transport's RTT as the estimated
+one-way transit time) via exponential smoothing (15% of the gap per
+sample) rather than overwriting it outright, so jitter in real packet
+arrival timing doesn't visibly kick it around frame to frame -- except the
+very first sample of a session, or a gap bigger than 1 real second (a long
+stall, a reused estimator after reconnect), which both snap outright
+instead of slow-easing across an already-known-wrong span.
+**The real bug this surfaced, not just the originally-scoped gap:**
+`ClientSession::interpolated_pos()` (`src/net/session.cpp`) used to target
+`last_server_tick_ - 1` directly -- but `last_server_tick_` only changes
+when a new snapshot actually arrives, so the interpolation fraction `a`
+was frozen solid between arrivals (always exactly 0 under a normal
+steady 20 Hz stream, since `last_server_tick_` equals the freshly-arrived
+`cur_tick` every time) and only ever visibly moved -- in one discrete step
+-- on the frame a new packet happened to land, not smoothly across every
+render frame in between as the interpolation delay was always intended to
+produce. Retargeting it at `server_time_.estimate_seconds() * tick_rate`
+instead (falling back to the old `last_server_tick_`-based math before the
+first snapshot, i.e. `server_time_.primed()` is false) fixes this for any
+transport, not only `GnsTransport` -- the smoothing itself only needed
+real elapsed local time, not real network latency; RTT is what makes the
+*offset itself* track true server time rather than just "ticks since the
+last packet," per this item's own original scope.
+Verified: full `vb_tests` 404/404 green (6 new
+`server_time_estimator_test.cpp` cases covering `ServerTimeEstimator`'s
+pure math directly: unprimed initial state, first-sample snap, smooth
+`advance()` progression, easing toward a nearby sample instead of jumping,
+convergence under several repeated samples, and a large-gap snap; 2 new
+`gns_transport_test.cpp` cases: the `!VB_WITH_NET` stub always reports
+`nullopt`, and a real-UDP localhost round trip reports a small non-negative
+RTT once GNS has actually measured one), confirmed stable across 3
+repeated full-suite runs (no flakes, real UDP included), clean `-Werror`
+build of `vb_tests`/`voxel_browser`/`voxel_browser_server` (temporarily
+reconfigured `build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`, confirmed
+clean, reconfigured back to this dir's OFF default afterward). The actual
+smoother-in-practice remote-entity motion (a human watching another player
+move over a real, jittery connection) was **not** manually eyeballed — no
+GUI in this agent environment, same still-open caveat as every other
+rendering-adjacent pass in this file; `netcode_test.cpp`'s existing
+"remote entity keeps moving as the other client watches" case (unchanged,
+still green) is the only indirect coverage of the render-facing behavior
+itself.
+
+Before that, most recent landed item was **the item grid widget for `UiRuntime`, closing REMAINING_TASKS' Phase 4 "item
 grid widget for `UiRuntime` — needs a real item/inventory concept" gap.**
 Picked per this file's own standing priority (engine C++ work over content
 Lua) from the remaining open items — the blocker in that item's own text

@@ -1395,7 +1395,13 @@ ClientSession::virtual_pack_fs() const {
 	return asset_cache_ != nullptr ? asset_cache_->virtual_fs() : kEmpty;
 }
 
-void ClientSession::tick(double) {
+void ClientSession::tick(double dt_seconds) {
+	// Keep the wall-clock server-time estimate progressing every tick, even
+	// one with no snapshot in it -- see ServerTimeEstimator's own header
+	// comment for why this is what fixes interpolated_pos()'s old
+	// "frozen until the next packet" staircase.
+	server_time_.advance(dt_seconds);
+
 	scratch_.clear();
 	transport_.poll(scratch_);
 
@@ -1735,6 +1741,20 @@ void ClientSession::apply_block_damage(const protocol::S2CBlockDamage &msg) {
 void ClientSession::apply_snapshot(const protocol::S2CEntitySnapshot &snap) {
 	last_server_tick_ = snap.server_tick;
 
+	// Wall-clock server-time estimate (REMAINING_TASKS.md Phase 3): the
+	// real server tick rate replicated at join (S2CServerInfo, default 20
+	// if that hasn't arrived yet for some reason) converts this snapshot's
+	// tick to seconds; half the transport's round-trip time (0 if unknown,
+	// e.g. LoopbackTransport) estimates how long it's already been in
+	// flight, so the implied "true" server time is as-of-now, not as-of-
+	// when-it-was-sent.
+	const double tick_rate =
+			server_info() && server_info()->tick_rate > 0 ? server_info()->tick_rate : 20.0;
+	const double one_way_latency =
+			transport_.round_trip_time_seconds(conn_).value_or(0.0) / 2.0;
+	server_time_.on_snapshot(
+			static_cast<double>(snap.server_tick) / tick_rate, one_way_latency);
+
 	const auto ingest = [&](const protocol::EntityRecord &r) {
 		remote_[r.net_id] = r;
 		if (r.visual_override) {
@@ -1870,10 +1890,22 @@ core::Vec3d ClientSession::interpolated_pos(core::NetId id) const {
 	if (s.cur_tick <= s.prev_tick) {
 		return s.cur_pos;
 	}
-	// Render ~1 tick behind the newest sample (spec §8.4 interpolation delay).
+	// Render ~1 tick behind the newest sample (spec §8.4 interpolation
+	// delay), at a continuously-advancing wall-clock estimate of "now" in
+	// server ticks rather than the last *received* tick number -- using
+	// last_server_tick_ directly here used to freeze `a` solid between
+	// snapshot arrivals (it only changes when a new packet lands), so a
+	// remote entity only ever appeared to move on the frames a snapshot
+	// happened to arrive, not every render frame. server_time_est_seconds()
+	// (fed every tick() call, snapshot or not -- ServerTimeEstimator's own
+	// header comment) keeps `a` progressing smoothly in between too.
 	const double span = static_cast<double>(s.cur_tick - s.prev_tick);
-	const double target =
-			static_cast<double>(last_server_tick_) - 1.0 - static_cast<double>(s.prev_tick);
+	const double tick_rate =
+			server_info() && server_info()->tick_rate > 0 ? server_info()->tick_rate : 20.0;
+	const double now_ticks = server_time_.primed()
+			? server_time_.estimate_seconds() * tick_rate
+			: static_cast<double>(last_server_tick_);
+	const double target = now_ticks - 1.0 - static_cast<double>(s.prev_tick);
 	const double a = core::clamp(span > 0.0 ? target / span : 1.0, 0.0, 1.0);
 	return s.prev_pos + (s.cur_pos - s.prev_pos) * a;
 }

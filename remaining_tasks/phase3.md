@@ -138,8 +138,10 @@ with prediction/interpolation.
 - [x] Integration test (`tests/unit/netcode_test.cpp`): input batch round-trip;
       predicted feet converge to server authority within epsilon; a second client
       sees the first move.
-- [ ] Wall-clock `server_time_est` + smoothing on the client (needs `GnsTransport`
-      RTT; the loopback path has no latency to estimate).
+- [x] Wall-clock `server_time_est` + smoothing on the client (needs `GnsTransport`
+      RTT; the loopback path has no latency to estimate) — landed 2026-09-28,
+      see `STATE.md`'s "Current status" for the full writeup and
+      `REMAINING_TASKS.md`'s own entry for the short version.
 - [x] Map players ↔ librg network entities — `InterestGrid::upsert`/`remove` track
       every `NetId` (players and item drops alike) 1:1 as a self-owned librg
       entity; see `src/replication/interest.cpp`.

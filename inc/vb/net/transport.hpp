@@ -102,6 +102,19 @@ public:
 		(void)conn;
 		return std::nullopt;
 	}
+
+	// Best-effort round-trip time in seconds for `conn`, if this backend can
+	// estimate one. `std::nullopt` when unknown, not yet measured, or not
+	// applicable -- the default for any Transport that doesn't override
+	// this, and permanently the case for LoopbackTransport (in-process, no
+	// real latency to estimate; REMAINING_TASKS.md's own "the loopback path
+	// has no latency to estimate" note on the wall-clock server_time_est
+	// gap this feeds). GnsTransport overrides it with GameNetworkingSockets'
+	// own real-time connection ping.
+	virtual std::optional<double> round_trip_time_seconds(ConnId conn) const {
+		(void)conn;
+		return std::nullopt;
+	}
 };
 
 // Convenience: frame a typed message and send it on its natural lane.

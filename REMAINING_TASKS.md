@@ -279,8 +279,20 @@ Full detail: `remaining_tasks/phase3.md`.
       walking up a single block and watching the camera rise instead of pop)
       was **not** manually eyeballed — no GUI in this agent environment, same
       still-open caveat as every other rendering-adjacent pass in this file.
-- [ ] Wall-clock `server_time_est` + smoothing on the client (needs
-      `GnsTransport` RTT — loopback has no latency to estimate).
+- [x] Wall-clock `server_time_est` + smoothing on the client (needs
+      `GnsTransport` RTT — loopback has no latency to estimate) — landed
+      2026-09-28, see "Current status" in `STATE.md` for the full writeup.
+      New `Transport::round_trip_time_seconds(ConnId)` (default `nullopt`,
+      `GnsTransport` overrides it with GameNetworkingSockets' own real-time
+      ping) feeds a new header-only `vb::net::ServerTimeEstimator`
+      (`inc/vb/net/server_time_estimator.hpp`, same pure-math/unit-tested-
+      without-a-session posture as `render::EyeHeightSmoother`) that
+      `ClientSession` advances every `tick()` and nudges on every snapshot.
+      `interpolated_pos()` now targets this continuously-advancing estimate
+      instead of the last *received* tick number, which used to freeze the
+      interpolation fraction solid between snapshot arrivals (a real,
+      previously-unnoticed bug this item's investigation surfaced, not
+      just the originally-scoped "add RTT" gap).
 - [x] `SpriteVisual`-equivalent client state (atlas handle, `facings`,
       per-clip frame lists) for entity kinds — landed 2026-09-25 as Phase
       4's `visual = {...}` item below (`EntityRenderer`'s `KindVisual`/

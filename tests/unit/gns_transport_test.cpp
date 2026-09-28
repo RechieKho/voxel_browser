@@ -15,6 +15,7 @@ TEST_CASE("GnsTransport reports kBackendUnavailable without VB_WITH_NET") {
 	CHECK(status.error() == vb::core::NetError::kBackendUnavailable);
 	const auto conn = t.connect("127.0.0.1", 27015);
 	CHECK_FALSE(conn);
+	CHECK_FALSE(t.round_trip_time_seconds(vb::net::ConnId{ 1 }).has_value());
 }
 
 #else
@@ -122,6 +123,58 @@ TEST_CASE("GnsTransport: connect, exchange a message, and disconnect over real U
 	});
 	CHECK(disconnected);
 	CHECK(server.connection_count() == 0);
+}
+
+// REMAINING_TASKS.md Phase 3's "wall-clock server_time_est" gap needs a
+// real transport-level RTT to feed it (the whole reason it was gated on
+// GnsTransport in the first place -- LoopbackTransport has nothing to
+// measure). GNS only starts reporting a real ping after enough real
+// packets have actually round-tripped, so this polls a little longer than
+// the bare connect tests above before asserting on it.
+TEST_CASE("GnsTransport::round_trip_time_seconds reports a real, small RTT "
+		"over localhost once connected") {
+	constexpr std::uint16_t kTestPort = 27206;
+
+	GnsTransport server;
+	REQUIRE(server.listen(kTestPort));
+	GnsTransport client;
+	const auto conn = client.connect("127.0.0.1", kTestPort);
+	REQUIRE(conn);
+
+	// Not yet connected: unmeasured.
+	CHECK_FALSE(client.round_trip_time_seconds(*conn).has_value());
+
+	const bool connected = pump_until(500, [&] {
+		std::vector<TransportEvent> cev;
+		client.poll(cev);
+		std::vector<TransportEvent> sev;
+		server.poll(sev);
+		return client.connection_count() == 1;
+	});
+	REQUIRE(connected);
+
+	// Exchange a little traffic both ways so GNS has real round trips to
+	// measure from, not just the connection handshake itself.
+	const std::vector<std::byte> ping{ std::byte{ 1 } };
+	std::optional<double> rtt;
+	pump_until(400, [&] {
+		client.send(*conn, vb::protocol::Lane::kControl, ping);
+		std::vector<TransportEvent> cev;
+		client.poll(cev);
+		std::vector<TransportEvent> sev;
+		server.poll(sev);
+		rtt = client.round_trip_time_seconds(*conn);
+		return rtt.has_value();
+	});
+
+	REQUIRE(rtt.has_value());
+	CHECK(*rtt >= 0.0);
+	// Real localhost traffic, not a stalled/misrouted connection.
+	CHECK(*rtt < 1.0);
+
+	// An unknown/never-connected id: still nullopt, not a crash.
+	CHECK_FALSE(client.round_trip_time_seconds(static_cast<ConnId>(0xDEADBEEF))
+					.has_value());
 }
 
 // §8.3 hardening (REMAINING_TASKS.md 1.3): remote_address() is what

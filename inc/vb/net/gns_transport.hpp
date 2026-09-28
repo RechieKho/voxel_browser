@@ -42,6 +42,7 @@ public:
 	bool is_server() const override;
 	std::size_t connection_count() const override;
 	std::optional<std::string> remote_address(ConnId conn) const override;
+	std::optional<double> round_trip_time_seconds(ConnId conn) const override;
 
 	// The actual bound UDP port after a successful listen(). 0 if not
 	// listening. Note: unlike a plain BSD socket, GNS's direct-UDP listen
