@@ -283,15 +283,27 @@ bool ServerSession::apply_script_block_edit(core::NetId editor,
 ServerSession::PunchResult ServerSession::punch(core::NetId puncher) {
 	PunchResult result;
 	entt::entity puncher_entity{ entt::null };
+	Conn *puncher_conn = nullptr;
 	for (auto &[conn, state] : conns_) {
 		(void)conn;
 		if (state.playing && state.net_id == puncher) {
 			puncher_entity = state.entity;
+			puncher_conn = &state;
 			break;
 		}
 	}
 	if (puncher_entity == entt::null) {
 		return result;
+	}
+	if (punch_params_.punch_cooldown_seconds > 0.0 &&
+			puncher_conn->punch_cooldown_remaining > 0.0) {
+		return result; // still on cooldown -- silent no-op, same as no target
+	}
+	if (punch_params_.punch_cooldown_seconds > 0.0) {
+		// Armed up front, before target resolution: a whiff still costs a
+		// swing, matching a real attack-rate cap rather than only throttling
+		// punches that happen to land.
+		puncher_conn->punch_cooldown_remaining = punch_params_.punch_cooldown_seconds;
 	}
 	// Read straight from the registry, not interest_ (only refreshed once
 	// per tick, after all of this tick's messages -- including this punch,
@@ -640,6 +652,16 @@ void ServerSession::system_network_io(double dt_seconds) {
 			(void)c;
 			state.msg_tokens = std::min(max_messages_per_second_,
 					state.msg_tokens + max_messages_per_second_ * dt_seconds);
+		}
+	}
+
+	if (punch_params_.punch_cooldown_seconds > 0.0) {
+		for (auto &[c, state] : conns_) {
+			(void)c;
+			if (state.punch_cooldown_remaining > 0.0) {
+				state.punch_cooldown_remaining =
+						std::max(0.0, state.punch_cooldown_remaining - dt_seconds);
+			}
 		}
 	}
 

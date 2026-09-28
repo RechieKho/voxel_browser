@@ -418,6 +418,18 @@ public:
 		// counts then only ever go away by actually breaking the block.
 		double heal_after_seconds = 4.0;
 		double heal_interval_seconds = 1.5;
+		// REMAINING_TASKS.md's "no punch-rate cooldown enforced engine-side"
+		// gap: minimum real time between two punch() calls from the same
+		// puncher that actually resolve to a swing (armed the instant a call
+		// clears the previous cooldown, regardless of whether that swing hits
+		// anything -- a whiff still costs the same swing time a landed hit
+		// would, matching how a real attack-rate cap works). A call still on
+		// cooldown is a silent no-op (empty PunchResult), the same shape as
+		// "nothing within reach" below -- not a disconnect/flood-guard
+		// concern, just a gameplay cap. `<= 0.0` (the default) disables this
+		// entirely, so every existing direct-punch() call site/test is
+		// unaffected unless a pack opts in via vb.combat.set_params.
+		double punch_cooldown_seconds = 0.0;
 	};
 	void set_punch_params(PunchParams p) { punch_params_ = p; }
 	const PunchParams &punch_params() const { return punch_params_; }
@@ -462,6 +474,11 @@ private:
 		// Meaningless (never drained) while max_messages_per_second_ == 0.
 		double msg_tokens = 0.0;
 		double age = 0.0;
+		// PunchParams::punch_cooldown_seconds' per-puncher timer, counted down
+		// once per tick in system_network_io() (mirrors msg_tokens' own
+		// per-tick refill loop just above it). Meaningless while
+		// punch_cooldown_seconds <= 0.0 (never armed, so never checked).
+		double punch_cooldown_remaining = 0.0;
 		bool playing = false;
 		bool input_driven = false;
 		core::NetId net_id = core::NetId::kInvalid;

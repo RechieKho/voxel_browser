@@ -1296,6 +1296,11 @@ void PackRuntime::Impl::install_bindings() {
 	// Unlike 6.5's BlockDamageSystem (which ships zero heal policy until a
 	// pack supplies one), punching's self-heal is a real engine default --
 	// only its rate is a pack-facing knob, not whether it exists at all.
+	// `punch_cooldown_seconds` (REMAINING_TASKS.md's "no punch-rate cooldown
+	// enforced engine-side" gap) is the opposite posture: the engine ships
+	// no cap at all (0.0, disabled) until a pack sets one -- there's no
+	// obviously-correct default swing rate the way there is for a heal
+	// timer, so this stays opt-in.
 	// Phase 6.21: `reach` moved out to vb.action.set_params below -- it isn't
 	// combat-specific (block-edit reach uses the exact same value), so a pack
 	// author hunting for the mining-reach knob shouldn't have to look here.
@@ -2467,6 +2472,8 @@ net::ServerSession::PunchParams PackRuntime::effective_punch_params(
 			def.get_or("heal_after_seconds", out.heal_after_seconds);
 	out.heal_interval_seconds =
 			def.get_or("heal_interval_seconds", out.heal_interval_seconds);
+	out.punch_cooldown_seconds =
+			def.get_or("punch_cooldown_seconds", out.punch_cooldown_seconds);
 	return out;
 }
 

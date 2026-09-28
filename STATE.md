@@ -36,7 +36,42 @@ content-only (e.g. the user explicitly asks for a content-pack feature).
 
 ## Current status (2026-09-28)
 
-**Connect-screen byte-progress bar, closing REMAINING_TASKS' Phase 5 gap
+**Punch-rate cooldown enforced engine-side, closing REMAINING_TASKS' Phase
+6.18 "no punch-rate cooldown enforced engine-side" gap.** Picked per this
+file's own standing priority (engine C++ work over content Lua) from the
+remaining open items. New `net::ServerSession::PunchParams::
+punch_cooldown_seconds` (`inc/vb/net/session.hpp`, default `0.0` = disabled,
+so every pre-existing direct-`punch()` call/test is unaffected unless a pack
+opts in) plus a matching per-connection `Conn::punch_cooldown_remaining`
+timer, decremented once per server tick right next to `set_max_messages_per_
+second`'s own `msg_tokens` refill loop in `system_network_io()`
+(`src/net/session.cpp`) — same "gate a per-connection resource with a
+per-tick countdown" shape, different resource. `ServerSession::punch()`
+rejects a call still on cooldown with an empty `PunchResult` (the same
+silent-no-op shape "nothing within reach" already had), and **arms the next
+cooldown immediately once a call is accepted, before resolving what it hit**
+— a whiff costs the same swing time as a landed hit, matching how a real
+attack-rate cap works rather than only throttling punches that connect.
+Pack-facing via `vb.combat.set_params{punch_cooldown_seconds=...}`
+(`PackRuntime::effective_punch_params`, `src/script/pack_runtime.cpp`), the
+same table `hit_radius`/`player_damage`/`heal_after_seconds`/
+`heal_interval_seconds` already live on — deliberately opt-in with no engine
+default (unlike the heal timers, which do ship a real default rate): there's
+no obviously-correct default swing cadence the way there is for "how fast a
+punched block starts healing." Verified: full `vb_tests` 392/392 green (2
+new `blockedit_test.cpp` cases — a configured cooldown rejects an immediate
+second `punch()` call but lets a later one land once `server.tick()` has
+advanced real time past it, and a disabled-by-default case proving two
+back-to-back calls with no cooldown set both land, matching every
+pre-existing punch test's own calling style), clean `-Werror` build of
+`vb_tests`/`voxel_browser`/`voxel_browser_server` (temporarily reconfigured
+`build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`, confirmed clean,
+reconfigured back to this dir's OFF default afterward). **Still open,
+unchanged by this pass:** no swing animation; PvP still has no armor/
+knockback — this item's own text bundled 3 things together and only the
+cooldown third is closed here.
+
+Before that, most recent landed item was **the connect-screen byte-progress bar, closing REMAINING_TASKS' Phase 5 gap
 ("No connect-screen byte-progress bar — status-text-only").** Also confirmed
 and closed a separate, stale Phase 1 line item in the same session: "Surface
 `ENGINE_PROTOCOL_VERSION` mismatch in the client connect UI" turned out to

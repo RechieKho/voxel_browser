@@ -512,6 +512,103 @@ TEST_CASE("punch() hits nothing when no block or player is within reach") {
 	CHECK_FALSE(result.hit_block);
 }
 
+// REMAINING_TASKS.md's "no punch-rate cooldown enforced engine-side" gap
+// (PunchParams::punch_cooldown_seconds).
+TEST_CASE("punch() enforces a configured cooldown between swings") {
+	EditWorld w;
+	vb::net::ServerSession::PunchParams params;
+	params.punch_cooldown_seconds = 1.0;
+	w.server->set_punch_params(params);
+
+	w.server->set_player_state(w.a_id, Vec3d{ 4, 40, 4 });
+	w.pump(6);
+	const IVec3 target =
+			surface_voxel(w.server->world_replicator()->world(), 4, 4);
+	w.server->set_player_state(w.a_id,
+			Vec3d{ target.x + 0.5, target.y + 3.0, target.z + 0.5 },
+			vb::core::Vec2f{ 0.0f, -90.0f });
+	w.pump(3);
+	REQUIRE(w.server->world_replicator()->world().solid_at(target));
+
+	// First swing lands and breaks the (max_damage == 0) block.
+	CHECK(w.server->punch(w.a_id).hit_block);
+	// A second swing immediately after, no time elapsed, is still on
+	// cooldown -- silent no-op, not "nothing within reach" (there's a block
+	// right there, it's just too soon to swing again).
+	const auto still_cooling_down = w.server->punch(w.a_id);
+	CHECK_FALSE(still_cooling_down.hit_block);
+	CHECK_FALSE(still_cooling_down.hit_player);
+
+	// Advancing real time past the cooldown (system_network_io() ticks it
+	// down once per server tick) lets the next swing land again.
+	w.pump(21); // 21 * 0.05s = 1.05s > punch_cooldown_seconds
+	w.server->set_player_state(w.a_id,
+			Vec3d{ target.x + 0.5, target.y + 3.0, target.z + 0.5 },
+			vb::core::Vec2f{ 0.0f, -90.0f });
+	w.pump(1);
+	// Nothing solid left at `target` (broken above) -- punch a fresh
+	// neighbor voxel instead to prove the *cooldown* cleared, not just that
+	// the old block respawned.
+	const IVec3 target2 =
+			surface_voxel(w.server->world_replicator()->world(), 4, 5);
+	w.server->set_player_state(w.a_id,
+			Vec3d{ target2.x + 0.5, target2.y + 3.0, target2.z + 0.5 },
+			vb::core::Vec2f{ 0.0f, -90.0f });
+	w.pump(1);
+	CHECK(w.server->punch(w.a_id).hit_block);
+}
+
+TEST_CASE("punch() cooldown is disabled by default -- back-to-back swings "
+		  "both land") {
+	EditWorld w;
+	LoopbackNetwork net2;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	const vb::core::BlockId tough = registry.add_or_get(
+			"test:tough_stone_cooldown", vb::world::BlockType{
+												 .name = "test:tough_stone_cooldown",
+												 .solid = true,
+												 .opaque = true,
+												 .max_damage = 5,
+										 });
+	vb::world::World world(registry);
+	wg::WorldGenWorkerPool pool(
+			wg::WorldGenerator(wg::WorldGenParams{}, registry),
+			wg::WorldGenWorkerPool::kSynchronous);
+
+	HandshakeServerConfig cfg;
+	cfg.world_seed = 7;
+	ServerSession server(net2.server(), cfg);
+	server.set_world_replicator(make_rep(world, pool));
+	REQUIRE(net2.server().listen(0));
+
+	Transport &ta = net2.create_client();
+	auto ida = ta.connect("x", 0);
+	REQUIRE(ida);
+	ClientSession a(ta, *ida, HandshakeClientConfig{ "A", "", "v", 1 });
+
+	auto pump = [&](int n) {
+		for (int i = 0; i < n; ++i) {
+			server.tick(0.05);
+			a.tick(0.05);
+		}
+	};
+	pump(20);
+	REQUIRE(a.joined());
+	const NetId a_id = a.join_accept()->your_net_id;
+
+	server.set_player_state(a_id, Vec3d{ 4, 40, 4 });
+	pump(6);
+	const IVec3 target = surface_voxel(world, 4, 4);
+	world.set_block(target, tough);
+	server.set_player_state(a_id,
+			Vec3d{ target.x + 0.5, target.y + 3.0, target.z + 0.5 },
+			vb::core::Vec2f{ 0.0f, -90.0f });
+	pump(3);
+
+	CHECK(server.punch(a_id).block_punches == 1);
+	CHECK(server.punch(a_id).block_punches == 2); // no cooldown -> lands too
+}
+
 // Phase 6.21: WorldReplicator::set_reach(...) is the one shared knob both
 // block-edit reach (WorldReplicator::apply_block_edit/in_reach) and combat
 // reach (ServerSession::punch(), which reads world_replicator()->reach())

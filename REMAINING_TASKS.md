@@ -807,8 +807,37 @@ Full detail: `remaining_tasks/phase6.md`.
       (a human watching the player list/chat/hotbar draw identically to
       before) was **not** manually eyeballed — no GUI in this agent
       environment.
-- [ ] No punch-rate cooldown enforced engine-side; no swing animation; PvP has
-      no armor/cooldown/knockback — 6.18, deliberate scope cuts.
+- [x] No punch-rate cooldown enforced engine-side — landed 2026-09-28 as
+      `PunchParams::punch_cooldown_seconds` (default `0.0`, disabled — every
+      existing direct-`punch()` test/call site is unaffected unless a pack
+      opts in). New `Conn::punch_cooldown_remaining` (`inc/vb/net/
+      session.hpp`), ticked down once per server tick in
+      `system_network_io()` (mirrors `msg_tokens`' own per-tick refill loop
+      immediately above it in the same function). `ServerSession::punch()`
+      rejects (empty `PunchResult`, same "no-op" shape as "nothing within
+      reach") a call still on cooldown, and **arms the next cooldown up
+      front**, before target resolution — a whiff costs the same swing time
+      a landed hit would, matching a real attack-rate cap rather than only
+      throttling punches that happen to connect. Pack-facing via
+      `vb.combat.set_params{punch_cooldown_seconds=...}`
+      (`PackRuntime::effective_punch_params`), same shape as the existing
+      `hit_radius`/`player_damage`/`heal_after_seconds`/
+      `heal_interval_seconds` fields on that table — deliberately opt-in
+      (no engine default swing rate), unlike the heal timers, which do ship
+      a real default: there's no obviously-correct default attack rate the
+      way there is for "how fast should a punched block start healing."
+      Verified: full `vb_tests` 392/392 green (2 new `blockedit_test.cpp`
+      cases: a configured cooldown rejects an immediate second swing but
+      lets a later one land once enough real time has ticked past via
+      `server.tick()`, and the disabled-by-default case proves two
+      back-to-back swings with no cooldown set both land, matching every
+      pre-existing punch test's own back-to-back-calls style), clean
+      `-Werror` build of `vb_tests`/`voxel_browser`/`voxel_browser_server`
+      (temporarily reconfigured `build-net-lua` with
+      `-DVB_WARNINGS_AS_ERRORS=ON`, confirmed clean, reconfigured back to
+      this dir's OFF default afterward). **Still open, unchanged by this
+      pass:** no swing animation; PvP has no armor/knockback — this item
+      only closed the cooldown half of its own original scope.
 - [x] Held item / hotbar selection — landed 2026-09-25 (entity-management
       follow-up, closes 6.20's own gap). Placing used to always place a
       hardcoded `base_stone_id` regardless of what the player was carrying,
