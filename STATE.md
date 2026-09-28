@@ -36,7 +36,48 @@ content-only (e.g. the user explicitly asks for a content-pack feature).
 
 ## Current status (2026-09-28)
 
-**Wall-clock `server_time_est` + smoothing on the client, closing Phase 3's
+**Per-block hardness/tool break-time variation, closing Phase 5's "vary by
+block/tool" gap.** Picked per this file's own standing priority (engine
+C++ work over content Lua) from the remaining open items. Per-block
+hardness already existed (`BlockType::max_damage`, Phase 6.5) -- what was
+actually still missing was the matching "tool" half: `ServerSession::
+punch()` (`inc/vb/net/session.hpp`, `src/net/session.cpp`) always counted
+exactly one hit per swing against a block's `max_damage`, with no seam at
+all for a pack to make some swings count for more. New optional
+`block_damage` parameter (default 1, `std::uint16_t`, every pre-existing
+call site/test unaffected) — a `max_damage > 0` block's punch counter now
+accumulates by `block_damage` instead of a hardcoded `++`; a `max_damage
+== 0` (instant-break) block stays unaffected by it entirely, same as
+before (there's no "partial" instant break). `player:punch(block_damage)`
+(`src/script/pack_runtime.cpp`, `sol::optional<int>`, validated `1..65535`
+-- `entity:punch(): block_damage must be between 1 and 65535` otherwise)
+is the pack-facing half: a pack decides how much a given swing counts for
+however it likes (e.g. looking up `player:get_held_item()` against a
+Lua-side tool table), with **no tool/hardness concept added to the engine
+itself** -- the same "generic primitive, not a game-specific concept"
+posture `vb.combat.set_params`'s other knobs already have.
+**Deliberately out of scope:** PvP damage is entirely unaffected by this
+parameter -- `damage_player()`'s call site inside `punch()` never reads
+it, so a pack's tool-damage table only ever changes mining speed, never
+combat balance; that stays `vb.combat.set_params`'s own `player_damage`,
+a separate knob, on purpose (conflating the two felt like scope creep
+past what this item was actually asking for). `content/base` itself was
+not changed -- no tool items exist yet in any shipped pack (items are
+still raw block ids, Phase 4's own still-open gap), so there's nothing
+real to wire this up to there yet; this closes the engine-side mechanism
+gap, not a content policy choice.
+Verified: full `vb_tests` 406/406 green (a new `blockedit_test.cpp` case
+drives `ServerSession::punch()`'s `block_damage` parameter directly --
+breaks a `max_damage=3` block in 2 swings at `block_damage=2` instead of
+3 at the default; a new `pack_runtime_integration_test.cpp` case proves
+the same end-to-end through a real `vb.on("player_input")` handler calling
+`player:punch(2)`, the same dispatch shape `content/base/mechanics.lua`
+itself uses), confirmed clean `-Werror` build of
+`vb_tests`/`voxel_browser`/`voxel_browser_server` (temporarily
+reconfigured `build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`, confirmed
+clean, reconfigured back to this dir's OFF default afterward).
+
+Before that, most recent landed item was **wall-clock `server_time_est` + smoothing on the client, closing Phase 3's
 last remaining item.** Picked per this file's own standing priority
 (engine C++ work over content Lua) from the remaining open items — this
 one had been sitting blocked on "needs `GnsTransport` RTT" since Phase 3,

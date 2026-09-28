@@ -280,7 +280,8 @@ bool ServerSession::apply_script_block_edit(core::NetId editor,
 	return result.accepted;
 }
 
-ServerSession::PunchResult ServerSession::punch(core::NetId puncher) {
+ServerSession::PunchResult ServerSession::punch(
+		core::NetId puncher, std::uint16_t block_damage) {
 	PunchResult result;
 	entt::entity puncher_entity{ entt::null };
 	Conn *puncher_conn = nullptr;
@@ -392,14 +393,15 @@ ServerSession::PunchResult ServerSession::punch(core::NetId puncher) {
 		}
 		if (max_damage == 0) {
 			// Unset max_damage always meant "instant break" pre-6.18 (the
-			// continuous-hold BlockDamageSystem skipped it outright); one
-			// punch keeps that meaning.
-			result.block_punches = 1;
+			// continuous-hold BlockDamageSystem skipped it outright); any
+			// punch keeps that meaning regardless of `block_damage` -- there's
+			// no "partial" instant break.
+			result.block_punches = block_damage;
 			result.block_broken = apply_script_block_edit(
 					puncher, protocol::BlockEditAction::kBreak, block_hit.voxel);
 		} else {
 			PunchDamageState &state = block_punch_counts_[block_hit.voxel];
-			++state.punches;
+			state.punches = static_cast<std::uint16_t>(state.punches + block_damage);
 			state.idle_seconds = 0.0; // a landed punch resets the heal clock
 			state.heal_progress = 0.0;
 			result.block_punches = state.punches;

@@ -561,9 +561,19 @@ Full detail: `remaining_tasks/phase5.md`.
       2026-09-25, see Phase 4's "Real base-pack art" entry.
 - [~] Cross-chunk relight on edit (breaking a floor lets light into the chunk
       below) — still per-chunk from scratch each edit.
-- [ ] Per-block hardness/tool break-time variation — one flat duration today
+- [x] Per-block hardness/tool break-time variation — one flat duration today
       (superseded in direction by Phase 6.17/6.18's punch-based combat, but
-      the "vary by block/tool" idea itself is still open).
+      the "vary by block/tool" idea itself is still open) — landed
+      2026-09-28, see "Current status" in `STATE.md` for the full writeup.
+      `ServerSession::punch()`/`player:punch()` gained an optional
+      `block_damage` parameter (default 1, every existing call site
+      unaffected): per-block hardness already existed
+      (`BlockType::max_damage`, Phase 6.5); this is the matching "tool"
+      half, entirely a pack-side decision (e.g. from
+      `player:get_held_item()`) with no tool/hardness concept added to the
+      engine itself, following the same generic-primitive posture every
+      other combat knob here already has. PvP damage is unaffected —
+      that stays `vb.combat.set_params`'s own `player_damage`.
 - [x] Keybindings screen (5.3 Settings) — a new Settings -> Keybindings
       raygui screen (`MainMenu::draw_keybindings`) lets a player click an
       action's key and press any physical key to rebind it, for the 6

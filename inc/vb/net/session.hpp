@@ -450,15 +450,25 @@ public:
 	// whichever is closer -- "hit whatever's directly in front of you,"
 	// same as the real client's own crosshair raycast, just without a
 	// camera object. A player hit applies instant PvP damage
-	// (damage_player()); a block hit increments a sparse per-position punch
-	// counter and, once it reaches the target's BlockType::max_damage
-	// (0 = break on the very first punch, same "unset" meaning it always
-	// had), commits the break through apply_script_block_edit() below --
-	// the exact same validated pipeline (reach check, hooks, drops, relight,
-	// fan-out) a real C2S_BlockEdit uses. Returns a default/empty
-	// PunchResult (both `hit_player`/`hit_block` false) if `puncher` isn't a
-	// playing connection or nothing is within reach.
-	PunchResult punch(core::NetId puncher);
+	// (damage_player()), unaffected by `block_damage` -- that knob is
+	// mining-only (REMAINING_TASKS.md's "vary break time by block/tool"
+	// gap); PvP's own balance stays entirely `vb.combat.set_params`'s
+	// `player_damage`. A block hit increments a sparse per-position punch
+	// counter by `block_damage` (default 1, matching every pre-existing
+	// call site/test) and, once it reaches the target's
+	// BlockType::max_damage (0 = break on the very first punch, unaffected
+	// by `block_damage`, same "unset" meaning it always had), commits the
+	// break through apply_script_block_edit() below -- the exact same
+	// validated pipeline (reach check, hooks, drops, relight, fan-out) a
+	// real C2S_BlockEdit uses. The engine has no notion of "tools" or
+	// per-block hardness beyond max_damage itself -- a pack decides
+	// `block_damage` however it likes (e.g. looking up the puncher's
+	// currently held item), keeping the "generic primitive, not a
+	// game-specific concept" posture every other combat knob here already
+	// has. Returns a default/empty PunchResult (both `hit_player`/
+	// `hit_block` false) if `puncher` isn't a playing connection or
+	// nothing is within reach.
+	PunchResult punch(core::NetId puncher, std::uint16_t block_damage = 1);
 
 private:
 	struct Conn {

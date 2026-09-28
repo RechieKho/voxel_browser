@@ -989,12 +989,26 @@ struct PlayerHandle {
 	// target=<Player>|nil, hit_block=bool, x=,y=,z=, punches=, broken=bool}
 	// -- a pack that wants swing VFX/sound or a hit-marker reads this;
 	// one that doesn't can ignore the return value entirely.
-	sol::table punch(sol::this_state ts) const {
+	//
+	// `block_damage` (optional, default 1): REMAINING_TASKS.md's "vary
+	// break time by block/tool" gap -- the engine has no tool/hardness
+	// concept of its own, so this is the one knob it exposes: a pack
+	// deciding how much a given swing counts for against
+	// BlockType::max_damage (e.g. looking up the puncher's own
+	// player:get_held_item() against a Lua-side tool table) gets a real
+	// faster-or-slower break without the engine needing to know what a
+	// "tool" even is. PvP damage is unaffected by this -- that's
+	// vb.combat.set_params's player_damage, a separate knob.
+	sol::table punch(sol::this_state ts, sol::optional<int> block_damage) const {
 		sol::state_view lua(ts);
 		if (rt->session == nullptr) {
 			throw sol::error("entity:punch(): session not attached yet");
 		}
-		const auto r = rt->session->punch(net_id);
+		const int dmg = block_damage.value_or(1);
+		if (dmg < 1 || dmg > 0xFFFF) {
+			throw sol::error("entity:punch(): block_damage must be between 1 and 65535");
+		}
+		const auto r = rt->session->punch(net_id, static_cast<std::uint16_t>(dmg));
 		sol::table t = lua.create_table();
 		t["hit_player"] = r.hit_player;
 		if (r.hit_player) {

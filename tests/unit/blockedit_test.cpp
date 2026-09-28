@@ -271,6 +271,70 @@ TEST_CASE("punch() accumulates hits on a max_damage > 0 block and only "
 	CHECK(world.get_block(target) == vb::core::BlockId::kAir);
 }
 
+// REMAINING_TASKS.md's "vary break time by block/tool" gap: punch()'s
+// optional block_damage parameter (default 1, exercised by every test
+// above) is the one knob the engine exposes for it -- a pack decides how
+// much a given swing counts for (e.g. from the puncher's held item),
+// without the engine needing any tool/hardness concept of its own.
+TEST_CASE("punch()'s block_damage parameter breaks a max_damage block in "
+		  "fewer, heavier hits") {
+	LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	const vb::core::BlockId tough = registry.add_or_get(
+			"test:tough_stone", vb::world::BlockType{
+										.name = "test:tough_stone",
+										.solid = true,
+										.opaque = true,
+										.max_damage = 3,
+								});
+	vb::world::World world(registry);
+	wg::WorldGenWorkerPool pool(
+			wg::WorldGenerator(wg::WorldGenParams{}, registry),
+			wg::WorldGenWorkerPool::kSynchronous);
+
+	HandshakeServerConfig cfg;
+	cfg.world_seed = 7;
+	ServerSession server(net.server(), cfg);
+	server.set_world_replicator(make_rep(world, pool));
+	REQUIRE(net.server().listen(0));
+
+	Transport &ta = net.create_client();
+	auto ida = ta.connect("x", 0);
+	REQUIRE(ida);
+	ClientSession a(ta, *ida, HandshakeClientConfig{ "A", "", "v", 1 });
+
+	auto pump = [&](int n) {
+		for (int i = 0; i < n; ++i) {
+			server.tick(0.05);
+			a.tick(0.05);
+		}
+	};
+	pump(20);
+	REQUIRE(a.joined());
+	const NetId a_id = a.join_accept()->your_net_id;
+
+	server.set_player_state(a_id, Vec3d{ 4, 40, 4 });
+	pump(6);
+	const IVec3 target = surface_voxel(world, 4, 4);
+	world.set_block(target, tough);
+	server.set_player_state(a_id,
+			Vec3d{ target.x + 0.5, target.y + 3.0, target.z + 0.5 },
+			vb::core::Vec2f{ 0.0f, -90.0f });
+	pump(3);
+	REQUIRE(world.get_block(target) == tough);
+
+	// A "better tool": 2 damage per swing against a max_damage=3 block --
+	// broken on the second swing (2 + 2 = 4 >= 3), not the third.
+	const auto r1 = server.punch(a_id, 2);
+	CHECK(r1.block_punches == 2);
+	CHECK_FALSE(r1.block_broken);
+
+	const auto r2 = server.punch(a_id, 2);
+	CHECK(r2.block_punches == 4);
+	CHECK(r2.block_broken);
+	CHECK(world.get_block(target) == vb::core::BlockId::kAir);
+}
+
 TEST_CASE("punch() replicates live block damage (S2C_BlockDamage) to every "
 		  "nearby player watching the chunk, not just the puncher") {
 	LoopbackNetwork net;

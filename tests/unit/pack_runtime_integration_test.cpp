@@ -353,6 +353,87 @@ TEST_CASE("a target with max_damage == 0 never reaches the damage system") {
 	CHECK(world.solid_at(deep));
 }
 
+// REMAINING_TASKS.md's "vary break time by block/tool" gap: player:punch()'s
+// optional block_damage argument, exercised end-to-end through a real
+// vb.on("player_input") handler (the same shape content/base/mechanics.lua
+// itself uses), not just the direct C++ call blockedit_test.cpp's own
+// punch() cases exercise.
+TEST_CASE("player:punch(block_damage) lets a pack break a tough block in "
+		  "fewer, heavier swings") {
+	LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	const vb::core::BlockId tough = registry.add_or_get(
+			"test:tough_ore", vb::world::BlockType{
+										.name = "test:tough_ore",
+										.solid = true,
+										.opaque = true,
+										.max_damage = 3,
+								});
+
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("punch_block_damage"));
+	// A "pickaxe" that hits for 2 instead of the default 1 -- a pack decides
+	// this however it likes (here: unconditionally, standing in for a real
+	// held-item lookup); the engine only ever sees the resulting number.
+	REQUIRE(rt.load_pack_file(
+			"vb.on('player_input', function(player, input) "
+			"if input.buttons.primary then player:punch(2) end end)"));
+	rt.freeze();
+
+	vb::world::World world(registry);
+	wg::WorldGenWorkerPool pool(
+			wg::WorldGenerator(wg::WorldGenParams{}, registry),
+			wg::WorldGenWorkerPool::kSynchronous);
+
+	HandshakeServerConfig cfg;
+	cfg.world_seed = 7;
+	ServerSession server(net.server(), cfg);
+	auto replicator = std::make_unique<WorldReplicator>(world, pool, registry, 1, 2);
+	rt.attach_world(*replicator);
+	server.set_world_replicator(std::move(replicator));
+	rt.attach_session(server);
+	REQUIRE(net.server().listen(0));
+
+	Transport &ta = net.create_client();
+	auto ida = ta.connect("x", 0);
+	REQUIRE(ida);
+	ClientSession client(ta, *ida, HandshakeClientConfig{ "A", "", "v", 1 });
+
+	auto pump = [&](int n) {
+		for (int i = 0; i < n; ++i) {
+			server.tick(0.05);
+			client.tick(0.05);
+		}
+	};
+	pump(20);
+	REQUIRE(client.joined());
+	const NetId a_id = client.join_accept()->your_net_id;
+
+	const IVec3 target = surface_voxel(world, 4, 4);
+	pump(6);
+	world.set_block(target, tough);
+	// Directly above the target, looking straight down -- same posture
+	// blockedit_test.cpp's own punch() tests use.
+	server.set_player_state(a_id,
+			Vec3d{ target.x + 0.5, target.y + 3.0, target.z + 0.5 },
+			vb::core::Vec2f{ 0.0f, -90.0f });
+	pump(3);
+	REQUIRE(world.get_block(target) == tough);
+
+	vb::protocol::InputCmd hit;
+	hit.buttons = vb::protocol::kInputPrimary;
+	hit.pitch = -90.0f;
+
+	hit.seq = 1;
+	client.push_input(hit);
+	pump(1);
+	CHECK(world.get_block(target) == tough); // 2 of 3 -- not broken yet
+
+	hit.seq = 2;
+	client.push_input(hit);
+	pump(1);
+	CHECK(world.get_block(target) == vb::core::BlockId::kAir); // 4 >= 3
+}
+
 TEST_CASE("pack script vetoes a specific player's join") {
 	LoopbackNetwork net;
 	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
