@@ -37,6 +37,7 @@ add_executable(vb_tests
   unit/script_db_test.cpp
   unit/server_time_estimator_test.cpp
   unit/sha256_test.cpp
+  unit/soak_test.cpp
   unit/ui_runtime_test.cpp
   unit/world_replication_test.cpp
   unit/world_test.cpp

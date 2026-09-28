@@ -36,7 +36,70 @@ content-only (e.g. the user explicitly asks for a content-pack feature).
 
 ## Current status (2026-09-28)
 
-**Closed Phase 4's "Manifest staleness" gap: a pack that writes `vb.storage`
+**Closed the Cross-Cutting "Soak test target" item: `tests/unit/soak_test.cpp`
+now runs N simulated clients doing a random walk + edits, folded into the
+normal `vb_tests` run instead of a separate nightly/pre-release job.**
+Picked per this file's own standing priority (engine work over content)
+from `REMAINING_TASKS.md`'s remaining `[ ]` items after the manifest-
+staleness pass below — this and "perf budget checks" were the last two
+concrete, unblocked, non-continuous engine gaps left (the rest is blocked
+on infrastructure this agent environment doesn't have, or is inherently
+continuous/no-single-PR-closes-it, or content policy).
+**Shape:** 4 simulated `ClientSession`s over a real `LoopbackNetwork` +
+`ServerSession` + `WorldReplicator` + `World` (`WorldGenWorkerPool::
+kSynchronous`, same pattern `blockedit_test.cpp` already established),
+random-walking with a fixed-seed `std::mt19937` (reproducible, not flaky)
+and occasionally pushing a break/place block edit, for 150 ticks, then all
+disconnecting. Every tick advances simulated time directly via `tick(0.05)`
+calls -- no real sleeps, same "pump" pattern every other session-stack test
+in this suite already uses.
+**What it actually checks**, matching ARCHITECTURE_SPEC.md's own soak
+description ("watch for leaks... and unbounded queue growth"): every client
+stays joined the whole run with no connection stuck mid-handshake
+(`player_count()`/`pending_count()`); each client's `pending_edit_count()`/
+`unacked_input_count()` stay bounded across all 150 ticks rather than
+growing (a real queue-growth bug -- an ack that stops being sent, an edit
+result that never arrives -- would blow well past the generous bound this
+test checks); `World::loaded_coords()` stays bounded rather than growing
+roughly linearly with tick count (proving chunk unload keeps working under
+sustained churn, not just chunk load); and a final round confirms
+`player_count()`/`pending_count()` both return to exactly 0 once every
+client disconnects -- no leaked `Conn` entry per soak client that ever
+joined. Real ASan/LSan leak detection comes free from this simply being
+part of `vb_tests`, which the Linux CI matrix already runs under
+`-DVB_ENABLE_ASAN` (this same day's earlier CI pass) -- no separate
+sanitizer wiring was needed for that half of the spec's description, only
+the "watch queue growth" half needed new code at all.
+**Sizing this took real iteration, not a first-try guess:** an initial
+6-client, 400-tick draft with clients spread 40 blocks apart (each forcing
+its own distinct set of chunk columns) measured **~55 seconds of real CPU
+time on its own** -- confirmed via `time`, with `user`/`sys` both reporting
+near-zero the whole run (Git Bash's `time` builtin doesn't correctly
+attribute a native Win32 child process's CPU time on this platform, a real
+environment quirk worth knowing about before trusting a `0.000s user` next
+to a large `real` on this machine) -- because real fBm terrain generation
+in an unoptimized Debug build, not the session/queue logic actually being
+soaked, dominates this test's cost. Scaled down to 4 clients kept only 8
+blocks apart (heavily overlapping interest, so far fewer distinct chunk
+columns ever get generated) and 150 ticks: ~14s standalone, against a ~70s
+baseline for the other 412 tests combined -- a proportionate addition, not
+a suite-doubling one. Verified: full `vb_tests` 413/413 green (1 new case),
+clean `-Werror` build of `vb_tests`/`voxel_browser`/`voxel_browser_server`
+(temporarily reconfigured `build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`,
+confirmed clean, reconfigured back to this dir's OFF default afterward).
+**Gotcha hit while verifying, same category as this file's other real-UDP
+notes:** running the full suite with `--test-case-exclude="*real UDP*"`
+right after this change still ran unusually slowly (~90s+ with long gaps
+between log lines) before finishing clean -- the exclude filter apparently
+doesn't catch every GNS-touching case, and this environment's shared
+per-process GNS global state makes sequential runs flaky in duration (not
+in outcome) the same way this file's §3/`STATE.md.local` real-UDP hang note
+already describes. Not a regression from this change -- confirmed by
+watching the log advance through unrelated test names the whole time, never
+truly stuck, and it did eventually reach the soak test and finish 413/413
+green.
+
+Before that, most recent landed item was **closing Phase 4's "Manifest staleness" gap: a pack that writes `vb.storage`
 after startup no longer permanently stales the asset manifest.** Picked per
 this file's own standing priority (engine work over content) from
 `REMAINING_TASKS.md`'s remaining `[ ]` items, after the git-tag/doc-fix pass

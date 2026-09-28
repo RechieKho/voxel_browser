@@ -1410,8 +1410,39 @@ Full detail: `remaining_tasks/phase6.md`.
       every GUI-adjacent item in this file, just for CI infrastructure
       instead of rendering.
 - [ ] Determinism golden-value CI gate stays green across platforms.
-- [ ] Soak test target (N simulated clients, random walk + edits) run nightly or
-      pre-release; watch queue growth + leaks.
+- [x] Soak test target (N simulated clients, random walk + edits) — landed
+      2026-09-28 as `tests/unit/soak_test.cpp`, folded into the normal
+      `vb_tests` run rather than a separate nightly/pre-release job. 4
+      simulated `ClientSession`s over `LoopbackNetwork` (real `ServerSession`
+      + `WorldReplicator` + `World`, `WorldGenWorkerPool::kSynchronous`)
+      random-walk (fixed-seed `std::mt19937`, reproducible) and
+      break/place-edit for 150 ticks, then all disconnect. Asserts three
+      things ARCHITECTURE_SPEC.md's Testing Strategy calls out: every client
+      stays joined and no pending connection is left stuck
+      (`player_count()`/`pending_count()`), `pending_edit_count()`/
+      `unacked_input_count()` stay bounded rather than growing across the
+      whole run (a real queue-growth bug — an ack that stops being sent, an
+      edit result that never arrives — would blow well past the generous
+      bound), and `World::loaded_coords()` stays bounded rather than growing
+      roughly linearly with tick count (chunk unload actually keeps working
+      under sustained random-walk churn). A final round confirms
+      `player_count()`/`pending_count()` both return to 0 after every client
+      disconnects — no leaked `Conn` entry. Real ASan/LSan leak detection
+      comes for free from this simply being part of `vb_tests`, which the
+      Linux CI matrix already runs under `-DVB_ENABLE_ASAN` (this same day's
+      earlier CI pass) — no separate sanitizer wiring needed for that half.
+      **Deliberately kept small** (4 clients, close together, 150 ticks):
+      real fBm terrain generation dominates this test's cost in an
+      unoptimized Debug build far more than the sim logic actually being
+      soaked — an earlier draft (6 clients spread far enough apart to force
+      a distinct set of chunk columns each, 400 ticks) measured ~55s of real
+      CPU time standalone; this version measured ~14s against a ~70s
+      baseline for the other 412 tests combined, a proportionate addition
+      rather than a suite-doubling one. Verified: full `vb_tests` 413/413
+      green, clean `-Werror` build of `vb_tests`/`voxel_browser`/
+      `voxel_browser_server` (temporarily reconfigured `build-net-lua` with
+      `-DVB_WARNINGS_AS_ERRORS=ON`, confirmed clean, reconfigured back to
+      this dir's OFF default afterward).
 - [ ] Perf budget checks: chunk mesh time, snapshot size, frame time — track in a
       simple benchmark harness.
 - [ ] `--headless` stays functional for both binaries (CI + integration tests).
