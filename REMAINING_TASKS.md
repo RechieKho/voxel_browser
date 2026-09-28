@@ -74,8 +74,65 @@ meshing is permanent).
 Full detail: `remaining_tasks/phase2.md`.
 
 **Remaining:**
-- [ ] Horizontal cross-chunk light propagation (sideways-only spill under a
-      horizontal overhang spanning a chunk border) — still per-chunk-only.
+- [x] Horizontal cross-chunk light propagation — landed 2026-09-28, closing
+      this phase's last remaining item (`relight_chunk`/`relight_column` were
+      previously vertical-only: a chunk always assumed a closed border on
+      every side except straight up). `LightEngine::Neighbours`
+      (`inc/vb/world/lighting.hpp`) replaces the old bare `const Chunk *above`
+      parameter with 5 optional fields (`above` plus new `north`/`south`/
+      `east`/`west`) — a single-pointer constructor keeps every pre-existing
+      `above`-only call site (including `relight_column`'s own) compiling
+      unchanged. `relight_chunk` (`src/world/lighting.cpp`) seeds each of the
+      4 new vertical *faces* from whichever horizontal neighbour is loaded,
+      the same "attenuate by 1 step, `if (seeded > sky[i])` relax" shape the
+      interior BFS already used, not the top face's special "straight down,
+      no falloff" case (horizontal light always decays by 1 per step, matching
+      how a purely-interior sideways step already behaved before this pass).
+      `relight_column` now builds the full `Neighbours` set (via `find()`) at
+      every level of its vertical cascade, so *any* relight — edit, initial
+      load, or cascade — picks up whatever horizontal neighbours happen to be
+      loaded at that moment, the same passive "use what's there" posture
+      `above` already had.
+      **Real reactive gap closed on top of that:** the passive form above
+      only helps when a chunk happens to relight *after* its neighbour is
+      already lit right; it does nothing for the common live-edit case (break
+      one block near a border, and the chunk on the other side — already
+      stably lit, with no other reason to ever relight again — never finds
+      out). `relight_column_impl`'s new `push` parameter closes that: when a
+      chunk in the cascade actually changes and a horizontal neighbour is
+      loaded, it recursively relights that neighbour's whole column too
+      (deferred until the whole triggering column finishes, so the pushed
+      neighbour never reads a half-updated column back), reported through the
+      same `on_relit` callback so `WorldReplicator`'s per-edit code sends the
+      neighbour's own delta immediately, not on the next tick's separate
+      revision-diff sweep. Bounded to exactly one hop, provably: every
+      propagation step costs at least 1 of light's 0-15 range and a chunk is
+      `kChunkDim` (32) blocks wide, so light that has just crossed one border
+      has at most 14 of budget left — nowhere near enough to cross a second
+      full-width chunk and reach a third one, so a pushed neighbour's own
+      relight never tries to push again. Diagonal neighbours are still never
+      touched directly (unchanged from before this pass) — any effect on one
+      only ever arrives indirectly through whichever shared orthogonal
+      neighbour pushes into it.
+      Verified: full `vb_tests` 382/382 green (2 new `lighting_test.cpp`
+      cases — a direct `relight_chunk` case proving sideways spill/falloff
+      from a single `west` neighbour under an otherwise-sealed roof, and a
+      `relight_column`-based end-to-end case proving an edit that opens a
+      gap in one already-loaded chunk's ceiling automatically relights an
+      already-stable neighbour on the other side of the border, without ever
+      calling relight on that neighbour directly, and reports it via
+      `on_relit`), clean `-Werror` build of `vb_tests`/`voxel_browser`/
+      `voxel_browser_server` (temporarily reconfigured `build-net-lua` with
+      `-DVB_WARNINGS_AS_ERRORS=ON`, confirmed clean, reconfigured back to
+      this dir's OFF default afterward). **Deliberately out of scope, per the
+      pre-existing vertical asymmetry this pass didn't reopen:** block light
+      still doesn't cross chunk borders at all (vertically or horizontally) —
+      only sky light does, matching what the vertical-only implementation
+      already covered before this pass. The actual rendered result (a human
+      mining sideways near a chunk border and watching light spill in
+      correctly instead of a dark band) was **not** manually eyeballed — no
+      GUI in this agent environment, same still-open caveat as every other
+      rendering-adjacent pass in this file.
 - [x] Frustum culling, transparent second pass — landed 2026-09-27 (texture
       atlas itself landed separately 2026-09-23, see Phase 4's own entry).
       New `inc/vb/render/frustum.hpp` (header-only, no raylib dependency,

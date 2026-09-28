@@ -217,12 +217,15 @@ std::vector<WorldReplicator::PlayerFrames> WorldReplicator::apply_block_edit(
 		hooks_.after_edit(editor, p, existing, new_block, is_break);
 	}
 
-	// Relight cc and cascade downward (lighting::relight_column, see
-	// lighting.hpp) instead of a plain single-chunk relight_chunk: an edit at
-	// the top of a chunk can change what the chunk below it should see as
-	// "incoming sky light" too, not just cc itself. Every chunk the cascade
-	// actually touches -- always cc, plus any chunk below it whose light
-	// changed as a result -- gets its own delta, fanned out only to the
+	// Relight cc, cascade downward, and (as of this pass) sideways too
+	// (lighting::relight_column, see lighting.hpp) instead of a plain
+	// single-chunk relight_chunk: an edit at the top of a chunk can change
+	// what the chunk below it should see as "incoming sky light" too, not
+	// just cc itself, and an edit near a chunk's border can spill new light
+	// into an already-loaded, already-stable horizontal neighbour that has
+	// no other reason to ever relight again. Every chunk the cascade
+	// actually touches -- always cc, plus any chunk below or beside it whose
+	// light changed as a result -- gets its own delta, fanned out only to the
 	// players who actually mirror that specific chunk (which may differ from
 	// cc's own watchers).
 	const world::LightEngine light_engine(reg);

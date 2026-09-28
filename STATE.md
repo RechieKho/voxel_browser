@@ -18,9 +18,106 @@
 
 ---
 
-## Current status (2026-09-27)
+## Standing priority: prefer engine (C++) work over content (Lua)
 
-**Per-connection message-rate flood guard, closing REMAINING_TASKS' long-
+When picking what to work on next and multiple open items are roughly equally
+ready (e.g. choosing among REMAINING_TASKS' several `[ ]` items with no other
+constraint forcing one), **prioritize a task that changes the engine (C++
+code under `src/`/`inc/`) over one that's purely `content/*.lua` policy/
+content work.** Most remaining Lua-only gaps (PvP/mob damage policy, hunger,
+more base-pack art/reskins, etc.) are content authors' problems the engine
+already has the primitives for; the engine surface itself is where real
+mechanism gaps still exist and where a wrong call is much more expensive to
+unwind later. This is a standing preference for ambiguous "what next"
+choices, not a rule to force an engine change where a task is inherently
+content-only (e.g. the user explicitly asks for a content-pack feature).
+
+---
+
+## Current status (2026-09-28)
+
+**Horizontal cross-chunk light propagation, closing Phase 2's own last
+remaining item ("Horizontal cross-chunk light propagation... still
+per-chunk-only").** `LightEngine::relight_chunk`'s old `const Chunk *above`
+parameter is now `const Neighbours &neighbours` (`inc/vb/world/lighting.hpp`)
+-- 5 optional fields, `above` (unchanged meaning) plus new `north`/`south`/
+`east`/`west`, each "the loaded chunk at the corresponding adjacent
+`ChunkCoord`, or null if nothing's loaded there / that border is closed
+off." A single-`Chunk*`-argument constructor on `Neighbours` keeps every
+pre-existing `above`-only call site, including `relight_column`'s own,
+compiling unchanged -- purely additive at the API surface. `relight_chunk`
+(`src/world/lighting.cpp`) seeds sky light across each of the 4 new
+vertical *faces* from whichever horizontal neighbour is loaded, using the
+same "attenuate by 1 step, `if (seeded > sky[i])` relax" shape the interior
+BFS already used for a plain sideways step -- not the top face's special
+"straight down, no falloff" case, since horizontal propagation across a
+border decays by 1 per step exactly like an interior horizontal step
+already did (confirmed by the pre-existing "sky light spills under an
+overhang and falls off by 1 per step" test, unchanged by this pass).
+`relight_column` (unconditional vertical cascade, 2026-09-15) now builds
+the *full* `Neighbours` set via `find()` at every level of that cascade, so
+any relight -- an edit, an initial chunk load, or the cascade itself --
+picks up whatever horizontal neighbours happen to already be loaded at that
+moment, the same passive "use what's there" posture `above` always had.
+**Real reactive gap closed on top of that, not just the passive form:** the
+passive form alone only helps when a chunk happens to relight *after* its
+neighbour is already correctly lit -- it does nothing for the actual
+live-editing case that motivated this item (break one block near a chunk
+border, and the chunk on the other side, already stably lit with no other
+reason to ever relight again, never finds out). New `push` parameter on
+`relight_column_impl`: when relighting a chunk in the cascade actually
+changes its light and a horizontal neighbour is loaded in that direction,
+this now also relights that neighbour's *whole column* recursively (via the
+same cascade, with `push=false` on the inner call), and reports it through
+the same `on_relit` callback -- so `WorldReplicator`'s existing per-edit
+delta-building code (`src/net/world_replicator.cpp`'s `apply_block_edit`)
+sends the pushed neighbour's own delta to its own watchers immediately, on
+the same edit, rather than waiting for the next tick's separate
+"still-visible chunk whose revision moved" catch-all sweep. **Deliberately
+deferred until the whole triggering column finishes cascading, not fired
+per-level as each change is found:** a pushed neighbour's own relight reads
+the triggering column's chunks back via `find()`, and firing early would
+let it see a half-updated column (levels below the one that just changed
+still holding pre-relight data).
+**Why one hop is provably enough, not just "good enough for now" like the
+existing vertical cascade's own down-through-the-stack cost note:** every
+propagation step costs at least 1 of light's 0-15 range, and a chunk is
+`kChunkDim` (32) blocks wide -- light that has just crossed one border has
+at most 14 of budget left, nowhere near enough to cross a second full-width
+chunk and reach a third one. So a pushed neighbour's own relight, even
+though it may itself find further changes, never tries to push a second
+time (`push=false` on that inner call) -- it doesn't need to, not just
+"chooses not to for cost reasons." Diagonal neighbours are still never
+touched directly, unchanged from before this pass -- an edit's effect on a
+diagonal chunk, if any, only ever arrives indirectly through whichever of
+the two shared orthogonal neighbours pushes into it, one hop at a time,
+exactly like everything else here.
+Verified: full `vb_tests` 382/382 green (2 new `lighting_test.cpp` cases --
+a direct `relight_chunk` case proving sideways spill/falloff from a single
+`west` neighbour under an otherwise fully-sealed roof, using the same
+"stone ceiling with one open column" shape the pre-existing single-chunk
+overhang test uses, just pinned to the chunk edge instead of the middle;
+and a `relight_column`-based end-to-end case that starts two adjacent
+fully-sealed chunks, "breaks a block" in one to open a gap right at its own
+border column, calls `relight_column` on *only* that edited chunk's own
+coord -- exactly what a real block-edit call site does -- and confirms the
+untouched neighbour picks up the new spill automatically, with `on_relit`
+firing for both coords), clean `-Werror` build of `vb_tests`/
+`voxel_browser`/`voxel_browser_server` (temporarily reconfigured
+`build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`, confirmed clean,
+reconfigured back to this dir's OFF default afterward). **Deliberately out
+of scope, per the pre-existing vertical asymmetry this pass didn't
+reopen:** block light still never crosses a chunk border at all, vertically
+or horizontally -- only sky light does, matching exactly what the
+vertical-only implementation already covered before this pass; extending
+cross-chunk propagation to block light too is a separate, still-open
+follow-up, not attempted here. The actual rendered result (a human mining
+sideways near a chunk border and watching light spill in correctly instead
+of sitting in a dark band until they cross it) was **not** manually
+eyeballed -- no GUI in this agent environment, same still-open caveat as
+every other rendering-adjacent pass in this file.
+
+Before that, most recent landed item was **a per-connection message-rate flood guard, closing REMAINING_TASKS' long-
 tracked "per-player rate limit / flood guard belongs with `GnsTransport`"
 item (Phase 3) and its Phase 6.3 duplicate ("rate limiting on custom-keybind
 events").** New `ServerSession::set_max_messages_per_second(double)` /

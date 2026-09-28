@@ -37,7 +37,7 @@ std::uint8_t LightEngine::transmittance(core::BlockId block) const {
 	return 0; // opaque
 }
 
-void LightEngine::relight_chunk(Chunk &chunk, const Chunk *above) const {
+void LightEngine::relight_chunk(Chunk &chunk, const Neighbours &neighbours) const {
 	auto &blocks = chunk.blocks();
 	auto &light = chunk.light_volume();
 
@@ -61,8 +61,8 @@ void LightEngine::relight_chunk(Chunk &chunk, const Chunk *above) const {
 				continue;
 			}
 			std::uint8_t seeded = kMaxLight;
-			if (above != nullptr) {
-				const std::uint8_t incoming = above->light(x, 0, z).sky();
+			if (neighbours.above != nullptr) {
+				const std::uint8_t incoming = neighbours.above->light(x, 0, z).sky();
 				if (incoming == 0) {
 					continue;
 				}
@@ -80,6 +80,55 @@ void LightEngine::relight_chunk(Chunk &chunk, const Chunk *above) const {
 			q.push({ x, kDim - 1, z, seeded });
 		}
 	}
+
+	// --- sky light: seed the 4 vertical faces from horizontal neighbours ---
+	// (cross-chunk horizontal propagation -- e.g. light spilling sideways
+	// under an overhang whose own opening is in the neighbouring chunk).
+	// Unlike the top face above, a border cell here may already carry a
+	// value from the top-face seed (the shared edge/corner column) or an
+	// earlier face in this same pass, so this only ever raises a cell's
+	// light -- same relax-if-greater rule the interior BFS below uses --
+	// never overwrites a higher value with a lower one. No "straight
+	// through, no falloff" special case either (unlike straight-down sky
+	// light): every horizontal step decays by 1, matching how a purely
+	// interior sideways step already behaves within one chunk.
+	auto seed_horizontal = [&](const Chunk *neighbour, int fixed_a, bool a_is_x,
+										int neighbour_a) {
+		if (neighbour == nullptr) {
+			return;
+		}
+		for (int y = 0; y < kDim; ++y) {
+			for (int b = 0; b < kDim; ++b) {
+				const int x = a_is_x ? fixed_a : b;
+				const int z = a_is_x ? b : fixed_a;
+				const std::size_t i = index_of(x, y, z);
+				const std::uint8_t pass = transmittance(blocks.get(i));
+				if (pass == 0) {
+					continue;
+				}
+				const int nx = a_is_x ? neighbour_a : b;
+				const int nz = a_is_x ? b : neighbour_a;
+				const std::uint8_t incoming = neighbour->light(nx, y, nz).sky();
+				if (incoming == 0) {
+					continue;
+				}
+				const std::uint8_t drop = static_cast<std::uint8_t>(kMaxLight - pass + 1);
+				if (incoming <= drop) {
+					continue;
+				}
+				const std::uint8_t seeded = static_cast<std::uint8_t>(incoming - drop);
+				if (seeded > sky[i]) {
+					sky[i] = seeded;
+					q.push({ x, y, z, seeded });
+				}
+			}
+		}
+	};
+	seed_horizontal(neighbours.east, kDim - 1, /*a_is_x=*/true, 0);
+	seed_horizontal(neighbours.west, 0, /*a_is_x=*/true, kDim - 1);
+	seed_horizontal(neighbours.north, kDim - 1, /*a_is_x=*/false, 0);
+	seed_horizontal(neighbours.south, 0, /*a_is_x=*/false, kDim - 1);
+
 	while (!q.empty()) {
 		const Node n = q.front();
 		q.pop();

@@ -10,8 +10,11 @@ namespace vb::world {
 // Default (see ChunkLifecycleSystem::ingest_budget_ / set_ingest_budget()):
 // caps how many just-finished chunks get inserted+relit per update() call.
 // relight_column() cascades down through a whole loaded column per chunk
-// (up to ~2*vertical_view+1 relight_chunk() calls each), so ingesting an
-// unbounded batch is `O(chunks_finished_since_last_tick)` per call -- fine
+// (up to ~2*vertical_view+1 relight_chunk() calls each), plus, as of this
+// pass, up to 4 more whole columns if lighting an already-loaded column
+// spills sideways into an already-stable horizontal neighbour (bounded to
+// one hop -- see lighting.hpp), so ingesting an unbounded batch is
+// `O(chunks_finished_since_last_tick)` per call -- fine
 // normally, but a large initial view distance (e.g. render_distance=8's
 // ~2000-chunk box) submits its entire box to the worldgen pool in one go,
 // and background threads can finish faster than the main thread can insert

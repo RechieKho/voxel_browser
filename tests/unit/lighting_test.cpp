@@ -120,6 +120,43 @@ TEST_CASE("relight_chunk with an open `above` propagates full brightness "
 	CHECK(below.light(5, 0, 5).sky() == kMaxLight); // straight down, no falloff
 }
 
+// --- cross-chunk horizontal sky light (this pass's own gap) -------------
+
+TEST_CASE("relight_chunk with an open `west` neighbour spills sky light "
+		"sideways under a sealed roof, falling off by 1 per step") {
+	auto reg = BlockRegistry::base();
+
+	// West chunk: a stone ceiling at y=10 covering every x except x=31 (the
+	// border column), which stays open straight down -- same shape as the
+	// existing single-chunk "spills under an overhang" test above, just with
+	// the open column pinned to the very edge instead of the middle.
+	Chunk west({ -1, 0, 0 });
+	for (int z = 0; z < kChunkDim; ++z) {
+		for (int x = 0; x < kChunkDim - 1; ++x) {
+			west.blocks().set(x, 10, z, base_block::stone);
+		}
+	}
+	LightEngine(reg).relight_chunk(west);
+	REQUIRE(west.light(kChunkDim - 1, 5, 0).sky() == kMaxLight); // open column
+
+	// East chunk: a stone ceiling at y=10 covering *every* x -- fully sealed,
+	// no opening of its own. Without a west neighbour it would be pitch dark
+	// under the ceiling (same as the "solid floor... sealed" test above).
+	Chunk east({ 0, 0, 0 });
+	for (int z = 0; z < kChunkDim; ++z) {
+		for (int x = 0; x < kChunkDim; ++x) {
+			east.blocks().set(x, 10, z, base_block::stone);
+		}
+	}
+	LightEngine::Neighbours n;
+	n.west = &west;
+	LightEngine(reg).relight_chunk(east, n);
+
+	CHECK(east.light(0, 5, 0).sky() == kMaxLight - 1); // border cell
+	CHECK(east.light(1, 5, 0).sky() == kMaxLight - 2); // one step further in
+	CHECK(east.light(kChunkDim - 1, 5, 0).sky() == 0); // far side: never reached
+}
+
 namespace {
 
 // A minimal in-memory chunk store for exercising relight_column() the same
@@ -218,4 +255,57 @@ TEST_CASE("relight_column always reports the starting chunk even if its "
 				++calls;
 			});
 	CHECK(calls == 1);
+}
+
+TEST_CASE("relight_column pushes a newly-opened sideways gap into an "
+		"already-loaded, already-stable east neighbour") {
+	// Regression for this pass's own gap: an edit near a chunk border used to
+	// only ever relight *its own* column -- an already-lit neighbour on the
+	// other side of the border had no reason to ever relight again, so it
+	// never picked up the new spill even though it was sitting right there,
+	// already loaded.
+	FakeStore store;
+	auto find = [&](ChunkCoord c) { return store.find(c); };
+	LightEngine engine(BlockRegistry::base());
+
+	// Both chunks start under a full, unbroken stone ceiling at y=10 -- fully
+	// sealed, no opening anywhere, exactly like the "solid floor... sealed"
+	// test above.
+	Chunk &west = store.put({ 0, 0, 0 });
+	Chunk &east = store.put({ 1, 0, 0 });
+	for (Chunk *c : { &west, &east }) {
+		for (int z = 0; z < kChunkDim; ++z) {
+			for (int x = 0; x < kChunkDim; ++x) {
+				c->blocks().set(x, 10, z, base_block::stone);
+			}
+		}
+	}
+
+	std::vector<ChunkCoord> relit;
+	auto on_relit = [&](ChunkCoord c, const std::array<Light, kChunkVolume> &, const Chunk &) {
+		relit.push_back(c);
+	};
+	relight_column(engine, ChunkCoord{ 0, 0, 0 }, find, on_relit);
+	relight_column(engine, ChunkCoord{ 1, 0, 0 }, find, on_relit);
+	relit.clear();
+	REQUIRE(east.light(0, 5, 0).sky() == 0); // sealed: no spill from west yet
+
+	// "Break a block": punch a hole straight through west's ceiling right at
+	// its own east-facing border column (x=31) -- opens a shaft all the way
+	// down, same shape the direct relight_chunk `west`-neighbour test above
+	// uses, just produced by an edit instead of authored that way from the
+	// start.
+	west.blocks().set(kChunkDim - 1, 10, 0, base_block::air);
+
+	// Only west's own column is asked to relight -- east is never touched
+	// directly, exactly like a real block-edit call site (world_replicator.cpp)
+	// only ever names the edited chunk's own coord.
+	relight_column(engine, ChunkCoord{ 0, 0, 0 }, find, on_relit);
+
+	CHECK(east.light(0, 5, 0).sky() == kMaxLight - 1); // pushed in from west
+	CHECK(east.light(1, 5, 0).sky() == kMaxLight - 2);
+	// Both chunks were reported via on_relit -- a real caller (e.g.
+	// WorldReplicator) needs east's own callback firing to know to fan a
+	// delta out to whoever's watching it, not just west's.
+	CHECK(relit == std::vector<ChunkCoord>{ { 0, 0, 0 }, { 1, 0, 0 } });
 }

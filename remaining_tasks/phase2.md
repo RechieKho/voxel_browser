@@ -50,9 +50,8 @@ Goal: server generates terrain, streams chunks, client meshes and renders them.
       uses its real neighbour above (or cascades down through a whole loaded
       column) instead of always assuming open sky. Fixed the false-bright
       band at chunk boundaries reported while mining. See `STATE.md` §8.
-- [ ] Horizontal cross-chunk light propagation (sideways-only spill, e.g.
-      under a horizontal overhang spanning a chunk border) is still
-      per-chunk-only — smaller-magnitude follow-up, not attempted.
+- [x] Horizontal cross-chunk light propagation — landed 2026-09-28. See
+      `REMAINING_TASKS.md`'s own Phase 2 entry for the full writeup.
 
 ### 2.4 World replication (§8.5)  ✅
 
