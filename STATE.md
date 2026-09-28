@@ -36,7 +36,35 @@ content-only (e.g. the user explicitly asks for a content-pack feature).
 
 ## Current status (2026-09-28)
 
-**Added Linux CI jobs that build and test under ASan/UBSan and under TSan,
+**Closed Phase 0's last concrete remaining item, "First `git tag v0.0.1`",
+and fixed two stale cross-references left over from earlier the same day's
+`RegionStore`/LZ4 passes.** Picked from `REMAINING_TASKS.md`'s remaining
+`[ ]` items after the ASan/UBSan/TSan CI pass below — everything else still
+open there is either blocked on infrastructure this agent environment
+doesn't have (macOS CI, a live GUI for the two-window playtest), genuinely
+continuous/no-single-PR-closes-it (the Cross-Cutting section's soak-test/
+perf-budget/protocol-lockstep lines), or content policy (PvP/hunger,
+deprioritized by this file's own standing engine-over-content preference).
+**The tag:** `git tag -a v0.0.1 -m "..."` — local annotated tag only,
+**not pushed to `origin`** (pushing a tag is a shared/visible action, left
+for a human to do deliberately via `git push origin v0.0.1` — that's also
+what will actually exercise `bundle`/`publish` in CI for the first time,
+since neither has ever run against a real tag before). `git describe --tags`
+now returns `v0.0.1` instead of erroring `fatal: No names found, cannot
+describe anything`.
+**The stale cross-references:** `REMAINING_TASKS.md`'s Cross-Cutting §18
+line and `ARCHITECTURE_SPEC.md` §18 row 5 both still said `--singleplayer`'s
+`RegionStore` wiring (and, in the `ARCHITECTURE_SPEC.md` case, region-file
+LZ4 framing itself) was "still open" — both actually landed earlier the same
+day (2026-09-28, see the two "Before that" entries below this one). Only
+`remaining_tasks/deferred.md` had already been updated to say "Resolved
+2026-09-28" when that item landed; the two docs that name it from the
+*question/backlog* side, rather than the *changelog* side, didn't get the
+matching edit in the same pass. Both fixed to read "no open sub-item left."
+No code changed, no test run required — pure doc correction plus one git
+tag command.
+
+Before that, most recent landed item was **adding Linux CI jobs that build and test under ASan/UBSan and under TSan,
 closing the Cross-Cutting "Sanitizer (ASan/UBSan) debug CI job; TSan job for
 the threaded subsystems" item in `REMAINING_TASKS.md`.** Picked per this
 file's own standing priority (engine work over content) — this was the one

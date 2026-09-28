@@ -33,8 +33,13 @@ modules, `VB_HEADLESS`, CI workflows, project renamed to `voxel_browser`.
 Full detail: `remaining_tasks/phase0.md`.
 
 **Remaining:**
-- [ ] First `git tag v0.0.1` so `git describe` yields a real version and
-      `bundle`/`publish` are exercised.
+- [x] First `git tag v0.0.1` so `git describe` yields a real version —
+      landed 2026-09-28, local annotated tag only (`git describe` now
+      returns `v0.0.1` instead of erroring with "No names found"). **Not
+      pushed to `origin`** — pushing a tag is a shared/visible action this
+      agent didn't take unilaterally; a human should push it (`git push
+      origin v0.0.1`) once ready, which is also what will actually exercise
+      `bundle`/`publish` in CI for the first time.
 - [ ] `CMAKE_POLICY_VERSION_MINIMUM=3.5` shim is set for CMake ≥ 4 (doctest
       2.4.11 declares `cmake_minimum_required(3.0)`); drop it if doctest is bumped.
 - [ ] Explicit source lists instead of relying on re-running CMake (already
@@ -1389,10 +1394,11 @@ Full detail: `remaining_tasks/phase6.md`.
       resolved or has a noted direction — Q4 chunk compression resolved
       2026-09-28 (LZ4 wired generically into `frame_message()`, see that
       row); Q5 persistence has region-file LZ4 framing resolved 2026-09-28
-      too (`RegionStore` format version 1 -> 2, see that row) but
-      `--singleplayer`'s missing `RegionStore` wiring is still open; Q6 auth
-      has a direction set but isn't implemented yet); record decisions in
-      that section.
+      too (`RegionStore` format version 1 -> 2, see that row), and
+      `--singleplayer`'s `RegionStore` wiring is also now resolved
+      (2026-09-28, see "Current status" in `STATE.md`) — Q5 has no open sub-
+      item left; Q6 auth has a direction set but isn't implemented yet);
+      record decisions in that section.
 
 ---
 
