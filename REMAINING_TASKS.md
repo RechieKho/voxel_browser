@@ -1443,8 +1443,33 @@ Full detail: `remaining_tasks/phase6.md`.
       `voxel_browser_server` (temporarily reconfigured `build-net-lua` with
       `-DVB_WARNINGS_AS_ERRORS=ON`, confirmed clean, reconfigured back to
       this dir's OFF default afterward).
-- [ ] Perf budget checks: chunk mesh time, snapshot size, frame time — track in a
-      simple benchmark harness.
+- [x] Perf budget checks: chunk mesh time, snapshot size — landed 2026-09-28
+      as `tests/unit/perf_budget_test.cpp`, two budget-gate `TEST_CASE`s
+      folded into the normal `vb_tests` run (no historical tracking, no
+      graphs, nothing scheduled separately — matching this item's own
+      "simple benchmark harness" framing). Chunk mesh time: generates a
+      real chunk at the generator's own reported surface height (a fixed
+      chunk-y guess turned out unreliable — an earlier draft hit an entirely
+      open-sky chunk for this seed/column and failed its own "not empty"
+      sanity check), meshes it 3x via `mesh_chunk()` and keeps the fastest
+      run, asserts `< 100ms` (measured ~21ms in this environment's
+      unoptimized Debug build — real headroom, not a hair's-width pass).
+      Snapshot size: encodes a 50-entity `S2CEntitySnapshot` (deliberately
+      busier than any single player's interest radius would realistically
+      ever surface at once) and asserts the encoded size stays under a
+      per-entity byte budget (measured ~52 bytes/entity; budget is 90
+      bytes/entity + a fixed 256-byte allowance) — would catch a real
+      regression such as `visual_override` starting to ride on every
+      record instead of only `entered` ones. **Frame time was deliberately
+      left out**, not attempted as a stand-in: real rasterization/GPU cost
+      needs a live GL context to mean anything, and this agent environment
+      has no GUI — the same already-documented caveat every other
+      rendering-adjacent item in this file carries. Verified: full
+      `vb_tests` 415/415 green (2 new cases), clean `-Werror` build of
+      `vb_tests`/`voxel_browser`/`voxel_browser_server` (temporarily
+      reconfigured `build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`,
+      confirmed clean, reconfigured back to this dir's OFF default
+      afterward).
 - [ ] `--headless` stays functional for both binaries (CI + integration tests).
 - [ ] Address the remaining open item(s) in `ARCHITECTURE_SPEC.md` §18 as
       their blocking phase arrives (renumbered from §19; every row is now

@@ -36,7 +36,53 @@ content-only (e.g. the user explicitly asks for a content-pack feature).
 
 ## Current status (2026-09-28)
 
-**Closed the Cross-Cutting "Soak test target" item: `tests/unit/soak_test.cpp`
+**Closed the Cross-Cutting "Perf budget checks" item (the mesh-time/
+snapshot-size half of it): `tests/unit/perf_budget_test.cpp` adds two
+budget-gate `TEST_CASE`s to the normal `vb_tests` run.** Picked per this
+file's own standing priority (engine work over content) from
+`REMAINING_TASKS.md`'s remaining `[ ]` items right after the soak test
+below — this was the last concrete, unblocked, non-continuous engine gap
+left in the whole backlog (everything else remaining is blocked on
+infrastructure this agent environment doesn't have, inherently continuous,
+or content policy).
+**Chunk mesh time:** generates a real chunk via `WorldGenerator` at
+`gen.surface_height(16, 16) / kChunkDim` -- **not** a fixed guessed chunk-y
+(an earlier draft hardcoded y=2 assuming "base_height=64 puts real terrain
+inside [64,96)" and it happened to land on a chunk that's *entirely open
+sky* for this seed at column (0,0); `mesh_chunk()` legitimately returned an
+empty mesh, and this test's own `REQUIRE_FALSE(mesh.empty())` sanity check
+caught it immediately rather than silently passing for the wrong reason).
+Meshes it 3x and keeps the fastest run (discards scheduling noise the same
+way a real micro-benchmark would, without pulling in a benchmarking
+library for a 3-sample gate), asserts `< 100ms`. Measured ~21ms in this
+environment's unoptimized Debug build -- real headroom, this isn't a
+hair's-width pass that a slightly slower CI runner would flip.
+**Snapshot size:** encodes a 50-entity `S2CEntitySnapshot` (deliberately
+busier than any single player's `InterestGrid` cell radius would
+realistically ever surface at once -- a worst-case shape, not a typical
+one) and checks the encoded byte size against a per-entity budget.
+Measured ~52 bytes/entity; the check uses 90 bytes/entity + a fixed
+256-byte allowance, leaving room for real future growth (more
+`EntityRecord` fields) while still catching an actual regression -- e.g. a
+change that starts sending `visual_override` on every record instead of
+only `entered` ones, breaking `snapshot.hpp`'s own documented "absent
+entirely costs one bool on the wire" invariant.
+**Frame time deliberately left out, not attempted as a stand-in:** real
+rasterization/GPU cost needs a live GL context to mean anything at all --
+same already-documented "no GUI in this agent environment" caveat every
+other rendering-adjacent item in this file carries, not a corner cut
+quietly. What CPU-side work *can* be measured without a GPU (chunk
+meshing, snapshot encoding) is exactly what the two checks above cover.
+Deliberately a **budget gate, not a benchmarking dashboard**: no
+historical tracking, no graphs, nothing scheduled separately from the
+normal `vb_tests` run -- matches this item's own "simple benchmark harness"
+framing, not a heavier one.
+Verified: full `vb_tests` 415/415 green (2 new cases), clean `-Werror`
+build of `vb_tests`/`voxel_browser`/`voxel_browser_server` (temporarily
+reconfigured `build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`, confirmed
+clean, reconfigured back to this dir's OFF default afterward).
+
+Before that, most recent landed item was **closing the Cross-Cutting "Soak test target" item: `tests/unit/soak_test.cpp`
 now runs N simulated clients doing a random walk + edits, folded into the
 normal `vb_tests` run instead of a separate nightly/pre-release job.**
 Picked per this file's own standing priority (engine work over content)

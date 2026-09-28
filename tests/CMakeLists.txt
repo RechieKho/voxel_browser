@@ -27,6 +27,7 @@ add_executable(vb_tests
   unit/noise_graph_test.cpp
   unit/pack_runtime_integration_test.cpp
   unit/pack_runtime_test.cpp
+  unit/perf_budget_test.cpp
   unit/physics_test.cpp
   unit/protocol_test.cpp
   unit/net_test.cpp
