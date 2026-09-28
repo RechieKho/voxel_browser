@@ -6,8 +6,16 @@
   disk.~~ **Resolved 2026-09-25 (Phase 7.6)** for `voxel_browser_server`;
   see `REMAINING_TASKS.md`'s Phase 7.6 entry. ~~Region files carry no
   LZ4/zstd framing yet (RLE only).~~ **Resolved 2026-09-28** — see
-  `ARCHITECTURE_SPEC.md` §18 row 5. Still deferred: `--singleplayer`'s
-  integrated server has no `RegionStore` wired in.
+  `ARCHITECTURE_SPEC.md` §18 row 5. ~~`--singleplayer`'s integrated server
+  has no `RegionStore` wired in.~~ **Resolved 2026-09-28** — see
+  `STATE.md`'s "Current status" for the full writeup: `Singleplayer`
+  (`src/client/main.cpp`) now owns its own `RegionStore` under a fixed
+  `world_singleplayer/` directory, wired into its `WorldReplicator` exactly
+  like the dedicated server's own `region_store`, with a matching 60s
+  periodic autosave sweep plus an unconditional final save in its
+  destructor. No `client.toml` surface to disable it yet (the dedicated
+  server's `persist_world` toggle has no singleplayer equivalent) — a real
+  follow-up, not a cut corner of this pass.
 - Account/auth token verification service (`auth_mode = token`).
 - Audio subsystem + Lua sfx/music API.
 - Server-side plugin hot-reload.

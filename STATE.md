@@ -36,7 +36,82 @@ content-only (e.g. the user explicitly asks for a content-pack feature).
 
 ## Current status (2026-09-28)
 
-**Fixed `default_spawn_position()` spawning players in open ocean.** User-
+**Wired `--singleplayer`'s integrated server to a real `RegionStore`, closing the last item in `remaining_tasks/deferred.md`'s
+world-persistence writeup ("`--singleplayer`'s integrated server wired to
+`RegionStore`").** Picked per this file's own standing priority (engine C++
+work over content Lua) from the remaining open items — everything else
+still open in `REMAINING_TASKS.md`/`deferred.md` was either process/build
+metadata (Phase 0's `git tag`), blocked on infrastructure this agent
+environment doesn't have (macOS CI, a live GUI for the two-window playtest),
+or genuinely content policy (PvP/hunger). This was the one concrete,
+unblocked engine gap left.
+**What was actually missing:** Phase 7.6 (2026-09-25) wired a `RegionStore`
+into `src/server/main.cpp` only — `src/client/main.cpp`'s `Singleplayer`
+struct (the in-process integrated server `--singleplayer` drives) never got
+one, so every singleplayer session's edits were lost the instant the process
+exited; the world regenerated from scratch (including any placed/broken
+blocks) on the next launch. `deferred.md`'s own tracked line already named
+this exact gap.
+**The fix, mirroring `src/server/main.cpp`'s own shape as closely as
+possible:** `Singleplayer` gained a `std::unique_ptr<vb::world::RegionStore>
+region_store` member, declared immediately before `server` (members destroy
+in reverse declaration order, so it's guaranteed to outlive the
+`WorldReplicator` that `server` owns and holds a raw, non-owning pointer to
+it via `ChunkLifecycleSystem::set_region_store`). Constructed in the
+constructor body under a new fixed `kSingleplayerWorldDir` ("world_singleplayer")
+-- distinct from a dedicated server's own default "world" dir so running both
+from the same working directory never collide -- then wired into the
+replicator the same way `src/server/main.cpp` does
+(`replicator->set_region_store(region_store.get())`, right after
+`set_reach()`, right before `server.set_world_replicator(std::move(replicator))`).
+**No `client.toml` surface to disable it yet** -- unlike the dedicated
+server's `persist_world` config toggle, `--singleplayer` has no config file
+on this in-process path at all (same "no ServerConfig here" gap every other
+`Singleplayer`-side comment in this file already notes), so persistence is
+unconditionally on; a real follow-up, not a cut corner of this pass.
+**Autosave, mirroring `src/server/main.cpp`'s own periodic sweep +
+unconditional shutdown save:** a new `kAutosaveIntervalSeconds` (60s, same
+default as the dedicated server's `autosave_interval_seconds`) accumulator
+inside `Singleplayer::tick()` sweeps every loaded chunk through
+`save_if_dirty()` + one `flush()` once enough real time has accumulated --
+otherwise a chunk that never unloads (a player idling in one spot for a
+whole session) would only ever reach disk via the final save below. A new
+`~Singleplayer()` destructor does that same unconditional final sweep on the
+way out (quitting to the main menu, or closing the whole app), mirroring
+`src/server/main.cpp`'s own unconditional `autosave_sweep()` call right
+before it returns.
+**Verified, not just wired:** confirmed the exact same "only persist edits"
+invariant Phase 7.6's own writeup manually verified for the dedicated server
+holds here too -- ran a real `voxel_browser.exe --headless --singleplayer
+--frames 2 --name CiBot --render-distance 2` from a scratch working
+directory (no block ever edited, since `--frames 2` is too short for any
+input to land) and confirmed no `world_singleplayer/` directory was created
+at all, matching `Chunk::revision() == 0` meaning "still exactly what
+worldgen produced, nothing to persist" -- not a missed case. The underlying
+mechanism itself (`RegionStore` wired into `ChunkLifecycleSystem` via
+`WorldReplicator`, saving a real edit across an unload+reload cycle) already
+has full end-to-end test coverage from Phase 7.6's own pass
+(`tests/unit/region_store_test.cpp`'s "a block edit survives a real
+unload+reload cycle... via WorldReplicator" case) -- this pass reuses that
+exact same, already-tested mechanism from a new call site
+(`Singleplayer`), so no new test was added for the wiring itself; `Singleplayer`
+lives entirely inside `src/client/main.cpp`, not linked into `vb_tests`,
+so it isn't directly unit-testable the way `RegionStore`/`ChunkLifecycleSystem`
+are. Full `vb_tests` 411/411 green (run with
+`--test-case-exclude="*real UDP*"` per this file's own noted Windows
+Firewall gotcha for this agent environment), clean `-Werror` build of
+`vb_tests`/`voxel_browser`/`voxel_browser_server` (temporarily reconfigured
+`build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`, confirmed clean,
+reconfigured back to this dir's OFF default afterward). **The actual
+gameplay-visible result (a human placing/breaking a block in a real
+singleplayer session, quitting, relaunching, and seeing the edit still
+there) was not manually eyeballed** -- no GUI in this agent environment,
+same still-open caveat as every other rendering-adjacent pass in this file;
+what *was* verified directly is the "no directory created when nothing was
+edited" half and the already-tested underlying save/load mechanism, not the
+full human-visible round trip.
+
+Before that, most recent landed item was **fixing `default_spawn_position()` spawning players in open ocean.** User-
 reported: "please ensure the spawn point to be on land." Root cause:
 `worldgen::default_spawn_position()` (`src/worldgen/generator.cpp`) always
 stood the player on the exact `(spawn_x, spawn_z)` column's surface (default

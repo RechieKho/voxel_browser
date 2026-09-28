@@ -56,6 +56,7 @@
 #include "vb/world/block.hpp"
 #include "vb/world/daynight.hpp"
 #include "vb/world/raycast.hpp"
+#include "vb/world/region_store.hpp"
 #include "vb/world/world.hpp"
 #include "vb/worldgen/generator.hpp"
 #include "vb/worldgen/worker_pool.hpp"
@@ -133,6 +134,24 @@ vb::net::HandshakeServerHost sp_server_host(std::uint64_t seed) {
 // Default content pack --singleplayer loads (matches server.toml.example's
 // own default) -- there's no client-side config for this yet, so it's fixed.
 constexpr const char *kSingleplayerContentPack = "content/base";
+
+// Phase 7.6 landed world persistence for the dedicated server only
+// (RegionStore wired into src/server/main.cpp) -- --singleplayer's
+// integrated server had no RegionStore at all, so every edit made in a
+// singleplayer session was lost the moment the process exited (the world
+// regenerated from scratch, including any placed/broken blocks, on the next
+// launch). Fixed the same way the dedicated server's own persist_world
+// default works: a fixed relative directory (no client.toml surface for this
+// yet, same "hardcoded, not configurable" posture kSingleplayerContentPack
+// already has above), distinct from a dedicated server's own default "world"
+// dir so running both from the same working directory never collide.
+// Deliberately not scoped per-seed: a dedicated server's own world_dir isn't
+// either (REMAINING_TASKS.md never asked for that), so a singleplayer world
+// re-launched with a different --seed just serves whatever was saved under
+// this same directory for any chunk already edited, regenerating the rest
+// with the new seed -- identical in spirit to how a dedicated server behaves
+// if its own world_seed config changes with saved chunks already on disk.
+constexpr const char *kSingleplayerWorldDir = "world_singleplayer";
 
 vb::script::PackRuntime make_singleplayer_pack_runtime(
 		vb::net::Transport &transport, vb::world::BlockRegistry &registry) {
@@ -291,6 +310,12 @@ struct Singleplayer {
 	vb::physics::MoveParams move_params;
 	vb::world::World world;
 	vb::worldgen::WorldGenWorkerPool pool;
+	// Phase 7.6 follow-up: declared before `server` so it outlives the
+	// WorldReplicator that `server` owns (which holds a raw, non-owning
+	// pointer to it via ChunkLifecycleSystem::set_region_store) -- members are
+	// destroyed in reverse declaration order, so this stays alive for the
+	// whole time `server`'s replicator could still touch it.
+	std::unique_ptr<vb::world::RegionStore> region_store;
 	vb::net::ServerSession server;
 	std::optional<vb::net::ClientSession> client_session;
 
@@ -320,6 +345,13 @@ struct Singleplayer {
 		auto listening = net.server().listen(0);
 		(void)listening; // loopback listen never fails on a fresh network
 
+		// Phase 7.6 follow-up: mirrors src/server/main.cpp's own
+		// region_store construction -- unlike the dedicated server there's no
+		// persist_world config toggle to check here yet (no client.toml
+		// surface for it, same fixed-default posture kSingleplayerWorldDir's
+		// own comment already has).
+		region_store = std::make_unique<vb::world::RegionStore>(kSingleplayerWorldDir);
+
 		auto replicator = std::make_unique<vb::net::WorldReplicator>(
 				world, pool, registry, view_distance, 3);
 		pack_runtime.attach_world(*replicator);
@@ -328,6 +360,7 @@ struct Singleplayer {
 		// server.punch()'s combat reach read.
 		replicator->set_reach(
 				pack_runtime.effective_action_params(vb::net::ActionParams{}).reach);
+		replicator->set_region_store(region_store.get());
 		server.set_world_replicator(std::move(replicator));
 		pack_runtime.attach_session(server);
 
@@ -340,6 +373,27 @@ struct Singleplayer {
 			std::cerr << "client: singleplayer failed to connect to its own "
 						 "loopback server\n";
 		}
+	}
+
+	// Phase 7.6 follow-up: unconditional final save on the way out, mirroring
+	// src/server/main.cpp's own unconditional autosave_sweep() call right
+	// before it returns -- without this, only edits already covered by the
+	// periodic sweep below (or a chunk that happened to unload while playing)
+	// would survive; anything edited since the last sweep and still loaded
+	// when the session ends (quitting to the main menu, or closing the whole
+	// app) would be silently lost.
+	~Singleplayer() { save_all_dirty(); }
+
+	void save_all_dirty() {
+		if (!region_store) {
+			return;
+		}
+		for (vb::core::ChunkCoord coord : world.loaded_coords()) {
+			if (const vb::world::Chunk *chunk = world.find_chunk(coord)) {
+				region_store->save_if_dirty(*chunk);
+			}
+		}
+		region_store->flush();
 	}
 
 	vb::net::ClientSession &client() { return *client_session; }
@@ -369,6 +423,17 @@ struct Singleplayer {
 	// set_ingest_budget()'s doc for why this needs shrinking per catch-up
 	// step below instead of being spent in full on every one of them.
 	static constexpr std::size_t kBaseChunkIngestBudget = 32;
+
+	// Phase 7.6 follow-up: mirrors src/server/main.cpp's own
+	// autosave_interval_seconds default (60s) -- a chunk that stays loaded
+	// the whole session (the player never wandering far enough to trigger
+	// ChunkLifecycleSystem's own unload-triggers-save path) would otherwise
+	// only ever reach disk in the final save_all_dirty() the destructor
+	// above does, e.g. never for a session that crashes instead of exiting
+	// cleanly. No client.toml surface to configure this yet, same
+	// hardcoded-default posture as kSingleplayerWorldDir itself.
+	static constexpr double kAutosaveIntervalSeconds = 60.0;
+	double autosave_accum_ = 0.0;
 
 	void tick(double dt) {
 		if (client_session) {
@@ -403,6 +468,14 @@ struct Singleplayer {
 		}
 		if (steps == kMaxStepsPerFrame) {
 			tick_accum_ = 0.0; // drop the backlog rather than spiral
+		}
+
+		if (region_store) {
+			autosave_accum_ += dt;
+			if (autosave_accum_ >= kAutosaveIntervalSeconds) {
+				autosave_accum_ = 0.0;
+				save_all_dirty();
+			}
 		}
 	}
 };

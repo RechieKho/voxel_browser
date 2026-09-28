@@ -1315,10 +1315,11 @@ Full detail: `remaining_tasks/phase6.md`.
       2026-09-28, see this file's own Cross-Cutting §18 line and
       `ARCHITECTURE_SPEC.md` §18 row 5 for the writeup.
       `--singleplayer`'s in-process integrated server (`src/client/main.cpp`)
-      is **not** wired to a `RegionStore` at all -- it explicitly has no
-      `ServerConfig`/`server.toml` on that path (see its own
-      `make_singleplayer_pack_runtime` comment), so persistence there is a
-      separate follow-up, not a cut corner of this one; a corrupt/unreadable
+      was **not** wired to a `RegionStore` at all when this phase first
+      landed -- closed 2026-09-28 as its own follow-up, see `STATE.md`'s
+      "Current status" for the full writeup (`Singleplayer` now owns a
+      `RegionStore` under a fixed `world_singleplayer/` directory, no
+      `client.toml` toggle to disable it yet). A corrupt/unreadable
       region file is logged (`VB_WARN`) and treated as "chunk never saved"
       (regenerates from worldgen), never fatal -- no migration/versioning
       story exists yet for a region file format change (version 1 today).
@@ -1364,10 +1365,7 @@ Full detail: `remaining_tasks/phase6.md`.
 
 ## Deferred (post first-playable)
 
-`--singleplayer`'s integrated server wired to `RegionStore` (7.6 landed it for
-the dedicated server only) · region file LZ4/zstd framing (7.6's chunk
-payloads are RLE-only today) · region file format versioning/migration ·
-token auth verification · audio subsystem + Lua sfx/music API · server-side
+region file format versioning/migration · token auth verification · audio subsystem + Lua sfx/music API · server-side
 plugin hot-reload · entity-entity physics/mounts/projectiles · particle
 system beyond block-break puffs · compression tuning (zstd, snapshot deltas,
 bit-packed inputs) · dedicated server browser/master list · modding
