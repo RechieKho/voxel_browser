@@ -93,31 +93,42 @@ void ChunkLifecycleSystem::update(const std::vector<core::ChunkCoord> &desired) 
 
 	// 2. Request wanted chunks that are neither loaded nor in flight. A saved
 	//    chunk is loaded straight from disk, synchronously -- no reason to pay
-	//    for a worldgen submission when its real state is already known. That
-	//    synchronous load+relight work shares (1)'s ingest_budget_ instead of
-	//    running unbounded: a persisted world's initial view box (e.g. ~2000
-	//    chunks at view_distance=8) would otherwise load+relight *all* of them
-	//    in a single update() call the first time a player (re)joins -- the
-	//    same unbounded-per-tick-work failure this file's ingest_budget_
-	//    comment already describes for the worldgen-finish path, just hit via
-	//    the disk-load path instead (blocks the tick, and the network send
-	//    that follows it, long enough that the client's loading-screen stall
-	//    deadline fires over a still-empty world). Once the budget's spent
-	//    this call, remaining coords are skipped entirely rather than routed
-	//    to pool_.submit() -- falling through to worldgen would regenerate,
-	//    and silently discard, a chunk that actually has saved data on disk.
-	//    They're retried (load-checked again) on a later tick.
+	//    for a worldgen submission when its real state is already known.
+	//    region_store_->load() itself is cheap regardless of hit or miss (a
+	//    hash lookup into the already-decompressed in-memory Region, plus on
+	//    a hit one chunk's palette/RLE decode -- LZ4 decompression, the
+	//    genuinely non-trivial cost, already happened once per *region* file
+	//    in region_for(), not per chunk here). The actual expensive part is
+	//    relight_column() right below a hit: same unbounded-per-tick-work
+	//    failure this file's ingest_budget_ comment already describes for the
+	//    worldgen-finish path, just reached via the disk-load path instead --
+	//    a persisted world's initial view box (e.g. ~2000 chunks at
+	//    view_distance=8) would otherwise insert+relight *all* of them in a
+	//    single update() call the first time a player (re)joins, blocking the
+	//    tick (and the network send that follows it) long enough that the
+	//    client's loading-screen stall deadline fires over a still-empty
+	//    world. So only an actual disk *hit* counts against `disk_loads` --
+	//    once that budget's spent, a hit chunk is left un-inserted and
+	//    retried (re-decoded, cheaply) on a later tick rather than routed to
+	//    pool_.submit(), which would regenerate and silently discard real
+	//    saved data. A *miss* always falls through to pool_.submit()
+	//    unthrottled: it costs nothing to rule out per coord, and gating
+	//    fresh/never-saved chunks behind the same counter as real disk hits
+	//    throttled a brand new world's entire initial worldgen submission
+	//    down to `ingest_budget_` per tick for no reason (regressed
+	//    --singleplayer's own loading screen once its integrated server
+	//    started sharing this path with a real RegionStore -- see STATE.md).
 	std::size_t disk_loads = 0;
 	for (core::ChunkCoord coord : desired) {
 		if (world_.has_chunk(coord) || requested_.count(coord) != 0) {
 			continue;
 		}
 		if (region_store_ != nullptr) {
-			if (disk_loads >= ingest_budget_) {
-				continue;
-			}
-			++disk_loads;
 			if (std::unique_ptr<Chunk> loaded = region_store_->load(coord)) {
+				if (disk_loads >= ingest_budget_) {
+					continue;
+				}
+				++disk_loads;
 				loaded->set_gen_state(GenState::kGenerated);
 				world_.insert_chunk(std::move(loaded));
 				relight_column(light_, coord, find,
