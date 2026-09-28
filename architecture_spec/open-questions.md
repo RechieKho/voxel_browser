@@ -97,13 +97,21 @@
    an Anvil-style flat file per 16x16-chunk X/Z region (Y ungrouped), reusing
    the existing `vb/world/chunk_codec` palette+RLE serialization (the same
    format `S2C_ChunkAdd` already uses) as the on-disk chunk payload verbatim.
-   No LZ4 framing on region files themselves (only network frames go through
-   `frame_message()`'s new compression path, item 4 above) — a real, still-
-   open follow-up (`remaining_tasks/deferred.md`'s "region file LZ4/zstd
-   framing"), not blocked on Q4 anymore now that Q4 itself is resolved.
-   Wired into `voxel_browser_server` only; the
-   `--singleplayer` integrated server has no `RegionStore`, a known gap not
-   a cut corner (see `remaining_tasks/deferred.md`).
+   **Region file LZ4 framing landed 2026-09-28**, closing
+   `remaining_tasks/deferred.md`'s "region file LZ4/zstd framing" follow-up:
+   `RegionStore::flush()` now runs each entry's chunk-codec payload through
+   the same `compress_for_disk()` policy `net::frame_message()` uses for wire
+   messages (a local copy of the threshold + "only if it helps" gate, not a
+   shared function — `world/` has no business depending on `net/` for one
+   size constant) before writing it, and `region_for()`'s read path reverses
+   it transparently. The on-disk format version bumped 1 -> 2 to add a
+   per-entry `u8 flags` byte (bit 0 = "this entry's payload is LZ4-framed");
+   version-1 files (no flags byte) are still read correctly (`flags` defaults
+   to 0 = uncompressed for them) — an existing on-disk world upgrades in
+   place, one edited chunk at a time, not via any migration pass. Wired into
+   `voxel_browser_server` only; the `--singleplayer` integrated server still
+   has no `RegionStore` at all, a separate, still-open gap (see
+   `remaining_tasks/deferred.md`).
 6. **Account/auth**: `auth_mode = none | token` — token verification service is
    out of scope for v0 but the handshake reserves the field. **Direction set
    (2026-09-17, not yet implemented):** the engine will not own an auth

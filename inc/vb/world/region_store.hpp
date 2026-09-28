@@ -17,9 +17,13 @@
 // 3D but a generated world is typically only a few chunks tall; every chunk
 // column-neighbour on X/Z shares one file regardless of Y. Reuses chunk_codec's
 // existing palette+RLE payload format as-is -- a region file is just a
-// container for it, not a new wire concept. No LZ4 framing yet: RLE is the
-// only compression here for now (ARCHITECTURE_SPEC §18's still-open "chunk
-// compression" item covers adding that uniformly, not scoped to this class).
+// container for it, not a new wire concept. Above a size threshold, and only
+// when it actually helps, an entry's RLE'd payload is additionally LZ4-framed
+// on disk (same policy `net::frame_message()` uses for wire messages, see
+// ARCHITECTURE_SPEC.md §18 Q4) -- ordinary near-homogeneous terrain RLE's down
+// small enough that LZ4 rarely helps there, but a heavily-edited chunk with
+// little RLE run-length left benefits the same way an equivalent chunk would
+// over the network.
 //
 // Only *edited* chunks are ever persisted: Chunk::revision() == 0 means "still
 // exactly what worldgen produced", so regenerating on next load is equivalent

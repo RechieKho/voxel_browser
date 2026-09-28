@@ -10,9 +10,11 @@
 #include <vector>
 
 #include "vb/net/world_replicator.hpp"
+#include "vb/protocol/byte_buffer.hpp"
 #include "vb/protocol/world.hpp"
 #include "vb/world/block.hpp"
 #include "vb/world/chunk.hpp"
+#include "vb/world/chunk_codec.hpp"
 #include "vb/world/region_store.hpp"
 #include "vb/world/world.hpp"
 #include "vb/worldgen/generator.hpp"
@@ -127,6 +129,87 @@ TEST_CASE("multiple chunks in the same region share one file") {
 	REQUIRE(lb);
 	CHECK(la->get(0, 0, 0) == base_block::stone);
 	CHECK(lb->get(0, 0, 0) == base_block::dirt);
+
+	std::filesystem::remove_all(dir);
+}
+
+#if VB_WITH_COMPRESSION
+TEST_CASE("a heavily-edited chunk with little RLE run-length gets LZ4-framed "
+		  "on disk and round-trips through it") {
+	const auto dir = temp_world_dir("compressed_round_trip");
+	Chunk chunk({ 2, 0, 2 });
+	// A per-voxel pseudo-random pattern of 4 block types leaves RLE almost
+	// nothing to find -- the same "swiss cheese" shape STATE.md's own LZ4
+	// measurement used to show LZ4 actually helps past RLE alone.
+	std::uint32_t rng = 12345;
+	for (int x = 0; x < kChunkDim; ++x) {
+		for (int y = 0; y < kChunkDim; ++y) {
+			for (int z = 0; z < kChunkDim; ++z) {
+				rng = rng * 1664525u + 1013904223u;
+				const auto pick = rng % 4;
+				const auto id = pick == 0 ? base_block::air
+						: pick == 1 ? base_block::stone
+						: pick == 2 ? base_block::dirt
+									: base_block::water;
+				chunk.set(x, y, z, id);
+			}
+		}
+	}
+	{
+		RegionStore store(dir);
+		store.save_if_dirty(chunk);
+		store.flush();
+	}
+
+	// Reopening and reading back must reproduce the exact same volume --
+	// compression is transparent to load(), not just to the writer.
+	RegionStore reopened(dir);
+	auto loaded = reopened.load({ 2, 0, 2 });
+	REQUIRE(loaded);
+	for (int x = 0; x < kChunkDim; x += 5) {
+		for (int y = 0; y < kChunkDim; y += 5) {
+			for (int z = 0; z < kChunkDim; z += 5) {
+				CHECK(loaded->get(x, y, z) == chunk.get(x, y, z));
+			}
+		}
+	}
+
+	std::filesystem::remove_all(dir);
+}
+#endif
+
+TEST_CASE("a pre-existing version-1 region file (no per-entry flags byte, "
+		  "written before LZ4 framing existed) still loads correctly") {
+	const auto dir = temp_world_dir("legacy_v1");
+	std::filesystem::create_directories(dir);
+
+	Chunk chunk({ 0, 0, 0 });
+	chunk.set(3, 4, 5, base_block::stone);
+	const auto payload = encode_chunk_payload(chunk);
+
+	std::vector<std::byte> out;
+	vb::protocol::ByteWriter w(out);
+	w.u32(0x47524256u); // kMagic ("VBRG")
+	w.u32(1u); // kVersionNoFlags -- no flags byte per entry
+	w.varint(1);
+	w.i32(0);
+	w.i32(0);
+	w.i32(0);
+	w.u64(1); // revision
+	w.varint(payload.size());
+	w.bytes(payload);
+
+	{
+		std::ofstream f(dir / "r.0.0.vbr", std::ios::binary);
+		f.write(reinterpret_cast<const char *>(out.data()),
+				static_cast<std::streamsize>(out.size()));
+	}
+
+	RegionStore store(dir);
+	auto loaded = store.load({ 0, 0, 0 });
+	REQUIRE(loaded);
+	CHECK(loaded->get(3, 4, 5) == base_block::stone);
+	CHECK(loaded->get(0, 0, 0) == vb::core::BlockId::kAir);
 
 	std::filesystem::remove_all(dir);
 }

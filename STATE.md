@@ -36,7 +36,59 @@ content-only (e.g. the user explicitly asks for a content-pack feature).
 
 ## Current status (2026-09-28)
 
-**Wired real LZ4 wire compression, resolving ARCHITECTURE_SPEC.md §18 Q4
+**Region file LZ4 framing, closing `remaining_tasks/deferred.md`'s "region
+file LZ4/zstd framing" item and unblocking `ARCHITECTURE_SPEC.md` §18 row 5's
+remaining open half.** Picked per this file's own standing priority (engine
+work over content) right after the wire-compression pass below landed and
+its own writeup explicitly named this as the next unblocked follow-up (region
+file payloads still carried bare RLE with no LZ4 framing of their own).
+**The change:** `RegionStore::flush()` (`src/world/region_store.cpp`) now
+runs each entry's chunk-codec payload through a local `compress_for_disk()`
+helper — the same threshold-and-only-if-it-helps policy `net::frame_message()`
+already established for wire messages (`kCompressionThresholdBytes = 128`,
+compress via `protocol::compress_lz4`/`decompress_lz4`, keep the compressed
+bytes only if they're actually smaller) — before writing an entry, rather
+than sharing a function with `net/`: `world/` has no business depending on
+`net/` for one size constant, so this is a deliberate small duplication, not
+an oversight. On-disk format version bumped **1 -> 2** to add a per-entry
+`u8 flags` byte (bit 0 = `kEntryCompressed`) right after the existing
+revision field; a version-1 file (written before this pass, no flags byte)
+is still read correctly by treating its flags as always 0 (uncompressed) —
+`region_for()` accepts either `kVersion` or `kVersionNoFlags` on read, only
+ever writes `kVersion`. **Gotcha this pass had to get right:** the corrupt-
+file handling that already existed (any read failure -> warn + treat the
+whole region as empty, never fatal) had to be extended to a mid-read LZ4
+decompression failure too (a new `entry_corrupt` flag threaded through the
+read loop) — and to a compressed entry reaching a binary built *without*
+`VB_WITH_COMPRESSION` at all, which is treated as corrupt rather than fed raw
+LZ4 bytes to `chunk_codec::decode_chunk_payload` (same "a compressed frame
+reaching a build that can't decompress it is a real error, not a silent
+misinterpretation" posture `net/session.cpp`'s `decompress_frame_payload()`
+already established for wire messages). In-memory `Entry::payload` is always
+the *uncompressed* chunk-codec blob regardless of what's on disk — compression
+is purely a write-time/read-time disk-format detail, so `save_if_dirty()`'s
+existing revision-based dedup logic (skip re-encoding a chunk already cached
+at its current revision) needed no change at all.
+Verified: full `vb_tests` 410/410 green (2 new `region_store_test.cpp`
+cases — a synthetic per-voxel-random 4-block-type "swiss cheese" chunk (the
+same shape the wire-compression measurement below used) round-trips through
+a real save/flush/reopen/load cycle, proving compression is transparent to
+the reader; and a hand-built version-1-format file, written the way this
+pass's *old* code would have, still loads correctly through the *new* code),
+run with `--test-case-exclude="*real UDP*"` per this environment's known
+Windows Firewall gotcha, clean `-Werror` build of `vb_tests`/`voxel_browser`/
+`voxel_browser_server` (temporarily reconfigured `build-net-lua` with
+`-DVB_WARNINGS_AS_ERRORS=ON`, confirmed clean, reconfigured back to this
+dir's OFF default afterward). Updated `ARCHITECTURE_SPEC.md` §18 row 5,
+`architecture_spec/open-questions.md`'s matching writeup, `REMAINING_TASKS.md`'s
+Phase 7.6 entry and its Cross-Cutting §18 line, and
+`remaining_tasks/deferred.md` to match. **Still genuinely open, not touched
+by this pass:** `--singleplayer`'s integrated server still has no
+`RegionStore` at all (a separate wiring gap, not a compression-format one);
+zstd was never implemented or measured here either, same reasoning as the
+wire-compression pass below.
+
+Before that, most recent landed item was **wiring real LZ4 wire compression, resolving ARCHITECTURE_SPEC.md §18 Q4
 ("Chunk compression: LZ4 vs. zstd vs. palette-only") — the one item that
 section's own cross-cutting line called "still fully open."** Picked per
 this file's own standing priority (engine work over content) after closing

@@ -1309,10 +1309,11 @@ Full detail: `remaining_tasks/phase6.md`.
       exits. Three new `server.toml` keys: `persist_world` (default `true`),
       `world_dir` (default `"world"`, relative like `content_pack`),
       `autosave_interval_seconds` (default `60.0`).
-      **Deliberately out of scope, per the AskUserQuestion decision that
-      shaped this pass:** no LZ4/zstd framing on region files yet (chunk
-      codec's own RLE is the only compression here -- ARCHITECTURE_SPEC §18
-      row 4's "chunk compression" item still covers adding that uniformly);
+      **Deliberately out of scope at the time, per the AskUserQuestion
+      decision that shaped this pass:** no LZ4/zstd framing on region files
+      (chunk codec's own RLE was the only compression here) -- landed
+      2026-09-28, see this file's own Cross-Cutting §18 line and
+      `ARCHITECTURE_SPEC.md` §18 row 5 for the writeup.
       `--singleplayer`'s in-process integrated server (`src/client/main.cpp`)
       is **not** wired to a `RegionStore` at all -- it explicitly has no
       `ServerConfig`/`server.toml` on that path (see its own
@@ -1353,8 +1354,11 @@ Full detail: `remaining_tasks/phase6.md`.
       their blocking phase arrives (renumbered from §19; every row is now
       resolved or has a noted direction — Q4 chunk compression resolved
       2026-09-28 (LZ4 wired generically into `frame_message()`, see that
-      row); Q5 persistence and Q6 auth have a direction set but aren't fully
-      implemented yet); record decisions in that section.
+      row); Q5 persistence has region-file LZ4 framing resolved 2026-09-28
+      too (`RegionStore` format version 1 -> 2, see that row) but
+      `--singleplayer`'s missing `RegionStore` wiring is still open; Q6 auth
+      has a direction set but isn't implemented yet); record decisions in
+      that section.
 
 ---
 
