@@ -36,7 +36,33 @@ content-only (e.g. the user explicitly asks for a content-pack feature).
 
 ## Current status (2026-09-28)
 
-**Wired `--singleplayer`'s integrated server to a real `RegionStore`, closing the last item in `remaining_tasks/deferred.md`'s
+**Added Linux CI jobs that build and test under ASan/UBSan and under TSan,
+closing the Cross-Cutting "Sanitizer (ASan/UBSan) debug CI job; TSan job for
+the threaded subsystems" item in `REMAINING_TASKS.md`.** Picked per this
+file's own standing priority (engine work over content) — this was the one
+remaining Cross-Cutting item that was both concrete and fully unblocked (the
+`vb_sanitizers` CMake target and `VB_ENABLE_ASAN`/`VB_ENABLE_UBSAN`/
+`VB_ENABLE_TSAN` options already existed, linked into every first-party
+target — nothing ever turned them on in CI). `.github/workflows/build_linux.yml`
+gained two new `build_type` matrix entries (`asan`, `tsan`, both
+`RelWithDebInfo`) running the exact same `ctest --output-on-failure` the
+existing `release`/`debug` entries already run, with binary staging/artifact
+upload skipped for the two sanitizer entries (not real distributables).
+Deliberately Linux-only: `cmake/Sanitizers.cmake` already documents MSVC has
+no UBSan/TSan at all, and macOS CI doesn't build `VB_WITH_NET` yet (this
+file's own still-open Phase 1 item) — Linux is the only platform where all
+three sanitizers and the full net-enabled build coexist. **Caveat, same
+category as every GUI-adjacent item in this file but for CI instead of
+rendering: not verified by an actual GitHub Actions run** — this agent
+environment can't trigger/observe one. The change only adds `-DVB_ENABLE_*`
+flags to the same configure/build/test steps the already-green release/debug
+entries use, so it should work, but the *point* of adding it is to let a real
+run surface genuine findings (a real race, real UB, or a third-party
+FetchContent'd lib not tolerating being linked against instrumented code)
+that this local session has no way to preempt. See `REMAINING_TASKS.md`'s own
+entry for the full writeup.
+
+Before that, most recent landed item was **wiring `--singleplayer`'s integrated server to a real `RegionStore`, closing the last item in `remaining_tasks/deferred.md`'s
 world-persistence writeup ("`--singleplayer`'s integrated server wired to
 `RegionStore`").** Picked per this file's own standing priority (engine C++
 work over content Lua) from the remaining open items — everything else

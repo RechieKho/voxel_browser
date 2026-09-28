@@ -1344,7 +1344,40 @@ Full detail: `remaining_tasks/phase6.md`.
 - [ ] Keep `ENGINE_PROTOCOL_VERSION` + `docs/protocol.md` in lockstep with every
       wire change.
 - [ ] Every new `vb/protocol` struct gets a round-trip + fuzz test.
-- [ ] Sanitizer (ASan/UBSan) debug CI job; TSan job for the threaded subsystems.
+- [x] Sanitizer (ASan/UBSan) debug CI job; TSan job for the threaded
+      subsystems — landed 2026-09-28. `cmake/Sanitizers.cmake`'s
+      `vb_sanitizers` INTERFACE target (and the `VB_ENABLE_ASAN`/
+      `VB_ENABLE_UBSAN`/`VB_ENABLE_TSAN` options) already existed and were
+      already linked into every first-party target, but no workflow ever
+      turned them on — this closes that gap on the Linux matrix only
+      (`.github/workflows/build_linux.yml`): two new `build_type` entries,
+      `asan` (`-DVB_ENABLE_ASAN=ON -DVB_ENABLE_UBSAN=ON`, combinable per
+      `Sanitizers.cmake`'s own mutual-exclusion check) and `tsan`
+      (`-DVB_ENABLE_TSAN=ON`), both `RelWithDebInfo` so symbols/line info
+      survive in sanitizer output. Both run the exact same `ctest
+      --output-on-failure` the existing release/debug jobs already run — no
+      new test list, the point is running *existing* tests under
+      instrumentation. Binary staging/artifact upload is skipped for these
+      two (`if: matrix.build_type == 'release' || matrix.build_type ==
+      'debug'`) since a sanitizer build isn't a real distributable. Windows
+      (MSVC) and macOS were deliberately left alone: `Sanitizers.cmake`
+      itself already documents MSVC has no UBSan/TSan support at all (ASan
+      only, and even that needed the `_DISABLE_*_ANNOTATION` workaround
+      already in that file for third-party static-lib linking), and macOS CI
+      doesn't even build `VB_WITH_NET` yet (this file's own still-open Phase
+      1 item) — Linux is the one platform where all three sanitizers and the
+      full net-enabled build are simultaneously supported. **Not verified by
+      an actual GitHub Actions run** — this agent environment has no way to
+      trigger/observe a real Actions run; the change is a straightforward
+      extension of the existing, already-green release/debug matrix entries
+      (same install/configure/build/test steps, just extra `-DVB_ENABLE_*`
+      flags plumbed through `matrix.sanitizer_cmake_flags`), but the first
+      real run may still surface a genuine sanitizer finding (a real race or
+      UB) or an environment quirk (e.g. a third-party FetchContent'd lib not
+      tolerating being linked against instrumented code) that a local
+      Windows-only agent session can't preempt — same category of caveat as
+      every GUI-adjacent item in this file, just for CI infrastructure
+      instead of rendering.
 - [ ] Determinism golden-value CI gate stays green across platforms.
 - [ ] Soak test target (N simulated clients, random walk + edits) run nightly or
       pre-release; watch queue growth + leaks.

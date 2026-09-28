@@ -15,12 +15,18 @@ jobs:
       matrix:
         target: [linux]
         arch: [x86_64]
-        build_type: [release, debug]
+        build_type: [release, debug, asan, tsan]
         include:
           - build_type: release
             cmake_build_type_keyword: Release
           - build_type: debug
             cmake_build_type_keyword: RelWithDebInfo
+          - build_type: asan
+            cmake_build_type_keyword: RelWithDebInfo
+            sanitizer_cmake_flags: -DVB_ENABLE_ASAN=ON -DVB_ENABLE_UBSAN=ON
+          - build_type: tsan
+            cmake_build_type_keyword: RelWithDebInfo
+            sanitizer_cmake_flags: -DVB_ENABLE_TSAN=ON
           - os: ubuntu-latest
             target: linux
           - target: linux
@@ -53,7 +59,8 @@ jobs:
             -DVB_HEADLESS=OFF \
             -DVB_WITH_LUA=ON \
             -DVB_WITH_NET=ON \
-            -DVB_WITH_REPLICATION=ON
+            -DVB_WITH_REPLICATION=ON \
+            ${{ matrix.sanitizer_cmake_flags }}
 
       - name: Build
         shell: bash
@@ -65,6 +72,7 @@ jobs:
         run: ctest --output-on-failure
 
       - name: Stage binaries
+        if: matrix.build_type == 'release' || matrix.build_type == 'debug'
         shell: bash
         run: |
           dist="${{ github.workspace }}/dist"
@@ -76,6 +84,7 @@ jobs:
           find "$dist/content" \( -name "storage.json" -o -type d -name "db" \) -exec rm -rf {} +
 
       - name: Export binaries
+        if: matrix.build_type == 'release' || matrix.build_type == 'debug'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ needs.setup_metadata.outputs.project_name }}-${{ matrix.target }}-${{ matrix.arch }}-${{ matrix.build_type }}
