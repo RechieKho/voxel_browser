@@ -36,9 +36,31 @@ content-only (e.g. the user explicitly asks for a content-pack feature).
 
 ## Current status (2026-09-28)
 
-**Region file LZ4 framing, closing `remaining_tasks/deferred.md`'s "region
-file LZ4/zstd framing" item and unblocking `ARCHITECTURE_SPEC.md` §18 row 5's
-remaining open half.** Picked per this file's own standing priority (engine
+**Fixed `default_spawn_position()` spawning players in open ocean.** User-
+reported: "please ensure the spawn point to be on land." Root cause:
+`worldgen::default_spawn_position()` (`src/worldgen/generator.cpp`) always
+stood the player on the exact `(spawn_x, spawn_z)` column's surface (default
+`(0, 0)`) with no check against sea level — if that column's terrain height
+happened to be at or below sea level (a very plausible ocean column for an
+arbitrary seed), the player spawned floating in open water. **The fix:** it
+now spirals outward from the requested column in growing square rings,
+checking each column's `surface_height(x, z) > sea_level` (new
+`WorldGenerator::sea_level()` accessor — pipeline's own value when a
+`PackWorldGenPipeline` is attached, else `WorldGenParams::sea_level`), and
+spawns on the first dry-land column found (capped at a 256-ring search,
+falling back to the original column if truly nothing turns up — pathological
+case only). Callers (`src/server/main.cpp`, `src/client/main.cpp`
+`--singleplayer`) needed no changes; they just call
+`default_spawn_position(generator)` and get the fixed behavior for free.
+Updated `tests/unit/worldgen_test.cpp`'s two spawn tests to stop assuming
+the spawn column is always exactly `(spawn_x, spawn_z)` (seed 1's origin
+column is actually ocean, which is what surfaced this bug once the land
+check was added) and added a new regression test asserting the spawn
+surface is always above sea level. Verified: full `vb_tests` 414/414 green.
+
+Before that, most recent landed item was **region file LZ4 framing, closing
+`remaining_tasks/deferred.md`'s "region file LZ4/zstd framing" item and
+unblocking `ARCHITECTURE_SPEC.md` §18 row 5's remaining open half.** Picked per this file's own standing priority (engine
 work over content) right after the wire-compression pass below landed and
 its own writeup explicitly named this as the next unblocked follow-up (region
 file payloads still carried bare RLE with no LZ4 framing of their own).

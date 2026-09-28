@@ -3,6 +3,7 @@
 #include <ostream>
 
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <span>
 #include <thread>
@@ -238,22 +239,45 @@ TEST_CASE("default_spawn_position always sits on top of the real surface") {
 		WorldGenParams p;
 		p.seed = seed;
 		const WorldGenerator gen(p, registry);
-		const int surface = gen.surface_height(0, 0);
 
 		const vb::core::Vec3d spawn = default_spawn_position(gen);
-		CHECK(spawn.x == doctest::Approx(0.5));
-		CHECK(spawn.z == doctest::Approx(0.5));
+		const int surface = gen.surface_height(
+				static_cast<int>(std::floor(spawn.x)),
+				static_cast<int>(std::floor(spawn.z)));
 		// One voxel above the topmost solid block, not inside/below it.
 		CHECK(spawn.y == doctest::Approx(static_cast<double>(surface) + 1.0));
 		CHECK(spawn.y > static_cast<double>(surface));
 	}
 }
 
-TEST_CASE("default_spawn_position honours a non-origin spawn column") {
+// Regression: default_spawn_position used to stand on the exact requested
+// column's surface even when that column was ocean (surface at or below sea
+// level), spawning the player floating in open water. It now spirals outward
+// to the nearest column that is actually dry land.
+TEST_CASE("default_spawn_position lands on dry ground, not open water") {
+	auto registry = vb::world::BlockRegistry::base();
+	for (const std::uint64_t seed : { std::uint64_t{ 1 }, std::uint64_t{ 7 },
+				 std::uint64_t{ 19 } }) {
+		WorldGenParams p;
+		p.seed = seed;
+		const WorldGenerator gen(p, registry);
+
+		const vb::core::Vec3d spawn = default_spawn_position(gen);
+		const int surface = gen.surface_height(
+				static_cast<int>(std::floor(spawn.x)),
+				static_cast<int>(std::floor(spawn.z)));
+		CHECK(surface > gen.sea_level());
+	}
+}
+
+TEST_CASE("default_spawn_position honours a non-origin spawn column when "
+		"it's already land") {
 	auto registry = vb::world::BlockRegistry::base();
 	WorldGenParams p;
 	p.seed = 1;
 	const WorldGenerator gen(p, registry);
+
+	REQUIRE(gen.surface_height(40, -12) > gen.sea_level());
 
 	const vb::core::Vec3d spawn = default_spawn_position(gen, 40, -12);
 	CHECK(spawn.x == doctest::Approx(40.5));

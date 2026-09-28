@@ -53,6 +53,11 @@ public:
 	// column. Exposed for tests and for decoration placement later.
 	int surface_height(int world_x, int world_z) const;
 
+	// Sea level in effect for this generator -- the pipeline's own value when
+	// a PackWorldGenPipeline is attached (it can differ from `params_`, which
+	// only governs the fixed default path), otherwise `params_.sea_level`.
+	int sea_level() const;
+
 	const WorldGenParams &params() const { return params_; }
 	const PackWorldGenPipeline *pipeline() const { return pipeline_.get(); }
 
@@ -68,13 +73,19 @@ private:
 };
 
 // A safe default spawn point for this generator: standing on the surface at
-// world column (spawn_x, spawn_z). `JoinGrant::spawn_pos` used to default to
-// a fixed {0, 64, 0} regardless of seed -- with base_height=64 and
-// amplitude=28, the real surface height ranges roughly [36, 92], so a fixed
-// Y had a real chance of landing at or below it, spawning the player
-// embedded in solid terrain with no fall involved (see STATE.md). Callers
-// (client `--singleplayer` and the dedicated server) feed this into a
-// HandshakeServerHost::on_ready so JoinGrant::spawn_pos is seed-correct
+// world column (spawn_x, spawn_z), or the nearest column that is dry land if
+// that one is underwater. `JoinGrant::spawn_pos` used to default to a fixed
+// {0, 64, 0} regardless of seed -- with base_height=64 and amplitude=28, the
+// real surface height ranges roughly [36, 92], so a fixed Y had a real
+// chance of landing at or below it, spawning the player embedded in solid
+// terrain with no fall involved (see STATE.md). It later stood on the exact
+// (spawn_x, spawn_z) surface, but that column can itself be ocean -- surface
+// height there sits at or below sea level -- which spawned the player
+// floating in open water instead of on land. This now spirals outward from
+// (spawn_x, spawn_z) in a growing square ring, one column at a time, until
+// it finds one whose surface sits above sea level, and spawns there instead.
+// Callers (client `--singleplayer` and the dedicated server) feed this into
+// a HandshakeServerHost::on_ready so JoinGrant::spawn_pos is seed-correct
 // instead of a guess.
 core::Vec3d default_spawn_position(
 		const WorldGenerator &gen, int spawn_x = 0, int spawn_z = 0);

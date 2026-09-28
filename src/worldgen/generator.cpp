@@ -233,13 +233,51 @@ void WorldGenerator::generate(world::Chunk &chunk) const {
 	chunk.set_gen_state(world::GenState::kGenerated);
 }
 
+int WorldGenerator::sea_level() const {
+	return pipeline_ ? pipeline_->sea_level : params_.sea_level;
+}
+
 core::Vec3d default_spawn_position(const WorldGenerator &gen, int spawn_x,
 		int spawn_z) {
-	const int surface = gen.surface_height(spawn_x, spawn_z);
+	int land_x = spawn_x;
+	int land_z = spawn_z;
+	const int sea_level = gen.sea_level();
+
+	// Spiral outward in growing square rings from (spawn_x, spawn_z) until a
+	// dry-land column turns up. Ring 0 is just the starting column itself;
+	// ring r visits the perimeter of the (2r+1)x(2r+1) square around it.
+	// Capped well beyond any plausible island/ocean size so a pathological
+	// seed can't spin forever -- falls back to the starting column's surface
+	// (which is what every caller did before this search existed) if nothing
+	// turns up.
+	constexpr int kMaxRing = 256;
+	bool found = gen.surface_height(land_x, land_z) > sea_level;
+	for (int r = 1; !found && r <= kMaxRing; ++r) {
+		const int x0 = spawn_x - r;
+		const int x1 = spawn_x + r;
+		const int z0 = spawn_z - r;
+		const int z1 = spawn_z + r;
+		for (int x = x0; !found && x <= x1; ++x) {
+			for (int z = z0; !found && z <= z1; ++z) {
+				// Perimeter only -- interior columns were already visited by
+				// smaller rings.
+				if (x != x0 && x != x1 && z != z0 && z != z1) {
+					continue;
+				}
+				if (gen.surface_height(x, z) > sea_level) {
+					land_x = x;
+					land_z = z;
+					found = true;
+				}
+			}
+		}
+	}
+
+	const int surface = gen.surface_height(land_x, land_z);
 	// Feet one voxel above the topmost solid block (occupies [surface,
 	// surface+1)), centred in the column.
-	return { static_cast<double>(spawn_x) + 0.5,
-		static_cast<double>(surface) + 1.0, static_cast<double>(spawn_z) + 0.5 };
+	return { static_cast<double>(land_x) + 0.5,
+		static_cast<double>(surface) + 1.0, static_cast<double>(land_z) + 0.5 };
 }
 
 } // namespace vb::worldgen
