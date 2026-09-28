@@ -8,6 +8,7 @@
 
 #include "vb/core/log.hpp"
 #include "vb/core/math.hpp"
+#include "vb/protocol/compression.hpp"
 #include "vb/protocol/message.hpp"
 #include "vb/protocol/world.hpp"
 #include "vb/world/block.hpp"
@@ -20,6 +21,38 @@ namespace {
 
 std::span<const std::byte> span_of(const std::vector<std::byte> &v) {
 	return { v.data(), v.size() };
+}
+
+// Reverses frame_message()'s optional LZ4 framing (ARCHITECTURE_SPEC.md §18
+// Q4) before a message's payload reaches its `decode()`. A no-op (returns
+// true, `storage` untouched) when MessageFlag::kCompressed isn't set --
+// `frame.payload` already points at the caller's own buffer in that case, and
+// is left alone. When it is set, `storage` receives the decompressed bytes
+// and `frame.payload` is repointed at it; `storage` must outlive every use of
+// `frame.payload` after this call. The sender only ever sets the flag once it
+// actually compressed a payload (frame_message()), so any failure here --
+// corrupt bytes, or a compressed frame reaching a binary built without
+// VB_WITH_COMPRESSION at all -- means something is genuinely wrong, not
+// "nothing to do."
+bool decompress_frame_payload(protocol::Frame &frame,
+		std::vector<std::byte> &storage, const char *&reason) {
+	if ((frame.header.flags &
+				static_cast<std::uint16_t>(protocol::MessageFlag::kCompressed)) == 0) {
+		return true;
+	}
+#if VB_WITH_COMPRESSION
+	auto decoded = protocol::decompress_lz4(frame.payload);
+	if (!decoded) {
+		reason = "malformed compressed frame";
+		return false;
+	}
+	storage = std::move(decoded.value());
+	frame.payload = storage;
+	return true;
+#else
+	reason = "received a compressed frame but built without VB_WITH_COMPRESSION";
+	return false;
+#endif
 }
 
 // Per-tick S2C_AssetData send budget (spec §9.3's pacing, simple per-tick
@@ -702,6 +735,12 @@ void ServerSession::system_network_io(double dt_seconds) {
 				auto frame = protocol::read_frame(span_of(ev.frame), consumed);
 				if (!frame) {
 					drop(ev.conn, "malformed frame");
+					break;
+				}
+				std::vector<std::byte> decompressed;
+				const char *decompress_err = nullptr;
+				if (!decompress_frame_payload(*frame, decompressed, decompress_err)) {
+					drop(ev.conn, decompress_err);
 					break;
 				}
 				if (it->second.playing) {
@@ -1424,6 +1463,12 @@ void ClientSession::tick(double dt_seconds) {
 				auto frame = protocol::read_frame(span_of(ev.frame), consumed);
 				if (!frame) {
 					failure_reason_ = "malformed frame from server";
+					return;
+				}
+				std::vector<std::byte> decompressed;
+				const char *decompress_err = nullptr;
+				if (!decompress_frame_payload(*frame, decompressed, decompress_err)) {
+					failure_reason_ = decompress_err;
 					return;
 				}
 				// Handled unconditionally (not through the handshake FSM's

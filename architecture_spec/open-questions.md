@@ -34,7 +34,61 @@
    envelope/lane routing.** Not yet wired — Phase 1 ships a hand-rolled
    `InterestGrid` with the same diff semantics behind a narrow interface. Full
    write-up in `docs/replication.md`.
-4. **Chunk compression**: LZ4 vs. zstd vs. palette-only. Start LZ4, measure.
+4. **Chunk compression**: LZ4 vs. zstd vs. palette-only. **Resolved
+   (2026-09-28): LZ4, applied generically at the message-frame level (not
+   chunk-specific plumbing), above a size threshold, only when it actually
+   shrinks the payload.** `VB_WITH_COMPRESSION` already linked LZ4 (for
+   asset-sync manifest hashing's xxHash dependency) but nothing had ever
+   called into it for network payloads — `MessageFlag::kCompressed`
+   (`inc/vb/protocol/message.hpp`) existed as pure unused scaffolding since
+   Phase 2. New `vb::protocol::compress_lz4`/`decompress_lz4`
+   (`inc/vb/protocol/compression.hpp`, `src/protocol/compression.cpp`, only
+   compiled when `VB_WITH_COMPRESSION`): a u32 LE original-size prefix
+   followed by one `LZ4_compress_default`/`LZ4_decompress_safe` block (LZ4's
+   block API carries no length of its own, so the decompressor needs to be
+   told the output size up front). Wired into the one shared
+   `vb::net::frame_message()` helper (`inc/vb/net/handshake.hpp`) every
+   message type already goes through to get framed — not a chunk-specific
+   code path — behind `kCompressionThresholdBytes` (128 bytes) and an
+   explicit "only if `compressed.size() < payload.size()`" check, so a
+   payload that wouldn't actually shrink is sent uncompressed with the flag
+   unset rather than paying LZ4's own fixed overhead for nothing. The
+   receiving side (`decompress_frame_payload()`, an anonymous-namespace
+   helper shared by both `ServerSession::tick()`'s and `ClientSession::
+   tick()`'s `kMessage` handling in `src/net/session.cpp`) reverses this
+   transparently right after `read_frame()`, before any message-specific
+   `decode()` call — every existing decode call site needed zero changes.
+   A frame arriving with the flag set on a binary built without
+   `VB_WITH_COMPRESSION` is treated as a real protocol violation (dropped/
+   disconnected with a clear reason), not silently misinterpreted, since the
+   sender only ever sets the flag once it actually compressed something.
+   **Measured, not guessed** (the item's own "start LZ4, measure"
+   instruction), via a throwaway scratch test against real
+   `WorldGenerator`-produced chunks (removed after measuring, per this
+   project's convention of not committing debug scaffolding): a real surface
+   chunk (smooth fBm heightmap, no caves) already RLE's its full 32768-byte
+   raw volume down to ~12-14 bytes on its own — LZ4 on top of that actually
+   comes out *larger* (17-19 bytes, all fixed per-call overhead: the 4-byte
+   size prefix plus LZ4's own minimum block framing) since there is nothing
+   left for it to find, which is exactly why `kCompressionThresholdBytes`
+   exists rather than compressing unconditionally. The case LZ4 actually
+   matters for is a heavily-edited, low-run-length chunk — a synthetic
+   per-voxel-random "swiss cheese" chunk (4 block types, no long runs at
+   all, the realistic shape of a well-played, heavily-mined area) measured
+   at 50832 bytes RLE'd, LZ4'd down to 32393 bytes, a real ~36% further
+   reduction. zstd and palette-only-with-no-generic-compression-at-all were
+   not implemented or measured — LZ4 was already a zero-new-dependency,
+   already-linked option, and the measured numbers gave no reason to reach
+   for zstd's extra complexity/dependency cost. Verified: full `vb_tests`
+   408/408 green (4 new cases: `protocol_test.cpp` covers `compress_lz4`/
+   `decompress_lz4` directly — compressible/incompressible/empty round-trips
+   plus rejecting a truncated buffer; `net_test.cpp` covers `frame_message`'s
+   own threshold + "only if it helps" policy against a real `S2CChat`
+   message, both the compressed-large-repetitive-payload case and the
+   left-uncompressed-small-payload case), clean `-Werror` build of
+   `vb_tests`/`voxel_browser`/`voxel_browser_server` (temporarily
+   reconfigured `build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`, confirmed
+   clean, reconfigured back to this dir's OFF default afterward).
 5. **Persistence**: region file format for world save. **Resolved
    (2026-09-25, Phase 7.6, `REMAINING_TASKS.md`):** the 2026-09-17 "lean
    toward LMDB" direction note above was **reversed** after an explicit
@@ -43,8 +97,11 @@
    an Anvil-style flat file per 16x16-chunk X/Z region (Y ungrouped), reusing
    the existing `vb/world/chunk_codec` palette+RLE serialization (the same
    format `S2C_ChunkAdd` already uses) as the on-disk chunk payload verbatim.
-   No LZ4 framing yet — §18 Q4 (chunk compression) stays open and now
-   explicitly covers this too. Wired into `voxel_browser_server` only; the
+   No LZ4 framing on region files themselves (only network frames go through
+   `frame_message()`'s new compression path, item 4 above) — a real, still-
+   open follow-up (`remaining_tasks/deferred.md`'s "region file LZ4/zstd
+   framing"), not blocked on Q4 anymore now that Q4 itself is resolved.
+   Wired into `voxel_browser_server` only; the
    `--singleplayer` integrated server has no `RegionStore`, a known gap not
    a cut corner (see `remaining_tasks/deferred.md`).
 6. **Account/auth**: `auth_mode = none | token` — token verification service is

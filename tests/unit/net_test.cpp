@@ -13,6 +13,8 @@
 #include "vb/net/loopback.hpp"
 #include "vb/net/session.hpp"
 #include "vb/net/transport.hpp"
+#include "vb/protocol/chat.hpp"
+#include "vb/protocol/compression.hpp"
 #include "vb/protocol/handshake.hpp"
 #include "vb/protocol/message.hpp"
 
@@ -313,3 +315,50 @@ TEST_CASE("ServerSession times out a silent connection") {
 	}
 	CHECK(disconnected);
 }
+
+#if VB_WITH_COMPRESSION
+
+// ARCHITECTURE_SPEC.md §18 Q4: frame_message() is the one real caller of
+// compress_lz4() (protocol_test.cpp covers that function directly) -- these
+// cover its own size-threshold + "only if it actually helps" policy.
+TEST_CASE("frame_message compresses a large, repetitive payload and sets "
+		"MessageFlag::kCompressed") {
+	proto::S2CChat msg;
+	msg.text = std::string(500, 'a'); // well past kCompressionThresholdBytes, highly repetitive
+	std::vector<std::byte> uncompressed_payload;
+	msg.encode(uncompressed_payload);
+	REQUIRE(uncompressed_payload.size() >= kCompressionThresholdBytes);
+
+	const auto framed = frame_message(msg);
+	std::size_t consumed = 0;
+	auto frame = proto::read_frame(span_of(framed.bytes), consumed);
+	REQUIRE(frame);
+	CHECK((frame->header.flags &
+				  static_cast<std::uint16_t>(proto::MessageFlag::kCompressed)) != 0);
+	// Genuinely smaller on the wire than sending it uncompressed would be --
+	// not just flagged.
+	CHECK(framed.bytes.size() < proto::kEnvelopeBytes + uncompressed_payload.size());
+
+	auto decoded = proto::decompress_lz4(frame->payload);
+	REQUIRE(decoded);
+	auto reconstructed = proto::S2CChat::decode(*decoded);
+	REQUIRE(reconstructed);
+	CHECK(reconstructed->text == msg.text);
+}
+
+TEST_CASE("frame_message leaves a small payload uncompressed") {
+	proto::S2CChat msg;
+	msg.text = "hi"; // well under kCompressionThresholdBytes
+
+	const auto framed = frame_message(msg);
+	std::size_t consumed = 0;
+	auto frame = proto::read_frame(span_of(framed.bytes), consumed);
+	REQUIRE(frame);
+	CHECK((frame->header.flags &
+				  static_cast<std::uint16_t>(proto::MessageFlag::kCompressed)) == 0);
+	auto decoded = proto::S2CChat::decode(frame->payload);
+	REQUIRE(decoded);
+	CHECK(decoded->text == "hi");
+}
+
+#endif // VB_WITH_COMPRESSION

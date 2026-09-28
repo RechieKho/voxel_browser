@@ -12,6 +12,7 @@
 #include "vb/core/ids.hpp"
 #include "vb/core/math.hpp"
 #include "vb/protocol/assetsync.hpp" // AssetEntryRecord, S2CAssetData
+#include "vb/protocol/compression.hpp"
 #include "vb/protocol/handshake.hpp"
 #include "vb/protocol/message.hpp"
 #include "vb/protocol/world.hpp" // BlockRegistryRecord
@@ -295,11 +296,37 @@ private:
 	std::optional<protocol::S2CJoinAccept> join_accept_;
 };
 
+// Payloads smaller than this never get LZ4-framed even when
+// VB_WITH_COMPRESSION is on: LZ4's own block format (plus the 4-byte
+// original-size prefix compress_lz4() adds) has enough fixed overhead that a
+// small message (an input batch, a single-block edit result) would come out
+// the same size or bigger, all for a wasted round trip through the
+// compressor on both ends.
+inline constexpr std::size_t kCompressionThresholdBytes = 128;
+
 // Shared helper: frame a message into an OutgoingFrame on its natural lane.
+// Above kCompressionThresholdBytes, and only when compressing genuinely
+// shrinks the payload (never assumed -- an already-dense payload, e.g. a
+// mostly-solid chunk's RLE'd blob past a certain point, can come back the
+// same size or larger), this LZ4-frames the payload and sets
+// MessageFlag::kCompressed so the receiver reverses it before decoding (see
+// ARCHITECTURE_SPEC.md §18 Q4). Resolves generically for every message type
+// through this one shared helper, not just chunk messages specifically --
+// S2C_ChunkAdd/S2C_ChunkDelta are simply the frequent, large-payload case
+// that motivated it.
 template <typename Msg>
 OutgoingFrame frame_message(const Msg &msg, std::uint16_t flags = 0) {
 	std::vector<std::byte> payload;
 	msg.encode(payload);
+#if VB_WITH_COMPRESSION
+	if (payload.size() >= kCompressionThresholdBytes) {
+		std::vector<std::byte> compressed = protocol::compress_lz4(payload);
+		if (compressed.size() < payload.size()) {
+			payload = std::move(compressed);
+			flags |= static_cast<std::uint16_t>(protocol::MessageFlag::kCompressed);
+		}
+	}
+#endif
 	OutgoingFrame out;
 	out.lane = protocol::lane_for(Msg::kType);
 	protocol::write_frame(out.bytes, Msg::kType, payload, flags);

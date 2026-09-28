@@ -5,6 +5,7 @@
 target_sources(vb_core PRIVATE
   assetsync.cpp
   chat.cpp
+  compression.cpp
   handshake.cpp
   input.cpp
   inventory.cpp

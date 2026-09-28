@@ -11,6 +11,7 @@
 #include "vb/protocol/assetsync.hpp"
 #include "vb/protocol/byte_buffer.hpp"
 #include "vb/protocol/chat.hpp"
+#include "vb/protocol/compression.hpp"
 #include "vb/protocol/handshake.hpp"
 #include "vb/protocol/input.hpp"
 #include "vb/protocol/inventory.hpp"
@@ -554,3 +555,63 @@ TEST_CASE("decode rejects a bad enum and trailing bytes") {
 	CHECK_FALSE(trailing);
 	CHECK(trailing.error() == vb::core::ProtocolError::kTrailingBytes);
 }
+
+#if VB_WITH_COMPRESSION
+
+// ARCHITECTURE_SPEC.md §18 Q4 ("Chunk compression: LZ4 vs. zstd vs.
+// palette-only") -- resolved LZ4; these cover compress_lz4()/decompress_lz4()
+// directly, independent of frame_message()'s own size-threshold policy
+// (net_test.cpp covers that end of it).
+TEST_CASE("compress_lz4/decompress_lz4 round-trips compressible, "
+		"incompressible, and empty input") {
+	// Highly compressible: one repeated byte, the same shape a homogeneous
+	// chunk's own RLE'd payload has.
+	const std::vector<std::byte> compressible(1000, std::byte{ 0x2A });
+	const auto compressed = compress_lz4(as_span(compressible));
+	CHECK(compressed.size() < compressible.size());
+	auto decoded = decompress_lz4(as_span(compressed));
+	REQUIRE(decoded);
+	CHECK(*decoded == compressible);
+
+	// Effectively random bytes: LZ4 may not shrink this at all, but the
+	// round-trip must still be byte-exact.
+	std::vector<std::byte> noisy;
+	noisy.reserve(500);
+	std::uint32_t x = 0x12345678u;
+	for (int i = 0; i < 500; ++i) {
+		x = x * 1664525u + 1013904223u; // LCG, deterministic "noise"
+		noisy.push_back(static_cast<std::byte>(x & 0xFF));
+	}
+	const auto compressed_noisy = compress_lz4(as_span(noisy));
+	auto decoded_noisy = decompress_lz4(as_span(compressed_noisy));
+	REQUIRE(decoded_noisy);
+	CHECK(*decoded_noisy == noisy);
+
+	// Empty input: still a valid (4-byte, zero-length-prefix) frame.
+	const auto compressed_empty = compress_lz4({});
+	auto decoded_empty = decompress_lz4(as_span(compressed_empty));
+	REQUIRE(decoded_empty);
+	CHECK(decoded_empty->empty());
+}
+
+TEST_CASE("decompress_lz4 rejects a truncated buffer instead of "
+		"reading/writing out of bounds") {
+	const std::vector<std::byte> original(1000, std::byte{ 0x2A });
+	const auto compressed = compress_lz4(as_span(original));
+	REQUIRE(compressed.size() > 8);
+
+	// The original-size prefix still says 1000 bytes, but the compressed
+	// bytes needed to actually produce them are cut short.
+	const std::vector<std::byte> truncated(
+			compressed.begin(), compressed.end() - 4);
+	auto decoded = decompress_lz4(as_span(truncated));
+	CHECK_FALSE(decoded);
+
+	// Just the 4-byte size prefix, no compressed bytes at all.
+	const std::vector<std::byte> prefix_only(
+			compressed.begin(), compressed.begin() + 4);
+	auto decoded2 = decompress_lz4(as_span(prefix_only));
+	CHECK_FALSE(decoded2);
+}
+
+#endif // VB_WITH_COMPRESSION

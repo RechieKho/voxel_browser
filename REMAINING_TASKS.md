@@ -559,8 +559,31 @@ Full detail: `remaining_tasks/phase5.md`.
 **Remaining:**
 - [x] Player + dropped-item billboard sprite atlases (§11.3/3.5) — landed
       2026-09-25, see Phase 4's "Real base-pack art" entry.
-- [~] Cross-chunk relight on edit (breaking a floor lets light into the chunk
-      below) — still per-chunk from scratch each edit.
+- [x] Cross-chunk relight on edit (breaking a floor lets light into the chunk
+      below) — confirmed already closed 2026-09-28, no code change needed.
+      This item's own text was stale: `WorldReplicator::apply_block_edit()`
+      (`src/net/world_replicator.cpp`) has called `lighting::relight_column`
+      (not a plain single-chunk `relight_chunk`) on every real edit since
+      Phase 2's cross-chunk light propagation pass landed the same day — the
+      cascade already relights the whole loaded column below (and, via its
+      `push` parameter, sideways) whenever an edit changes what a neighbour
+      should see, in the same edit, not on some later unrelated relight.
+      Verified with a new end-to-end regression test (not just re-reading the
+      existing code): `tests/unit/world_replication_test.cpp`'s "breaking a
+      floor block lets sky light into the loaded chunk below it, in the same
+      edit" builds two stacked synthetic chunks (a solid floor over an empty
+      room), calls `WorldReplicator::apply_block_edit()` to break one floor
+      voxel, and confirms the room below picks up real sky light
+      (`sky() > 0`) immediately — not staying dark. Full `vb_tests` 404/404
+      green, clean `-Werror` build of `vb_tests`/`voxel_browser`/
+      `voxel_browser_server` (temporarily reconfigured `build-net-lua` with
+      `-DVB_WARNINGS_AS_ERRORS=ON`, confirmed clean, reconfigured back to
+      this dir's OFF default afterward). **Still genuinely true, not
+      resolved by this pass:** `relight_chunk()` itself always recomputes a
+      chunk's light from scratch (a full BFS), not incrementally from just
+      the edited voxel — a real performance characteristic, but a
+      deliberate, documented one (`lighting.hpp`'s own header comment), not
+      the "still TODO" correctness gap this item's stale text described.
 - [x] Per-block hardness/tool break-time variation — one flat duration today
       (superseded in direction by Phase 6.17/6.18's punch-based combat, but
       the "vary by block/tool" idea itself is still open) — landed
@@ -1327,10 +1350,11 @@ Full detail: `remaining_tasks/phase6.md`.
       simple benchmark harness.
 - [ ] `--headless` stays functional for both binaries (CI + integration tests).
 - [ ] Address the remaining open item(s) in `ARCHITECTURE_SPEC.md` §18 as
-      their blocking phase arrives (renumbered from §19; most rows are
-      already resolved or have a noted direction — Q4 chunk compression is
-      the one still fully open; Q5 persistence and Q6 auth have a direction
-      set but aren't implemented yet); record decisions in that section.
+      their blocking phase arrives (renumbered from §19; every row is now
+      resolved or has a noted direction — Q4 chunk compression resolved
+      2026-09-28 (LZ4 wired generically into `frame_message()`, see that
+      row); Q5 persistence and Q6 auth have a direction set but aren't fully
+      implemented yet); record decisions in that section.
 
 ---
 

@@ -168,6 +168,60 @@ TEST_CASE("breaking a block at the top of a buried chunk stays dark, not "
 	CHECK(mid->light(5, kChunkDim - 1, 5).sky() == 0);
 }
 
+// Regression/coverage for REMAINING_TASKS.md's long-tracked "cross-chunk
+// relight on edit (breaking a floor lets light into the chunk below)" item:
+// apply_block_edit() must relight the *whole* affected column, not just the
+// chunk the edit itself lives in, so a hole punched in a floor immediately
+// lights up the (already-loaded) chunk below it -- not just on that chunk's
+// own next unrelated relight.
+TEST_CASE("breaking a floor block lets sky light into the loaded chunk below "
+		"it, in the same edit") {
+	vb::world::World world(vb::world::BlockRegistry::base());
+	wg::WorldGenWorkerPool pool(
+			wg::WorldGenerator(wg::WorldGenParams{}, vb::world::BlockRegistry::base()),
+			wg::WorldGenWorkerPool::kSynchronous);
+	WorldReplicator rep(world, pool, vb::world::BlockRegistry::base(),
+			/*view*/ 0, /*vview*/ 1);
+
+	using vb::world::kChunkDim;
+
+	// Chunk {0,1,0}: a solid floor at local y=0 (the only thing separating it
+	// from the room below) with open air above -- nothing loaded above this
+	// chunk, so relight_chunk()'s "no `above`" convention already treats its
+	// own ceiling as open sky.
+	vb::world::Chunk &floor_chunk = world.get_or_create_chunk({ 0, 1, 0 });
+	for (int x = 0; x < kChunkDim; ++x) {
+		for (int z = 0; z < kChunkDim; ++z) {
+			floor_chunk.set(x, 0, z, vb::world::base_block::stone);
+		}
+	}
+	// Chunk {0,0,0}: an empty room directly under the floor.
+	world.get_or_create_chunk({ 0, 0, 0 });
+
+	// Before the edit: nothing has ever been relit (both chunks start with an
+	// all-zero light volume by construction), so this isn't yet a meaningful
+	// "dark" assertion -- the point of this test is what happens *after* the
+	// edit triggers the real relight.
+	const vb::core::IVec3 floor_voxel{ 5, kChunkDim, 5 }; // local (5,0,5) of {0,1,0}
+	REQUIRE(world.get_block(floor_voxel) == vb::world::base_block::stone);
+
+	vb::protocol::C2SBlockEdit edit;
+	edit.predicted_seq = 1;
+	edit.action = vb::protocol::BlockEditAction::kBreak;
+	edit.pos = floor_voxel;
+	vb::protocol::S2CBlockEditResult result;
+	const Vec3d eye{ 5.5, static_cast<double>(kChunkDim) - 0.5, 5.5 };
+	rep.apply_block_edit(NetId{ 1 }, eye, edit, result);
+	REQUIRE(result.accepted);
+
+	// The room below picks up real sky light through the new hole, in this
+	// same edit -- not left dark waiting for some later, unrelated relight of
+	// its own.
+	const vb::world::Chunk *room = world.find_chunk({ 0, 0, 0 });
+	REQUIRE(room != nullptr);
+	CHECK(room->light(5, kChunkDim - 1, 5).sky() > 0);
+}
+
 // Regression: a chunk lit assuming open sky (nothing loaded above it yet,
 // generated on a background worker thread before its real neighbour) can be
 // sent to a player, then have that guess corrected server-side once its

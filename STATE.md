@@ -36,7 +36,136 @@ content-only (e.g. the user explicitly asks for a content-pack feature).
 
 ## Current status (2026-09-28)
 
-**Per-block hardness/tool break-time variation, closing Phase 5's "vary by
+**Wired real LZ4 wire compression, resolving ARCHITECTURE_SPEC.md §18 Q4
+("Chunk compression: LZ4 vs. zstd vs. palette-only") — the one item that
+section's own cross-cutting line called "still fully open."** Picked per
+this file's own standing priority (engine work over content) after closing
+the stale "cross-chunk relight on edit" item below left Phase 5 with nothing
+else engine-shaped open; this was the next concrete, real engine gap still
+tracked anywhere in the docs (Phase 0's `git tag v0.0.1` and the
+`CMAKE_POLICY_VERSION_MINIMUM` shim are process/build-metadata items, not
+code; Phase 1's macOS universal-protobuf CI gap needs a real macOS runner
+this agent environment doesn't have).
+**What was actually missing:** `VB_WITH_COMPRESSION` already linked LZ4
+(alongside xxHash, for asset-sync manifest hashing) and `chunk_codec.hpp`'s
+own header comment already described the intended shape ("then optionally
+LZ4-framed by the caller via MessageFlag::kCompressed") — but
+`MessageFlag::kCompressed` (`inc/vb/protocol/message.hpp`) was pure unused
+scaffolding: grepping the whole `src/` tree for it turned up nothing outside
+that one enum definition. No message had ever actually been compressed.
+**The fix, scoped generically rather than chunk-specific:** new
+`vb::protocol::compress_lz4`/`decompress_lz4` (`inc/vb/protocol/
+compression.hpp`, `src/protocol/compression.cpp`, compiled only when
+`VB_WITH_COMPRESSION`) -- a u32 LE original-size prefix + one LZ4 block
+(LZ4's block API has no length of its own). Wired into the single shared
+`vb::net::frame_message()` helper every message type already funnels
+through to get framed (`inc/vb/net/handshake.hpp`), not into chunk messages
+specifically: above a new `kCompressionThresholdBytes` (128 bytes) *and*
+only when compressing actually shrinks the payload -- both conditions
+matter, see the measurement below for why the second one is load-bearing,
+not defensive paranoia. `decompress_frame_payload()` (a new anonymous-
+namespace helper in `src/net/session.cpp`, shared by both `ServerSession`'s
+and `ClientSession`'s `kMessage` handling) reverses it transparently right
+after `read_frame()`, before any per-type `decode()` call runs -- every
+existing decode call site needed zero changes. A frame arriving with the
+flag set on a binary built without `VB_WITH_COMPRESSION` is treated as a
+real error (dropped/disconnected with a clear reason) rather than silently
+fed to a struct decoder as raw LZ4 bytes.
+**Measured, not guessed, closing the item's own "start LZ4, measure"
+instruction:** a throwaway scratch `TEST_CASE` (built, run, and deleted
+again -- not committed, per this project's own no-debug-scaffolding
+convention) against real `WorldGenerator` output found that a real surface
+chunk (smooth fBm heightmap, no caves) already RLE's its 32768-byte raw
+volume down to ~12-14 bytes on its own -- LZ4 on top of *that* comes out
+larger (17-19 bytes, all fixed per-call overhead), which is exactly why the
+threshold + "only if it helps" gate exists rather than compressing
+unconditionally. The case that actually benefits is a heavily-edited,
+low-run-length chunk: a synthetic per-voxel-random 4-block-type "swiss
+cheese" chunk (no long runs anywhere, the realistic shape of a well-mined
+area) measured at 50832 bytes RLE'd, 32393 bytes RLE+LZ4'd -- a real ~36%
+further reduction in exactly the case that matters for bandwidth on a
+heavily-played world. This is why the resolution is "LZ4 above a threshold,
+conditionally" rather than "always LZ4" or "zstd instead" -- the measured
+numbers gave no reason to reach for zstd's extra dependency/complexity cost
+for a marginal further win on an already-small payload.
+Verified: full `vb_tests` 408/408 green (4 new cases: `protocol_test.cpp`'s
+`compress_lz4`/`decompress_lz4` round-trip + truncated-buffer-rejection
+cases; `net_test.cpp`'s `frame_message` threshold-and-only-if-it-helps
+policy cases against a real `S2CChat` message, both the
+compressed-large-payload and left-uncompressed-small-payload sides), clean
+`-Werror` build of `vb_tests`/`voxel_browser`/`voxel_browser_server`
+(temporarily reconfigured `build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`,
+confirmed clean, reconfigured back to this dir's OFF default afterward).
+Updated `ARCHITECTURE_SPEC.md` §18's Q4 row, `architecture_spec/
+open-questions.md`'s full writeup (including fixing its Q5/persistence
+entry's now-stale "§18 Q4 stays open" cross-reference), and
+`REMAINING_TASKS.md`'s cross-cutting §18 line to match. **Deliberately
+out of scope, left as real follow-ups, not cut corners:** region file
+payloads (`RegionStore`, Phase 7.6) still carry the bare RLE codec with no
+LZ4 framing of their own -- only network frames go through
+`frame_message()`'s new path; that's `remaining_tasks/deferred.md`'s
+already-tracked "region file LZ4/zstd framing" item, now unblocked rather
+than resolved by this pass. zstd itself was never implemented or measured
+against for the same reason noted above.
+
+Before that, most recent landed item was **confirming + closing the stale "cross-chunk relight on edit" item in Phase 5
+(no code change to the mechanism itself — it was already correct).** Picked
+per this file's own standing priority (engine work over content) from the
+remaining open items; this was the last engine-shaped item still marked
+`[~]`/open in Phase 5 (everything else left there is either pure content
+policy or the still-genuinely-open "live two-window manual playtest," which
+needs a human and a GUI this agent environment doesn't have).
+The item's own text ("breaking a floor lets light into the chunk below —
+still per-chunk from scratch each edit") dated back to 5.2 (2026-09-16),
+before Phase 2's horizontal cross-chunk light propagation pass landed
+earlier the same day as this check (2026-09-28, see that entry further down
+this file). That pass's own writeup already noted `relight_column`'s
+unconditional *vertical* cascade had existed since 2026-09-15 — a full tick
+before this Phase 5 item was even written — so the "still TODO" framing was
+wrong even at the time, not just stale by the time this session re-checked
+it: `WorldReplicator::apply_block_edit()` (`src/net/world_replicator.cpp`)
+has called `lighting::relight_column` (which cascades down through every
+consecutively-loaded chunk below the edited one, not just a single
+`relight_chunk` call on the edited chunk alone) on every real edit for that
+entire time. Same pattern as this file's earlier "`ENGINE_PROTOCOL_VERSION`
+mismatch" find: a real gap that closed as a side effect of unrelated work,
+never picked up as its own line item until an agent happened to re-read the
+code behind a stale backlog entry.
+**Verified with a new test, not just re-reading the code:** added
+`tests/unit/world_replication_test.cpp`'s "breaking a floor block lets sky
+light into the loaded chunk below it, in the same edit" — builds two
+manually-constructed stacked chunks (a fully solid floor layer over an
+otherwise-empty room below, bypassing `WorldGenWorkerPool` entirely so the
+scenario is exact and not incidentally already-lit by real terrain), calls
+the real `WorldReplicator::apply_block_edit()` to break one floor voxel, and
+confirms the room below reads real sky light (`sky() > 0`) immediately
+afterward — proving the cascade actually fires through the public edit path
+end-to-end, not just that `relight_column` itself is capable of it (already
+covered by `lighting_test.cpp`'s existing, more synthetic cases).
+**Gotcha hit writing it:** `vb::world::base_block` is a namespace (a
+collection of `inline constexpr BlockId` values), not a type or value --
+`using vb::world::base_block;` fails to compile (MSVC `C2873: symbol cannot
+be used in a using-declaration`); every existing call site in this file
+already spells it out fully (`vb::world::base_block::stone`) for exactly
+this reason, which this test now does too.
+Verified: full `vb_tests` 404/404 green (401 pre-existing + this 1 new case
++ 2 pre-existing skipped real-UDP `gns_transport_test.cpp` cases, run with
+`--test-case-exclude="*real UDP*"` per this file's own noted Windows
+Firewall gotcha for this agent environment), clean `-Werror` build of
+`vb_tests`/`voxel_browser`/`voxel_browser_server` (temporarily reconfigured
+`build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`, confirmed clean,
+reconfigured back to this dir's OFF default afterward). Updated
+`REMAINING_TASKS.md`'s Phase 5 entry and `remaining_tasks/phase5.md`'s own
+`[~]` line and 5.2 status paragraph to match. **Still genuinely true, left
+open by this pass on purpose:** `relight_chunk()` itself always recomputes a
+whole chunk's light from scratch on any relight, never incrementally from
+just the edited voxel outward — a real perf characteristic, but a
+deliberate, already-documented one (`lighting.hpp`'s own header comment
+calls loaded columns "shallow in practice... the extra relight_chunk() calls
+this costs... are cheap"), not the correctness gap this item's stale text
+conflated it with.
+
+Before that, most recent landed item was **per-block hardness/tool break-time variation, closing Phase 5's "vary by
 block/tool" gap.** Picked per this file's own standing priority (engine
 C++ work over content Lua) from the remaining open items. Per-block
 hardness already existed (`BlockType::max_damage`, Phase 6.5) -- what was

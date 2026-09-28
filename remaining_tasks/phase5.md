@@ -299,8 +299,11 @@ Goal: a small, coherent, playable multiplayer sandbox.
       return value (a would-be drop) is still logged, not materialized.
 - [x] `S2C_BlockEditResult` to the editor + `S2C_ChunkDelta` (block + diffed
       light) fan-out to every player mirroring the chunk.
-- [~] Relight on edit: per-chunk from scratch each edit; cross-chunk propagation
-      (breaking a floor lets light into the chunk below) still TODO.
+- [x] Relight on edit: cross-chunk propagation (breaking a floor lets light
+      into the chunk below) confirmed closed 2026-09-28 — see
+      `REMAINING_TASKS.md`'s Phase 5 entry for the full writeup.
+      `relight_chunk()` itself still recomputes each chunk from scratch (a
+      deliberate, documented characteristic, not a correctness gap).
 - [x] Selection raycast (Amanatides–Woo) + wire-cube highlight; LMB break /
       RMB place stone. Break progress (hold-to-break, 2026-09-16):
       `src/client/main.cpp` now requires LMB held on the *same* voxel for a
@@ -327,9 +330,10 @@ out-of-reach edits roll back; a pack's
 `vb.on("block_break"/"block_place")` can veto a real edit end-to-end (was
 already implemented before this session, this pass corrected the checklist
 to match — see `STATE.md`'s note the prior status text was stale); breaking
-now takes a short hold instead of an instant click. Remaining: drops/tools/
-items (5.1), per-block hardness/tool break-time variation, cross-chunk
-relight.
+now takes a short hold instead of an instant click. Remaining at the time:
+drops/tools/items (5.1), per-block hardness/tool break-time variation,
+cross-chunk relight — all since closed, see `REMAINING_TASKS.md`'s Phase 5
+section for each.
 
 ### 5.3 Main menu (raygui, engine-level, not pack)  ✅ (keybindings screen deferred)
 
