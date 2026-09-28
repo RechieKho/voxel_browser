@@ -36,7 +36,47 @@ content-only (e.g. the user explicitly asks for a content-pack feature).
 
 ## Current status (2026-09-28)
 
-**Horizontal cross-chunk light propagation, closing Phase 2's own last
+**Render-only step-up smoothing, closing Phase 3's "Step-up jerk" gap.**
+`VoxelCollisionSystem`'s step-up resolves a full climb (up to `step_height`,
+1.05m) in one physics tick, correctly, but the client used to feed that raw
+`feet.y` straight into the camera every frame (`controller.set_position({
+feet.x, feet.y + eye_height, feet.z })`, `src/client/main.cpp`) — so a real
+step-up visually popped the camera up in one frame instead of climbing
+smoothly. New `vb::render::EyeHeightSmoother` (`inc/vb/render/camera.hpp`,
+header-only pure math, no raylib dependency — same "unit-tested without a GL
+context" posture as `frustum.hpp`/`entity_visual_layout.hpp`) sits between
+the two: `update(target_y, dt)` exponentially eases the *rendered* Y toward
+`target_y` over a 0.12s time constant, except a jump bigger than
+`kSnapThreshold` (2.0m — comfortably above any real step-up, comfortably
+below a teleport/respawn distance) is applied immediately with zero
+smoothing, so a respawn or a fresh connection never eases in from wherever
+the previous life's body happened to be. **Deliberately Y-only:** `X`/`Z`
+still come straight from `feet` every frame, unsmoothed — horizontal movement
+was never the jerky part, and smoothing it too would just add input lag for
+no benefit. `src/client/main.cpp` gives each of the two client loops
+(`--headless` and the real windowed one) their own `EyeHeightSmoother`
+instance, reset alongside `controller` both at the very first spawn and
+inside `enter_playing()` (the reconnect/respawn reset path) — an explicit
+reset rather than relying solely on the snap-threshold is what guarantees a
+*fresh* life never has any of a *previous* life's in-flight smoothing state
+bleeding into it, even in the edge case where the two positions happen to be
+close enough to fall under `kSnapThreshold`.
+Verified: full `vb_tests` 388/388 green (6 new `render_test.cpp` cases on
+`EyeHeightSmoother` — first update snaps to the target, a one-block step-up
+eases in over a single frame rather than landing there immediately,
+convergence to the target after ~10s of ticks, a >2m jump snaps immediately
+rather than easing, a tiny per-frame delta from ordinary walking/falling
+tracks almost exactly with negligible lag, and `reset()` mid-ease drops the
+in-flight smoothing rather than blending from it), clean `-Werror` build of
+`vb_tests`/`voxel_browser`/`voxel_browser_server` (temporarily reconfigured
+`build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`, confirmed clean,
+reconfigured back to this dir's OFF default afterward). The actual smoothed
+step-up (a human walking up a single block and watching the camera rise
+instead of pop) was **not** manually eyeballed — no GUI in this agent
+environment, same still-open caveat as every other rendering-adjacent pass in
+this file.
+
+Before that, most recent landed item was **horizontal cross-chunk light propagation, closing Phase 2's own last
 remaining item ("Horizontal cross-chunk light propagation... still
 per-chunk-only").** `LightEngine::relight_chunk`'s old `const Chunk *above`
 parameter is now `const Neighbours &neighbours` (`inc/vb/world/lighting.hpp`)

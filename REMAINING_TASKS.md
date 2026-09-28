@@ -233,8 +233,37 @@ Full detail: `remaining_tasks/phase3.md`.
       reconfigured `build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`,
       confirmed clean, reconfigured back to this dir's OFF default
       afterward).
-- [ ] Step-up jerk: physics is exact but visually abrupt; needs a render-only
-      eye-height smoothing layer client-side (not attempted).
+- [x] Step-up jerk: physics is exact but visually abrupt — landed 2026-09-28.
+      New `vb::render::EyeHeightSmoother` (`inc/vb/render/camera.hpp`, pure
+      math, unit-tested without a GL context, same posture as
+      `frustum.hpp`/`entity_visual_layout.hpp`): each frame it exponentially
+      eases the *rendered* eye Y toward the true `feet.y + eye_height` target
+      over a short (0.12s) time constant, rather than setting the camera to
+      it directly — a step-up's instantaneous 1-tick position jump (up to
+      `step_height`, 1.05m) now reads as a quick smooth rise instead of a
+      pop. A jump bigger than `kSnapThreshold` (2.0m — above any real
+      step-up, below a teleport/respawn distance) is applied immediately with
+      no smoothing, so a respawn or reconnect never eases in from the old
+      body's position. Purely a render concern: `feet`/collision/physics are
+      completely untouched, `X`/`Z` are still set directly from `feet` every
+      frame (only `Y` gets smoothed) — the "physics is exact" half of the
+      original gap is unchanged, only what's drawn changes.
+      `src/client/main.cpp` wires one `EyeHeightSmoother` per client loop
+      (both the `--headless` path and the real windowed one), reset alongside
+      `controller` at spawn/join and in `enter_playing()` (reconnect/respawn)
+      so a fresh life never inherits a stale in-flight smoothing state from a
+      previous one. Verified: full `vb_tests` 388/388 green (6 new
+      `render_test.cpp` cases: first-update snaps, a step-up eases in over
+      one frame rather than landing immediately, converges to the target
+      after enough time, a large jump snaps immediately, a tiny continuous
+      delta tracks almost exactly, and `reset()` drops any in-flight
+      smoothing), clean `-Werror` build of `vb_tests`/`voxel_browser`/
+      `voxel_browser_server` (temporarily reconfigured `build-net-lua` with
+      `-DVB_WARNINGS_AS_ERRORS=ON`, confirmed clean, reconfigured back to
+      this dir's OFF default afterward). The actual smoothed step-up (a human
+      walking up a single block and watching the camera rise instead of pop)
+      was **not** manually eyeballed — no GUI in this agent environment, same
+      still-open caveat as every other rendering-adjacent pass in this file.
 - [ ] Wall-clock `server_time_est` + smoothing on the client (needs
       `GnsTransport` RTT — loopback has no latency to estimate).
 - [x] `SpriteVisual`-equivalent client state (atlas handle, `facings`,

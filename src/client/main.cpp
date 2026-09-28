@@ -714,6 +714,11 @@ int run_headless(const vb::core::ClientConfig &config, const vb::core::Args &arg
 	controller.set_position({ spawn.x, spawn.y + 1.7, spawn.z });
 	controller.set_look(0.0, -20.0);
 	controller.set_sensitivity(config.mouse_sensitivity);
+	// Render-only step-up smoothing (Phase 3's "physics is exact but visually
+	// abrupt" gap) -- seeded to match the initial camera position above so
+	// the very first update() call has nothing to smooth away.
+	vb::render::EyeHeightSmoother eye_smoother;
+	eye_smoother.reset(spawn.y + 1.7);
 
 	// Phase 6.7: read back whatever set_move_params() already holds (the
 	// engine default, or the real S2C_MoveParams applied while joining --
@@ -745,8 +750,9 @@ int run_headless(const vb::core::ClientConfig &config, const vb::core::Args &arg
 				client->tick(dt);
 			}
 			const vb::core::Vec3d feet = client->predicted_feet();
-			controller.set_position(
-					{ feet.x, feet.y + move_params.eye_height, feet.z });
+			const double smoothed_eye_y =
+					eye_smoother.update(feet.y + move_params.eye_height, dt);
+			controller.set_position({ feet.x, smoothed_eye_y, feet.z });
 		}
 		(void)edit_seq;
 
@@ -884,6 +890,11 @@ int main(int argc, char **argv) {
 	// would do twice a frame).
 	vb::render::UiRenderer hud_renderer;
 	vb::render::FirstPersonController controller;
+	// Render-only step-up smoothing (Phase 3's "physics is exact but visually
+	// abrupt" gap) -- reset alongside `controller` in enter_playing() below so
+	// a fresh connection/respawn never inherits a stale in-flight smoothing
+	// state from a previous life.
+	vb::render::EyeHeightSmoother eye_smoother;
 	vb::physics::MoveParams move_params;
 	std::uint32_t input_seq = 0;
 	std::unique_ptr<vb::render::ChunkRenderer> chunk_renderer;
@@ -1035,6 +1046,7 @@ int main(int argc, char **argv) {
 		controller.set_position({ spawn.x, spawn.y + 1.7, spawn.z });
 		controller.set_look(0.0, -20.0);
 		controller.set_sensitivity(config.mouse_sensitivity);
+		eye_smoother.reset(spawn.y + 1.7);
 
 		// Phase 6.7: read back what's already applied (S2C_MoveParams arrives
 		// alongside S2C_JoinAccept, so it's already in the session by now)
@@ -1364,8 +1376,9 @@ int main(int argc, char **argv) {
 						client->tick(dt);
 					}
 					const vb::core::Vec3d feet = client->predicted_feet();
-					controller.set_position(
-							{ feet.x, feet.y + move_params.eye_height, feet.z });
+					const double smoothed_eye_y = eye_smoother.update(
+							feet.y + move_params.eye_height, dt);
+					controller.set_position({ feet.x, smoothed_eye_y, feet.z });
 				}
 
 				// Phase 6.17/6.20: neither breaking nor placing is a client-

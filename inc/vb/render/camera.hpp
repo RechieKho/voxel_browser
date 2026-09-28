@@ -93,4 +93,46 @@ private:
 	double sprint_multiplier_ = 2.0;
 };
 
+// Render-only smoothing for the camera's vertical eye position (REMAINING_
+// TASKS.md Phase 3: "physics is exact but visually abrupt" step-up jerk).
+// VoxelCollisionSystem's step-up resolves a full step in one tick (no ramp) --
+// correct physics, but rendering the eye at that raw feet.y directly reads as
+// a hard vertical pop. This smooths only what gets drawn; the authoritative
+// feet position driving gameplay/collision is untouched.
+class EyeHeightSmoother {
+public:
+	// Drops any in-flight smoothing; the next update() starts exactly at `y`.
+	// Call on spawn/respawn/reconnect so a stale smoothed value from a
+	// previous life never bleeds into a fresh one.
+	void reset(double y) {
+		current_ = y;
+		initialized_ = true;
+	}
+
+	// Returns the smoothed eye Y for this frame given the true (physics)
+	// target `y`. A jump larger than kSnapThreshold -- well above a normal
+	// step-up, well below a teleport/respawn distance -- is treated as a
+	// teleport, not a step, and applied immediately with no smoothing.
+	double update(double y, double dt_seconds) {
+		if (!initialized_) {
+			reset(y);
+			return current_;
+		}
+		const double diff = y - current_;
+		if (diff > kSnapThreshold || diff < -kSnapThreshold) {
+			current_ = y;
+			return current_;
+		}
+		const double decay = std::exp(-dt_seconds / kTimeConstantSeconds);
+		current_ = y - diff * decay;
+		return current_;
+	}
+
+private:
+	static constexpr double kSnapThreshold = 2.0; // meters; > step_height (1.05)
+	static constexpr double kTimeConstantSeconds = 0.12;
+	double current_ = 0.0;
+	bool initialized_ = false;
+};
+
 } // namespace vb::render
