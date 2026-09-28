@@ -390,6 +390,108 @@ TEST_CASE(
 	CHECK(saw_death_msg);
 }
 
+// REMAINING_TASKS.md's Phase 6 line "No PvP, mob damage, or hunger" turned
+// out stale for the PvP third: ServerSession::punch() (src/net/session.cpp)
+// already resolves the nearest other player along the puncher's look-ray
+// and calls damage_player(..., "pvp") on a hit -- content/base/mechanics.lua
+// already dispatches player:punch() on every left-click rising edge, so a
+// real pack has driven this path since Phase 6.18/6.20 landed. What was
+// missing was proof, not code: blockedit_test.cpp's "punch() prefers a
+// closer player over a block" only checks PunchResult::hit_player/target,
+// never that repeated hits actually reduce health and kill/respawn the
+// target the way void-kill does above. This closes that gap the same way
+// the void-kill test above proves its own end-to-end path: no
+// WorldReplicator needed at all (punch()'s player-vs-player resolution runs
+// before any block/replicator-dependent code), a `set_respawn_handler`
+// capturing the real (player, cause, health_before) tuple instead of
+// string-matching a chat line (more direct than the void-kill test's own
+// text-match, and this test wants to prove the *cause* specifically).
+TEST_CASE("PvP: repeated punches reduce health and kill + respawn the "
+		"target, with cause \"pvp\"") {
+	LoopbackNetwork net;
+	ServerSession server(net.server(), [] {
+		HandshakeServerConfig c;
+		c.world_seed = 1;
+		return c;
+	}());
+	REQUIRE(net.server().listen(0));
+
+	std::optional<NetId> death_player;
+	std::optional<std::string> death_cause;
+	std::optional<float> death_health_before;
+	server.set_respawn_handler([&](NetId id, std::string_view cause,
+										float health_before) {
+		death_player = id;
+		death_cause = std::string(cause);
+		death_health_before = health_before;
+		return ServerSession::RespawnDecision{
+			20.0f, server.spawn_point(id), "" };
+	});
+
+	vb::net::Transport &ta = net.create_client();
+	auto ida = ta.connect("x", 0);
+	REQUIRE(ida);
+	std::optional<ClientSession> a;
+	a.emplace(ta, *ida, HandshakeClientConfig{ "Attacker", "", "v", 1 });
+
+	vb::net::Transport &tb = net.create_client();
+	auto idb = tb.connect("x", 0);
+	REQUIRE(idb);
+	std::optional<ClientSession> b;
+	b.emplace(tb, *idb, HandshakeClientConfig{ "Victim", "", "v", 2 });
+
+	auto pump = [&](int n) {
+		for (int i = 0; i < n; ++i) {
+			server.tick(0.05);
+			a->tick(0.05);
+			b->tick(0.05);
+		}
+	};
+	pump(16);
+	REQUIRE(a->joined());
+	REQUIRE(b->joined());
+	const NetId a_id = a->join_accept()->your_net_id;
+	const NetId b_id = b->join_accept()->your_net_id;
+
+	// Face A straight at B, both at the same height and well within the
+	// default hit_radius/reach -- the exact geometry
+	// blockedit_test.cpp's own "prefers a closer player" case already
+	// proved resolves to a player hit, reused here.
+	server.set_player_state(a_id, Vec3d{ 0, 100, 0 }, vb::core::Vec2f{ 180.0f, 0.0f });
+	server.set_player_state(b_id, Vec3d{ 0, 100, 3 });
+	pump(3);
+
+	// Default player health is 20, default player_damage is 1/punch (no
+	// PunchParams override here) -- 20 punches lands exactly on empty, not
+	// one short or one over, which is itself part of what this test proves
+	// (not just "enough punches eventually kill").
+	ServerSession::PunchResult last{};
+	for (int i = 0; i < 20; ++i) {
+		last = server.punch(a_id);
+		REQUIRE(last.hit_player);
+		CHECK(last.target == b_id);
+	}
+	pump(1); // let check_respawns() see health reach 0 this tick
+
+	REQUIRE(death_player.has_value());
+	CHECK(*death_player == b_id);
+	CHECK(death_cause == "pvp");
+	// health_before is the value *before* the killing 20th punch (health
+	// was 1.0, the 19 prior punches having brought it down from 20), not
+	// the post-punch 0 -- apply_damage() (src/net/session.cpp) captures it
+	// pre-subtraction specifically so a death hook can report "how much
+	// overkill" if it wants to.
+	CHECK(*death_health_before == doctest::Approx(1.0f));
+
+	const auto srv = server.player_move_state(b_id);
+	REQUIRE(srv.has_value());
+	// Respawned back at B's own spawn point, not left dead in place.
+	const Vec3d b_spawn = server.spawn_point(b_id);
+	CHECK(srv->position.x == doctest::Approx(b_spawn.x));
+	CHECK(srv->position.y == doctest::Approx(b_spawn.y));
+	CHECK(srv->position.z == doctest::Approx(b_spawn.z));
+}
+
 TEST_CASE(
 		"player join/leave: existing players are listed to a newcomer and "
 		"told when they arrive/leave") {

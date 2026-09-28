@@ -734,9 +734,47 @@ Full detail: `remaining_tasks/phase6.md`.
       window (no GUI in this agent environment), same still-open caveat as
       every other pass in this file — though this item has no rendering
       component at all, so that caveat matters less here than usual.
-- [ ] No PvP, mob damage, or hunger — 6.6 only added the primitive
-      (`player:damage`) and the decision hook (`player_death`); fall damage
-      (just above) is the first real content caller of either.
+- [x] **PvP half confirmed already real, not stale text** — checked
+      2026-09-28. `ServerSession::punch()` (`src/net/session.cpp`, Phase
+      6.18/6.20) already resolves the nearest other player along the
+      puncher's look-ray (a forgiving vertical-cylinder hitbox, capped at
+      the shared `reach`, closer of {player, block} wins) and calls
+      `damage_player(target, punch_params_.player_damage, "pvp")` on a
+      hit; `content/base/mechanics.lua` already dispatches
+      `player:punch()` on every left-click rising edge — so a real pack
+      has driven real PvP since those phases landed, this item's own text
+      was just never updated. What was actually missing was proof, not
+      code: the existing `blockedit_test.cpp` "punch() prefers a closer
+      player over a block" case only checked `PunchResult::hit_player`/
+      `target`, never that repeated hits actually reduce health and
+      kill/respawn the victim. New `netcode_test.cpp` case ("PvP: repeated
+      punches reduce health and kill + respawn the target, with cause
+      'pvp'") closes that proof gap: two plain `ServerSession` connections
+      (no `WorldReplicator` needed at all — punch()'s player-vs-player
+      resolution runs before any block/replicator-dependent code), a
+      `set_respawn_handler` capturing the real `(player, cause,
+      health_before)` tuple (more direct than string-matching a chat line,
+      since this test wants to prove the *cause* specifically, not just
+      that a respawn happened), 20 direct `punch()` calls (default health
+      20, default `player_damage` 1/punch) landing exactly on empty on the
+      20th, confirming `cause == "pvp"`, `health_before == 1.0` (the value
+      *before* the killing blow, not after), and the victim's position
+      snapping back to their own spawn point. Verified: full `vb_tests`
+      416/416 green (1 new case), clean `-Werror` build of `vb_tests`/
+      `voxel_browser`/`voxel_browser_server` (temporarily reconfigured
+      `build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`, confirmed clean,
+      reconfigured back to this dir's OFF default afterward).
+- [ ] No mob damage or hunger — 6.6 only added the primitive
+      (`player:damage`) and the decision hook (`player_death`); fall
+      damage and PvP (both just above) are the only real content callers
+      of either so far. Mob damage needs an actual hostile-mob concept
+      (an `on_tick`-driven script entity that seeks out and punches/damages
+      a nearby player) — the engine primitive (`entity:damage()`/
+      `player:damage()`) already exists, nothing new engine-side is
+      obviously missing here the way PvP's "is it even wired up" question
+      turned out to be. Hunger has no primitive at all yet (no stored
+      per-player hunger stat, no tick-driven decay, no starvation-damage
+      hook) — a real, still-open gap, not a stale one.
 - [x] Automatic despawn-on-health trigger for generic script entities —
       landed 2026-09-25. Opt-in per kind via `vb.register_entity{health=...}`
       (`EntityKindDef::max_health`, rejects a non-positive value at

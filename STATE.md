@@ -36,7 +36,63 @@ content-only (e.g. the user explicitly asks for a content-pack feature).
 
 ## Current status (2026-09-28)
 
-**Closed the Cross-Cutting "Perf budget checks" item (the mesh-time/
+**Found (and closed the proof gap for) another stale backlog line: "No
+PvP" turned out to already be real, wired-up engine behavior, not a
+missing feature.** Picked after the perf-budget pass below closed out the
+last concrete, unblocked, purely-engine gap in the Cross-Cutting section --
+this file's own standing engine-over-content preference notes that once
+those are exhausted, the remaining Phase 6 "No PvP, mob damage, or hunger"
+line was the next most concrete thing left (mob damage and hunger stayed
+genuinely open, see below).
+**What was actually there already:** `ServerSession::punch()`
+(`src/net/session.cpp`, landed as part of Phase 6.18/6.20) resolves the
+nearest *other player* along the puncher's look-ray -- a forgiving
+vertical-cylinder hitbox capped at the shared `reach`, the closer of
+{player, block} along the ray wins -- and calls `damage_player(target,
+punch_params_.player_damage, "pvp")` on a hit, before any block-hit code
+runs at all. `content/base/mechanics.lua` already dispatches
+`player:punch()` on every left-click rising edge. So a real content pack
+has been driving real player-vs-player damage since those two phases
+landed on 2026-09-27 -- this backlog line was written before that (or just
+never revisited), same "stale, not missing" pattern this session already
+found for the `ENGINE_PROTOCOL_VERSION` mismatch and cross-chunk-relight
+items earlier this week.
+**What was genuinely missing:** proof, not code. The existing
+`blockedit_test.cpp` case ("punch() prefers a closer player over a block")
+only ever checked `PunchResult::hit_player`/`target` -- it never confirmed
+that a landed punch actually reduces the victim's health, or that enough
+of them actually kill and respawn the victim with the right cause. New
+`netcode_test.cpp` case ("PvP: repeated punches reduce health and kill +
+respawn the target, with cause 'pvp'") closes that: two plain
+`ServerSession` connections with **no `WorldReplicator` at all** (proven
+unnecessary by reading the code -- `punch()`'s player-vs-player resolution
+runs unconditionally before any block/replicator-dependent branch), a
+`set_respawn_handler` that captures the real `(player, cause,
+health_before)` tuple rather than string-matching a chat line the way the
+pre-existing void-kill death test does (this test specifically wants to
+prove the *cause*, not just that some respawn happened), 20 direct
+`punch()` calls landing exactly on empty on the 20th (default player
+health 20, default `player_damage` 1/punch -- confirms the exact
+punch-count, not just "eventually dies"), and assertions that `cause ==
+"pvp"`, `health_before == 1.0` (the value captured *before* the killing
+20th hit, not the post-hit 0 -- a real gotcha this test's first draft got
+backwards before checking `apply_damage()`'s own capture order), and the
+victim's position snapping back to their own spawn point afterward.
+Verified: full `vb_tests` 416/416 green (1 new case), clean `-Werror`
+build of `vb_tests`/`voxel_browser`/`voxel_browser_server` (temporarily
+reconfigured `build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`, confirmed
+clean, reconfigured back to this dir's OFF default afterward).
+**Deliberately not touched, genuinely still open (not stale):** mob
+damage needs an actual hostile-mob concept (some `on_tick`-driven script
+entity that seeks out and punches/damages a nearby player) -- the engine
+primitives (`entity:damage()`/`player:damage()`) already exist, so this
+isn't a mechanism gap the way PvP's "is this even wired up" question
+turned out to be, just unwritten content. Hunger has no primitive at all
+yet -- no stored per-player hunger stat, no tick-driven decay, no
+starvation-damage hook -- a real, still-open engine-shaped gap if anyone
+picks it up next, not just a content-authoring one.
+
+Before that, most recent landed item was **closing the Cross-Cutting "Perf budget checks" item (the mesh-time/
 snapshot-size half of it): `tests/unit/perf_budget_test.cpp` adds two
 budget-gate `TEST_CASE`s to the normal `vb_tests` run.** Picked per this
 file's own standing priority (engine work over content) from
