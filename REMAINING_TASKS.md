@@ -53,8 +53,22 @@ end-to-end; verified with two live processes over real UDP.
 Full detail: `remaining_tasks/phase1.md`.
 
 **Remaining:**
-- [ ] Surface `ENGINE_PROTOCOL_VERSION` mismatch in the client connect UI
-      (both FSMs already reject it; needs the Phase 5.3 main-menu error path).
+- [x] Surface `ENGINE_PROTOCOL_VERSION` mismatch in the client connect UI —
+      already fully wired by the time this was checked (2026-09-28), no code
+      change needed: `ClientHandshake::on_frame` (`src/net/handshake.cpp`)
+      fails with `"engine protocol version mismatch"` both when the client's
+      own check trips (`info->engine_protocol_version != kEngineProtocolVersion`)
+      and when a server-side rejection frame (`kProtocolMismatch`) arrives;
+      `src/client/main.cpp`'s `kConnecting` case (`client->failed() ?
+      client->failure_reason() : ...`) already routes that string into
+      `error_message` and `AppState::kError`, which `MainMenu::draw_error()`
+      (`src/render/main_menu.cpp`) renders as a real raygui label with a
+      "Back to menu" button — the Phase 5.3 main-menu error path this item
+      said it was waiting on has existed since that phase landed. Covered by
+      the existing `net_test.cpp` case "client rejects a protocol version
+      mismatch". This item's own text was stale, tracking a gap that closed
+      as a side effect of unrelated work rather than being picked up as its
+      own task.
 - [ ] macOS CI doesn't build `VB_WITH_NET` (universal arm64+x86_64 build vs.
       single-arch brew protobuf) — needs a universal protobuf, see `build_macos.yml`.
 - [ ] The two-client replication test runs over `LoopbackTransport` only;
@@ -542,8 +556,40 @@ Full detail: `remaining_tasks/phase5.md`.
       name registry (which is about a pack reading `input.keybinds["jump"]`
       by name, not which key produces it) — the two compose: rebinding
       "Jump" here still shows up as the same `keybinds["jump"]` bit to Lua.
-- [ ] No connect-screen byte-progress bar (status-text-only) — asset-sync
-      never grew progress-fraction accounting.
+- [x] No connect-screen byte-progress bar (status-text-only) — landed
+      2026-09-28. New `assetsync::ClientAssetCache::sync_total_bytes()`/
+      `sync_received_bytes()` (`src/assetsync/cache.cpp`) derive real
+      byte-progress from the existing `pending_` map on every call —
+      `PendingFile::expected_size`/`buffer.size()` already carried everything
+      needed, so there's no new running counter to keep in sync with
+      `ingest_chunk`/`compute_missing`. `net::ClientSession::
+      asset_sync_total_bytes()`/`asset_sync_received_bytes()` (`inc/vb/net/
+      session.hpp`) forward through the session's own (possibly null)
+      `asset_cache_` pointer, same "0 when there's no cache" posture
+      `virtual_pack_fs()` already had. `render::MainMenu::draw_connecting()`
+      gained an optional `float fraction = -1.0f` parameter (`-1` = unknown,
+      keeps the original text-only layout exactly; `>= 0` grows the panel by
+      one row and draws a real `GuiProgressBar`, same look `draw_loading()`
+      already established for 7.1's post-join loading screen).
+      `src/client/main.cpp`'s `kConnecting` case now computes a real fraction
+      only when `!connecting_singleplayer` (no `ClientAssetCache` on that
+      path) and `client->status() == kSyncingAssets` and the total is
+      nonzero — every other handshake stage still shows text-only, matching
+      the fact that only asset-streaming has a meaningful byte count at all.
+      Verified: full `vb_tests` 390/390 green (2 new `assetsync_cache_test.
+      cpp` cases: total/received tracked correctly across two pending files
+      including a mid-transfer partial-chunk read, and 0/0 before any
+      `compute_missing()` call), clean `-Werror` build of `vb_tests`/
+      `voxel_browser`/`voxel_browser_server` (temporarily reconfigured
+      `build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`, confirmed clean,
+      reconfigured back to this dir's OFF default afterward). The actual
+      rendered bar (a human watching it fill while downloading a real content
+      pack) was **not** manually eyeballed — no GUI in this agent
+      environment, same still-open caveat as every other rendering-adjacent
+      pass in this file. Phase 7.1's own loading-screen entry named this as a
+      likely shared prerequisite for its own still-open "connect screen byte
+      progress" gap — that dependency is now closed, though 7.1's chunk-load
+      fraction (a separate signal) is untouched by this pass.
 - [ ] Live two-window manual playtest (chat + crafting + seeing each other,
       all at once, across all 3 platforms) — not yet run.
 

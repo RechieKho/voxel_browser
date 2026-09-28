@@ -306,14 +306,27 @@ MainMenu::KeybindingsResult MainMenu::draw_keybindings(core::ClientConfig &confi
 	return result;
 }
 
-MainMenu::ConnectingResult MainMenu::draw_connecting(std::string_view status_text) {
+MainMenu::ConnectingResult MainMenu::draw_connecting(std::string_view status_text,
+		float fraction) {
 	ConnectingResult result;
+	// A known fraction (asset-sync byte progress) grows the panel by one row
+	// for a real GuiProgressBar; unknown (-1, every other handshake stage)
+	// keeps the original text-only layout exactly as before this gap closed.
+	const bool has_fraction = fraction >= 0.0f;
 	const float panel_w = 420.0f;
-	GuiPanel(centered(panel_w, 140.0f, 220.0f), "Connecting");
+	const float panel_h = has_fraction ? 178.0f : 140.0f;
+	GuiPanel(centered(panel_w, panel_h, 220.0f), "Connecting");
 	const float x = (static_cast<float>(GetScreenWidth()) - panel_w) * 0.5f + 20.0f;
 	GuiLabel(Rectangle{ x, 270.0f, panel_w - 40.0f, 24.0f },
 			std::string(status_text).c_str());
-	if (GuiButton(Rectangle{ x, 310.0f, panel_w - 40.0f, 32.0f }, "Cancel")) {
+	float button_y = 310.0f;
+	if (has_fraction) {
+		float value = fraction < 1.0f ? fraction : 1.0f;
+		GuiProgressBar(Rectangle{ x, 304.0f, panel_w - 40.0f, 20.0f }, nullptr, nullptr,
+				&value, 0.0f, 1.0f);
+		button_y = 336.0f;
+	}
+	if (GuiButton(Rectangle{ x, button_y, panel_w - 40.0f, 32.0f }, "Cancel")) {
 		result.cancel = true;
 	}
 	return result;

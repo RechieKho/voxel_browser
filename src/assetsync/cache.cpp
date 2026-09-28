@@ -251,4 +251,25 @@ bool ClientAssetCache::all_received() const {
 	return true;
 }
 
+std::uint64_t ClientAssetCache::sync_total_bytes() const {
+	std::uint64_t total = 0;
+	for (const auto &[h, pf] : pending_) {
+		(void)h;
+		total += pf.expected_size;
+	}
+	return total;
+}
+
+std::uint64_t ClientAssetCache::sync_received_bytes() const {
+	std::uint64_t total = 0;
+	for (const auto &[h, pf] : pending_) {
+		(void)h;
+		// A completed file's buffer is retained (never cleared on commit), so
+		// `pf.done` doesn't change which field this reads -- kept explicit
+		// anyway so this stays correct if that ever changes.
+		total += pf.done ? pf.expected_size : pf.buffer.size();
+	}
+	return total;
+}
+
 } // namespace vb::assetsync

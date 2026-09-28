@@ -67,7 +67,12 @@ public:
 	struct ConnectingResult {
 		bool cancel = false;
 	};
-	ConnectingResult draw_connecting(std::string_view status_text);
+	// `fraction < 0.0f` (the default) means "no known byte-progress" -- draws
+	// just the status text as before, no bar. Callers pass a real 0.0-1.0
+	// value once asset-sync byte counts are available (see
+	// ClientSession::asset_sync_total_bytes()/asset_sync_received_bytes()).
+	ConnectingResult draw_connecting(std::string_view status_text,
+			float fraction = -1.0f);
 
 	// --- error screen --------------------------------------------------------
 	struct ErrorResult {

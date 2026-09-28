@@ -633,6 +633,17 @@ public:
 		return handshake_.join_accept();
 	}
 
+	// Connect-screen byte-progress (spec gap: previously status-text-only).
+	// Both 0 when there's no cache (headless/no-op asset sync) or nothing is
+	// currently pending -- callers should treat 0/0 as "no progress to show"
+	// rather than divide-by-zero into a fraction.
+	std::uint64_t asset_sync_total_bytes() const {
+		return asset_cache_ != nullptr ? asset_cache_->sync_total_bytes() : 0;
+	}
+	std::uint64_t asset_sync_received_bytes() const {
+		return asset_cache_ != nullptr ? asset_cache_->sync_received_bytes() : 0;
+	}
+
 	// Replicated view of other entities (spec §8.4). Updated from every
 	// S2C_EntitySnapshot once joined.
 	const std::unordered_map<core::NetId, protocol::EntityRecord> &

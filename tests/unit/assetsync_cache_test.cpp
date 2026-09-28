@@ -102,6 +102,47 @@ TEST_CASE("ingest_chunk rejects a completed file that fails hash verification") 
 	std::filesystem::remove_all(dir);
 }
 
+TEST_CASE("sync byte-progress tracks total/received across multiple pending files") {
+	const auto dir = temp_cache_dir("progress");
+	ClientAssetCache cache(dir, 1024ull * 1024ull);
+
+	const AssetHash a = vb::assetsync::hash_bytes(bytes_of("0123456789")); // 10 bytes
+	const AssetHash b = vb::assetsync::hash_bytes(bytes_of("abcde")); // 5 bytes
+	cache.compute_missing({ entry_for("a.bin", a, 10), entry_for("b.bin", b, 5) });
+
+	CHECK(cache.sync_total_bytes() == 15);
+	CHECK(cache.sync_received_bytes() == 0);
+
+	// Feed "a" in two chunks -- received should track mid-transfer, not just
+	// on completion.
+	S2CAssetData chunk;
+	chunk.hash = a;
+	chunk.seq = 0;
+	chunk.total_chunks = 2;
+	chunk.bytes = bytes_of("01234");
+	REQUIRE(cache.ingest_chunk(chunk));
+	CHECK(cache.sync_received_bytes() == 5);
+
+	chunk.seq = 1;
+	chunk.bytes = bytes_of("56789");
+	REQUIRE(cache.ingest_chunk(chunk));
+	CHECK(cache.sync_received_bytes() == 10); // "a" now complete
+
+	REQUIRE(ingest_whole_file(cache, b, "abcde"));
+	CHECK(cache.sync_received_bytes() == 15); // both files complete
+	CHECK(cache.sync_total_bytes() == 15); // unchanged by ingest
+
+	std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("sync byte-progress is 0/0 before any compute_missing call") {
+	const auto dir = temp_cache_dir("progress_empty");
+	ClientAssetCache cache(dir, 1024ull * 1024ull);
+	CHECK(cache.sync_total_bytes() == 0);
+	CHECK(cache.sync_received_bytes() == 0);
+	std::filesystem::remove_all(dir);
+}
+
 TEST_CASE("LRU eviction keeps the cache under its byte cap") {
 	const auto dir = temp_cache_dir("lru");
 	// Cap only large enough for one ~10-byte file at a time.

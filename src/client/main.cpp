@@ -1225,9 +1225,24 @@ int main(int argc, char **argv) {
 					std::cout << "client: join failed: " << error_message << '\n';
 					state = AppState::kError;
 				} else {
+					// Real byte-progress only exists once actually streaming
+					// assets, and only for a real remote session (singleplayer
+					// has no ClientAssetCache -- both accessors default to 0
+					// there, so the total>0 guard alone would suffice, but the
+					// status check documents *why* rather than relying on it).
+					float fraction = -1.0f;
+					if (!connecting_singleplayer &&
+							client->status() == vb::net::ClientHandshakeStatus::kSyncingAssets) {
+						const std::uint64_t total = client->asset_sync_total_bytes();
+						if (total > 0) {
+							fraction = static_cast<float>(client->asset_sync_received_bytes()) /
+									static_cast<float>(total);
+						}
+					}
 					const auto ui = menu.draw_connecting(connecting_singleplayer
 									? "Starting singleplayer world..."
-									: connecting_status_text(client->status()));
+									: connecting_status_text(client->status()),
+							fraction);
 					if (ui.cancel) {
 						sp.reset();
 						remote.reset();

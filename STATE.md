@@ -36,7 +36,40 @@ content-only (e.g. the user explicitly asks for a content-pack feature).
 
 ## Current status (2026-09-28)
 
-**Render-only step-up smoothing, closing Phase 3's "Step-up jerk" gap.**
+**Connect-screen byte-progress bar, closing REMAINING_TASKS' Phase 5 gap
+("No connect-screen byte-progress bar — status-text-only").** Also confirmed
+and closed a separate, stale Phase 1 line item in the same session: "Surface
+`ENGINE_PROTOCOL_VERSION` mismatch in the client connect UI" turned out to
+already be fully wired end-to-end (`ClientHandshake::on_frame` already fails
+with a real message string, `src/client/main.cpp`'s `kConnecting` case
+already routes it into `AppState::kError`, `MainMenu::draw_error()` already
+renders it) — no code changed for that one, just the backlog entry.
+For the byte-progress bar itself: `assetsync::ClientAssetCache` gained
+`sync_total_bytes()`/`sync_received_bytes()` (`src/assetsync/cache.cpp`),
+both computed fresh from the existing `pending_` map (`PendingFile::
+expected_size` and `.buffer.size()`) rather than kept as separate running
+counters that `ingest_chunk`/`compute_missing` would otherwise have to
+remember to update in lockstep. `net::ClientSession::asset_sync_total_bytes()`/
+`asset_sync_received_bytes()` (`inc/vb/net/session.hpp`) forward through the
+session's own possibly-null `asset_cache_` (0/0 when there's no cache, same
+posture `virtual_pack_fs()` already had for singleplayer/no-asset-sync).
+`render::MainMenu::draw_connecting()` gained an optional `float fraction =
+-1.0f` — `-1` (every non-`kSyncingAssets` handshake stage, and singleplayer,
+which has no `ClientAssetCache` at all) keeps the exact original text-only
+layout; a real `>= 0` value grows the panel by one row and draws a
+`GuiProgressBar`, matching 7.1's `draw_loading()` bar look. Verified: full
+`vb_tests` 390/390 green (2 new `assetsync_cache_test.cpp` cases: byte
+totals/received tracked correctly across two pending files including a
+mid-transfer partial-chunk read, and 0/0 before any `compute_missing()` call
+at all), clean `-Werror` build of `vb_tests`/`voxel_browser`/
+`voxel_browser_server` (temporarily reconfigured `build-net-lua` with
+`-DVB_WARNINGS_AS_ERRORS=ON`, confirmed clean, reconfigured back to this
+dir's OFF default afterward). The actual rendered bar (a human watching it
+fill while downloading a real content pack over a real connection) was
+**not** manually eyeballed — no GUI in this agent environment, same
+still-open caveat as every other rendering-adjacent pass in this file.
+
+Before that, most recent landed item was **render-only step-up smoothing, closing Phase 3's "Step-up jerk" gap.**
 `VoxelCollisionSystem`'s step-up resolves a full climb (up to `step_height`,
 1.05m) in one physics tick, correctly, but the client used to feed that raw
 `feet.y` straight into the camera every frame (`controller.set_position({

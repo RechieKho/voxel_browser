@@ -51,6 +51,16 @@ public:
 	// fully received and committed (or there were none).
 	bool all_received() const;
 
+	// Byte-progress for the connect screen's own progress bar (spec gap:
+	// "no connect-screen byte-progress bar (status-text-only)"). Derived
+	// from `pending_` on every call rather than kept as separate running
+	// counters -- `PendingFile::expected_size`/`buffer` already carry
+	// everything needed, so there is no separate state to keep in sync.
+	// Both are 0 when nothing is pending (nothing missing, or before the
+	// first compute_missing() call).
+	std::uint64_t sync_total_bytes() const;
+	std::uint64_t sync_received_bytes() const;
+
 	// path -> bytes, assembled from cache reads (already-cached entries) and
 	// completed transfers. Nothing consumes this yet (Lua require / texture
 	// loader land in later phases).
