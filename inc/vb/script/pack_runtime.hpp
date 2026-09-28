@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -201,6 +202,15 @@ public:
 
 	bool storage_dirty() const;
 	void flush_storage(); // write vb.storage to storage_path if dirty
+
+	// Bumped every time flush_storage() actually writes storage_path to disk
+	// (both this explicit call and dispatch_tick()'s own internal auto-flush
+	// when storage_dirty()). Lets an embedder (e.g. the dedicated server's
+	// asset manifest, which hashes storage.json's on-disk bytes) detect a
+	// runtime write with a cheap integer comparison instead of re-hashing the
+	// file speculatively every tick -- see REMAINING_TASKS.md's "Manifest
+	// staleness" item.
+	std::uint64_t storage_revision() const;
 
 	struct Impl;
 

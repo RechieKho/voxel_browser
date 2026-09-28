@@ -36,8 +36,75 @@ content-only (e.g. the user explicitly asks for a content-pack feature).
 
 ## Current status (2026-09-28)
 
-**Closed Phase 0's last concrete remaining item, "First `git tag v0.0.1`",
-and fixed two stale cross-references left over from earlier the same day's
+**Closed Phase 4's "Manifest staleness" gap: a pack that writes `vb.storage`
+after startup no longer permanently stales the asset manifest.** Picked per
+this file's own standing priority (engine work over content) from
+`REMAINING_TASKS.md`'s remaining `[ ]` items, after the git-tag/doc-fix pass
+below — this was the one real, concrete engine correctness gap left that
+wasn't blocked on infrastructure (macOS CI, a live GUI) or continuous/
+no-single-PR-closes-it (soak tests, perf budgets).
+**The actual bug:** `src/server/main.cpp` already fixed the *load-time* half
+of this back on 2026-09-18 (flushing `vb.storage` before building the
+manifest, so the very first hash is correct) — but the manifest itself was
+still built exactly once and handed out as a fixed `shared_ptr` for the rest
+of the process's life. `storage.json` lives directly under `content_pack`
+(same directory `build_manifest()` recursively scans), so it's a real
+manifest entry, not metadata outside it. Any *later* `vb.storage` write
+(any tick after startup, not just load time) silently rewrites that file on
+disk while the already-built manifest keeps advertising its old hash —
+`host.asset_file_bytes` reads current bytes off disk at request time, so a
+client that syncs after that point downloads bytes that don't match the
+hash the manifest told it to expect, and asset-sync verification fails with
+the exact `"asset transfer failed (hash mismatch or size cap)"` text this
+file's §4 gotcha list already documents for a *different* root cause (see
+that entry's own note: "this error string has (at least) two unrelated root
+causes").
+**The fix:** new `PackRuntime::storage_revision()` (`inc/vb/script/
+pack_runtime.hpp`/`.cpp`) — a monotonic counter bumped inside `Impl::
+flush_storage()` every time it actually writes to disk, whether called
+explicitly (the startup flush) or from `dispatch_tick()`'s own internal
+"if `storage_dirty()`, flush" auto-flush. `src/server/main.cpp` polls it
+once a second (`manifest_check_ticks`, deliberately throttled rather than
+checked every tick — same "periodic backstop, not hard real-time" shape
+`autosave_ticks` already established, and a full manifest rebuild rescans
++ rehashes *every* asset file, not just `storage.json`, so doing it at the
+tick rate for a pack that flushes every tick would be real, avoidable
+work this item's own text never asked for). On a change, it rebuilds the
+manifest and atomically swaps it into a new small `ManifestHolder`
+(mutex + `shared_ptr<const Manifest>`) that `host.asset_manifest`/
+`host.asset_file_bytes` now read through by reference each call, instead of
+each lambda capturing a fixed `shared_ptr` by value at startup the way they
+used to.
+**Deliberately out of scope:** `--singleplayer` never builds a manifest at
+all (same-process integrated server, no asset sync needed — confirmed by
+grep, `src/client/main.cpp` has zero references to `build_manifest`/
+`asset_manifest`), so this gap and its fix are both server-only. The
+manifest-rebuild-on-a-live-server code path itself (not just
+`storage_revision()`'s own counting, which is directly unit tested) was not
+exercised end-to-end — `src/server/main.cpp` isn't linked into `vb_tests`,
+same pre-existing gap every other `main.cpp`-only change in this file
+already has; no GUI/live-server harness in this agent environment to drive
+it further.
+Verified: full `vb_tests` 412/412 green (1 new `pack_runtime_test.cpp` case:
+`storage_revision()` bumps on an explicit `flush_storage()` call and on
+`dispatch_tick()`'s own implicit auto-flush, but *not* on a no-op tick with
+nothing dirty — the property the whole point of a revision counter over a
+plain "rebuild every tick" approach depends on), clean `-Werror` build of
+`vb_tests`/`voxel_browser`/`voxel_browser_server` (temporarily reconfigured
+`build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`, confirmed clean,
+reconfigured back to this dir's OFF default afterward). **Gotcha hit while
+verifying:** re-running the full suite a second time against the `-Werror`
+build (immediately after the first, already-green run against the
+non-`-Werror` build) hung with zero output for several minutes before
+producing anything — matches this file's own already-documented real-UDP/
+GNS Windows-Firewall-prompt hang (§3/`STATE.md.local`), triggered by shared
+per-process GNS global state across sequential test runs, not a regression
+from this change; killing the stuck `vb_tests.exe` and re-running fresh
+produced the same clean 412/412 (just slower than the first run, ~90s of
+real-UDP-test churn before the summary printed instead of near-instant).
+
+Before that, most recent landed item was **closing Phase 0's last concrete remaining item, "First `git tag v0.0.1`",
+and fixing two stale cross-references left over from earlier the same day's
 `RegionStore`/LZ4 passes.** Picked from `REMAINING_TASKS.md`'s remaining
 `[ ]` items after the ASan/UBSan/TSan CI pass below — everything else still
 open there is either blocked on infrastructure this agent environment

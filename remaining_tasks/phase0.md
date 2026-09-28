@@ -44,8 +44,9 @@ Prerequisite for everything else. Not in the README's phase list but required.
       `cmake_minimum_required` → 3.25.
 
 Follow-ups deferred out of Phase 0:
-- [ ] First `git tag v0.0.1` so `git describe` yields a real version and
-      `bundle`/`publish` are exercised.
+- [x] First `git tag v0.0.1` so `git describe` yields a real version —
+      landed and pushed to `origin` 2026-09-28, see `REMAINING_TASKS.md`'s
+      Phase 0 entry / `STATE.md`'s "Current status" for the full note.
 - [ ] `CMAKE_POLICY_VERSION_MINIMUM=3.5` shim is set for CMake ≥ 4 (doctest
       2.4.11 declares `cmake_minimum_required(3.0)`); drop it if doctest is bumped.
 - [ ] Explicit source lists instead of relying on re-running CMake (targets use

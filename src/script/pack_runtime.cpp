@@ -56,6 +56,7 @@ bool PackRuntime::dispatch_player_interact(core::NetId, core::IVec3) {
 void PackRuntime::dispatch_ui_event(core::NetId, const protocol::C2SUiEvent &) {}
 bool PackRuntime::storage_dirty() const { return false; }
 void PackRuntime::flush_storage() {}
+std::uint64_t PackRuntime::storage_revision() const { return 0; }
 
 } // namespace vb::script
 
@@ -534,6 +535,7 @@ struct PackRuntime::Impl {
 
 	nlohmann::json storage;
 	bool storage_dirty_flag = false;
+	std::uint64_t storage_revision_counter = 0;
 
 	std::vector<BlockDef> blocks;
 	std::vector<ItemDef> items;
@@ -1994,6 +1996,7 @@ void PackRuntime::Impl::flush_storage() {
 	}
 	out << storage.dump();
 	storage_dirty_flag = false;
+	++storage_revision_counter;
 }
 
 bool PackRuntime::Impl::on_block_edit_before(core::NetId editor,
@@ -2938,6 +2941,10 @@ bool PackRuntime::dispatch_player_interact(core::NetId player,
 bool PackRuntime::storage_dirty() const { return impl_->storage_dirty_flag; }
 
 void PackRuntime::flush_storage() { impl_->flush_storage(); }
+
+std::uint64_t PackRuntime::storage_revision() const {
+	return impl_->storage_revision_counter;
+}
 
 } // namespace vb::script
 

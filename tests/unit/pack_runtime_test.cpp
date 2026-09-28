@@ -1062,6 +1062,35 @@ TEST_CASE("vb.storage persists across PackRuntime instances") {
 	std::filesystem::remove(storage);
 }
 
+TEST_CASE("storage_revision() bumps on explicit flush_storage() and on "
+		"dispatch_tick()'s own implicit auto-flush, not on a no-op tick") {
+	const auto storage = temp_storage("storage_revision");
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, storage);
+	CHECK(rt.storage_revision() == 0);
+
+	const auto r = rt.load_pack_file(R"(vb.storage.count = 1)");
+	REQUIRE(r);
+	CHECK(rt.storage_dirty());
+	rt.flush_storage();
+	CHECK(rt.storage_revision() == 1);
+
+	// A tick with no dirty storage must not bump the revision -- otherwise
+	// an embedder polling it (the dedicated server's manifest-refresh check)
+	// would rebuild the whole asset manifest every tick for nothing.
+	rt.dispatch_tick(0.1);
+	CHECK(rt.storage_revision() == 1);
+
+	const auto r2 = rt.load_pack_file(R"(vb.storage.count = 2)");
+	REQUIRE(r2);
+	rt.dispatch_tick(0.1); // dispatch_tick's own internal auto-flush
+	CHECK_FALSE(rt.storage_dirty());
+	CHECK(rt.storage_revision() == 2);
+
+	std::filesystem::remove(storage);
+}
+
 TEST_CASE("vb.db persists across PackRuntime instances, unlike vb.storage "
 		"it's keyed per-script-chosen-string") {
 	const auto storage = temp_storage("db_persist");

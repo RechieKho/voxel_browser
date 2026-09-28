@@ -34,12 +34,11 @@ Full detail: `remaining_tasks/phase0.md`.
 
 **Remaining:**
 - [x] First `git tag v0.0.1` so `git describe` yields a real version —
-      landed 2026-09-28, local annotated tag only (`git describe` now
-      returns `v0.0.1` instead of erroring with "No names found"). **Not
-      pushed to `origin`** — pushing a tag is a shared/visible action this
-      agent didn't take unilaterally; a human should push it (`git push
-      origin v0.0.1`) once ready, which is also what will actually exercise
-      `bundle`/`publish` in CI for the first time.
+      landed and pushed to `origin` 2026-09-28 (`git describe` now returns
+      `v0.0.1` instead of erroring with "No names found"). First real tag
+      on the repo, so this is also the first time CI's `bundle`/`publish`
+      steps will actually run against a real `git describe` version —
+      worth checking that run once it appears.
 - [ ] `CMAKE_POLICY_VERSION_MINIMUM=3.5` shim is set for CMake ≥ 4 (doctest
       2.4.11 declares `cmake_minimum_required(3.0)`); drop it if doctest is bumped.
 - [ ] Explicit source lists instead of relying on re-running CMake (already
@@ -534,9 +533,36 @@ Full detail: `remaining_tasks/phase4.md`.
       mechanism gap.
 - [ ] `--singleplayer`'s registry-wiring gap is closed (Phase 5.1); no
       remaining item here.
-- [ ] Manifest staleness: a pack that writes `vb.storage` *after* startup
-      (not just at load time) goes stale for the rest of that server
-      process's life — no shipped pack triggers this today, left unaddressed.
+- [x] Manifest staleness: a pack that writes `vb.storage` *after* startup
+      (not just at load time) used to go stale for the rest of that server
+      process's life — landed 2026-09-28. New `PackRuntime::storage_revision()`
+      (`inc/vb/script/pack_runtime.hpp`) is a monotonic counter bumped every
+      time `Impl::flush_storage()` actually writes `storage.json` to disk —
+      both the explicit startup call and `dispatch_tick()`'s own internal
+      auto-flush when `storage_dirty()`. `src/server/main.cpp` polls it once
+      a second (`manifest_check_ticks`, same "periodic backstop, not a hard
+      real-time guarantee" shape `autosave_ticks` already has): on a change,
+      it rebuilds the whole asset manifest (`vb::assetsync::build_manifest`)
+      and atomically swaps it in via a new small `ManifestHolder`
+      (mutex + `shared_ptr`) that `host.asset_manifest`/`host.asset_file_bytes`
+      now read through by reference instead of each capturing a fixed
+      `shared_ptr` by value at startup. Deliberately throttled rather than
+      checked every tick: a pack that flushes `vb.storage` every tick would
+      otherwise pay a full content-pack rescan+rehash (every asset file, not
+      just `storage.json`) at the tick rate. `--singleplayer` was out of
+      scope — it never builds a manifest at all (same-process, no asset sync
+      needed). Verified: full `vb_tests` 412/412 green (1 new
+      `pack_runtime_test.cpp` case: `storage_revision()` bumps on an explicit
+      `flush_storage()` and on `dispatch_tick()`'s implicit auto-flush, but
+      *not* on a no-op tick with nothing dirty), clean `-Werror` build of
+      `vb_tests`/`voxel_browser`/`voxel_browser_server` (temporarily
+      reconfigured `build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`,
+      confirmed clean, reconfigured back to this dir's OFF default
+      afterward). The manifest-rebuild-on-a-live-server path itself (not
+      just `storage_revision()`'s own counting) was **not** exercised
+      end-to-end — `src/server/main.cpp` isn't linked into `vb_tests`, same
+      pre-existing gap every other `main.cpp`-only change in this file
+      already has.
 - [x] Item grid widget for `UiRuntime` — landed 2026-09-28, see "Current
       status" in `STATE.md` for the full writeup. Not a baked-in "grid"
       concept: a new generic `icon` `WidgetType` draws one registered
