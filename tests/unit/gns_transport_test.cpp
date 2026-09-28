@@ -241,4 +241,75 @@ TEST_CASE("GnsTransport::connect resolves a real hostname (\"localhost\"), "
 	CHECK_FALSE(bad);
 }
 
+// REMAINING_TASKS.md Phase 1 polish: "the two-client replication test runs
+// over LoopbackTransport only; re-run over GnsTransport" -- the exact same
+// scenario as replication_test.cpp's "two clients within interest range
+// replicate to each other", but over real UDP instead of the in-process
+// loopback, since the interest/replication logic itself is transport-
+// agnostic (it only ever talks to Transport, never LoopbackTransport
+// directly) and this was the one path never exercised over the real backend.
+TEST_CASE("two clients within interest range replicate to each other, over "
+		"real UDP (GnsTransport)") {
+	constexpr std::uint16_t kTestPort = 27205;
+
+	GnsTransport server_transport;
+	REQUIRE(server_transport.listen(kTestPort));
+	HandshakeServerConfig cfg;
+	cfg.world_seed = 3;
+	ServerSession server(server_transport, cfg);
+	server.set_interest_radius_cells(1);
+
+	GnsTransport a_transport;
+	const auto conn_a = a_transport.connect("127.0.0.1", kTestPort);
+	REQUIRE(conn_a);
+	ClientSession a(a_transport, *conn_a, HandshakeClientConfig{ "A", "", "v", 1 });
+
+	GnsTransport b_transport;
+	const auto conn_b = b_transport.connect("127.0.0.1", kTestPort);
+	REQUIRE(conn_b);
+	ClientSession b(b_transport, *conn_b, HandshakeClientConfig{ "B", "", "v", 2 });
+
+	const bool both_joined = pump_until(500, [&] {
+		server.tick(0.05);
+		a.tick(0.05);
+		b.tick(0.05);
+		return a.joined() && b.joined();
+	});
+	REQUIRE(both_joined);
+	const auto a_id = a.join_accept()->your_net_id;
+	const auto b_id = b.join_accept()->your_net_id;
+
+	// Both near the origin (default 32 m cells, radius 1 -> same/adjacent cell).
+	server.set_player_state(a_id, vb::core::Vec3d{ 0, 64, 0 });
+	server.set_player_state(b_id, vb::core::Vec3d{ 8, 64, 0 });
+
+	// Don't stop at the first tick each sees the other -- over real UDP the
+	// "entered interest" event and the position-8 snapshot can land in
+	// separate packets, so the earliest visible position may still be
+	// whatever was current at connect time (0,0,0), not yet the explicit
+	// set_player_state() above. Wait for the position to actually converge,
+	// not just for presence.
+	const bool both_see_each_other = pump_until(500, [&] {
+		server.tick(0.05);
+		a.tick(0.05);
+		b.tick(0.05);
+		return a.remote_entities().count(b_id) == 1 &&
+				b.remote_entities().count(a_id) == 1 &&
+				a.remote_entities().at(b_id).pos.x == doctest::Approx(8.0);
+	});
+	REQUIRE(both_see_each_other);
+	CHECK(a.remote_entities().at(b_id).pos.x == doctest::Approx(8.0));
+
+	// Move B far away -> A should get a removal.
+	server.set_player_state(b_id, vb::core::Vec3d{ 5000, 64, 0 });
+	const bool b_left = pump_until(500, [&] {
+		server.tick(0.05);
+		a.tick(0.05);
+		b.tick(0.05);
+		return a.remote_entities().count(b_id) == 0;
+	});
+	CHECK(b_left);
+	CHECK(b.remote_entities().count(a_id) == 0);
+}
+
 #endif // VB_WITH_NET

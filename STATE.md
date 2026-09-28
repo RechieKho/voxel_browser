@@ -36,7 +36,39 @@ content-only (e.g. the user explicitly asks for a content-pack feature).
 
 ## Current status (2026-09-28)
 
-**Punch-rate cooldown enforced engine-side, closing REMAINING_TASKS' Phase
+**Two-client replication test re-run over real `GnsTransport`, closing
+Phase 1's own last remaining item ("the two-client replication test runs
+over `LoopbackTransport` only; re-run over `GnsTransport`").** Picked per
+this file's own standing priority (engine C++ work over content Lua) from
+the remaining open items. Pure test-coverage gap, no production code
+changed: `tests/unit/gns_transport_test.cpp` gained a new case ("two
+clients within interest range replicate to each other, over real UDP
+(GnsTransport)") mirroring `replication_test.cpp`'s existing
+`LoopbackTransport` scenario (join, come into interest range, see each
+other's position, move far away, get a removal) but driving two real
+`GnsTransport` instances over real UDP loopback instead of the in-process
+`LoopbackNetwork` — `ServerSession`/`ClientSession`/`InterestGrid` only
+ever talk to the `Transport` interface, so nothing about the replication
+path itself needed a real-UDP-specific code change. **One real timing
+difference from the `LoopbackTransport` version's fixed-pump-count
+style:** over real UDP, "entered interest" and a position update can land
+in separate packets, so this test polls until the position actually
+converges to the expected value rather than stopping at the first tick
+presence is detected — confirmed this mattered, not just theoretical: an
+earlier version of this test that stopped at bare presence passed in
+isolation but flaked when run as part of the full suite (saw a stale
+pre-`set_player_state` position), because GNS's global per-process state
+and callback dispatch is shared with dozens of other tests running back to
+back in the same process (`gns_transport.hpp`'s own header comment already
+flags this "one shared global interface" posture). Verified: full
+`vb_tests` 395/395 green, confirmed stable across 3 repeated full-suite
+runs (no flakes) plus a clean `-Werror` rebuild of
+`vb_tests`/`voxel_browser`/`voxel_browser_server` (temporarily
+reconfigured `build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`, confirmed
+clean, reconfigured back to this dir's OFF default afterward, same pattern
+as every other recent phase).
+
+Before that, most recent landed item was **punch-rate cooldown enforced engine-side, closing REMAINING_TASKS' Phase
 6.18 "no punch-rate cooldown enforced engine-side" gap.** Picked per this
 file's own standing priority (engine C++ work over content Lua) from the
 remaining open items. New `net::ServerSession::PunchParams::

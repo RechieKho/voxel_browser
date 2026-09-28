@@ -71,8 +71,9 @@ Full detail: `remaining_tasks/phase1.md`.
       own task.
 - [ ] macOS CI doesn't build `VB_WITH_NET` (universal arm64+x86_64 build vs.
       single-arch brew protobuf) — needs a universal protobuf, see `build_macos.yml`.
-- [ ] The two-client replication test runs over `LoopbackTransport` only;
-      re-run over `GnsTransport`.
+- [x] The two-client replication test runs over `LoopbackTransport` only;
+      re-run over `GnsTransport` — see "Current status" in `STATE.md` for
+      the full writeup (landed 2026-09-28).
 
 ---
 
