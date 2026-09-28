@@ -520,7 +520,16 @@ Full detail: `remaining_tasks/phase4.md`.
 - [ ] Manifest staleness: a pack that writes `vb.storage` *after* startup
       (not just at load time) goes stale for the rest of that server
       process's life — no shipped pack triggers this today, left unaddressed.
-- [ ] Item grid widget for `UiRuntime` — needs a real item/inventory concept.
+- [x] Item grid widget for `UiRuntime` — landed 2026-09-28, see "Current
+      status" in `STATE.md` for the full writeup. Not a baked-in "grid"
+      concept: a new generic `icon` `WidgetType` draws one registered
+      block/item id's real atlas texture at x/y/w/h (same atlas chunk
+      meshes already use, via new `ChunkRenderer::has_atlas()`/
+      `atlas_texture()`/`atlas_rect_for()` getters), and
+      `content/base/ui/inventory.lua` composes a real item grid out of it
+      plus `rect`/`text` (slot background/border, count label) — the same
+      "compose it in Lua" posture Phase 6.16 already gave the hold-to-break
+      progress bar out of `rect`.
 
 ---
 

@@ -7,6 +7,7 @@
 #include <string_view>
 #include <vector>
 
+#include "vb/core/ids.hpp"
 #include "vb/net/session.hpp"
 #include "vb/script/vm.hpp"
 
@@ -50,6 +51,17 @@ enum class WidgetType : std::uint8_t {
 	// raylib-linked render layer (vb::render::UiRenderer), not here; this
 	// struct only carries the request.
 	kText,
+	// A registered block/item id's real atlas texture drawn at (x, y, w, h)
+	// (REMAINING_TASKS.md Phase 4's "item grid widget for UiRuntime" gap):
+	// deliberately just "one item's icon," the same no-baked-in-meaning
+	// posture kRect/kText already have -- an item *grid* (rows/columns,
+	// slot borders, hover highlight, a count label per slot) is entirely a
+	// Lua/content concern composed out of this plus kRect/kText, exactly
+	// how 6.16 composed a progress bar out of kRect. `color` (default
+	// opaque white, i.e. no tint) multiplies the drawn texture same as
+	// raylib's own tint parameter -- lets content grey out an unusable
+	// slot without a second widget on top.
+	kIcon,
 };
 
 // kText only: `x` is the anchor edge/point `align` is relative to, not
@@ -74,6 +86,7 @@ struct Widget {
 	std::uint8_t border_r = 0, border_g = 0, border_b = 0, border_a = 0; // kRect only; alpha 0 = no border
 	int font_size = 16; // kText only
 	TextAlign align = TextAlign::kLeft; // kText only
+	core::BlockId item = core::BlockId::kAir; // kIcon only
 };
 
 class UiRuntime {

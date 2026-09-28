@@ -6,6 +6,7 @@
 #include <utility>
 #include <vector>
 
+#include "vb/render/chunk_renderer.hpp" // atlas texture + per-block UV rects, for kIcon widgets
 #include "vb/script/ui_runtime.hpp" // script::Widget
 
 // Draws a vb::script::UiRuntime's widget list with raygui (spec §10.4,
@@ -27,8 +28,13 @@ public:
 	// end_frame(), outside any BeginMode3D/EndMode3D block (raygui is a 2D
 	// immediate-mode overlay). Resets per-widget text/list edit state when
 	// `ui_name` differs from the previous call (a different or reopened UI).
+	// `atlas_source` (optional) is the session's `ChunkRenderer` -- only
+	// consulted for `kIcon` widgets, to draw a real block texture from the
+	// same atlas chunk meshes already use; nullptr (or one with no atlas
+	// set yet) falls back to that block's flat placeholder color.
 	UiFrameResult draw(std::string_view ui_name,
-			const std::vector<script::Widget> &widgets);
+			const std::vector<script::Widget> &widgets,
+			const ChunkRenderer *atlas_source = nullptr);
 
 private:
 	std::string last_ui_name_;

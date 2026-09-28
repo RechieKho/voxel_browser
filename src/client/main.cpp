@@ -1610,7 +1610,8 @@ int main(int argc, char **argv) {
 				// content/base/ui/hud.lua reads client.break_progress() (set
 				// above) and decides whether/how to show it; the engine
 				// itself no longer draws a single pixel of it.
-				const auto hud_result = hud_renderer.draw("hud", ui_runtime.render_hud());
+				const auto hud_result =
+						hud_renderer.draw("hud", ui_runtime.render_hud(), chunk_renderer.get());
 				for (const auto &id : hud_result.clicked) {
 					ui_runtime.report_hud_click(id);
 				}
@@ -1640,8 +1641,8 @@ int main(int argc, char **argv) {
 
 				if (ui_runtime.is_open()) {
 					const auto &widgets = ui_runtime.render_frame();
-					const auto ui_result =
-							ui_renderer.draw(ui_runtime.current_name(), widgets);
+					const auto ui_result = ui_renderer.draw(
+							ui_runtime.current_name(), widgets, chunk_renderer.get());
 					for (const auto &id : ui_result.clicked) {
 						ui_runtime.report_click(id);
 					}

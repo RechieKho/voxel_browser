@@ -324,6 +324,15 @@ Color ChunkRenderer::underwater_tint(core::BlockId id) const {
 	return fallback_color_for(static_cast<std::uint32_t>(idx));
 }
 
+const AtlasRect &ChunkRenderer::atlas_rect_for(core::BlockId id) const {
+	static constexpr AtlasRect kWholeTexture{ 0.0f, 0.0f, 1.0f, 1.0f };
+	const auto idx = static_cast<std::size_t>(id);
+	if (idx < atlas_rects_.size()) {
+		return atlas_rects_[idx];
+	}
+	return kWholeTexture;
+}
+
 void ChunkRenderer::drop(core::ChunkCoord coord) {
 	const auto it = gpu_.find(coord);
 	if (it == gpu_.end()) {

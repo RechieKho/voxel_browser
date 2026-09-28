@@ -189,6 +189,50 @@ TEST_CASE("ui.define_hud + render_hud() composes a progress bar entirely in "
 	CHECK(ui.render_hud().empty());
 }
 
+TEST_CASE("ui.define with an \"icon\" widget carries its item id and tint "
+		"(REMAINING_TASKS.md Phase 4's item grid widget gap)") {
+	UiRuntime ui;
+	REQUIRE(ui.load_pack_file(R"(
+		ui.define("test", function(state)
+			return {
+				widgets = {
+					{ id = "slot0", type = "icon", x = 10, y = 10, w = 32, h = 32, item = 5 },
+					{ id = "slot1", type = "icon", x = 46, y = 10, w = 32, h = 32,
+						item = 2, color = { 128, 128, 128, 200 } },
+				},
+			}
+		end)
+	)"));
+	ui.open("test", "{}");
+	const auto &widgets = ui.render_frame();
+	REQUIRE(widgets.size() == 2);
+	CHECK(widgets[0].type == WidgetType::kIcon);
+	CHECK(widgets[0].item == vb::core::BlockId{ 5 });
+	// No `color` given -> opaque white, i.e. no tint on the drawn texture.
+	CHECK(widgets[0].fill_r == 255);
+	CHECK(widgets[0].fill_a == 255);
+	CHECK(widgets[1].item == vb::core::BlockId{ 2 });
+	CHECK(widgets[1].fill_r == 128);
+	CHECK(widgets[1].fill_a == 200);
+}
+
+// A missing `item` field (e.g. a plain "icon" widget the author forgot to
+// fill in) defaults to air (id 0) rather than an uninitialized/garbage id --
+// same "missing field -> the type's zero value" posture every other widget
+// field already has (x/y/w/h default 0, text defaults empty, ...).
+TEST_CASE("ui \"icon\" widget with no item field defaults to air") {
+	UiRuntime ui;
+	REQUIRE(ui.load_pack_file(R"(
+		ui.define("test", function(state)
+			return { widgets = { { id = "slot", type = "icon", x = 0, y = 0, w = 8, h = 8 } } }
+		end)
+	)"));
+	ui.open("test", "{}");
+	const auto &widgets = ui.render_frame();
+	REQUIRE(widgets.size() == 1);
+	CHECK(widgets[0].item == vb::core::BlockId::kAir);
+}
+
 TEST_CASE("render_hud() is a safe no-op when no HUD was ever registered "
 		"(Phase 6.16)") {
 	UiRuntime ui;

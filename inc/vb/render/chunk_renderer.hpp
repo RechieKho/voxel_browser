@@ -86,6 +86,16 @@ public:
 	// themselves fall back to.
 	Color underwater_tint(core::BlockId id) const;
 
+	// Entity-management follow-up: lets `UiRenderer` draw a real block
+	// texture for a `kIcon` widget (REMAINING_TASKS.md Phase 4's "item grid
+	// widget for UiRuntime" gap) from the exact same atlas chunk meshes
+	// already use, instead of a second texture/atlas just for UI. `false`/
+	// a default-constructed `Texture2D{}` before `set_atlas()` has ever
+	// been called -- callers must check `has_atlas()` first.
+	bool has_atlas() const { return has_atlas_; }
+	Texture2D atlas_texture() const { return atlas_; }
+	const AtlasRect &atlas_rect_for(core::BlockId id) const;
+
 private:
 	struct GpuMesh;
 	struct GpuChunk;

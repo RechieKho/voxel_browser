@@ -160,6 +160,9 @@ WidgetType widget_type_from(const std::string &s) {
 	if (s == "text") {
 		return WidgetType::kText;
 	}
+	if (s == "icon") {
+		return WidgetType::kIcon;
+	}
 	if (s != "label") {
 		VB_WARN("script", "ui: unknown widget type '", s, "', treating as label");
 	}
@@ -192,6 +195,9 @@ Widget widget_from_table(const sol::table &wt) {
 	// is a raw parameter rather than the engine guessing pixel widths for
 	// Lua).
 	w.font_size = wt.get_or("font_size", 16);
+	// kIcon only: `item`, a registered block/item id -- the same numeric id
+	// `player:get_inventory()`/`vb.world.set_block` already use elsewhere.
+	w.item = static_cast<core::BlockId>(wt.get_or("item", std::uint16_t{ 0 }));
 	const std::string align_str = wt.get_or("align", std::string("left"));
 	if (align_str == "right") {
 		w.align = TextAlign::kRight;
@@ -201,10 +207,11 @@ Widget widget_from_table(const sol::table &wt) {
 		w.align = TextAlign::kLeft;
 	}
 
-	// kRect/kText: `color = {r,g,b,a?}` (fill, default opaque white) and an
-	// optional `border = {r,g,b,a?}` (kRect only; default fully transparent
-	// -- no border drawn). 1-indexed like every other Lua color array in
-	// this codebase (vb.daynight.set_curve's `color = {r,g,b}`).
+	// kRect/kText/kIcon: `color = {r,g,b,a?}` (fill for kRect/kText, tint
+	// multiplier for kIcon; default opaque white -- no tint for kIcon) and
+	// an optional `border = {r,g,b,a?}` (kRect only; default fully
+	// transparent -- no border drawn). 1-indexed like every other Lua color
+	// array in this codebase (vb.daynight.set_curve's `color = {r,g,b}`).
 	sol::object color_obj = wt["color"];
 	if (color_obj.get_type() == sol::type::table) {
 		sol::table c = color_obj.as<sol::table>();

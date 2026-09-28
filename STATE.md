@@ -36,7 +36,61 @@ content-only (e.g. the user explicitly asks for a content-pack feature).
 
 ## Current status (2026-09-28)
 
-**Two-client replication test re-run over real `GnsTransport`, closing
+**Item grid widget for `UiRuntime`, closing REMAINING_TASKS' Phase 4 "item
+grid widget for `UiRuntime` — needs a real item/inventory concept" gap.**
+Picked per this file's own standing priority (engine C++ work over content
+Lua) from the remaining open items — the blocker in that item's own text
+("needs a real item/inventory concept") was already resolved by Phase 5.4's
+inventory sync/hotbar work, leaving only the engine-side rendering gap
+itself open. Followed this codebase's established "generic primitive, not
+a baked-in concept" posture (the same one `kRect`/`kText` already have,
+Phase 6.16) rather than inventing a dedicated grid layout concept
+engine-side: a new `vb::script::WidgetType::kIcon` (`inc/vb/script/
+ui_runtime.hpp`) draws exactly one registered block/item id's real atlas
+texture at `x/y/w/h`, nothing else — an `item` field (a numeric block id,
+default air) plus the existing `color` field reused as a tint multiplier
+(default opaque white = no tint, so an untinted icon draws the real
+texture colors unchanged). `content/base/ui/inventory.lua`'s known "the
+item-grid widget the spec describes for this screen doesn't exist... a
+list stands in" comment is now resolved: it composes a real item grid out
+of `icon` plus `rect` (slot background/border) and `text` (the count
+label), the exact same "compose it in Lua" shape Phase 6.16 already gave
+the hold-to-break progress bar out of `rect`.
+**Rendering plumbing:** `UiRenderer` had no texture to draw an icon from at
+all before this — the client's block texture atlas lives entirely inside
+`ChunkRenderer` (built once at join, handed over via `set_atlas()`), so
+three new getters (`has_atlas()`, `atlas_texture()`, `atlas_rect_for(id)`,
+the last following `underwater_tint()`'s existing bounds-check-with-
+fallback shape) let `UiRenderer::draw()` reuse that same atlas instead of
+building a second one just for UI. `UiRenderer::draw()` gained an optional
+`const ChunkRenderer *atlas_source = nullptr` parameter — nullptr (or a
+`ChunkRenderer` with no atlas set yet, e.g. a screen opened before the
+join-time atlas build finishes) falls back to that block's flat
+placeholder color (`fallback_color_for()`, already used elsewhere for the
+identical "no real texture yet" case) via a plain `DrawRectangle` instead
+of `DrawTexturePro`, never a crash or a blank slot. `src/client/main.cpp`'s
+two real `.draw()` call sites (the modal-screen `ui_renderer` and the
+always-on `hud_renderer`) both now pass `chunk_renderer.get()` — the
+`--headless` client's own separate `ui_renderer` local (line ~687) is
+never actually `.draw()`n on that path, so it needed no change.
+Verified: full `vb_tests` 397/397 green (2 new `ui_runtime_test.cpp`
+cases: an `icon` widget round-trips its `item` id and an explicit `color`
+tint, and a missing `item` field defaults to air rather than garbage;
+`content_pack_test.cpp`'s existing whole-pack load exercises the rewritten
+`content/base/ui/inventory.lua` for a real syntax/load check), clean
+`-Werror` build of `vb_tests`/`voxel_browser`/`voxel_browser_server`
+(temporarily reconfigured `build-net-lua` with
+`-DVB_WARNINGS_AS_ERRORS=ON`, confirmed clean, reconfigured back to this
+dir's OFF default afterward). The actual rendered icon grid (a human
+opening the inventory screen and seeing real block textures in a real
+window) was **not** manually eyeballed — no GUI in this agent environment,
+same still-open caveat as every other rendering-adjacent pass in this
+file. `ChunkRenderer`/`UiRenderer` themselves also stay untested directly
+(both need a live GL context — same pre-existing posture as
+`underwater_tint()`'s own C++ side, only its Lua-facing shape gets a unit
+test).
+
+Before that, most recent landed item was **the two-client replication test re-run over real `GnsTransport`, closing
 Phase 1's own last remaining item ("the two-client replication test runs
 over `LoopbackTransport` only; re-run over `GnsTransport`").** Picked per
 this file's own standing priority (engine C++ work over content Lua) from

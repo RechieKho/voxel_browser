@@ -18,62 +18,104 @@
 -- `src/client/main.cpp`'s `kCustomKeybinds` table binds that name to
 -- `KEY_E` client-side.
 --
--- **Known gaps, not attempted here:** (1) item ids are raw block ids today
+-- **Known gap, not attempted here:** item ids are raw block ids today
 -- (`vb.register_item` never allocates its own id space -- see blocks/*.lua's
--- on_break, which gives back the broken block's own id), so this renders
--- numeric ids, not item names, until that's resolved. (2) the item-grid
--- widget the spec describes for this screen doesn't exist (`ui_runtime.cpp`'s
--- `WidgetType` has no grid variant) -- a `list` stands in.
+-- on_break, which gives back the broken block's own id), so each slot's
+-- count label is the only text; there's no item *name* to show yet.
+--
+-- The item grid itself is composed from the engine's generic `icon`
+-- primitive (draws one registered block/item id's real atlas texture at
+-- x/y/w/h, nothing else -- REMAINING_TASKS.md's old "item grid widget for
+-- UiRuntime" gap) plus `rect` for the slot background/border and `text` for
+-- the count -- the same "compose it in Lua" posture Phase 6.16 already gave
+-- the hold-to-break progress bar out of `rect`. An empty slot (item == 0,
+-- i.e. air) draws just the background, no icon/count.
+local kSlotSize = 40
+local kSlotGap = 4
+local kCols = 8
+
 ui.define("base:inventory", function(state)
-	local items = {}
 	local slots = state and state.slots or {}
-	for _, slot in ipairs(slots) do
-		table.insert(items, "item " .. tostring(slot.item) .. " x" .. tostring(slot.count))
-	end
-	if #items == 0 then
-		items = { "(empty)" }
-	end
 
-	local title = "Inventory"
-	if state.selected then
-		title = title .. " (#" .. tostring(state.selected) .. ")"
-	end
-
-	return {
-		widgets = {
-			{
-				id = "title",
-				type = "label",
-				x = 24,
-				y = 24,
-				w = 200,
-				h = 28,
-				text = title,
-			},
-			{
-				id = "slots",
-				type = "list",
-				x = 24,
-				y = 60,
-				w = 220,
-				h = 160,
-				items = items,
-				on_change = function(idx)
-					state.selected = idx
-				end,
-			},
-			{
-				id = "close",
-				type = "button",
-				x = 24,
-				y = 232,
-				w = 140,
-				h = 32,
-				text = "Close",
-				on_click = function()
-					ui.close()
-				end,
-			},
+	local widgets = {
+		{
+			id = "title",
+			type = "label",
+			x = 24,
+			y = 24,
+			w = 200,
+			h = 28,
+			text = "Inventory",
 		},
 	}
+
+	for i, slot in ipairs(slots) do
+		local col = (i - 1) % kCols
+		local row = math.floor((i - 1) / kCols)
+		local x = 24 + col * (kSlotSize + kSlotGap)
+		local y = 60 + row * (kSlotSize + kSlotGap)
+
+		table.insert(widgets, {
+			id = "slot_bg_" .. i,
+			type = "rect",
+			x = x,
+			y = y,
+			w = kSlotSize,
+			h = kSlotSize,
+			color = { 40, 40, 46, 220 },
+			border = { 90, 90, 100, 230 },
+		})
+
+		if slot.item and slot.item ~= 0 then
+			table.insert(widgets, {
+				id = "slot_icon_" .. i,
+				type = "icon",
+				x = x + 2,
+				y = y + 2,
+				w = kSlotSize - 4,
+				h = kSlotSize - 4,
+				item = slot.item,
+			})
+			table.insert(widgets, {
+				id = "slot_count_" .. i,
+				type = "text",
+				x = x + kSlotSize - 4,
+				y = y + kSlotSize - 14,
+				text = tostring(slot.count),
+				font_size = 12,
+				align = "right",
+				color = { 255, 255, 255, 255 },
+			})
+		end
+	end
+
+	if #slots == 0 then
+		table.insert(widgets, {
+			id = "empty",
+			type = "label",
+			x = 24,
+			y = 60,
+			w = 220,
+			h = 24,
+			text = "(empty)",
+		})
+	end
+
+	local rows = math.max(1, math.ceil(#slots / kCols))
+	local close_y = 60 + rows * (kSlotSize + kSlotGap) + 8
+
+	table.insert(widgets, {
+		id = "close",
+		type = "button",
+		x = 24,
+		y = close_y,
+		w = 140,
+		h = 32,
+		text = "Close",
+		on_click = function()
+			ui.close()
+		end,
+	})
+
+	return { widgets = widgets }
 end)

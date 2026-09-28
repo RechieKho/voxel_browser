@@ -13,7 +13,7 @@ constexpr int kTextBoxBufferSize = 256;
 } // namespace
 
 UiFrameResult UiRenderer::draw(std::string_view ui_name,
-		const std::vector<script::Widget> &widgets) {
+		const std::vector<script::Widget> &widgets, const ChunkRenderer *atlas_source) {
 	if (ui_name != last_ui_name_) {
 		text_buffers_.clear();
 		edit_mode_.clear();
@@ -88,6 +88,30 @@ UiFrameResult UiRenderer::draw(std::string_view ui_name,
 				}
 				DrawText(w.text.c_str(), static_cast<int>(draw_x), static_cast<int>(w.y),
 						w.font_size, Color{ w.fill_r, w.fill_g, w.fill_b, w.fill_a });
+				break;
+			}
+			case script::WidgetType::kIcon: {
+				// Real block texture from the shared chunk atlas when one's
+				// been uploaded (entity-management follow-up: an "item"
+				// primitive, not a baked-in "item grid" concept -- content
+				// composes a real inventory grid out of these plus
+				// kRect/kText, same posture Phase 6.16 gave kRect for
+				// progress bars). No atlas yet falls back to the same flat
+				// placeholder color a chunk mesh itself would use.
+				if (atlas_source != nullptr && atlas_source->has_atlas()) {
+					const AtlasRect &r = atlas_source->atlas_rect_for(w.item);
+					const Texture2D tex = atlas_source->atlas_texture();
+					const Rectangle src{ r.u0 * static_cast<float>(tex.width),
+						r.v0 * static_cast<float>(tex.height),
+						(r.u1 - r.u0) * static_cast<float>(tex.width),
+						(r.v1 - r.v0) * static_cast<float>(tex.height) };
+					DrawTexturePro(tex, src, bounds, Vector2{ 0, 0 }, 0.0f,
+							Color{ w.fill_r, w.fill_g, w.fill_b, w.fill_a });
+				} else {
+					DrawRectangle(static_cast<int>(w.x), static_cast<int>(w.y),
+							static_cast<int>(w.w), static_cast<int>(w.h),
+							fallback_color_for(static_cast<std::uint32_t>(w.item)));
+				}
 				break;
 			}
 			case script::WidgetType::kList: {
