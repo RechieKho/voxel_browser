@@ -335,6 +335,10 @@ struct Singleplayer {
 		// Phase 6.18: mirrors src/server/main.cpp's own set_punch_params call.
 		server.set_punch_params(pack_runtime.effective_punch_params(
 				vb::net::ServerSession::PunchParams{}));
+		// Mirrors src/server/main.cpp's own set_hunger_params call
+		// (REMAINING_TASKS.md's hunger gap).
+		server.set_hunger_params(pack_runtime.effective_hunger_params(
+				vb::net::ServerSession::HungerParams{}));
 		// Phase 6.8: no server.toml on this in-process path either, so
 		// ServerSession's own hardcoded default (kDefaultDayLengthSeconds,
 		// matching its member initializer) is the base a pack's

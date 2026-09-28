@@ -33,6 +33,19 @@ net::ServerSession::PunchParams PackRuntime::effective_punch_params(
 		net::ServerSession::PunchParams base) const {
 	return base;
 }
+// Real pre-existing gap found while adding effective_hunger_params() just
+// below: effective_action_params() had no stub at all in this !VB_WITH_LUA
+// block, even though src/server/main.cpp/src/client/main.cpp call it
+// unconditionally -- a real link error waiting for anyone who actually
+// configures -DVB_WITH_LUA=OFF, never caught because no CI workflow does
+// (checked: build_linux/macos/windows.yml all hardcode VB_WITH_LUA=ON).
+net::ActionParams PackRuntime::effective_action_params(net::ActionParams base) const {
+	return base;
+}
+net::ServerSession::HungerParams PackRuntime::effective_hunger_params(
+		net::ServerSession::HungerParams base) const {
+	return base;
+}
 std::optional<world::DayNightCurve> PackRuntime::effective_day_night_curve() const {
 	return std::nullopt;
 }
@@ -575,6 +588,11 @@ struct PackRuntime::Impl {
 	// constant into the one value effective_action_params() resolves.
 	std::optional<sol::table> action_params_table;
 
+	// REMAINING_TASKS.md's hunger gap: the raw table passed to
+	// vb.hunger.set_params{...}, if a pack ever calls it -- same
+	// "capture the table, parse lazily" posture as the params tables above.
+	std::optional<sol::table> hunger_params_table;
+
 	// Phase 6.8: the raw table passed to vb.daynight.set_curve{keyframes =
 	// {...}}, if a pack ever calls it. Parsed into a world::DayNightCurve in
 	// effective_day_night_curve() rather than eagerly, matching
@@ -942,6 +960,34 @@ struct PlayerHandle {
 		rt->session->damage_player(net_id, amount, cause.value_or(std::string{}));
 	}
 
+	// REMAINING_TASKS.md's hunger gap: reads the current value of the
+	// per-player Hunger stat ServerSession::update_hunger() owns. nil if
+	// the player is already gone (same "nil, not an error, for a
+	// disappeared target" posture entity:get_health() uses for an
+	// untracked script-entity kind).
+	sol::object get_hunger(sol::this_state ts) const {
+		sol::state_view lua(ts);
+		if (rt->session == nullptr) {
+			throw sol::error("entity:get_hunger(): session not attached yet");
+		}
+		const auto h = rt->session->player_hunger(net_id);
+		if (!h) {
+			return sol::lua_nil;
+		}
+		return sol::make_object(lua, *h);
+	}
+
+	// A pack-facing way to spend or restore hunger directly (eating food,
+	// a sprint cost, ...) without waiting on decay_per_second -- clamped to
+	// [0, max] by ServerSession::add_player_hunger(), a negative `amount`
+	// spends hunger the same way a positive one restores it.
+	void add_hunger(float amount) const {
+		if (rt->session == nullptr) {
+			throw sol::error("entity:add_hunger(): session not attached yet");
+		}
+		rt->session->add_player_hunger(net_id, amount);
+	}
+
 	// Phase 6.17: breaking a block is no longer something the engine does on
 	// its own -- the client only ever reports raw input (buttons.primary,
 	// where it's looking via yaw/pitch); a pack decides whether/when that
@@ -1078,7 +1124,8 @@ void PackRuntime::Impl::install_bindings() {
 			"place_block", &PlayerHandle::place_block, "punch",
 			&PlayerHandle::punch, "get_selected_slot",
 			&PlayerHandle::get_selected_slot, "get_held_item",
-			&PlayerHandle::get_held_item);
+			&PlayerHandle::get_held_item, "get_hunger", &PlayerHandle::get_hunger,
+			"add_hunger", &PlayerHandle::add_hunger);
 
 	sol::table vb = lua.create_named_table("vb");
 
@@ -1354,6 +1401,37 @@ void PackRuntime::Impl::install_bindings() {
 		}
 		sol::table t = lua_state().create_table();
 		t["reach"] = p.reach;
+		return t;
+	};
+
+	// REMAINING_TASKS.md's "hunger has no primitive at all yet" gap: a
+	// per-player Hunger stat (see vb/ecs/components.hpp), decayed and
+	// (optionally) converted to starvation damage by ServerSession's own
+	// update_hunger() -- same "engine ships the mechanism at a value that
+	// changes nothing until a pack opts in" posture as
+	// vb.combat.set_params's punch_cooldown_seconds. Its own namespace,
+	// not folded into vb.combat, matching vb.action's own reasoning: a
+	// pack author looking for "the hunger knob" shouldn't have to search
+	// combat for it.
+	sol::table hunger_tbl = lua.create_table();
+	vb["hunger"] = hunger_tbl;
+	hunger_tbl["set_params"] = [this](sol::table def) {
+		if (frozen) {
+			throw sol::error("vb.hunger.set_params: registry already frozen");
+		}
+		hunger_params_table = def;
+	};
+	hunger_tbl["get_params"] = [this]() -> sol::table {
+		net::ServerSession::HungerParams p{};
+		if (hunger_params_table) {
+			p.decay_per_second =
+					hunger_params_table->get_or("decay_per_second", p.decay_per_second);
+			p.starvation_damage_per_second = hunger_params_table->get_or(
+					"starvation_damage_per_second", p.starvation_damage_per_second);
+		}
+		sol::table t = lua_state().create_table();
+		t["decay_per_second"] = p.decay_per_second;
+		t["starvation_damage_per_second"] = p.starvation_damage_per_second;
 		return t;
 	};
 
@@ -2501,6 +2579,19 @@ net::ActionParams PackRuntime::effective_action_params(net::ActionParams base) c
 	const sol::table &def = *impl_->action_params_table;
 	net::ActionParams out = base;
 	out.reach = def.get_or("reach", out.reach);
+	return out;
+}
+
+net::ServerSession::HungerParams PackRuntime::effective_hunger_params(
+		net::ServerSession::HungerParams base) const {
+	if (!impl_->hunger_params_table) {
+		return base;
+	}
+	const sol::table &def = *impl_->hunger_params_table;
+	net::ServerSession::HungerParams out = base;
+	out.decay_per_second = def.get_or("decay_per_second", out.decay_per_second);
+	out.starvation_damage_per_second = def.get_or(
+			"starvation_damage_per_second", out.starvation_damage_per_second);
 	return out;
 }
 

@@ -470,6 +470,38 @@ public:
 	// nothing is within reach.
 	PunchResult punch(core::NetId puncher, std::uint16_t block_damage = 1);
 
+	// REMAINING_TASKS.md's "hunger has no primitive at all yet" gap.
+	// Mechanism, not policy, same split as fall damage (6.22)/PvP: the
+	// engine owns a per-player Hunger stat and its own real-time decay (no
+	// begin/stop lifecycle for a pack to hang a decay policy off of, the
+	// same reasoning punch()'s built-in self-heal default already used),
+	// but ships every number at a value that changes nothing unless a pack
+	// opts in.
+	struct HungerParams {
+		// Hunger points lost per real second. `<= 0.0` (the default)
+		// disables hunger decay entirely -- every existing join/tick
+		// call site is unaffected unless a pack calls
+		// vb.hunger.set_params, matching PunchParams::punch_cooldown_seconds's
+		// own "0 disables" posture.
+		float decay_per_second = 0.0f;
+		// Damage per real second applied (cause "hunger") while hunger is
+		// at 0. `<= 0.0` (the default) means hunger can bottom out with no
+		// starvation consequence at all -- a pack that only wants a hunger
+		// *stat* (e.g. to gate sprinting) without starvation damage can set
+		// decay_per_second alone.
+		float starvation_damage_per_second = 0.0f;
+	};
+	void set_hunger_params(HungerParams p) { hunger_params_ = p; }
+	const HungerParams &hunger_params() const { return hunger_params_; }
+
+	// nullopt if `id` isn't a currently-playing connection (same shape as
+	// player_move_state()).
+	std::optional<float> player_hunger(core::NetId id) const;
+	// Clamped to [0, Hunger::max]; a negative `amount` is a deliberate way
+	// for a pack to spend hunger directly (e.g. sprint cost) without
+	// waiting on decay_per_second. No-op if `id` isn't playing.
+	void add_player_hunger(core::NetId id, float amount);
+
 private:
 	struct Conn {
 		explicit Conn(ServerHandshake hs) : handshake(std::move(hs)) {}
@@ -516,6 +548,7 @@ private:
 			const protocol::Frame &frame);
 	void handle_block_break_stop(Conn &state, const protocol::Frame &frame);
 	void apply_damage(Conn &state, float amount, std::string_view cause);
+	void update_hunger(double dt_seconds);
 	void check_respawns();
 	void update_item_drops(double dt_seconds);
 	void update_block_damage();
@@ -607,6 +640,7 @@ private:
 	};
 	std::unordered_map<core::IVec3, PunchDamageState> block_punch_counts_;
 	PunchParams punch_params_;
+	HungerParams hunger_params_;
 	physics::MoveParams move_params_;
 	int interest_radius_cells_ = 2;
 	double time_of_day_ticks_ = 0.0;

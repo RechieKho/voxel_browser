@@ -70,6 +70,17 @@ struct Health {
 	float max = 20.0f;
 };
 
+// REMAINING_TASKS.md's "no primitive at all yet" hunger gap: a per-player
+// stat, decayed and (optionally) converted to starvation damage by
+// ServerSession::update_hunger() -- see net/session.hpp's HungerParams for
+// the policy knobs. Decay defaults to 0 (disabled) until a pack opts in via
+// vb.hunger.set_params, same "engine ships the mechanism, not the numbers"
+// posture as PunchParams::punch_cooldown_seconds.
+struct Hunger {
+	float current = 100.0f;
+	float max = 100.0f;
+};
+
 struct ItemStack {
 	core::BlockId item = core::BlockId::kAir;
 	std::uint16_t count = 0;

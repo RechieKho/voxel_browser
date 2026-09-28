@@ -140,6 +140,14 @@ public:
 	// WorldReplicator::set_reach().
 	net::ActionParams effective_action_params(net::ActionParams base) const;
 
+	// REMAINING_TASKS.md's hunger gap: applies a pack's
+	// `vb.hunger.set_params{decay_per_second=, starvation_damage_per_second=}`
+	// on top of `base` -- same shape as effective_punch_params() above. Call
+	// after freeze(), once, before wiring the result onto
+	// ServerSession::set_hunger_params().
+	net::ServerSession::HungerParams effective_hunger_params(
+			net::ServerSession::HungerParams base) const;
+
 	// Phase 6.8: a pack's `vb.daynight.set_curve{keyframes = {...}}`, if it
 	// ever called it -- `nullopt` (default) means no pack ever overrode the
 	// curve, so the caller should send no S2C_DayNightCurve frame at all and

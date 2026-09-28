@@ -764,17 +764,58 @@ Full detail: `remaining_tasks/phase6.md`.
       `voxel_browser`/`voxel_browser_server` (temporarily reconfigured
       `build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`, confirmed clean,
       reconfigured back to this dir's OFF default afterward).
-- [ ] No mob damage or hunger — 6.6 only added the primitive
-      (`player:damage`) and the decision hook (`player_death`); fall
-      damage and PvP (both just above) are the only real content callers
-      of either so far. Mob damage needs an actual hostile-mob concept
-      (an `on_tick`-driven script entity that seeks out and punches/damages
-      a nearby player) — the engine primitive (`entity:damage()`/
-      `player:damage()`) already exists, nothing new engine-side is
-      obviously missing here the way PvP's "is it even wired up" question
-      turned out to be. Hunger has no primitive at all yet (no stored
-      per-player hunger stat, no tick-driven decay, no starvation-damage
-      hook) — a real, still-open gap, not a stale one.
+- [x] **Hunger primitive — landed 2026-09-28.** New `vb::ecs::Hunger`
+      component (`inc/vb/ecs/components.hpp`, current/max, default 100/100,
+      emplaced alongside `Health` at player join) plus `ServerSession::
+      HungerParams` (`decay_per_second`/`starvation_damage_per_second`, both
+      `0.0` by default — decay stays fully disabled until a pack opts in,
+      same "engine ships the mechanism at a value that changes nothing"
+      posture as `PunchParams::punch_cooldown_seconds`) and a new
+      `"update_hunger"` `SystemRunner` phase, placed right before
+      `check_respawns` so same-tick starvation damage is seen by that same
+      tick's death check (matching void-kill's own "damage then check" single-
+      tick shape). `ServerSession::player_hunger()`/`add_player_hunger()` are
+      the read/spend-or-restore accessors; a respawn always resets hunger to
+      max alongside health (otherwise a starved-to-death player would starve
+      to death again the very next tick). Pack-facing: `vb.hunger.set_params{
+      decay_per_second=, starvation_damage_per_second=}`/`get_params()`
+      (mirrors `vb.action`'s own shape) and `player:get_hunger()`/
+      `add_hunger(amount)` (mirrors `player:damage()`'s shape) —
+      `PackRuntime::effective_hunger_params()` resolves the override lazily,
+      wired into both `src/server/main.cpp` and `--singleplayer`'s
+      integrated server the same way `effective_punch_params()` already is.
+      **Real pre-existing bug found and fixed in the same pass, unrelated to
+      hunger itself:** `effective_action_params()` (Phase 6.21) had **no**
+      stub at all in `pack_runtime.cpp`'s `!VB_WITH_LUA` block, even though
+      `src/server/main.cpp`/`src/client/main.cpp` call it unconditionally —
+      a real link error waiting for anyone who actually configures
+      `-DVB_WITH_LUA=OFF`, never caught because no CI workflow does
+      (confirmed: `build_linux/macos/windows.yml` all hardcode
+      `VB_WITH_LUA=ON`). Fixed alongside adding `effective_hunger_params()`'s
+      own stub, so the same gap wasn't reintroduced for the new function.
+      **Deliberately out of scope:** no client HUD/protocol replication for
+      hunger — server-side bookkeeping only, same posture Phase 6's
+      automatic despawn-on-health item already established for script-
+      entity health. Verified: full `vb_tests` 420/420 green (5 new cases:
+      2 engine-level in `netcode_test.cpp` — default-disabled decay plus a
+      configured rate, and starvation damage killing + respawning with
+      cause `"hunger"` and hunger restored to max; 1 `pack_runtime_test.cpp`
+      `vb.hunger.set_params`/`get_params` round-trip + freeze-rejection case;
+      1 `pack_runtime_integration_test.cpp` case proving `player:get_hunger()`/
+      `add_hunger()` and a configured decay driving a real starvation death
+      through a real session), clean `-Werror` build of `vb_tests`/
+      `voxel_browser`/`voxel_browser_server` (temporarily reconfigured
+      `build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`, confirmed clean,
+      reconfigured back to this dir's OFF default afterward).
+- [ ] No mob damage — 6.6 only added the primitive (`player:damage`) and
+      the decision hook (`player_death`); fall damage, PvP, and now hunger
+      (all just above) are the only real content callers of either so far.
+      Needs an actual hostile-mob concept (an `on_tick`-driven script entity
+      that seeks out and punches/damages a nearby player) — the engine
+      primitive (`entity:damage()`/`player:damage()`) already exists,
+      nothing new engine-side is obviously missing here the way PvP's "is
+      it even wired up" question turned out to be, or hunger's "no
+      primitive at all" gap was.
 - [x] Automatic despawn-on-health trigger for generic script entities —
       landed 2026-09-25. Opt-in per kind via `vb.register_entity{health=...}`
       (`EntityKindDef::max_health`, rejects a non-positive value at

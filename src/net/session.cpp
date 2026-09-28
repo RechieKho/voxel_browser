@@ -807,6 +807,7 @@ void ServerSession::system_network_io(double dt_seconds) {
 							it->second.entity, move_params_, /*on_ground=*/false);
 					registry_.emplace<ecs::PlayerInput>(it->second.entity);
 					registry_.emplace<ecs::Health>(it->second.entity, 20.0f, 20.0f);
+					registry_.emplace<ecs::Hunger>(it->second.entity, 100.0f, 100.0f);
 					registry_.emplace<ecs::PlayerTag>(it->second.entity, step.player_name);
 					registry_.emplace<ecs::NetReplicated>(it->second.entity, g.net_id);
 					// Entity-management follow-up: player_visual_kind_ lets a
@@ -968,6 +969,12 @@ void ServerSession::build_systems() {
 			[this](entt::registry &, const ecs::TickContext &ctx) {
 				system_advance_time_of_day(ctx.dt_seconds);
 			});
+	// Ahead of check_respawns so same-tick starvation damage (cause
+	// "hunger") is seen by that same phase's health<=0 check, matching
+	// void-kill's own single-tick "damage then check" shape.
+	systems_.add("update_hunger", [this](entt::registry &, const ecs::TickContext &ctx) {
+		update_hunger(ctx.dt_seconds);
+	});
 	systems_.add("check_respawns", [this](entt::registry &, const ecs::TickContext &) {
 		check_respawns();
 	});
@@ -1120,6 +1127,44 @@ core::Vec3d ServerSession::spawn_point(core::NetId id) const {
 	return {};
 }
 
+std::optional<float> ServerSession::player_hunger(core::NetId id) const {
+	for (const auto &[conn, state] : conns_) {
+		(void)conn;
+		if (state.playing && state.net_id == id) {
+			return registry_.get<ecs::Hunger>(state.entity).current;
+		}
+	}
+	return std::nullopt;
+}
+
+void ServerSession::add_player_hunger(core::NetId id, float amount) {
+	for (auto &[conn, state] : conns_) {
+		(void)conn;
+		if (state.playing && state.net_id == id) {
+			auto &hunger = registry_.get<ecs::Hunger>(state.entity);
+			hunger.current = core::clamp(hunger.current + amount, 0.0f, hunger.max);
+			return;
+		}
+	}
+}
+
+void ServerSession::update_hunger(double dt_seconds) {
+	if (hunger_params_.decay_per_second <= 0.0f) {
+		return; // disabled -- see HungerParams::decay_per_second's own comment
+	}
+	const float dt = static_cast<float>(dt_seconds);
+	for (auto &[conn, state] : conns_) {
+		if (!state.playing) {
+			continue;
+		}
+		auto &hunger = registry_.get<ecs::Hunger>(state.entity);
+		hunger.current = std::max(0.0f, hunger.current - hunger_params_.decay_per_second * dt);
+		if (hunger.current <= 0.0f && hunger_params_.starvation_damage_per_second > 0.0f) {
+			apply_damage(state, hunger_params_.starvation_damage_per_second * dt, "hunger");
+		}
+	}
+}
+
 void ServerSession::check_respawns() {
 	for (auto &[conn, state] : conns_) {
 		if (!state.playing) {
@@ -1140,6 +1185,13 @@ void ServerSession::check_respawns() {
 					state.net_id, state.death_cause, state.death_health_before);
 		}
 		health.current = decision.heal_to;
+		// A death starved to 0 hunger shouldn't leave the respawned player
+		// still starving and dying again next tick -- respawn is a full
+		// reset, hunger included, same as health above (RespawnDecision has
+		// no separate hunger override; a pack wanting a harsher respawn can
+		// still call add_player_hunger() itself from vb.on("player_death")).
+		auto &hunger = registry_.get<ecs::Hunger>(state.entity);
+		hunger.current = hunger.max;
 		pos.value = decision.pos;
 		registry_.get<ecs::Velocity>(state.entity).value = {};
 		registry_.get<ecs::Collider>(state.entity).on_ground = false;

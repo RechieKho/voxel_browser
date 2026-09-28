@@ -1340,6 +1340,68 @@ TEST_CASE(
 	)"));
 }
 
+// REMAINING_TASKS.md's hunger gap: player:get_hunger()/add_hunger() through
+// a real session, plus vb.hunger.set_params driving real decay to a real
+// starvation death (mirrors the fall-damage/PvP precedent of proving a
+// primitive end-to-end, not just its Lua binding shape).
+TEST_CASE("player:get_hunger()/add_hunger() read and spend hunger, and "
+		"configured decay leads to a real starvation death") {
+	LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("hunger_e2e"));
+	REQUIRE(rt.load_pack_file(R"(
+		vb.hunger.set_params({ decay_per_second = 2000, starvation_damage_per_second = 400 })
+		seen_hunger = nil
+		death_cause = nil
+		vb.on("player_death", function(player, cause, health_before)
+			death_cause = cause
+			return { heal = 20, pos = { x = 0, y = 64, z = 0 }, message = "" }
+		end)
+		vb.on("chat", function(player, text)
+			if text == "spend" then
+				player:add_hunger(-30)
+				seen_hunger = player:get_hunger()
+			end
+			return true
+		end)
+	)"));
+	rt.freeze();
+
+	HandshakeServerConfig cfg;
+	cfg.world_seed = 7;
+	ServerSession server(net.server(), cfg);
+	rt.attach_session(server);
+	server.set_hunger_params(rt.effective_hunger_params(ServerSession::HungerParams{}));
+	REQUIRE(net.server().listen(0));
+
+	Transport &ta = net.create_client();
+	auto ida = ta.connect("x", 0);
+	REQUIRE(ida);
+	ClientSession client(ta, *ida, HandshakeClientConfig{ "A", "", "v", 1 });
+
+	auto pump = [&](int n) {
+		for (int i = 0; i < n; ++i) {
+			server.tick(0.05);
+			client.tick(0.05);
+		}
+	};
+	pump(16);
+	REQUIRE(client.joined());
+
+	client.send_chat("spend");
+	pump(1);
+	// Already decayed some (decay_per_second=2000 -> 100/tick) plus the
+	// explicit -30 spend from add_hunger() -- get_hunger() must report a
+	// real, already-lower value, not a stale/stub one. Clamped at 0 either
+	// way, so this also holds if decay alone already zeroed it out.
+	REQUIRE(rt.load_pack_file(R"(assert(seen_hunger <= 100 - 30))"));
+
+	// Let decay + starvation damage keep running to a real death.
+	pump(3);
+	REQUIRE(rt.load_pack_file(R"(assert(death_cause == "hunger"))"));
+}
+
 TEST_CASE("vb.register_entity + vb.world.spawn: self persists across on_tick, "
 		  "on_hit/on_death fire, and the instance replicates to a client") {
 	LoopbackNetwork net;

@@ -344,6 +344,13 @@ int main(int argc, char **argv) {
 	session.world_replicator()->set_reach(pack_runtime.effective_action_params(
 															  vb::net::ActionParams{})
 					.reach);
+	// REMAINING_TASKS.md's hunger gap: a pack's vb.hunger.set_params{...}
+	// overrides decay/starvation-damage rates, same config-then-pack-
+	// override shape as move_params/punch_params above -- 0/0 (the
+	// engine's own default) means hunger decay stays disabled unless a
+	// pack opts in.
+	session.set_hunger_params(pack_runtime.effective_hunger_params(
+			vb::net::ServerSession::HungerParams{}));
 	session.set_void_kill_y(config.void_kill_y);
 	// §8.3 hardening: 0 (server.toml's own default) means unlimited, same as
 	// today's unset behavior -- only bites once an operator opts in.

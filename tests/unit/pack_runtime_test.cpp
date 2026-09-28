@@ -481,6 +481,44 @@ TEST_CASE("vb.physics.get_params()/vb.action.get_params() round-trip the "
 	REQUIRE(r);
 }
 
+// REMAINING_TASKS.md's hunger gap.
+TEST_CASE("vb.hunger.set_params overrides decay/starvation rates, disabled "
+		"(0/0) with no override, rejected after freeze") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("hunger"));
+
+	{
+		const vb::net::ServerSession::HungerParams effective =
+				rt.effective_hunger_params(vb::net::ServerSession::HungerParams{});
+		CHECK(effective.decay_per_second == doctest::Approx(0.0f));
+		CHECK(effective.starvation_damage_per_second == doctest::Approx(0.0f));
+	}
+
+	const auto r = rt.load_pack_file(R"(
+		local defaults = vb.hunger.get_params()
+		assert(defaults.decay_per_second == 0)
+		assert(defaults.starvation_damage_per_second == 0)
+
+		vb.hunger.set_params({ decay_per_second = 2.0, starvation_damage_per_second = 1.0 })
+
+		local p = vb.hunger.get_params()
+		assert(p.decay_per_second == 2.0)
+		assert(p.starvation_damage_per_second == 1.0)
+	)");
+	REQUIRE(r);
+	rt.freeze();
+
+	const vb::net::ServerSession::HungerParams effective =
+			rt.effective_hunger_params(vb::net::ServerSession::HungerParams{});
+	CHECK(effective.decay_per_second == doctest::Approx(2.0f));
+	CHECK(effective.starvation_damage_per_second == doctest::Approx(1.0f));
+
+	const auto r2 = rt.load_pack_file(
+			R"(vb.hunger.set_params({ decay_per_second = 5.0 }))");
+	CHECK_FALSE(r2);
+}
+
 TEST_CASE("vb.config.get exposes the operator's ServerConfig read-only "
 		"(Phase 6.13)") {
 	vb::net::LoopbackNetwork net;

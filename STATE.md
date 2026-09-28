@@ -36,7 +36,61 @@ content-only (e.g. the user explicitly asks for a content-pack feature).
 
 ## Current status (2026-09-28)
 
-**Found (and closed the proof gap for) another stale backlog line: "No
+**Landed the hunger primitive, closing the hunger half of Phase 6's "No
+PvP, mob damage, or hunger" line -- unlike PvP (found already wired up
+below), this one genuinely had no primitive at all before this pass.**
+Picked per this file's own standing priority (engine work over content)
+from the remaining open items right after the PvP-proof pass below --
+this was the one item left in the whole backlog that was concrete,
+unblocked, and *not* already secretly done.
+**Shape, mirroring fall damage/PvP's own precedent as closely as possible:**
+new `vb::ecs::Hunger` component (current/max, default 100/100, emplaced
+alongside `Health` at player join) plus `ServerSession::HungerParams`
+(`decay_per_second`/`starvation_damage_per_second`, both `0.0` by default
+-- decay stays fully disabled until a pack opts in, same "mechanism at a
+value that changes nothing" posture `PunchParams::punch_cooldown_seconds`
+already has) and a new `"update_hunger"` `SystemRunner` phase placed right
+before `check_respawns` -- same-tick starvation damage is seen by that
+same tick's death check, matching void-kill's own single-tick "damage then
+check" shape (both live inside/around the same `check_respawns()` machinery).
+A respawn now resets hunger to max alongside health -- otherwise a player
+who starved to death would starve to death again the very next tick, hunger
+still parked at 0 with no `RespawnDecision` field to fix it. Pack-facing:
+`vb.hunger.set_params{decay_per_second=, starvation_damage_per_second=}`/
+`get_params()` (mirrors `vb.action`'s shape) and `player:get_hunger()`/
+`add_hunger(amount)` (mirrors `player:damage()`'s shape, a negative amount
+spends hunger the same way a positive one restores it -- an eat-food /
+sprint-cost primitive without waiting on decay alone).
+**Real pre-existing bug found and fixed in the same pass, unrelated to
+hunger itself:** while adding `effective_hunger_params()`'s own
+`!VB_WITH_LUA` stub, found that `effective_action_params()` (Phase 6.21)
+had **no stub there at all** -- `src/server/main.cpp`/`src/client/main.cpp`
+call it unconditionally, so any real `-DVB_WITH_LUA=OFF` configure+link
+would fail. Never caught because no CI workflow builds that combination
+(`build_linux/macos/windows.yml` all hardcode `VB_WITH_LUA=ON`) -- same
+category of "real gap, never exercised by CI" as the ASan/UBSan/TSan pass
+found for sanitizers themselves, just for a build configuration instead
+of an instrumentation flag. Fixed alongside adding the new stub, so hunger
+didn't quietly reintroduce the identical class of bug for a new function.
+**Deliberately out of scope:** no client HUD/protocol replication for
+hunger -- server-side bookkeeping only, the same posture Phase 6's
+automatic despawn-on-health item already established for script-entity
+health (no client renders it, no wire message carries it).
+Verified: full `vb_tests` 420/420 green (5 new cases: 2 engine-level in
+`netcode_test.cpp` -- default-disabled decay plus a configured rate moving
+it by a known amount over a known real-time interval, and starvation
+damage killing + respawning with cause `"hunger"` and hunger restored to
+max; 1 `pack_runtime_test.cpp` `vb.hunger.set_params`/`get_params`
+round-trip + freeze-rejection case, mirroring the existing
+`vb.action.set_params` test almost line for line; 1
+`pack_runtime_integration_test.cpp` case proving `player:get_hunger()`/
+`add_hunger()` and a configured decay driving a real starvation death
+through a real session, not just the binding shape in isolation), clean
+`-Werror` build of `vb_tests`/`voxel_browser`/`voxel_browser_server`
+(temporarily reconfigured `build-net-lua` with `-DVB_WARNINGS_AS_ERRORS=ON`,
+confirmed clean, reconfigured back to this dir's OFF default afterward).
+
+Before that, most recent landed item was **finding (and closing the proof gap for) another stale backlog line: "No
 PvP" turned out to already be real, wired-up engine behavior, not a
 missing feature.** Picked after the perf-budget pass below closed out the
 last concrete, unblocked, purely-engine gap in the Cross-Cutting section --

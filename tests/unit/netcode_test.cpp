@@ -492,6 +492,98 @@ TEST_CASE("PvP: repeated punches reduce health and kill + respawn the "
 	CHECK(srv->position.z == doctest::Approx(b_spawn.z));
 }
 
+// REMAINING_TASKS.md's "hunger has no primitive at all yet" gap.
+TEST_CASE("hunger decay is disabled by default, and a configured rate "
+		"drains it in real time") {
+	LoopbackNetwork net;
+	ServerSession server(net.server(), [] {
+		HandshakeServerConfig c;
+		c.world_seed = 1;
+		return c;
+	}());
+	REQUIRE(net.server().listen(0));
+
+	vb::net::Transport &ta = net.create_client();
+	auto ida = ta.connect("x", 0);
+	REQUIRE(ida);
+	std::optional<ClientSession> a;
+	a.emplace(ta, *ida, HandshakeClientConfig{ "Hungry", "", "v", 1 });
+
+	auto pump = [&](int n) {
+		for (int i = 0; i < n; ++i) {
+			server.tick(0.05);
+			a->tick(0.05);
+		}
+	};
+	pump(16);
+	REQUIRE(a->joined());
+	const NetId a_id = a->join_accept()->your_net_id;
+
+	// Disabled by default -- REMAINING_TASKS.md's own "0 disables" posture,
+	// same as PunchParams::punch_cooldown_seconds. 1 real second of ticking
+	// with nothing configured must not move hunger at all.
+	pump(20);
+	REQUIRE(server.player_hunger(a_id).has_value());
+	CHECK(*server.player_hunger(a_id) == doctest::Approx(100.0f));
+
+	ServerSession::HungerParams params;
+	params.decay_per_second = 10.0f;
+	server.set_hunger_params(params);
+	pump(20); // another real second -> -10 hunger
+	CHECK(*server.player_hunger(a_id) == doctest::Approx(90.0f).epsilon(0.02));
+}
+
+TEST_CASE("starvation damage (hunger at 0) kills + respawns with cause "
+		"\"hunger\", and respawn restores full hunger") {
+	LoopbackNetwork net;
+	ServerSession server(net.server(), [] {
+		HandshakeServerConfig c;
+		c.world_seed = 1;
+		return c;
+	}());
+	REQUIRE(net.server().listen(0));
+
+	std::optional<std::string> death_cause;
+	server.set_respawn_handler([&](NetId id, std::string_view cause, float) {
+		death_cause = std::string(cause);
+		return ServerSession::RespawnDecision{ 20.0f, server.spawn_point(id), "" };
+	});
+
+	vb::net::Transport &ta = net.create_client();
+	auto ida = ta.connect("x", 0);
+	REQUIRE(ida);
+	std::optional<ClientSession> a;
+	a.emplace(ta, *ida, HandshakeClientConfig{ "Starving", "", "v", 1 });
+
+	auto pump = [&](int n) {
+		for (int i = 0; i < n; ++i) {
+			server.tick(0.05);
+			a->tick(0.05);
+		}
+	};
+	pump(16);
+	REQUIRE(a->joined());
+	const NetId a_id = a->join_accept()->your_net_id;
+
+	ServerSession::HungerParams params;
+	params.decay_per_second = 2000.0f; // drains all 100 hunger in one 0.05s tick
+	params.starvation_damage_per_second = 400.0f; // 20 dmg/tick once hunger==0
+	server.set_hunger_params(params);
+
+	// update_hunger() runs before check_respawns() in the same tick (see
+	// ServerSession::build_systems()), so the very tick hunger first hits 0
+	// also applies starvation damage and, since that's exactly this
+	// player's full 20 HP, the very same tick's check_respawns() sees it.
+	pump(2);
+
+	REQUIRE(death_cause.has_value());
+	CHECK(*death_cause == "hunger");
+	// Respawn is a full reset, hunger included -- otherwise the player
+	// would starve to death again next tick with hunger still parked at 0.
+	REQUIRE(server.player_hunger(a_id).has_value());
+	CHECK(*server.player_hunger(a_id) == doctest::Approx(100.0f));
+}
+
 TEST_CASE(
 		"player join/leave: existing players are listed to a newcomer and "
 		"told when they arrive/leave") {
