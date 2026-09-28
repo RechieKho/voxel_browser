@@ -1858,6 +1858,18 @@ Other undecided:
 - `std::vector<std::byte>` can't be built directly from
   `std::istreambuf_iterator<char>` — use the `read_whole_file()` helper in
   `assetsync/cache.cpp` instead of re-deriving it.
+- **Clang: a nested class's `Foo() = default;` can't be used as a default
+  argument value (`= {}`) on a member function of the *enclosing* class
+  declared before that enclosing class is complete** — Clang errors
+  wanting the nested class's field default-member-initializers "within
+  definition of enclosing class" to compute the defaulted ctor's implicit
+  exception spec, which isn't available yet at that point. Hit this in
+  `inc/vb/world/lighting.hpp`'s `LightEngine::Neighbours() = default;`
+  used as `relight_chunk(Chunk&, const Neighbours& = {})`'s default arg.
+  Fix: give the nested ctor a user-provided empty body (`Neighbours() {}`)
+  instead of `= default` — a user-provided ctor's noexcept-ness doesn't
+  need the deferred computation, so no reordering/out-of-line-definition
+  dance is required.
 
 ---
 

@@ -43,7 +43,7 @@ public:
 		const Chunk *east = nullptr; // {coord.x + 1}
 		const Chunk *west = nullptr; // {coord.x - 1}
 
-		Neighbours() = default;
+		Neighbours() {}
 		Neighbours(const Chunk *above_chunk) : above(above_chunk) {}
 	};
 
