@@ -50,8 +50,65 @@ Goal: server generates terrain, streams chunks, client meshes and renders them.
       uses its real neighbour above (or cascades down through a whole loaded
       column) instead of always assuming open sky. Fixed the false-bright
       band at chunk boundaries reported while mining. See `STATE.md` §8.
-- [x] Horizontal cross-chunk light propagation — landed 2026-09-28. See
-      `REMAINING_TASKS.md`'s own Phase 2 entry for the full writeup.
+- [x] Horizontal cross-chunk light propagation — landed 2026-09-28, closing
+      this phase's last remaining item (`relight_chunk`/`relight_column` were
+      previously vertical-only: a chunk always assumed a closed border on
+      every side except straight up). `LightEngine::Neighbours`
+      (`inc/vb/world/lighting.hpp`) replaces the old bare `const Chunk *above`
+      parameter with 5 optional fields (`above` plus new `north`/`south`/
+      `east`/`west`) — a single-pointer constructor keeps every pre-existing
+      `above`-only call site (including `relight_column`'s own) compiling
+      unchanged. `relight_chunk` (`src/world/lighting.cpp`) seeds each of the
+      4 new vertical *faces* from whichever horizontal neighbour is loaded,
+      the same "attenuate by 1 step, `if (seeded > sky[i])` relax" shape the
+      interior BFS already used, not the top face's special "straight down,
+      no falloff" case (horizontal light always decays by 1 per step, matching
+      how a purely-interior sideways step already behaved before this pass).
+      `relight_column` now builds the full `Neighbours` set (via `find()`) at
+      every level of its vertical cascade, so *any* relight — edit, initial
+      load, or cascade — picks up whatever horizontal neighbours happen to be
+      loaded at that moment, the same passive "use what's there" posture
+      `above` already had.
+      **Real reactive gap closed on top of that:** the passive form above
+      only helps when a chunk happens to relight *after* its neighbour is
+      already lit right; it does nothing for the common live-edit case (break
+      one block near a border, and the chunk on the other side — already
+      stably lit, with no other reason to ever relight again — never finds
+      out). `relight_column_impl`'s new `push` parameter closes that: when a
+      chunk in the cascade actually changes and a horizontal neighbour is
+      loaded, it recursively relights that neighbour's whole column too
+      (deferred until the whole triggering column finishes, so the pushed
+      neighbour never reads a half-updated column back), reported through the
+      same `on_relit` callback so `WorldReplicator`'s per-edit code sends the
+      neighbour's own delta immediately, not on the next tick's separate
+      revision-diff sweep. Bounded to exactly one hop, provably: every
+      propagation step costs at least 1 of light's 0-15 range and a chunk is
+      `kChunkDim` (32) blocks wide, so light that has just crossed one border
+      has at most 14 of budget left — nowhere near enough to cross a second
+      full-width chunk and reach a third one, so a pushed neighbour's own
+      relight never tries to push again. Diagonal neighbours are still never
+      touched directly (unchanged from before this pass) — any effect on one
+      only ever arrives indirectly through whichever shared orthogonal
+      neighbour pushes into it.
+      Verified: full `vb_tests` 382/382 green (2 new `lighting_test.cpp`
+      cases — a direct `relight_chunk` case proving sideways spill/falloff
+      from a single `west` neighbour under an otherwise-sealed roof, and a
+      `relight_column`-based end-to-end case proving an edit that opens a
+      gap in one already-loaded chunk's ceiling automatically relights an
+      already-stable neighbour on the other side of the border, without ever
+      calling relight on that neighbour directly, and reports it via
+      `on_relit`), clean `-Werror` build of `vb_tests`/`voxel_browser`/
+      `voxel_browser_server` (temporarily reconfigured `build-net-lua` with
+      `-DVB_WARNINGS_AS_ERRORS=ON`, confirmed clean, reconfigured back to
+      this dir's OFF default afterward). **Deliberately out of scope, per the
+      pre-existing vertical asymmetry this pass didn't reopen:** block light
+      still doesn't cross chunk borders at all (vertically or horizontally) —
+      only sky light does, matching what the vertical-only implementation
+      already covered before this pass. The actual rendered result (a human
+      mining sideways near a chunk border and watching light spill in
+      correctly instead of a dark band) was **not** manually eyeballed — no
+      GUI in this agent environment, same still-open caveat as every other
+      rendering-adjacent pass in this file.
 
 ### 2.4 World replication (§8.5)  ✅
 
@@ -102,8 +159,54 @@ Goal: server generates terrain, streams chunks, client meshes and renders them.
       runs on background threads from a per-chunk+1-voxel-border snapshot;
       `ChunkRenderer::sync()` only does the GPU upload on the main thread.
       Fixes framerate drops while chunks stream in. See `STATE.md` §8.
-- [ ] Frustum culling, transparent second pass, texture atlas (Phase 4) —
-      follow-ups.
+- [x] Frustum culling, transparent second pass — landed 2026-09-27 (texture
+      atlas itself landed separately 2026-09-23, see Phase 4's own entry).
+      New `inc/vb/render/frustum.hpp` (header-only, no raylib dependency,
+      same "pure math, unit-tested without a GL context" posture as
+      `entity_visual_layout.hpp`): `build_frustum()` derives the 6 view-frustum
+      planes straight from camera basis vectors (position/forward/up/fovy/
+      aspect/near/far) via the standard "cross product of the far-plane
+      corner vectors" construction — deliberately *not* extracted from a
+      combined view-projection matrix, which would tie this pure header to
+      raylib/rlgl's internal row/column matrix convention; `aabb_in_frustum()`
+      is the standard conservative "positive vertex" AABB-vs-plane test.
+      `ChunkRenderer::draw()` (`src/render/chunk_renderer.cpp`) now takes the
+      `Camera3D` being rendered with (signature change, one call site in
+      `src/client/main.cpp`), builds a frustum from it every call (near/far
+      hardcoded to 0.01/1000.0 to match `BeginMode3D`'s own un-overridden
+      `RL_CULL_DISTANCE_NEAR/FAR` defaults — nothing in this codebase calls
+      `rlSetClipPlanes`), and skips any chunk whose 32-block AABB is provably
+      entirely outside it — no draw call at all for a culled chunk, not just
+      an early depth-reject.
+      Transparent second pass: `ChunkRenderer` now uploads **two** GPU models
+      per chunk instead of one — `split_transparent()` (new, `chunk_renderer.
+      cpp`) partitions a chunk's meshed quads by the same flat fallback-color
+      alpha `fill_mesh_arrays` already used for vertex-color alpha (today:
+      only `base:leaves`, `a=220` — see `fallback_color_for()`), since every
+      quad's 4 vertices already share one `block_id` and are contiguous by
+      construction (`chunk_mesh_snapshot.cpp`'s own per-face `first` numbering)
+      -- not a per-texel alpha check, and not a new `BlockType` field. `draw()`
+      renders every visible chunk's **opaque** model first (any order, the
+      depth buffer alone sorts it out), then every chunk with transparent
+      geometry a second time with `rlDisableDepthMask()` set and sorted
+      back-to-front by chunk-center distance from the camera (`rlDrawRenderBatchActive()`
+      flushes around the depth-mask toggle so it doesn't retroactively apply
+      to already-batched pass-1 draws) — chunk granularity only, not
+      per-triangle, matches this engine's block scale. `GpuChunk` is now two
+      `GpuMesh` slots (`opaque`/`transparent`) instead of one `Model`+capacity
+      pair; `upload_part()` (new) is the old single-mesh reuse-if-it-fits/
+      recreate-if-it-doesn't logic, now run once per slot.
+      Verified: full `vb_tests` 370/370 green (7 new `frustum_test.cpp` cases:
+      ahead/behind/beside/beyond-far/nearer-than-near/straddling-the-boundary
+      AABB cases plus one proving a non-normalized non-orthogonal `up` still
+      works), clean `-Werror` build of `vb_tests`/`voxel_browser`/
+      `voxel_browser_server` (temporarily reconfigured `build-net-lua` with
+      `-DVB_WARNINGS_AS_ERRORS=ON`, confirmed clean, reconfigured back to this
+      dir's OFF default afterward). The actual rendered result (a human
+      walking around and watching off-screen chunks stop being drawn, and
+      leaves/water blend correctly over terrain behind them) was **not**
+      manually eyeballed — no GUI in this agent environment, same still-open
+      caveat as every other rendering-adjacent pass in this file.
 
 **Phase 2 exit:** connect to a server and fly around streamed, meshed terrain
 (dirt/stone/grass/air) with correct chunk load/unload; determinism CI gate green.

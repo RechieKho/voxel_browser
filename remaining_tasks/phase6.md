@@ -48,13 +48,37 @@
       call), `on_hit`/`on_death` fire with the right args, and the instance
       both replicates to a client while alive and disappears from
       `remote_entities()` after `self:remove()`.
-- [ ] Not done (out of scope for this item): no automatic despawn-on-health
-      trigger (no health primitive exists for generic entities at all, only
-      the notification hook) — a pack wanting mob HP tracks it itself on
-      `self` and calls `self:remove()` when it hits zero. No client-side
-      kind-specific rendering yet (`EntityKind` id is threaded through to
-      replication but nothing branches on it, same pre-existing limitation
-      `world::kItemDropKind` has).
+- [x] Automatic despawn-on-health trigger for generic script entities —
+      landed 2026-09-25. Opt-in per kind via `vb.register_entity{health=...}`
+      (`EntityKindDef::max_health`, rejects a non-positive value at
+      registration); a kind that never sets it keeps the exact pre-existing
+      behavior (`entity:damage()` is notification-only, `on_hit` fires,
+      nothing else). A kind that does opt in gets a per-instance current
+      health (`ScriptEntity::health`, initialized from the kind default at
+      `vb.world.spawn`), new `entity:get_health()`/`entity:set_health(v)`
+      accessors (nil/error respectively for an untracked kind), and
+      `entity:damage()` now decrements it and calls the existing
+      `despawn_entity()` (fires `on_death`, deregisters) once it reaches 0 —
+      the same despawn path `entity:remove()` already used, just triggered
+      automatically. Server-side bookkeeping only, no protocol change.
+      **Gotcha hit while wiring this up:** `on_hit` can itself call
+      `self:remove()` (kitchen_sink's `sentry.lua` does exactly this) — the
+      first draft reused the iterator taken before firing `on_hit` to then
+      touch `.health` afterward, a use-after-erase if `on_hit` already
+      despawned the entity (`kitchen_sink_pack_test.cpp`'s sentry test
+      crashed on an MSVC STL iterator-debug assertion, not silently). Fixed
+      by re-`find`ing after the `on_hit` call instead of reusing the
+      pre-call iterator. Verified: full `vb_tests` 319/319 green (a
+      `pack_runtime_integration_test.cpp` case spawns a `health=5` kind and
+      an opted-out kind side by side, proves 2 hits of 3 despawn the tracked
+      one exactly at 0 without an explicit `:remove()` while the untracked
+      one survives 1000 damage notification-only), clean `-Werror` build.
+- [x] Client-side kind-specific rendering for script entities — landed
+      2026-09-25 (`EntityKind` id now drives the billboard's own
+      width/height, via a new `S2C_EntityKindRegistry` (protocol version 19)
+      and `vb.register_entity{width=, height=}`). Real per-kind sprite art
+      (the `visual = {...}` schema) landed as its own separate pass the same
+      day, see Phase 4's own entry.
 
 ### 6.2 Fully Lua-defined, immediate-mode reactive UI  ✅ (2026-09-17)
 
@@ -135,12 +159,13 @@
       pack_runtime_test.cpp` (idempotency/cap/freeze); `tests/unit/
       block_registry_test.cpp` (registry reaches a joined client / host
       that never opts in leaves it empty); protocol round-trip + lane tests.
-- [ ] Per-connection rate limiting on custom-keybind events, defense in depth
-      on top of the closed schema — **not implemented this pass**; still
-      folds into the already-tracked, still entirely unimplemented
-      "per-player rate limit / flood guard belongs with `GnsTransport`" item
-      (Phase 1.3). The closed-schema bitset itself remains the primary flood
-      defense the spec calls out.
+- [x] Per-connection rate limiting on custom-keybind events — closed
+      2026-09-27 as part of Phase 3's flood guard (see that phase's own
+      entry): custom-keybind bits ride inside `InputCmd`/`C2SInputBatch`
+      like every other input field, so the generic
+      `set_max_messages_per_second` token bucket (one token per message, any
+      type) covers a custom-keybind flood the same way it covers an
+      input-batch or chat flood — no keybind-specific limiter was needed.
 
 ### 6.4 Generic per-key persistent storage (script-owned identity/auth)  ✅ (2026-09-18)
 
@@ -171,7 +196,7 @@
       no position on auth as a concept — see `ARCHITECTURE_SPEC.md` §18 Q6.
       Also used internally by `ScriptDb` for its key-to-filename hashing.
 
-### 6.5 Shared block-damage breaking (default + override crack texture) ✅ (2026-09-18; damage-value replication + default crack overlay landed 2026-09-27; real crack-stage art + crack_texture override closed same day, see REMAINING_TASKS.md's own entry)
+### 6.5 Shared block-damage breaking (default + override crack texture) ✅ (2026-09-18; damage-value replication + default crack overlay landed 2026-09-27; real crack-stage art + crack_texture override closed same day, see below)
 
 - [x] `BlockType` gains `max_damage` (0 = today's instant break, the
       default — no behavior change for any existing block); `vb.register_block{...}`
@@ -245,17 +270,41 @@
       cleared on break; the existing self-heal case now also asserts the
       replicated value clears on a full heal), clean `-Werror` build of
       `vb_tests`/`voxel_browser`/`voxel_browser_server`.
-- [ ] Real crack-stage texture art + `crack_texture` override: the *value*
-      replication above unblocks this, but building it out (a pack-supplied
-      texture path replicated to the client, sampled onto the targeted
-      block's faces instead of the flat darkening default) is real
-      asset-pipeline work not attempted this pass — deliberately scoped
-      down to keep this session's change reviewable. No client UI sends
-      `C2S_BlockBreakBegin`/`Stop` yet either (`ClientSession::
-      send_block_break_begin`/`send_block_break_stop`
-      exist as a real, tested wire API — `src/client/main.cpp`'s existing 5.2
-      hold-to-break timer is untouched and still governs every
-      `max_damage == 0` block, which is every block in `content/base` today).
+- [x] Real crack-stage texture art + `crack_texture` override — landed
+      2026-09-27, closing 6.5 in full. Protocol bumped **25 -> 26**:
+      `BlockRegistryRecord` (`S2C_BlockRegistry`) gains `string
+      crack_texture`, mirroring `vb::world::BlockType::crack_texture`
+      (`BlockRegistry::set_crack_texture()` mirrors `set_texture()`'s
+      "attach without disturbing other already-frozen fields" posture).
+      `vb.register_block{crack_texture=...}` wires it through the same way
+      `texture` is. New `vb::render::CrackAtlas`
+      (`inc/vb/render/crack_atlas.hpp`, pure `build()`/GPU `upload()` split
+      like `TextureAtlas`): one shared row of `kStages` (8) cells holds the
+      engine's own procedurally-generated default crack pattern; a block
+      with a valid `crack_texture` gets its own extra row instead — a
+      wrong-shaped or undecodable override falls back to the shared default
+      row rather than failing pack load. New `vb::render::CrackOverlay`
+      (GPU-only, not unit tested) replaces the old flat translucent-cube
+      overlay: a persistent unit cube mesh whose texcoords are remapped
+      into the resolved `CrackAtlas` rect, alpha still climbing with
+      `break_progress`.
+      **Real pre-existing bug found and fixed in the same pass, unrelated to
+      `crack_texture` itself:** all three call sites that build or apply a
+      `BlockRegistryRecord` used an aggregate-init listing only the record's
+      first 5-6 fields — so `max_damage` (and now `crack_texture`) was
+      silently dropped on every one of these three hops the whole time. In
+      practice this meant no client ever received a real nonzero
+      `max_damage` for any block, so `client.break_progress()` was
+      permanently `nullopt` regardless — caught by a new regression test
+      that failed against the unfixed code before the fix. Verified: full
+      `vb_tests` 363/363 green (8 new cases: the end-to-end regression case
+      for the bug above, `crack_texture=`'s re-declare-attach and stored/
+      default-empty cases, a protocol round-trip case, and
+      `crack_atlas_test.cpp` covering default-row/override-row/wrong-shape-
+      fallback/missing-from-vfs-fallback/stage-clamping behavior), clean
+      `-Werror` build of `vb_tests`/`voxel_browser`/`voxel_browser_server`.
+      The actual rendered crack-stage overlay was **not** manually eyeballed
+      — no GUI in this agent environment.
 
 ### 6.6 Player damage & death (foundational — split out from the rest below) ✅
 
@@ -678,15 +727,30 @@
       (hud renders nothing until `client.break_progress()` is set, hides
       again on `nullopt`, hud `state` persists independent of a modal
       screen's open/close cycle, disabled-build stub no-ops cleanly).
-- [ ] Display-only for now: hud widgets aren't wired to
-      `report_click`/`report_change` — no interactive HUD element exists yet.
-      A future one (e.g. a hotbar slot click) would need that wiring added.
-- [ ] The player list / chat box / hotbar (`src/client/main.cpp`'s other
-      always-on HUD elements, predating this) are still hardcoded C++,
-      untouched by this item — only the break-progress bar was in scope.
-      Migrating the rest to `ui.define_hud` (a "real" Lua HUD replacing
-      draw_overlay entirely) is a natural, larger follow-up, not attempted
-      here.
+- [x] HUD widgets wired to `report_click`/`report_change`/`report_list_change`
+      — landed 2026-09-27. See "Current status" in `STATE.md` for the write-up.
+- [x] Player list / chat log / hotbar migrated off hardcoded C++ into
+      `ui.define_hud` — landed 2026-09-27. New `WidgetType::kText` (`inc/vb/
+      script/ui_runtime.hpp`) is a raw, colored, alignable text draw —
+      distinct from `kLabel`, which goes through raygui's un-colorable
+      `GuiLabel` — with an `align` (`left`/`center`/`right`) field so Lua can
+      right-align/center text without measuring its own pixel width; the
+      actual `MeasureText` call lives in `vb::render::UiRenderer::draw()`,
+      the raylib-linked layer, not `vb::script::UiRuntime`. Six new
+      `client.*` read-only accessors mirror `client.break_progress()`/
+      `client.screen_size()`: `player_name()`, `players()`, `chat_log()`,
+      `chat_open()`, `inventory()`, `selected_slot()`. `content/base/ui/
+      hud.lua` now composes the player list (top-right), chat scrollback
+      (bottom-left), and hotbar (bottom-center) out of `rect`/`text`
+      widgets, replicating the old hardcoded layout exactly. The chat
+      **input box** deliberately stays a plain `GuiTextBox` in
+      `src/client/main.cpp` — real keyboard text-entry capture, never a
+      `UiRuntime` widget. No new interactive HUD widgets were added, so
+      `report_click`/`report_change` HUD wiring (the item above) was
+      unaffected by this pass. Verified: full `vb_tests` 350/350 green (no
+      test exercises `content/base/ui/hud.lua` directly — evaluated only at
+      real client runtime), clean build. The actual rendered result was
+      **not** manually eyeballed — no GUI in this agent environment.
 
 ### 6.17 Movement/break-place bindings and hold-to-break timing as default + override  ✅ landed with a different shape (2026-09-18) — see note below
 
@@ -852,6 +916,16 @@
       `content_pack_test.cpp` if `content/base`'s shipped blocks' effective
       `max_damage` changes as a result.
 
+**Resolved as 6.19 (2026-09-19):** Movement/action key bindings extended into
+the 6.3 keybind registry — `move_forward`/`move_back`/`move_left`/
+`move_right`/`jump`/`sprint`/`primary`/`secondary` are pre-registered by
+every `PackRuntime` before any pack script runs, so a pack can read
+`input.keybinds["jump"]` etc. exactly like a custom keybind, resolving the
+open design question above (movement axes are already boolean, so they fit
+the existing keybind shape with no format change). Physical-key rebinding
+landed separately as Phase 5.3's keybindings screen — this item's own scope
+(name registry, not physical keys) is fully closed.
+
 ### 6.18 Growtopia-style combat: discrete punching replaces hold-to-break  ✅ done (2026-09-18)
 
 > User-requested pivot (2026-09-18), immediately after 6.17 landed: rather
@@ -960,6 +1034,22 @@
 > damage has no armor/cooldown/knockback, just a flat `player_damage` per
 > landed punch.
 
+**Resolved: punch-rate cooldown, landed 2026-09-28** as
+`PunchParams::punch_cooldown_seconds` (default `0.0`, disabled — every
+existing direct-`punch()` test/call site is unaffected unless a pack opts
+in). New `Conn::punch_cooldown_remaining`, ticked down once per server tick
+in `system_network_io()`. `ServerSession::punch()` rejects a call still on
+cooldown and **arms the next cooldown up front**, before target resolution
+— a whiff costs the same swing time a landed hit would. Pack-facing via
+`vb.combat.set_params{punch_cooldown_seconds=...}`, deliberately opt-in (no
+engine default swing rate). Verified: full `vb_tests` 392/392 green (2 new
+`blockedit_test.cpp` cases: a configured cooldown rejects an immediate
+second swing but lets a later one land once real time has ticked past, and
+the disabled-by-default case proves two back-to-back swings both land),
+clean `-Werror` build. **Still open, unchanged by this pass:** no swing
+animation; PvP has no armor/knockback — this item only closed the cooldown
+half of its own original scope.
+
 ### 6.20 Right-click placing decoupled from the engine (last hardcoded block edit closed)  ✅ done (2026-09-19)
 
 > User-flagged (2026-09-19): right-click placing was still 100% hardcoded
@@ -1003,13 +1093,45 @@
       breaking.
 - [x] Full `vb_tests` green (290/290) on `build-net-lua`; no protocol/wire
       change needed (`apply_script_block_edit` was already generic).
-- [ ] **Not done, same gap as breaking:** placed block is still a hardcoded
-      `base_stone_id`, not read from a selected hotbar/inventory slot — no
-      "held item" or hotbar-selection concept exists anywhere in the engine
-      yet (`get_inventory()` returns the full inventory, nothing marks one
-      slot "selected"). A real "place whatever's in your hand" mechanic needs
-      that primitive first; out of scope here, same as the old hardcoded
-      C++ path also always placing stone regardless of inventory contents.
+- [x] Held item / hotbar selection — landed 2026-09-25 (entity-management
+      follow-up, closes this gap). Placing used to always place a hardcoded
+      `base_stone_id` regardless of what the player was carrying, because no
+      primitive existed for a pack to ask "what slot is this player's hotbar
+      on, and what's in it". Wire protocol bumped **21 -> 22**: `InputCmd`
+      (within `C2S_InputBatch`) gains a `u8 selected_slot` (0-based), reported
+      every cmd exactly like `buttons`/`keybinds` — the client reads number
+      keys 1-9 into a persistent `selected_slot` local (gated on
+      `mouse_captured`) and outlines the selected slot in the hotbar HUD.
+      Server-side, `ecs::PlayerInput::selected_slot` mirrors the latest
+      processed value, readable via `ServerSession::selected_slot(NetId)`; a
+      pack's `vb.on("player_input", ...)` handler chain can also override it
+      (1-based to match `player:get_inventory()`'s own 1-based array), same
+      veto/replace shape `PlayerInputOverride` already gave `move`/`yaw`/
+      `pitch`/`buttons`/`keybinds`. Two new Lua primitives on `PlayerHandle`
+      close the actual gap: `player:get_selected_slot()` (1-based) and
+      `player:get_held_item()` (resolves that slot against the player's real
+      inventory — `nil` if empty/out-of-range). `content/base/mechanics.lua`'s
+      right-click placing now reads `player:get_held_item()` instead of the
+      hardcoded stone id — an empty/out-of-range slot places nothing, and a
+      successful placement spends one unit via `player:take()`, so placing
+      is a real inventory drain now rather than an infinite stone dispenser.
+      **Gotcha hit while wiring the Lua bindings:** `pack_runtime.cpp`'s
+      `PlayerHandle` usertype (20+ methods, all through sol2's template-heavy
+      `new_usertype`) was already close enough to MSVC's object-file
+      section-count ceiling that adding these two pushed it over (`fatal
+      error C1128: number of sections exceeded object file format limit`) —
+      fixed with a per-source `/bigobj` on `pack_runtime.cpp` only; a second
+      gotcha on the way there: `set_source_files_properties()` is
+      directory-scoped to where it's *called*, not where the consuming
+      target is defined, so setting it from `src/script/CMakeLists.txt`
+      silently never reached `vb_core`'s build rule until adding CMake
+      3.18's `TARGET_DIRECTORY vb_core` argument. Verified: full `vb_tests`
+      green, including a `netcode_test.cpp` round-trip case for
+      `InputCmd::selected_slot`, a `pack_runtime_test.cpp` case for the
+      no-session default, and a `pack_runtime_integration_test.cpp` case
+      proving a real client's `InputCmd::selected_slot` reaches both
+      accessors end-to-end. The actual hotbar-highlight rendering was **not**
+      manually eyeballed — no GUI in this agent environment.
 
 ### 6.21 Interaction reach + eye-height: default + override + read-back  ✅ done (2026-09-22)
 
@@ -1096,4 +1218,112 @@
       effective values both before and after `set_params`. Full `vb_tests`
       green (294/294) on `build-net-lua`; `voxel_browser`/
       `voxel_browser_server` also rebuild clean.
+
+### 6.22 Fall damage, PvP proof, hunger, mob damage ✅ done (2026-09-27/28)
+
+- [x] **6.22: fall damage.** Landed 2026-09-27. New `net::ServerSession::
+      set_landed_hook(fn(NetId, double impact_speed))` — fires once per
+      player exactly on the tick a fall is arrested by hitting ground
+      (`handle_input_batch`'s per-cmd loop compares `on_ground` before/after
+      each `physics::step_movement` call; `impact_speed` is the pre-step
+      downward velocity, captured before that tick's own small gravity
+      increment). Raw notification only, no built-in formula/threshold —
+      same "mechanism, not policy" posture as `RegionHooks`/`BlockBreakHooks`;
+      `vb.on("player_landed", function(player, impact_speed) ... end)` is the
+      new Lua event (only installed when a pack actually registers one).
+      `content/base/fall_damage.lua` (new) is the reference policy: no
+      damage below an 8 m/s safe-speed threshold, then 1 HP per m/s above
+      it, via the existing `player:damage(amount, "fall")` primitive (6.6) —
+      no protocol change (server-local hook, nothing replicated). Verified:
+      full `vb_tests` 371/371 green (1 new `pack_runtime_integration_test.cpp`
+      case drives a real gravity fall over `LoopbackTransport` — spawn a
+      player 5 blocks above real generated terrain with no jump input, pump
+      real 0.05s ticks, confirm the hook fires exactly once at a plausible
+      impact speed and never again while resting on the ground), clean
+      `-Werror` build. Not manually eyeballed in a real window (no GUI in
+      this agent environment) — though this item has no rendering
+      component at all, so that caveat matters less here.
+- [x] **PvP half confirmed already real, not stale text** — checked
+      2026-09-28. `ServerSession::punch()` (Phase 6.18/6.20) already resolves
+      the nearest other player along the puncher's look-ray (a forgiving
+      vertical-cylinder hitbox, capped at the shared `reach`, closer of
+      {player, block} wins) and calls `damage_player(target,
+      punch_params_.player_damage, "pvp")` on a hit; `content/base/
+      mechanics.lua` already dispatches `player:punch()` on every left-click
+      rising edge — so a real pack has driven real PvP since those phases
+      landed, this item's own text was just never updated. What was
+      actually missing was proof, not code: the existing `blockedit_test.cpp`
+      "punch() prefers a closer player over a block" case only checked
+      `PunchResult::hit_player`/`target`, never that repeated hits actually
+      reduce health and kill/respawn the victim. New `netcode_test.cpp` case
+      ("PvP: repeated punches reduce health and kill + respawn the target,
+      with cause 'pvp'") closes that proof gap: two plain `ServerSession`
+      connections, a `set_respawn_handler` capturing the real `(player,
+      cause, health_before)` tuple, 20 direct `punch()` calls (default
+      health 20, default `player_damage` 1/punch) landing exactly on empty
+      on the 20th, confirming `cause == "pvp"`, `health_before == 1.0` (the
+      value *before* the killing blow), and the victim's position snapping
+      back to their own spawn point. Verified: full `vb_tests` 416/416
+      green (1 new case), clean `-Werror` build.
+- [x] **Hunger primitive — landed 2026-09-28.** New `vb::ecs::Hunger`
+      component (current/max, default 100/100, emplaced alongside `Health`
+      at player join) plus `ServerSession::HungerParams`
+      (`decay_per_second`/`starvation_damage_per_second`, both `0.0` by
+      default — decay stays fully disabled until a pack opts in, same
+      "engine ships the mechanism at a value that changes nothing" posture
+      as `PunchParams::punch_cooldown_seconds`) and a new `"update_hunger"`
+      `SystemRunner` phase, placed right before `check_respawns` so same-tick
+      starvation damage is seen by that same tick's death check.
+      `ServerSession::player_hunger()`/`add_player_hunger()` are the
+      read/spend-or-restore accessors; a respawn always resets hunger to max
+      alongside health. Pack-facing: `vb.hunger.set_params{decay_per_second=,
+      starvation_damage_per_second=}`/`get_params()` (mirrors `vb.action`'s
+      own shape) and `player:get_hunger()`/`add_hunger(amount)` (mirrors
+      `player:damage()`'s shape). **Real pre-existing bug found and fixed in
+      the same pass, unrelated to hunger itself:** `effective_action_params()`
+      (Phase 6.21) had **no** stub at all in `pack_runtime.cpp`'s
+      `!VB_WITH_LUA` block, even though `src/server/main.cpp`/
+      `src/client/main.cpp` call it unconditionally — a real link error
+      waiting for anyone who actually configures `-DVB_WITH_LUA=OFF`, never
+      caught because no CI workflow does. Fixed alongside adding
+      `effective_hunger_params()`'s own stub. **Deliberately out of scope:**
+      no client HUD/protocol replication for hunger — server-side
+      bookkeeping only, same posture the despawn-on-health item established
+      for script-entity health. Verified: full `vb_tests` 420/420 green (5
+      new cases: default-disabled decay plus a configured rate, starvation
+      damage killing + respawning with cause `"hunger"` and hunger restored
+      to max, `vb.hunger.set_params`/`get_params` round-trip + freeze
+      rejection, and a `pack_runtime_integration_test.cpp` case proving
+      `player:get_hunger()`/`add_hunger()` and a configured decay driving a
+      real starvation death through a real session), clean `-Werror` build.
+- [x] **Mob damage — landed 2026-09-28** as `content/base/entities/
+      zombie.lua`: a real hostile mob (20 hp, `vb.register_entity{health=20}`)
+      spawned via `/zombie`, that chases down and bites (2 dmg every 1s once
+      in range) whichever player spawned it, using the existing
+      `entity:damage()`/`player:damage()` primitives — no new engine-side
+      mechanism was needed for the mob concept itself, confirming this
+      item's own original text.
+      **A real, previously-unknown engine bug was found and worked around
+      while building this** (not fixed — see `remaining_tasks/cross_cutting.md`
+      for the bug itself, kept separate since it's a real, still-open engine
+      correctness gap in its own right, not specific to mob AI): a
+      `PlayerHandle` stored across calls (in an entity's own field, a
+      module-level Lua table, or even a bare upvalue — all three were
+      tested) and then read back from *inside* `vb.on("tick", ...)` or a
+      script entity's own `on_tick` returns silently corrupted data (wrong
+      `rt`/`session` pointers, wrong `net_id` — confirmed with ASan, not
+      just inferred from a crash). Calling a method on a **freshly
+      passed-in** `PlayerHandle` from within the *same* handler call (the
+      pattern every pre-existing content/base script already uses) is
+      completely unaffected. `zombie.lua`'s chase/attack logic is therefore
+      driven from `vb.on("player_input", ...)` instead of the zombie's own
+      `on_tick` — that handler already hands over a fresh `PlayerHandle` on
+      every real `InputCmd`, used immediately, never stored; only the
+      zombie's own entity handle (`self:get_pos()`/`set_pos()`, which never
+      touches a `PlayerHandle` at all) is stored across calls, keyed by the
+      hunted player's *name* (a plain string, safe to snapshot).
+      Verified: full `vb_tests` 421/421 green (1 new `content_pack_test.cpp`
+      case driving a real `/zombie` command through 300 real
+      `InputCmd`-pumped ticks to an actual kill, confirming
+      `cause == "zombie"`), clean `-Werror` build.
 

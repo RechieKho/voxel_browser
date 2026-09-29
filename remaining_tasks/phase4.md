@@ -17,8 +17,51 @@ Lua-defined UI.
       hook, ceiling allocator.
 - [x] Sandbox-escape tests (`tests/unit/script_test.cpp`): os/io/load absent,
       runaway loop → `kBudgetExceeded`, memory bomb → `kOutOfMemory` (recoverable).
-- [ ] Custom `require` over the virtual pack FS + per-callback wall-clock budget
-      — deferred to 4.4 (needs the synced asset FS).
+- [x] Custom `require` over the pack's own virtual module filesystem +
+      per-callback wall-clock budget — landed 2026-09-27. Reframed from the
+      original plan: rather than reusing `ClientAssetCache`'s synced-FS map
+      (4.4), which only ever exists on a *remote client*, never on the
+      server/`PackRuntime` side that actually needs `require`, the virtual
+      FS here is a small in-memory `path -> source text` map that
+      `vb::script::load_content_pack` (`src/script/pack_loader.cpp`) builds
+      once from its own recursive directory walk (every `.lua` under the
+      pack root except `ui/*.lua`, which runs in its own restricted
+      `UiRuntime` VM) and installs via the new `PackRuntime::
+      set_pack_modules()` -> `Vm::install_require()`. `Vm` (`inc/vb/script/
+      vm.hpp`, `src/script/vm.cpp`) reinstates a safe `require` global right
+      after `strip_sandbox()` nils the stock one: a dotted or slash-separated
+      module name resolves only against that map (`.` -> `/`, `.lua`
+      appended if missing), rejects a name containing `..` or a leading `/`,
+      caches a module's return value across repeated `require()` calls the
+      same way stock Lua's `package.loaded` does (no explicit `return`
+      caches as `true`), and detects a require cycle via an in-progress name
+      stack rather than deadlocking or stack-overflowing. Wall-clock budget:
+      `VmLimits` gains `wall_clock_budget_ms` (default 250); the existing
+      instruction-count hook (`count_hook`) now fires far more often
+      (`kHookPeriod` = 1000 instructions, independent of the caller's own,
+      possibly huge, `instruction_budget`) and checks a `std::chrono::
+      steady_clock` deadline first, so a callback with few but individually
+      slow instructions still gets cut off in real time, not just by VM
+      instruction count — both failure modes still classify to the existing
+      `core::ScriptError::kBudgetExceeded` (no new enum value; the two
+      distinct internal marker strings, `vb:instruction-budget-exceeded` and
+      `vb:wall-clock-budget-exceeded`, are what `classify()` keys off of).
+      `AllocState` (`inc/vb/script/vm_internal.hpp`) now carries the
+      hook's own running state (`instructions_run`, `deadline`,
+      `time_boxed`) since it's the one piece of state already reachable from
+      inside the hook via `lua_getallocf`. `Vm::sandbox_intact()`'s old
+      `absent("require")` assertion is inverted to `require` being present
+      and a function (`sol::type::function`) — everything else it checks
+      is unchanged. Existing packs are unaffected (`content/base`/
+      `kitchen_sink` never call `require`); this is additive only. Verified:
+      full `vb_tests` 381/381 green (10 new cases: 8 `script_test.cpp`
+      `Vm`-level cases covering resolve/dotted-path/caching/no-return-
+      defaults-true/not-found/path-traversal/circular-dependency/
+      hot-swap-drops-cache, 1 wall-clock-vs-huge-instruction-budget case,
+      and 1 `content_pack_test.cpp` end-to-end case driving a real
+      `require('lib.util')` through `load_content_pack` and confirming the
+      result reaches `vb.storage`), clean `-Werror` build of `vb_tests`/
+      `voxel_browser`/`voxel_browser_server`.
 - [ ] Decision #1 (sol2) — recorded; **done**.
 
 ### 4.2 Server Lua API (§10.3)  🚧
@@ -82,19 +125,114 @@ Lua-defined UI.
       (`tests/unit/pack_runtime_integration_test.cpp`): block-edit veto +
       `on_break` end-to-end, `player_join` veto end-to-end, `player_leave`
       dispatch with the right net id.
-- [ ] `EntityKind` tick/spawn/hit/death callbacks wired into `ScriptPreTick` /
-      `ScriptPostTick` systems — waits on 3.1's EnTT registry; `register_entity`
-      already captures the callbacks, nothing iterates entities to call them.
+- [x] `EntityKind` tick/spawn/hit/death callbacks wired into real systems —
+      landed 2026-09-27, now that `SystemRunner` itself exists (Phase 3.1,
+      2026-09-25). `PackRuntime::dispatch_tick` (the `tick` event + entity
+      `on_tick`/`on_hit`/`on_death` dispatch + global timers) used to be a
+      separate call each embedder's own loop made *after* `ServerSession::
+      tick()` had already run every phase for that tick (`server/main.cpp`,
+      `client/main.cpp`'s `Singleplayer::tick()`) — a script-driven entity
+      move only reached `sync_interest`/`broadcast_snapshots` one tick late.
+      New `ServerSession::set_script_tick_hook(fn(double))` (`inc/vb/net/
+      session.hpp`) is a new `"script_tick"` `SystemRunner` phase, placed
+      right after `check_respawns` and before `update_item_drops`/
+      `sync_interest`/`broadcast_snapshots` — same "`ServerSession` has no
+      idea this is Lua-backed" decoupling every other hook here already uses
+      (`set_landed_hook` et al.), not a direct `PackRuntime` reference.
+      `PackRuntime::attach_session()` installs it unconditionally (unlike the
+      conditional hooks above it — `dispatch_tick` does real work, global
+      timers included, even for a pack with no entity-kind callbacks at
+      all). Both embedders' loops no longer call `pack_runtime.dispatch_tick()`
+      directly. Verified: full `vb_tests` 381/381 green (updated the ~19
+      existing `attach_session`-using pump loops in `pack_runtime_integration_
+      test.cpp`/`content_pack_test.cpp`/`kitchen_sink_pack_test.cpp` to drop
+      their now-redundant explicit `rt.dispatch_tick()` call — leaving it in
+      would have double-fired every entity tick/timer per pump step), clean
+      `-Werror` build of `vb_tests`/`voxel_browser`/`voxel_browser_server`.
 - [x] Lua-driven worldgen pipeline replaces the Phase 2 hardcoded one —
       moved to Phase 6.14 (extensibility push, FastNoise2 backend); tracked
       there now instead of here. Landed 2026-09-18 — see that item.
-- [ ] `register_entity`'s `visual = {...}` sub-table (`variant` frame-size
-      lookup, `texture`, `facings`, `origin`, `clips` grid) for 3.5's
-      `entity_renderer`, schema finalized 2026-09-17 — see `ARCHITECTURE_SPEC.md`
-      §11.3. Not implemented yet; nothing reads a per-kind visual def (3.5
-      still hardcodes a flat placeholder). Also needs the per-instance
-      `entity.visual_override` merge (`ScriptState`) for reskins (e.g. player
-      skins) once this lands.
+- [x] `register_entity`'s `visual = {...}` sub-table (variant/facings/clips)
+      for 3.5's `entity_renderer` — landed 2026-09-25. Protocol version bumped
+      **19 -> 20**: `EntityKindRegistryRecord` gains an optional `visual`
+      field (`protocol::EntityVisualDef` — texture path, resolved
+      frame_width/height, facings, origin, a `clips` list of
+      `{clip, frames, fps}`), absent for a kind that never sets one.
+      `PackRuntime`'s `vb["register_entity"]` binding parses and
+      shape-validates `visual = {...}` at registration (unknown variant,
+      missing texture, `facings` not 4/8, out-of-range `origin`, an empty
+      `clips` array, or a non-positive `frames`/`fps` all throw a
+      `sol::error`) — no image decoding happens on this, headless,
+      pack-runtime side. Client-side, a new pure header
+      `vb/render/entity_visual_layout.hpp` (`build_entity_visual_layout`)
+      computes the running per-clip column layout and validates it against
+      the *real* decoded PNG's pixel dimensions once
+      `EntityRenderer::set_kind_visual()` decodes the synced/on-disk texture
+      — a mismatch there logs `VB_WARN` and that kind keeps the flat
+      placeholder billboard rather than failing pack load.
+      `EntityRenderer::draw()` now picks its billboard's source rect from the
+      resolved pose row and animation clip (new `render::anim_clip_name`
+      bridges the existing `resolve_anim_clip()` enum to a pack's clip
+      names) and frame index (`clip_time * fps`, wrapped via modulo). A kind
+      with no `kind_visuals_` entry (players, or any kind that never set
+      `visual`) renders exactly as before this landed. **Deliberately out of
+      scope, kept for a follow-up:** per-instance `ScriptState.visual_override`
+      (skins) and real base-pack art — this pass proved the mechanism with
+      synthetically-generated-at-test-time PNGs, not new binary art checked
+      into `content/`. Verified: full `vb_tests` 331/331 green (12 new cases:
+      protocol round-trip + too-many-clips-cap, `pack_runtime_test.cpp`
+      rejection-path + valid-visual-reaches-the-registry cases,
+      `entity_visual_layout_test.cpp` pure layout math, `anim_clip_name`
+      coverage), clean `-Werror` build. The actual rendered sprite/animation
+      was **not** manually eyeballed — no GUI in this agent environment.
+- [x] Per-instance `ScriptState.visual_override` (skins) -- landed 2026-09-25.
+      `vb.world.spawn(kind, pos, { visual_override = {...} })` takes a third,
+      optional options table whose `visual_override` is the same shape as
+      `register_entity`'s `visual` but with every field independently
+      optional -- an omitted field inherits the kind's own `visual` unchanged
+      (`render::merge_visual_override`, `inc/vb/render/
+      entity_visual_layout.hpp`), so a pack can override just `texture` (a
+      player-skin variant) while keeping the kind's `facings`/`clips`/
+      `origin`. Protocol bumped **20 -> 21**: `EntityRecord` (within
+      `S2C_EntitySnapshot`) gains an optional `visual_override`, populated
+      only on the one `entered` record a client gets when a NetId first
+      enters their interest set -- `updated`/`local` records never carry it,
+      and `ClientSession` caches whatever it first learned for the entity's
+      whole replicated lifetime, same "learned once, immutable" posture as
+      `EntityRecord.kind` itself. Client-side, `EntityRenderer::sync()`
+      lazily decodes an override's texture the first time it sees a given
+      NetId's override, cached in a new `instance_visuals` map that takes
+      priority over `kind_visuals` in `draw()`. **Deliberately out of scope,
+      left as a real follow-up:** `entity:set_visual_override()`/a
+      live-update or clear path -- the override is fixed at spawn time only.
+      Verified: full `vb_tests` 340/340 green (protocol round-trip incl. an
+      `updated` record never carrying an override, `merge_visual_override`
+      empty/texture-only/full-replace cases, 2 `pack_runtime_integration_
+      test.cpp` cases -- override reaches a real client, malformed override
+      rejects the whole spawn), clean `-Werror` build. The actual rendered
+      skin swap was **not** manually eyeballed -- no GUI in this agent
+      environment.
+- [x] Real base-pack art for `base:player`/`base:dropped_item` -- landed
+      2026-09-25. Neither ever went through the `vb.register_entity` kind
+      mechanism (players hardcoded `EntityKindId::kInvalid` at join, drops
+      carried the reserved `world::kItemDropKind` sentinel) -- fixed with a
+      new generic `vb.register_entity{represents = "player" | "item_drop"}`
+      field, not a hardcoded pack-name check in engine code.
+      `content/base/entities/player.lua` (new) and `dropped_item.lua`
+      (edited) register real, checked-in `visual = {...}` spritesheets
+      (idle+walk, 4 facings) generated with a throwaway stdlib PNG writer (no
+      art tools in this environment). Full `vb_tests` 334/334 green, clean
+      `-Werror` build.
+      **Follow-up (2026-09-27), user-requested:** the real art's front/side/
+      back poses were too visually similar to tell apart by eye. `base:player`
+      swapped to debug-styled art (a big F/R/B/L letter baked into each row)
+      and a new `vb.register_entity{visual = {mirror = false}}` engine
+      feature (default `true`) lets a kind author a real, distinct pose per
+      facing instead of mirroring one "side" pose for both left and right —
+      `kEngineProtocolVersion` 22 -> 23. Also fixed a real pre-existing bug
+      this surfaced: `EntityRenderer` picked a facings=4 kind's pose using
+      hardcoded facings=8 sector math the whole time. See `STATE.md`'s
+      2026-09-27 entry for the full write-up.
 
 ### 4.3 Block registry replication  ✅ (name/solid/opaque/liquid/light only)
 
@@ -218,19 +356,29 @@ Lua-defined UI.
       machines before being traced to this). Fixed with a single
       `pack_runtime.flush_storage()` call between `freeze()` and
       `build_manifest()`.
-- [ ] **Not fixed, same class of bug, lower priority:** the manifest is
-      still only ever built once at startup — if a pack writes `vb.storage`
-      again *after* that point (a chat command, a timer, anything during
-      normal play, not just load-time) its manifest entry goes stale for
-      the remainder of that server process's lifetime; a client connecting
-      afterward gets the *old* hash but the *new* bytes on the next resync
-      of the same connection, or simply a permanently-wrong (but
-      consistent, since neither side updates) hash that no current pack
-      happens to trigger. No shipped pack does this today, so left
-      unaddressed; would need either re-hashing just that one manifest
-      entry on every `flush_storage()` call (cheap, targeted) or accepting
-      that `vb.storage`/`vb.db` shouldn't live inside the asset-synced pack
-      root at all (a bigger, unscoped redesign).
+- [x] Manifest staleness: a pack that writes `vb.storage` *after* startup
+      (not just at load time) used to go stale for the rest of that server
+      process's life — landed 2026-09-28. New `PackRuntime::storage_revision()`
+      (`inc/vb/script/pack_runtime.hpp`) is a monotonic counter bumped every
+      time `Impl::flush_storage()` actually writes `storage.json` to disk —
+      both the explicit startup call and `dispatch_tick()`'s own internal
+      auto-flush when `storage_dirty()`. `src/server/main.cpp` polls it once
+      a second (`manifest_check_ticks`, same "periodic backstop, not a hard
+      real-time guarantee" shape `autosave_ticks` already has): on a change,
+      it rebuilds the whole asset manifest (`vb::assetsync::build_manifest`)
+      and atomically swaps it in via a new small `ManifestHolder`
+      (mutex + `shared_ptr`) that `host.asset_manifest`/`host.asset_file_bytes`
+      now read through by reference instead of each capturing a fixed
+      `shared_ptr` by value at startup. Deliberately throttled rather than
+      checked every tick: a pack that flushes `vb.storage` every tick would
+      otherwise pay a full content-pack rescan+rehash at the tick rate.
+      `--singleplayer` was out of scope — it never builds a manifest at all.
+      Verified: full `vb_tests` 412/412 green (1 new `pack_runtime_test.cpp`
+      case: `storage_revision()` bumps on an explicit `flush_storage()` and
+      on `dispatch_tick()`'s implicit auto-flush, but *not* on a no-op tick
+      with nothing dirty), clean `-Werror` build. The manifest-rebuild-on-a-
+      live-server path itself was **not** exercised end-to-end —
+      `src/server/main.cpp` isn't linked into `vb_tests`.
 
 ### 4.5 Client UI VM + raygui (§10.4)  ✅ (item grid + base pack deferred)
 
@@ -277,7 +425,24 @@ Lua-defined UI.
       right `ui_name`/`widget_id`/`kind`/`value`.
 - [ ] Base pack `ui/inventory.lua`, `ui/pause.lua` — waits on 5.1 (no
       content pack exists to put them in).
-- [ ] Item grid widget — waits on 5.1 (needs a real item/inventory concept).
+- [x] Item grid widget for `UiRuntime` — landed 2026-09-28. Not a baked-in
+      "grid" concept: a new generic `icon` `WidgetType` draws one registered
+      block/item id's real atlas texture at x/y/w/h (same atlas chunk
+      meshes already use, via new `ChunkRenderer::has_atlas()`/
+      `atlas_texture()`/`atlas_rect_for()` getters), and
+      `content/base/ui/inventory.lua` composes a real item grid out of it
+      plus `rect`/`text` (slot background/border, count label) — the same
+      "compose it in Lua" posture Phase 6.16 already gave the hold-to-break
+      progress bar out of `rect`. See "Current status" in `STATE.md` for the
+      full writeup.
+- [x] Real texture/atlas system landed 2026-09-23 (see
+      `state/changelog-recent.md`): `vb.register_block{texture=...}` ->
+      `S2C_BlockRegistry` -> a per-session `vb::render::TextureAtlas` built
+      from Asset Sync (or, `--singleplayer`, straight off disk) -> real
+      per-face UVs in `ChunkRenderer`. Proved on `base:stone`/`base:water`
+      only (user-scoped) — a full base-pack reskin (dirt/grass/sand/wood/
+      leaves still flat placeholder colors) is a separate follow-up pass,
+      not a mechanism gap.
 
 **Phase 4 exit — met (mechanism, not content):** all five Lua/asset-sync
 subsystems (4.1–4.5) are implemented and tested end-to-end over

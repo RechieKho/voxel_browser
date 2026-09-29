@@ -87,7 +87,34 @@ with prediction/interpolation.
       unacked history ring (`ClientSession::push_input`) and resends it each frame.
 - [x] Input ingest: `ServerSession::handle_input_batch` — skips already-simulated
       `seq`, clamps `dt` to [0, 0.1], caps the batch at 64 cmds on decode.
-- [ ] Per-player rate limit / flood guard belongs with `GnsTransport`.
+- [x] Per-player rate limit / flood guard — landed 2026-09-27 as
+      `ServerSession::set_max_messages_per_second(double)` /
+      `ServerConfig::max_messages_per_second` (`server.toml`, default 0 =
+      unlimited). A token bucket per playing connection (one token per
+      post-join message, any type -- input batch, block edit, chat, UI
+      event, block-break begin/stop -- refilled at the configured rate,
+      capacity == one second's worth of burst), checked in
+      `system_network_io()` before a message is dispatched to its handler;
+      an empty bucket drops the message (not the connection). Defense in
+      depth on top of the existing closed-schema per-message caps
+      (`C2SInputBatch::kMaxCmds`, the fixed-width keybind bitset) -- those
+      bound how much one message can do, this bounds how often a connection
+      can send one at all. Exposed read-only via `vb.config.get(
+      "max_messages_per_second")` (Phase 6.13's surface), same posture as
+      `max_connections_per_ip`. Also closes Phase 6.3's custom-keybind-flood
+      item: custom-keybind bits ride inside `InputCmd`/`C2SInputBatch` like
+      every other input field, so this same token bucket covers a
+      custom-keybind flood too — no keybind-specific limiter was needed on
+      top of it. Verified: full `vb_tests` 380/380 green over
+      `LoopbackTransport` (a new `netcode_test.cpp` case drives 3
+      back-to-back chat sends through a 1 msg/sec limit, confirms only the
+      first lands, then confirms a 4th lands again after ~1s of ticks refill
+      the bucket; `config_test.cpp`/`pack_runtime_test.cpp` cases cover the
+      TOML default/parse and `vb.config.get` round-trip) — 2 real-UDP
+      `gns_transport_test.cpp` cases skipped in this run (this agent
+      environment's Windows Firewall blocks unattended real-UDP
+      listen/connect), clean `-Werror` build of `vb_tests`/`voxel_browser`/
+      `voxel_browser_server`.
 
 ### 3.3 Physics (`vb_core/physics`)  ✅
 
@@ -102,12 +129,34 @@ with prediction/interpolation.
 - [x] Unit tests (`tests/unit/physics_test.cpp`): floor rest, no tunnelling at
       terminal velocity, wall stop + slide, jump arc, step-up, yaw basis,
       sustained speed reaches walk/sprint, friction stops on release.
-- [ ] **Follow-up (smoke test):** step-up teleports the feet up to a full block
-      in one physics tick — correct, but visually abrupt ("jerk"). Physics
-      must stay exact for prediction/reconciliation; the fix is a
-      render-only eye-height smoothing layer in the client (lerp the rendered
-      camera Y toward the true feet+eye position, capped so it doesn't lag
-      behind normal fall/jump motion) — not attempted yet.
+- [x] Step-up jerk: physics is exact but visually abrupt — landed 2026-09-28.
+      New `vb::render::EyeHeightSmoother` (`inc/vb/render/camera.hpp`, pure
+      math, unit-tested without a GL context, same posture as
+      `frustum.hpp`/`entity_visual_layout.hpp`): each frame it exponentially
+      eases the *rendered* eye Y toward the true `feet.y + eye_height` target
+      over a short (0.12s) time constant, rather than setting the camera to
+      it directly — a step-up's instantaneous 1-tick position jump (up to
+      `step_height`, 1.05m) now reads as a quick smooth rise instead of a
+      pop. A jump bigger than `kSnapThreshold` (2.0m — above any real
+      step-up, below a teleport/respawn distance) is applied immediately with
+      no smoothing, so a respawn or reconnect never eases in from the old
+      body's position. Purely a render concern: `feet`/collision/physics are
+      completely untouched, `X`/`Z` are still set directly from `feet` every
+      frame (only `Y` gets smoothed) — the "physics is exact" half of the
+      original gap is unchanged, only what's drawn changes.
+      `src/client/main.cpp` wires one `EyeHeightSmoother` per client loop
+      (both the `--headless` path and the real windowed one), reset alongside
+      `controller` at spawn/join and in `enter_playing()` (reconnect/respawn)
+      so a fresh life never inherits a stale in-flight smoothing state from a
+      previous one. Verified: full `vb_tests` 388/388 green (6 new
+      `render_test.cpp` cases: first-update snaps, a step-up eases in over
+      one frame rather than landing immediately, converges to the target
+      after enough time, a large jump snaps immediately, a tiny continuous
+      delta tracks almost exactly, and `reset()` drops any in-flight
+      smoothing), clean `-Werror` build of `vb_tests`/`voxel_browser`/
+      `voxel_browser_server`. The actual smoothed step-up (a human walking
+      up a single block and watching the camera rise instead of pop) was
+      **not** manually eyeballed — no GUI in this agent environment.
 - [x] Join-time fall-through-world / embedding fix: `physics::
       ground_area_loaded()` freezes `step_movement` (both server and client)
       until the spawn column's chunk + 2 below are loaded, so a player can't
@@ -138,10 +187,20 @@ with prediction/interpolation.
 - [x] Integration test (`tests/unit/netcode_test.cpp`): input batch round-trip;
       predicted feet converge to server authority within epsilon; a second client
       sees the first move.
-- [x] Wall-clock `server_time_est` + smoothing on the client (needs `GnsTransport`
-      RTT; the loopback path has no latency to estimate) — landed 2026-09-28,
-      see `STATE.md`'s "Current status" for the full writeup and
-      `REMAINING_TASKS.md`'s own entry for the short version.
+- [x] Wall-clock `server_time_est` + smoothing on the client (needs
+      `GnsTransport` RTT — loopback has no latency to estimate) — landed
+      2026-09-28. New `Transport::round_trip_time_seconds(ConnId)` (default
+      `nullopt`, `GnsTransport` overrides it with GameNetworkingSockets' own
+      real-time ping) feeds a new header-only `vb::net::ServerTimeEstimator`
+      (`inc/vb/net/server_time_estimator.hpp`, same pure-math/unit-tested-
+      without-a-session posture as `render::EyeHeightSmoother`) that
+      `ClientSession` advances every `tick()` and nudges on every snapshot.
+      `interpolated_pos()` now targets this continuously-advancing estimate
+      instead of the last *received* tick number, which used to freeze the
+      interpolation fraction solid between snapshot arrivals (a real,
+      previously-unnoticed bug this item's investigation surfaced, not
+      just the originally-scoped "add RTT" gap). See `STATE.md`'s "Current
+      status" for the full writeup.
 - [x] Map players ↔ librg network entities — `InterestGrid::upsert`/`remove` track
       every `NetId` (players and item drops alike) 1:1 as a self-owned librg
       entity; see `src/replication/interest.cpp`.

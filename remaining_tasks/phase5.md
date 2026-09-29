@@ -292,7 +292,8 @@ Goal: a small, coherent, playable multiplayer sandbox.
       receives the player + block position, so a claims/region check is
       just a Lua-side lookup against `vb.storage` inside the same veto;
       nothing further needed C++-side unless a pack wants one built in.
-      Tool/hardness times: not yet.
+      Tool/hardness times: not yet at the time — landed 2026-09-28, see this
+      file's 5.2 entry below.
 - [x] Apply + bump `revision` + dirty light/mesh + whole-chunk `relight_chunk`.
       `on_break`/`on_place` callbacks: wired (`PackRuntime::Impl::
       on_block_edit_after`). Drops: waits on items (5.1) — the callback's
@@ -300,10 +301,27 @@ Goal: a small, coherent, playable multiplayer sandbox.
 - [x] `S2C_BlockEditResult` to the editor + `S2C_ChunkDelta` (block + diffed
       light) fan-out to every player mirroring the chunk.
 - [x] Relight on edit: cross-chunk propagation (breaking a floor lets light
-      into the chunk below) confirmed closed 2026-09-28 — see
-      `REMAINING_TASKS.md`'s Phase 5 entry for the full writeup.
-      `relight_chunk()` itself still recomputes each chunk from scratch (a
-      deliberate, documented characteristic, not a correctness gap).
+      into the chunk below) — confirmed already closed 2026-09-28, no code
+      change needed. This item's own text was stale:
+      `WorldReplicator::apply_block_edit()` (`src/net/world_replicator.cpp`)
+      has called `lighting::relight_column` (not a plain single-chunk
+      `relight_chunk`) on every real edit since Phase 2's cross-chunk light
+      propagation pass landed the same day — the cascade already relights
+      the whole loaded column below (and, via its `push` parameter,
+      sideways) whenever an edit changes what a neighbour should see, in
+      the same edit. Verified with a new end-to-end regression test (not
+      just re-reading the existing code):
+      `tests/unit/world_replication_test.cpp`'s "breaking a floor block lets
+      sky light into the loaded chunk below it, in the same edit" builds two
+      stacked synthetic chunks (a solid floor over an empty room), calls
+      `WorldReplicator::apply_block_edit()` to break one floor voxel, and
+      confirms the room below picks up real sky light (`sky() > 0`)
+      immediately. Full `vb_tests` 404/404 green, clean `-Werror` build.
+      **Still genuinely true, not resolved by this pass:**
+      `relight_chunk()` itself always recomputes a chunk's light from
+      scratch (a full BFS), not incrementally from just the edited voxel —
+      a real performance characteristic, but a deliberate, documented one
+      (`lighting.hpp`'s own header comment), not a correctness gap.
 - [x] Selection raycast (Amanatides–Woo) + wire-cube highlight; LMB break /
       RMB place stone. Break progress (hold-to-break, 2026-09-16):
       `src/client/main.cpp` now requires LMB held on the *same* voxel for a
@@ -322,6 +340,17 @@ Goal: a small, coherent, playable multiplayer sandbox.
       in this environment, same limitation as the rest of the HUD); verified
       by a clean `/W4` build of `voxel_browser` and the full `ctest` suite
       staying green.
+- [x] Per-block hardness/tool break-time variation — one flat duration was
+      superseded in direction by Phase 6.17/6.18's punch-based combat, but
+      the "vary by block/tool" idea itself landed 2026-09-28.
+      `ServerSession::punch()`/`player:punch()` gained an optional
+      `block_damage` parameter (default 1, every existing call site
+      unaffected): per-block hardness already existed (`BlockType::
+      max_damage`, Phase 6.5); this is the matching "tool" half, entirely a
+      pack-side decision (e.g. from `player:get_held_item()`) with no tool/
+      hardness concept added to the engine itself. PvP damage is unaffected
+      — that stays `vb.combat.set_params`'s own `player_damage`. See
+      "Current status" in `STATE.md` for the full writeup.
 
 ### 5.2 status (2026-09-16): playable over loopback, Lua veto now wired,
 hold-to-break landed. `voxel_browser --singleplayer` can break (after a short
@@ -356,11 +385,23 @@ section for each.
       Authenticating / Requesting content manifest / Downloading content
       pack / Syncing world) + a **Cancel** button that tears down the
       in-flight `Singleplayer`/`RemoteConnection` and returns to the menu.
-      **No byte-progress bar** — `ClientHandshake`/asset-sync (4.4) never
-      grew progress-fraction accounting (4.4's own known gap: "no
-      connect-screen UI exists yet" — now one does, but the underlying
-      counter still doesn't), so this is status-text-only, not a filled bar.
-      Real multiplayer connects are pumped one `tick(dt)` per frame with a
+      **Byte-progress bar landed 2026-09-28** (was status-text-only before
+      this): new `assetsync::ClientAssetCache::sync_total_bytes()`/
+      `sync_received_bytes()` (`src/assetsync/cache.cpp`) derive real
+      byte-progress from the existing `pending_` map on every call.
+      `net::ClientSession::asset_sync_total_bytes()`/
+      `asset_sync_received_bytes()` forward through the session's own
+      (possibly null) `asset_cache_` pointer. `render::MainMenu::
+      draw_connecting()` gained an optional `float fraction = -1.0f`
+      parameter (`-1` = unknown, keeps the original text-only layout;
+      `>= 0` draws a real `GuiProgressBar`, same look `draw_loading()`
+      established for 7.1's post-join loading screen) — computed only when
+      `!connecting_singleplayer` and `client->status() == kSyncingAssets`
+      and the total is nonzero; every other handshake stage still shows
+      text-only. Verified: full `vb_tests` 390/390 green (2 new
+      `assetsync_cache_test.cpp` cases), clean `-Werror` build. The actual
+      rendered bar was **not** manually eyeballed — no GUI in this agent
+      environment. Real multiplayer connects are pumped one `tick(dt)` per frame with a
       10 s wall-clock deadline (was a blocking `sleep`-based loop before the
       window existed); singleplayer's loopback join is ticked in small
       batches per frame (was a single blocking up-to-128-tick loop) since
@@ -384,10 +425,18 @@ section for each.
       render distance / mouse sensitivity (`GuiSlider`), asset cache MB
       (`GuiValueBox`); **Save** writes through `save_client_config` and
       returns to the menu, **Back** discards edits.
-      **Keybindings: not attempted** — WASD/jump/sprint/break/place are
-      still hardcoded in `sample_input_cmd()`/the block-edit block in
-      `main.cpp`; out of scope for this pass, no rebinding storage or UI
-      exists.
+      **Keybindings screen landed 2026-09-28** (was "not attempted" at the
+      time this section was first written): a new Settings -> Keybindings
+      raygui screen (`MainMenu::draw_keybindings`) lets a player click an
+      action's key and press any physical key to rebind it, for the 6
+      `MovementBindings` axes (forward/back/left/right/jump/sprint — mouse
+      break/place buttons are left alone). Persisted as 6 new `key_*` int
+      fields on `ClientConfig`/`client.toml`, applied to `src/client/
+      main.cpp`'s live `MovementBindings` immediately on Save — no restart
+      needed, unlike window size/vsync. **Note:** this rebinds the
+      *physical key*, distinct from Phase 6.19's `vb.register_keybind` name
+      registry (which is about a pack reading `input.keybinds["jump"]` by
+      name, not which key produces it) — the two compose.
 - [x] Integrated-server singleplayer path: unchanged mechanism from Phase 1
       (`Singleplayer` struct, in-process `IntegratedGame` over
       `LoopbackTransport`) — now reachable from the **Play Singleplayer**
