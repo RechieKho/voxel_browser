@@ -133,13 +133,12 @@ void strip_sandbox(sol::state &L) {
 
 } // namespace
 
-Vm::Impl::Impl(VmLimits lim)
-		: alloc(lim.memory_bytes,
-				  lim.instruction_budget > 0
-						  ? static_cast<std::size_t>(lim.instruction_budget)
-						  : 0,
-				  std::chrono::milliseconds(lim.wall_clock_budget_ms)),
-		  lua(sol::default_at_panic, &vm_alloc, &alloc) {
+Vm::Impl::Impl(VmLimits lim) : alloc(lim.memory_bytes,
+									   lim.instruction_budget > 0
+											   ? static_cast<std::size_t>(lim.instruction_budget)
+											   : 0,
+									   std::chrono::milliseconds(lim.wall_clock_budget_ms)),
+							   lua(sol::default_at_panic, &vm_alloc, &alloc) {
 	lua.open_libraries(sol::lib::base, sol::lib::string, sol::lib::table,
 			sol::lib::math, sol::lib::coroutine, sol::lib::utf8,
 			sol::lib::debug);
@@ -225,7 +224,7 @@ sol::object Vm::Impl::require_module(const std::string &name) {
 	}
 
 	sol::object result = r.return_count() > 0 ? r.get<sol::object>(0)
-											   : sol::make_object(lua, true);
+											  : sol::make_object(lua, true);
 	require_cache.emplace(name, result);
 	return result;
 }

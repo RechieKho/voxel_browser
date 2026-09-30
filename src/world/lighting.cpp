@@ -93,7 +93,7 @@ void LightEngine::relight_chunk(Chunk &chunk, const Neighbours &neighbours) cons
 	// light): every horizontal step decays by 1, matching how a purely
 	// interior sideways step already behaves within one chunk.
 	auto seed_horizontal = [&](const Chunk *neighbour, int fixed_a, bool a_is_x,
-										int neighbour_a) {
+								   int neighbour_a) {
 		if (neighbour == nullptr) {
 			return;
 		}

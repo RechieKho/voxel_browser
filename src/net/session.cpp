@@ -1376,7 +1376,7 @@ void ServerSession::broadcast_snapshots() {
 				const auto ov_it = script_entity_visual_overrides_.find(id);
 				snap.entered.push_back(to_record(*e,
 						ov_it != script_entity_visual_overrides_.end() ? &ov_it->second
-																		: nullptr));
+																	   : nullptr));
 			}
 		}
 		for (core::NetId id : d.stayed) {

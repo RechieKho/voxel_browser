@@ -1147,8 +1147,8 @@ int main(int argc, char **argv) {
 		// loaded from, straight off disk instead.
 		{
 			const vb::render::VirtualFs vfs = remote ? remote->asset_cache.virtual_fs()
-													  : load_textures_from_disk(client->chunk_store().registry(),
-																kSingleplayerContentPack);
+													 : load_textures_from_disk(client->chunk_store().registry(),
+															   kSingleplayerContentPack);
 			vb::render::TextureAtlas atlas =
 					vb::render::TextureAtlas::build(client->chunk_store().registry(), vfs);
 			std::vector<vb::render::AtlasRect> rects;

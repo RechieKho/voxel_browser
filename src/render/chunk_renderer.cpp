@@ -469,8 +469,7 @@ void ChunkRenderer::draw(const Camera3D &camera) const {
 	for (const auto &[coord, gpu] : gpu_) {
 		const core::IVec3 o = core::chunk_origin(coord);
 		const core::Vec3d cmin{ static_cast<double>(o.x), static_cast<double>(o.y), static_cast<double>(o.z) };
-		const core::Vec3d cmax = cmin + core::Vec3d{ static_cast<double>(core::kChunkDim),
-			static_cast<double>(core::kChunkDim), static_cast<double>(core::kChunkDim) };
+		const core::Vec3d cmax = cmin + core::Vec3d{ static_cast<double>(core::kChunkDim), static_cast<double>(core::kChunkDim), static_cast<double>(core::kChunkDim) };
 		if (!aabb_in_frustum(frustum, cmin, cmax)) {
 			continue; // Phase 2 remaining item: chunk frustum culling
 		}
