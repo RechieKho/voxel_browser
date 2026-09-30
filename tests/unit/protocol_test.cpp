@@ -261,11 +261,9 @@ TEST_CASE("block registry round-trips, including an empty list") {
 	reg.blocks.push_back({ .name = "test:glow", .solid = true, .opaque = true, .liquid = false, .light_emission = 15 });
 	reg.blocks.push_back({ .name = "test:crumbly", .solid = true, .opaque = true, .liquid = false, .max_damage = 5 });
 	// Real texture/atlas system: a pack-relative texture path round-trips too.
-	reg.blocks.push_back({ .name = "test:stone", .solid = true, .opaque = true, .liquid = false,
-			.texture = "textures/stone.png" });
+	reg.blocks.push_back({ .name = "test:stone", .solid = true, .opaque = true, .liquid = false, .texture = "textures/stone.png" });
 	// crack_texture (6.5's last piece): also round-trips.
-	reg.blocks.push_back({ .name = "test:ore", .solid = true, .opaque = true, .liquid = false,
-			.max_damage = 6, .crack_texture = "textures/ore_crack.png" });
+	reg.blocks.push_back({ .name = "test:ore", .solid = true, .opaque = true, .liquid = false, .max_damage = 6, .crack_texture = "textures/ore_crack.png" });
 	auto r2 = round_trip(reg);
 	REQUIRE(r2.blocks.size() == 6);
 	CHECK(r2.blocks[0].name == "base:air");
@@ -423,8 +421,8 @@ TEST_CASE("entity kind registry round-trips, including an empty list") {
 	CHECK(empty.kinds.empty());
 
 	S2CEntityKindRegistry reg;
-	reg.kinds.push_back({ "test:slime", 0.6f, 0.6f });
-	reg.kinds.push_back({ "test:golem" }); // default width/height
+	reg.kinds.push_back({ .name = "test:slime", .width = 0.6f, .height = 0.6f, .visual = std::nullopt });
+	reg.kinds.push_back({ .name = "test:golem", .visual = std::nullopt }); // default width/height
 	auto r2 = round_trip(reg);
 	REQUIRE(r2.kinds.size() == 2);
 	CHECK(r2.kinds[0].name == "test:slime");
@@ -438,7 +436,7 @@ TEST_CASE("entity kind registry round-trips, including an empty list") {
 
 TEST_CASE("entity kind registry round-trips a real visual def") {
 	S2CEntityKindRegistry reg;
-	EntityKindRegistryRecord rec{ "test:slime", 0.6f, 0.6f };
+	EntityKindRegistryRecord rec{ .name = "test:slime", .width = 0.6f, .height = 0.6f, .visual = std::nullopt };
 	EntityVisualDef visual;
 	visual.texture = "textures/entities/slime.png";
 	visual.frame_width = 128;
@@ -450,7 +448,7 @@ TEST_CASE("entity kind registry round-trips a real visual def") {
 	visual.clips.push_back({ "walk", 6, 10.0f });
 	rec.visual = visual;
 	reg.kinds.push_back(rec);
-	reg.kinds.push_back({ "test:golem" }); // no visual at all
+	reg.kinds.push_back({ .name = "test:golem", .visual = std::nullopt }); // no visual at all
 
 	auto r2 = round_trip(reg);
 	REQUIRE(r2.kinds.size() == 2);
@@ -470,7 +468,7 @@ TEST_CASE("entity kind registry round-trips a real visual def") {
 
 TEST_CASE("entity kind registry decode rejects a visual with too many clips") {
 	S2CEntityKindRegistry reg;
-	EntityKindRegistryRecord rec{ "test:overstuffed" };
+	EntityKindRegistryRecord rec{ .name = "test:overstuffed", .visual = std::nullopt };
 	EntityVisualDef visual;
 	visual.texture = "textures/entities/overstuffed.png";
 	visual.frame_width = 128;
@@ -563,7 +561,7 @@ TEST_CASE("decode rejects a bad enum and trailing bytes") {
 // directly, independent of frame_message()'s own size-threshold policy
 // (net_test.cpp covers that end of it).
 TEST_CASE("compress_lz4/decompress_lz4 round-trips compressible, "
-		"incompressible, and empty input") {
+		  "incompressible, and empty input") {
 	// Highly compressible: one repeated byte, the same shape a homogeneous
 	// chunk's own RLE'd payload has.
 	const std::vector<std::byte> compressible(1000, std::byte{ 0x2A });
@@ -595,7 +593,7 @@ TEST_CASE("compress_lz4/decompress_lz4 round-trips compressible, "
 }
 
 TEST_CASE("decompress_lz4 rejects a truncated buffer instead of "
-		"reading/writing out of bounds") {
+		  "reading/writing out of bounds") {
 	const std::vector<std::byte> original(1000, std::byte{ 0x2A });
 	const auto compressed = compress_lz4(as_span(original));
 	REQUIRE(compressed.size() > 8);

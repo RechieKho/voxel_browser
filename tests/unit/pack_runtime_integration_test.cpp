@@ -364,11 +364,13 @@ TEST_CASE("player:punch(block_damage) lets a pack break a tough block in "
 	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
 	const vb::core::BlockId tough = registry.add_or_get(
 			"test:tough_ore", vb::world::BlockType{
-										.name = "test:tough_ore",
-										.solid = true,
-										.opaque = true,
-										.max_damage = 3,
-								});
+									  .name = "test:tough_ore",
+									  .solid = true,
+									  .opaque = true,
+									  .texture = "",
+									  .max_damage = 3,
+									  .crack_texture = "",
+							  });
 
 	vb::script::PackRuntime rt(net.server(), registry, temp_storage("punch_block_damage"));
 	// A "pickaxe" that hits for 2 instead of the default 1 -- a pack decides
@@ -813,8 +815,8 @@ TEST_CASE("client UI round trip: server open_ui -> click -> server ui_event") {
 }
 
 TEST_CASE("client HUD round trip: a HUD widget's on_click -> ui.send_event "
-		"reaches the server with ui_name = \"hud\" (REMAINING_TASKS' 'HUD "
-		"widgets aren't wired to report_click/report_change' gap)") {
+		  "reaches the server with ui_name = \"hud\" (REMAINING_TASKS' 'HUD "
+		  "widgets aren't wired to report_click/report_change' gap)") {
 	LoopbackNetwork net;
 	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
 	vb::world::World world(registry);
@@ -1080,8 +1082,8 @@ TEST_CASE("vb.world.spawn_item_drop replicates to a client and is picked up on a
 }
 
 TEST_CASE("vb.register_entity{represents=\"item_drop\"} tags real drops with "
-		"that kind's id instead of the reserved sentinel (entity-management "
-		"follow-up)") {
+		  "that kind's id instead of the reserved sentinel (entity-management "
+		  "follow-up)") {
 	LoopbackNetwork net;
 	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
 
@@ -1148,8 +1150,8 @@ TEST_CASE("vb.register_entity{represents=\"item_drop\"} tags real drops with "
 }
 
 TEST_CASE("vb.register_entity{represents=\"player\"} tags a joining player's "
-		"replicated kind, seen by another client (entity-management "
-		"follow-up)") {
+		  "replicated kind, seen by another client (entity-management "
+		  "follow-up)") {
 	LoopbackNetwork net;
 	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
 
@@ -1345,7 +1347,7 @@ TEST_CASE(
 // starvation death (mirrors the fall-damage/PvP precedent of proving a
 // primitive end-to-end, not just its Lua binding shape).
 TEST_CASE("player:get_hunger()/add_hunger() read and spend hunger, and "
-		"configured decay leads to a real starvation death") {
+		  "configured decay leads to a real starvation death") {
 	LoopbackNetwork net;
 	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
 

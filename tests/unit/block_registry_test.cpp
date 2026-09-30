@@ -30,9 +30,9 @@ TEST_CASE("server sends a custom block registry and the client applies it") {
 	host.block_registry =
 			[]() -> std::optional<std::vector<vb::protocol::BlockRegistryRecord>> {
 		return std::vector<vb::protocol::BlockRegistryRecord>{
-			{ "base:air", false, false, false, 0 },
-			{ "base:stone", true, true, false, 0 },
-			{ "test:glow", true, true, false, 15 },
+			{ .name = "base:air", .solid = false, .opaque = false, .liquid = false, .light_emission = 0, .texture = "", .crack_texture = "" },
+			{ .name = "base:stone", .solid = true, .opaque = true, .liquid = false, .light_emission = 0, .texture = "", .crack_texture = "" },
+			{ .name = "test:glow", .solid = true, .opaque = true, .liquid = false, .light_emission = 15, .texture = "", .crack_texture = "" },
 		};
 	};
 	ServerSession server(net.server(), cfg, host);
@@ -55,8 +55,8 @@ TEST_CASE("server sends a custom block registry and the client applies it") {
 }
 
 TEST_CASE("server sends max_damage and crack_texture and the client applies "
-		"both (regression: these two fields used to be silently dropped by "
-		"src/server/main.cpp's/src/client/main.cpp's own aggregate-init)") {
+		  "both (regression: these two fields used to be silently dropped by "
+		  "src/server/main.cpp's/src/client/main.cpp's own aggregate-init)") {
 	LoopbackNetwork net;
 	HandshakeServerConfig cfg;
 	HandshakeServerHost host;
@@ -68,7 +68,10 @@ TEST_CASE("server sends max_damage and crack_texture and the client applies "
 		ore.opaque = true;
 		ore.max_damage = 6;
 		ore.crack_texture = "textures/ore_crack.png";
-		return std::vector<vb::protocol::BlockRegistryRecord>{ { "base:air", false, false, false, 0 }, ore };
+		return std::vector<vb::protocol::BlockRegistryRecord>{
+			{ .name = "base:air", .solid = false, .opaque = false, .liquid = false, .light_emission = 0, .texture = "", .crack_texture = "" },
+			ore
+		};
 	};
 	ServerSession server(net.server(), cfg, host);
 	REQUIRE(net.server().listen(0));
@@ -89,7 +92,7 @@ TEST_CASE("server sends max_damage and crack_texture and the client applies "
 }
 
 TEST_CASE("without a block_registry hook, the client keeps its own base() "
-		"registry") {
+		  "registry") {
 	LoopbackNetwork net;
 	HandshakeServerConfig cfg;
 	ServerSession server(net.server(), cfg); // default host: no hook set
@@ -132,7 +135,7 @@ TEST_CASE("server sends a custom keybind registry and the client applies it") {
 }
 
 TEST_CASE("without a keybind_registry hook, the client has no registered "
-		"keybinds") {
+		  "keybinds") {
 	LoopbackNetwork net;
 	HandshakeServerConfig cfg;
 	ServerSession server(net.server(), cfg); // default host: no hook set
@@ -150,15 +153,15 @@ TEST_CASE("without a keybind_registry hook, the client has no registered "
 }
 
 TEST_CASE("server sends a custom entity kind registry and the client applies "
-		"it") {
+		  "it") {
 	LoopbackNetwork net;
 	HandshakeServerConfig cfg;
 	HandshakeServerHost host;
 	host.entity_kind_registry =
 			[]() -> std::optional<std::vector<vb::protocol::EntityKindRegistryRecord>> {
 		return std::vector<vb::protocol::EntityKindRegistryRecord>{
-			{ "test:slime", 0.6f, 0.6f },
-			{ "test:golem", 1.2f, 2.4f },
+			{ .name = "test:slime", .width = 0.6f, .height = 0.6f, .visual = std::nullopt },
+			{ .name = "test:golem", .width = 1.2f, .height = 2.4f, .visual = std::nullopt },
 		};
 	};
 	ServerSession server(net.server(), cfg, host);
@@ -188,7 +191,7 @@ TEST_CASE("server sends a custom entity kind registry and the client applies "
 }
 
 TEST_CASE("without an entity_kind_registry hook, the client has no "
-		"registered entity kinds") {
+		  "registered entity kinds") {
 	LoopbackNetwork net;
 	HandshakeServerConfig cfg;
 	ServerSession server(net.server(), cfg); // default host: no hook set
@@ -206,7 +209,7 @@ TEST_CASE("without an entity_kind_registry hook, the client has no "
 }
 
 TEST_CASE("server sends custom move params and the client's prediction uses "
-		"them (Phase 6.7)") {
+		  "them (Phase 6.7)") {
 	LoopbackNetwork net;
 	HandshakeServerConfig cfg;
 	HandshakeServerHost host;
@@ -232,7 +235,7 @@ TEST_CASE("server sends custom move params and the client's prediction uses "
 }
 
 TEST_CASE("without a move_params hook, the client keeps its own default "
-		"MoveParams") {
+		  "MoveParams") {
 	LoopbackNetwork net;
 	HandshakeServerConfig cfg;
 	ServerSession server(net.server(), cfg); // default host: no hook set

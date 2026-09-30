@@ -217,7 +217,9 @@ TEST_CASE("punch() accumulates hits on a max_damage > 0 block and only "
 										.name = "test:tough_stone",
 										.solid = true,
 										.opaque = true,
+										.texture = "",
 										.max_damage = 3,
+										.crack_texture = "",
 								});
 	vb::world::World world(registry);
 	wg::WorldGenWorkerPool pool(
@@ -285,7 +287,9 @@ TEST_CASE("punch()'s block_damage parameter breaks a max_damage block in "
 										.name = "test:tough_stone",
 										.solid = true,
 										.opaque = true,
+										.texture = "",
 										.max_damage = 3,
+										.crack_texture = "",
 								});
 	vb::world::World world(registry);
 	wg::WorldGenWorkerPool pool(
@@ -341,11 +345,13 @@ TEST_CASE("punch() replicates live block damage (S2C_BlockDamage) to every "
 	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
 	const vb::core::BlockId tough = registry.add_or_get(
 			"test:tough_stone3", vb::world::BlockType{
-										.name = "test:tough_stone3",
-										.solid = true,
-										.opaque = true,
-										.max_damage = 3,
-								});
+										 .name = "test:tough_stone3",
+										 .solid = true,
+										 .opaque = true,
+										 .texture = "",
+										 .max_damage = 3,
+										 .crack_texture = "",
+								 });
 	vb::world::World world(registry);
 	wg::WorldGenWorkerPool pool(
 			wg::WorldGenerator(wg::WorldGenParams{}, registry),
@@ -418,11 +424,13 @@ TEST_CASE("punch() self-heals an idle block's punch count back to 0 over "
 	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
 	const vb::core::BlockId tough = registry.add_or_get(
 			"test:tough_stone2", vb::world::BlockType{
-										.name = "test:tough_stone2",
-										.solid = true,
-										.opaque = true,
-										.max_damage = 5,
-								});
+										 .name = "test:tough_stone2",
+										 .solid = true,
+										 .opaque = true,
+										 .texture = "",
+										 .max_damage = 5,
+										 .crack_texture = "",
+								 });
 	vb::world::World world(registry);
 	wg::WorldGenWorkerPool pool(
 			wg::WorldGenerator(wg::WorldGenParams{}, registry),
@@ -493,11 +501,13 @@ TEST_CASE("punch() landing again resets the heal clock instead of stacking "
 	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
 	const vb::core::BlockId tough = registry.add_or_get(
 			"test:tough_stone3", vb::world::BlockType{
-										.name = "test:tough_stone3",
-										.solid = true,
-										.opaque = true,
-										.max_damage = 5,
-								});
+										 .name = "test:tough_stone3",
+										 .solid = true,
+										 .opaque = true,
+										 .texture = "",
+										 .max_damage = 5,
+										 .crack_texture = "",
+								 });
 	vb::world::World world(registry);
 	wg::WorldGenWorkerPool pool(
 			wg::WorldGenerator(wg::WorldGenParams{}, registry),
@@ -632,7 +642,9 @@ TEST_CASE("punch() cooldown is disabled by default -- back-to-back swings "
 												 .name = "test:tough_stone_cooldown",
 												 .solid = true,
 												 .opaque = true,
+												 .texture = "",
 												 .max_damage = 5,
+												 .crack_texture = "",
 										 });
 	vb::world::World world(registry);
 	wg::WorldGenWorkerPool pool(
