@@ -59,6 +59,14 @@ if(NOT raylib_FOUND)
   set(SUPPORT_MODULE_RAUDIO OFF CACHE INTERNAL "") # no audio subsystem in v0
   vb_fetch(raylib TAG 5.5 REPO https://github.com/raysan5/raylib.git)
 endif()
+if(TARGET raylib)
+  get_target_property(_vb_raylib_inc raylib INTERFACE_INCLUDE_DIRECTORIES)
+  if(_vb_raylib_inc)
+    set_target_properties(raylib PROPERTIES
+      INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "${_vb_raylib_inc}")
+  endif()
+  unset(_vb_raylib_inc)
+endif()
 
 # ===========================================================================
 # raygui — immediate-mode UI (header-only; implementation TU lives in vb_render)

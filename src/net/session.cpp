@@ -35,7 +35,7 @@ std::span<const std::byte> span_of(const std::vector<std::byte> &v) {
 // VB_WITH_COMPRESSION at all -- means something is genuinely wrong, not
 // "nothing to do."
 bool decompress_frame_payload(protocol::Frame &frame,
-		std::vector<std::byte> &storage, const char *&reason) {
+		[[maybe_unused]] std::vector<std::byte> &storage, const char *&reason) {
 	if ((frame.header.flags &
 				static_cast<std::uint16_t>(protocol::MessageFlag::kCompressed)) == 0) {
 		return true;
