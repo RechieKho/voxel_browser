@@ -66,7 +66,7 @@ struct TrackedEntity {
 	int facings = kDefaultFacings;
 	bool mirror = true;
 
-	explicit TrackedEntity(int facings) : state(facings) {}
+	explicit TrackedEntity(int initial_facings) : state(initial_facings) {}
 };
 
 // A kind's real spritesheet, uploaded once per session by set_kind_visual().
@@ -279,7 +279,7 @@ void EntityRenderer::draw(const CameraView &camera_view) const {
 			const EntityClipLayout &clip =
 					resolve_clip(layout, anim_clip_name(frame.clip));
 			const int frame_in_clip = clip.frames > 0
-					? static_cast<int>(frame.clip_time * clip.fps) % clip.frames
+					? static_cast<int>(frame.clip_time * static_cast<double>(clip.fps)) % clip.frames
 					: 0;
 			const int column = clip.start_frame + frame_in_clip;
 			const int row = frame.pose.pose_index;

@@ -1844,7 +1844,7 @@ void PackRuntime::Impl::install_bindings() {
 		}
 		const std::size_t kind_index =
 				static_cast<std::size_t>(kind_it - entity_kinds.begin());
-		ScriptEntity entity{ kind_index, self, p };
+		ScriptEntity entity{ .kind_index = kind_index, .self = self, .pos = p, .health = std::nullopt };
 		if (kind_it->max_health) {
 			entity.health = *kind_it->max_health;
 		}
