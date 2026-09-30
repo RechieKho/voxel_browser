@@ -3,21 +3,21 @@
 namespace vb::world {
 
 namespace {
-const BlockType kAirType{ .name = "base:air", .solid = false, .opaque = false, .liquid = false, .light_emission = 0 };
+const BlockType kAirType{ .name = "base:air", .solid = false, .opaque = false, .liquid = false, .light_emission = 0, .texture = "", .crack_texture = "" };
 } // namespace
 
 BlockRegistry BlockRegistry::base() {
 	BlockRegistry r;
-	r.add({ .name = "base:air", .solid = false, .opaque = false, .liquid = false, .light_emission = 0 });
-	r.add({ .name = "base:stone", .solid = true, .opaque = true, .liquid = false, .light_emission = 0 });
-	r.add({ .name = "base:dirt", .solid = true, .opaque = true, .liquid = false, .light_emission = 0 });
-	r.add({ .name = "base:grass", .solid = true, .opaque = true, .liquid = false, .light_emission = 0 });
-	r.add({ .name = "base:sand", .solid = true, .opaque = true, .liquid = false, .light_emission = 0 });
-	BlockType water{ .name = "base:water", .solid = false, .opaque = false, .liquid = true, .light_emission = 0 };
+	r.add({ .name = "base:air", .solid = false, .opaque = false, .liquid = false, .light_emission = 0, .texture = "", .crack_texture = "" });
+	r.add({ .name = "base:stone", .solid = true, .opaque = true, .liquid = false, .light_emission = 0, .texture = "", .crack_texture = "" });
+	r.add({ .name = "base:dirt", .solid = true, .opaque = true, .liquid = false, .light_emission = 0, .texture = "", .crack_texture = "" });
+	r.add({ .name = "base:grass", .solid = true, .opaque = true, .liquid = false, .light_emission = 0, .texture = "", .crack_texture = "" });
+	r.add({ .name = "base:sand", .solid = true, .opaque = true, .liquid = false, .light_emission = 0, .texture = "", .crack_texture = "" });
+	BlockType water{ .name = "base:water", .solid = false, .opaque = false, .liquid = true, .light_emission = 0, .texture = "", .crack_texture = "" };
 	water.region = true; // Phase 7.3: first user of the generic region hook
 	r.add(std::move(water));
-	r.add({ .name = "base:wood", .solid = true, .opaque = true, .liquid = false, .light_emission = 0 });
-	r.add({ .name = "base:leaves", .solid = true, .opaque = false, .liquid = false, .light_emission = 0 });
+	r.add({ .name = "base:wood", .solid = true, .opaque = true, .liquid = false, .light_emission = 0, .texture = "", .crack_texture = "" });
+	r.add({ .name = "base:leaves", .solid = true, .opaque = false, .liquid = false, .light_emission = 0, .texture = "", .crack_texture = "" });
 	return r;
 }
 
