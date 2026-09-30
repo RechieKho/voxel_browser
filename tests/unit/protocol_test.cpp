@@ -139,9 +139,9 @@ TEST_CASE("entity snapshot round-trips") {
 	s.server_tick = 4242;
 	s.last_acked_input_seq = 17;
 	s.entered.push_back({ vb::core::NetId{ 3 }, vb::core::EntityKindId{ 1 },
-			{ 1.0, 2.0, 3.0 }, { 45.0f, -10.0f }, { 0.1f, 0.0f, -0.2f }, 0 });
+			{ 1.0, 2.0, 3.0 }, { 45.0f, -10.0f }, { 0.1f, 0.0f, -0.2f }, 0, std::nullopt });
 	s.updated.push_back({ vb::core::NetId{ 4 }, vb::core::EntityKindId{ 0 },
-			{ -8.0, 64.0, 0.0 }, {}, {}, 2 });
+			{ -8.0, 64.0, 0.0 }, {}, {}, 2, std::nullopt });
 	s.removed.push_back(vb::core::NetId{ 9 });
 
 	auto s2 = round_trip(s);
@@ -161,7 +161,7 @@ TEST_CASE("entity snapshot round-trips a per-instance visual override") {
 	s.last_acked_input_seq = 0;
 
 	EntityRecord entered{ vb::core::NetId{ 3 }, vb::core::EntityKindId{ 1 },
-		{ 1.0, 2.0, 3.0 }, { 45.0f, -10.0f }, { 0.1f, 0.0f, -0.2f }, 0 };
+		{ 1.0, 2.0, 3.0 }, { 45.0f, -10.0f }, { 0.1f, 0.0f, -0.2f }, 0, std::nullopt };
 	EntityVisualOverride ov;
 	ov.texture = "textures/entities/skins/player_red.png";
 	ov.facings = 4;
@@ -173,7 +173,7 @@ TEST_CASE("entity snapshot round-trips a per-instance visual override") {
 	// net::ServerSession::to_record) -- nullopt round-trips as absent, not a
 	// spurious default-constructed EntityVisualOverride.
 	s.updated.push_back({ vb::core::NetId{ 4 }, vb::core::EntityKindId{ 1 },
-			{ 0.0, 0.0, 0.0 }, {}, {}, 0 });
+			{ 0.0, 0.0, 0.0 }, {}, {}, 0, std::nullopt });
 
 	auto s2 = round_trip(s);
 	REQUIRE(s2.entered.size() == 1);
@@ -256,14 +256,14 @@ TEST_CASE("block registry round-trips, including an empty list") {
 	CHECK(empty.blocks.empty());
 
 	S2CBlockRegistry reg;
-	reg.blocks.push_back({ .name = "base:air", .solid = false, .opaque = false, .liquid = false });
-	reg.blocks.push_back({ .name = "base:stone", .solid = true, .opaque = true, .liquid = false });
-	reg.blocks.push_back({ .name = "test:glow", .solid = true, .opaque = true, .liquid = false, .light_emission = 15 });
-	reg.blocks.push_back({ .name = "test:crumbly", .solid = true, .opaque = true, .liquid = false, .max_damage = 5 });
+	reg.blocks.push_back({ .name = "base:air", .solid = false, .opaque = false, .liquid = false, .texture = "", .crack_texture = "" });
+	reg.blocks.push_back({ .name = "base:stone", .solid = true, .opaque = true, .liquid = false, .texture = "", .crack_texture = "" });
+	reg.blocks.push_back({ .name = "test:glow", .solid = true, .opaque = true, .liquid = false, .light_emission = 15, .texture = "", .crack_texture = "" });
+	reg.blocks.push_back({ .name = "test:crumbly", .solid = true, .opaque = true, .liquid = false, .texture = "", .max_damage = 5, .crack_texture = "" });
 	// Real texture/atlas system: a pack-relative texture path round-trips too.
-	reg.blocks.push_back({ .name = "test:stone", .solid = true, .opaque = true, .liquid = false, .texture = "textures/stone.png" });
+	reg.blocks.push_back({ .name = "test:stone", .solid = true, .opaque = true, .liquid = false, .texture = "textures/stone.png", .crack_texture = "" });
 	// crack_texture (6.5's last piece): also round-trips.
-	reg.blocks.push_back({ .name = "test:ore", .solid = true, .opaque = true, .liquid = false, .max_damage = 6, .crack_texture = "textures/ore_crack.png" });
+	reg.blocks.push_back({ .name = "test:ore", .solid = true, .opaque = true, .liquid = false, .texture = "", .max_damage = 6, .crack_texture = "textures/ore_crack.png" });
 	auto r2 = round_trip(reg);
 	REQUIRE(r2.blocks.size() == 6);
 	CHECK(r2.blocks[0].name == "base:air");

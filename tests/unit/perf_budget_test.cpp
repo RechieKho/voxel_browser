@@ -57,13 +57,13 @@ vb::protocol::EntityRecord make_entity(std::uint32_t i) {
 	return { NetId{ i }, EntityKindId{ 1 },
 		Vec3d{ static_cast<double>(i), 64.0, 0.0 },
 		Vec2f{ 90.0f, 0.0f }, Vec3f{ 1.0f, 0.0f, 0.0f },
-		/*flags*/ 1 };
+		/*flags*/ 1, std::nullopt };
 }
 
 } // namespace
 
 TEST_CASE("chunk mesh time for a representative surface chunk stays under "
-		"a generous budget") {
+		  "a generous budget") {
 	const wg::WorldGenerator gen(wg::WorldGenParams{}, BlockRegistry::base());
 	// A fixed chunk y (e.g. "wherever base_height nominally sits") isn't
 	// reliable -- the real surface for any given column can dip low enough
@@ -109,7 +109,7 @@ TEST_CASE("chunk mesh time for a representative surface chunk stays under "
 }
 
 TEST_CASE("S2CEntitySnapshot for a saturated interest set stays under a "
-		"per-tick byte budget") {
+		  "per-tick byte budget") {
 	// 50 entities is a deliberately busy scene -- more than any single
 	// player's view distance would realistically ever surface at once
 	// (spec's own InterestGrid cell radius keeps this well below in
