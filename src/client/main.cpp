@@ -1418,12 +1418,19 @@ int main(int argc, char **argv) {
 					chat_open = true;
 				}
 
-				if (ui_runtime.is_open() || chat_open) {
-					mouse_captured = false;
-					EnableCursor();
-				} else if (IsKeyPressed(KEY_TAB) || IsKeyPressed(KEY_ESCAPE)) {
-					mouse_captured = false;
-					EnableCursor();
+				// EnableCursor()/DisableCursor() each warp the OS cursor to
+				// screen center as a side effect (raylib's
+				// rcore_desktop_glfw.c), so they must only fire on the
+				// mouse_captured transition, not every frame it holds a
+				// value -- calling EnableCursor() every frame the inventory
+				// stayed open re-centered the cursor 60+ times a second,
+				// making it look stuck in the middle of the screen.
+				if (ui_runtime.is_open() || chat_open || IsKeyPressed(KEY_TAB) ||
+						IsKeyPressed(KEY_ESCAPE)) {
+					if (mouse_captured) {
+						mouse_captured = false;
+						EnableCursor();
+					}
 				} else if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && !mouse_captured) {
 					mouse_captured = true;
 					DisableCursor();
