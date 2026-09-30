@@ -69,6 +69,12 @@ jobs:
       - name: Test
         shell: bash
         working-directory: build
+        env:
+          # See cmake/tsan.supp's own comment: GameNetworkingSockets is
+          # never compiled with -fsanitize=thread, so TSan false-positives
+          # on its internal locking/message-buffer access. Harmless (and
+          # unused) for the other build_type legs.
+          TSAN_OPTIONS: suppressions=${{ github.workspace }}/cmake/tsan.supp
         run: ctest --output-on-failure
 
       - name: Stage binaries

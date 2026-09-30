@@ -1,0 +1,20 @@
+# ThreadSanitizer suppressions for vb_tests.
+#
+# GameNetworkingSockets (FetchContent'd in cmake/Dependencies.cmake) is
+# never linked against vb_sanitizers (see that target's own comment in
+# Sanitizers.cmake) -- like every other vendored dependency, it is not
+# recompiled with -fsanitize=thread. TSan's lock-state shadow tracking
+# for its recursive-mutex wrappers (SteamNetworkingSocketsLib::Lock<>/
+# ScopeLock<>) loses sync across that instrumentation boundary, reporting
+# "unlock of an unlocked mutex", lock-order-inversion, and memcpy races
+# that are entirely internal to GNS's own locking and never observed with
+# ASan/UBSan (which do run clean against it, modulo the array-bounds/
+# conversion carve-outs already documented in Sanitizers.cmake). Same
+# class of false positive as that ASan carve-out, just TSan's version of
+# it -- not a real race in this codebase.
+#
+# Wired in via TSAN_OPTIONS=suppressions=<this file> (see
+# .github/workflows/build_linux.yml's tsan leg).
+mutex:SteamNetworkingSocketsLib::
+deadlock:SteamNetworkingSocketsLib::
+race:SteamNetworkingSocketsLib::
