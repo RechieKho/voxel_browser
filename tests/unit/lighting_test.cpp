@@ -59,7 +59,7 @@ TEST_CASE("sky light spills under an overhang and falls off by 1 per step") {
 
 TEST_CASE("an emitting block floods block light radially") {
 	auto reg = BlockRegistry::base();
-	const BlockId lamp = reg.add({ "test:lamp", true, true, false, 14 });
+	const BlockId lamp = reg.add({ .name = "test:lamp", .solid = true, .opaque = true, .liquid = false, .light_emission = 14, .texture = "", .crack_texture = "" });
 
 	Chunk c({ 0, 0, 0 });
 	c.blocks().set(16, 16, 16, lamp);
@@ -87,14 +87,14 @@ TEST_CASE("water dims but does not stop light") {
 // --- cross-chunk sky light (the "bright band every 32 blocks" bug) ------
 
 TEST_CASE("relight_chunk with no `above` still assumes open sky (unchanged "
-		"default behaviour)") {
+		  "default behaviour)") {
 	Chunk c({ 0, 0, 0 });
 	LightEngine(BlockRegistry::base()).relight_chunk(c, nullptr);
 	CHECK(c.light(5, kChunkDim - 1, 5).sky() == kMaxLight);
 }
 
 TEST_CASE("relight_chunk with a solid `above` is dark at the top, not "
-		"falsely sky-lit") {
+		  "falsely sky-lit") {
 	auto reg = BlockRegistry::base();
 	Chunk above({ 0, 1, 0 });
 	above.blocks().fill(base_block::stone); // completely seals the sky
@@ -108,7 +108,7 @@ TEST_CASE("relight_chunk with a solid `above` is dark at the top, not "
 }
 
 TEST_CASE("relight_chunk with an open `above` propagates full brightness "
-		"straight down, no falloff") {
+		  "straight down, no falloff") {
 	auto reg = BlockRegistry::base();
 	Chunk above({ 0, 1, 0 }); // empty: fully sky-lit itself
 	LightEngine(reg).relight_chunk(above);
@@ -123,7 +123,7 @@ TEST_CASE("relight_chunk with an open `above` propagates full brightness "
 // --- cross-chunk horizontal sky light (this pass's own gap) -------------
 
 TEST_CASE("relight_chunk with an open `west` neighbour spills sky light "
-		"sideways under a sealed roof, falling off by 1 per step") {
+		  "sideways under a sealed roof, falling off by 1 per step") {
 	auto reg = BlockRegistry::base();
 
 	// West chunk: a stone ceiling at y=10 covering every x except x=31 (the
@@ -180,7 +180,7 @@ struct FakeStore {
 } // namespace
 
 TEST_CASE("relight_column cascades a solid roof's shadow down through "
-		"every loaded chunk below it") {
+		  "every loaded chunk below it") {
 	// Regression for the reported bug: mining down, every 32 blocks (a chunk
 	// boundary) the world was briefly/falsely bright, because each chunk was
 	// always relit in isolation, assuming open sky at its own top layer
@@ -209,8 +209,8 @@ TEST_CASE("relight_column cascades a solid roof's shadow down through "
 }
 
 TEST_CASE("relight_column visits every loaded chunk down to the bottom of "
-		"the stack even when nothing changes, but only bumps revisions for "
-		"chunks whose light output actually changed") {
+		  "the stack even when nothing changes, but only bumps revisions for "
+		  "chunks whose light output actually changed") {
 	FakeStore store;
 	auto find = [&](ChunkCoord c) { return store.find(c); };
 	LightEngine engine(BlockRegistry::base());
@@ -238,7 +238,7 @@ TEST_CASE("relight_column visits every loaded chunk down to the bottom of "
 }
 
 TEST_CASE("relight_column always reports the starting chunk even if its "
-		"light happens not to change") {
+		  "light happens not to change") {
 	// A caller with an unrelated (e.g. block-only) change to report for the
 	// starting chunk still needs exactly one callback to hang it on, even in
 	// the (rare) case relighting doesn't change any light byte.
@@ -258,7 +258,7 @@ TEST_CASE("relight_column always reports the starting chunk even if its "
 }
 
 TEST_CASE("relight_column pushes a newly-opened sideways gap into an "
-		"already-loaded, already-stable east neighbour") {
+		  "already-loaded, already-stable east neighbour") {
 	// Regression for this pass's own gap: an edit near a chunk border used to
 	// only ever relight *its own* column -- an already-lit neighbour on the
 	// other side of the border had no reason to ever relight again, so it
