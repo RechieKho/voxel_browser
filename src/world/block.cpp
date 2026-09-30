@@ -3,22 +3,21 @@
 namespace vb::world {
 
 namespace {
-const BlockType kAirType{ "base:air", /*solid*/ false, /*opaque*/ false,
-	/*liquid*/ false, /*light*/ 0 };
+const BlockType kAirType{ .name = "base:air", .solid = false, .opaque = false, .liquid = false, .light_emission = 0 };
 } // namespace
 
 BlockRegistry BlockRegistry::base() {
 	BlockRegistry r;
-	r.add({ "base:air", false, false, false, 0 });
-	r.add({ "base:stone", true, true, false, 0 });
-	r.add({ "base:dirt", true, true, false, 0 });
-	r.add({ "base:grass", true, true, false, 0 });
-	r.add({ "base:sand", true, true, false, 0 });
-	BlockType water{ "base:water", false, false, true, 0 };
+	r.add({ .name = "base:air", .solid = false, .opaque = false, .liquid = false, .light_emission = 0 });
+	r.add({ .name = "base:stone", .solid = true, .opaque = true, .liquid = false, .light_emission = 0 });
+	r.add({ .name = "base:dirt", .solid = true, .opaque = true, .liquid = false, .light_emission = 0 });
+	r.add({ .name = "base:grass", .solid = true, .opaque = true, .liquid = false, .light_emission = 0 });
+	r.add({ .name = "base:sand", .solid = true, .opaque = true, .liquid = false, .light_emission = 0 });
+	BlockType water{ .name = "base:water", .solid = false, .opaque = false, .liquid = true, .light_emission = 0 };
 	water.region = true; // Phase 7.3: first user of the generic region hook
 	r.add(std::move(water));
-	r.add({ "base:wood", true, true, false, 0 });
-	r.add({ "base:leaves", true, false, false, 0 });
+	r.add({ .name = "base:wood", .solid = true, .opaque = true, .liquid = false, .light_emission = 0 });
+	r.add({ .name = "base:leaves", .solid = true, .opaque = false, .liquid = false, .light_emission = 0 });
 	return r;
 }
 
