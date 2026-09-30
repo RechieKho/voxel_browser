@@ -36,6 +36,21 @@ content-only (e.g. the user explicitly asks for a content-pack feature).
 
 ## Current status (2026-09-30)
 
+**Bumped doctest `v2.4.11` -> `v2.5.3`; `CMAKE_POLICY_VERSION_MINIMUM=3.5` shim
+stays.** REMAINING_TASKS.md's Phase 0 backlog said to drop the shim "if
+doctest is bumped" — bumped it (`cmake/Dependencies.cmake`), then actually
+tried removing the shim and rebuilding `build-net-lua`'s `vb_tests` target to
+check. It failed, just not on doctest: lz4 `v1.9.4` (only pulled in behind
+`VB_WITH_COMPRESSION`, which `build-net-lua` has on) independently declares
+`cmake_minimum_required(VERSION 2.8.12)`, which CMake >= 4 (this machine's
+`scoop`-installed cmake) rejects the same way doctest's old `VERSION 3.0` did.
+So the shim's own comment was too narrow — restored it with a note that it's
+gating lz4 now, not doctest, and will only fully drop once lz4 (or whatever
+old-floor dependency remains) is bumped too. Verified end to end: full
+`vb_tests` rebuild + run green (426 test cases, 134460 assertions) with
+doctest v2.5.3 and the shim back in place. Full note in
+`remaining_tasks/phase0.md`.
+
 **Wired `VB_WITH_NET` into macOS CI — unverified, needs a real Actions run.**
 `build_macos.yml` builds a universal (arm64+x86_64) binary, but was skipping
 `VB_WITH_NET` because brew's protobuf/OpenSSL are single-arch and GNS needs

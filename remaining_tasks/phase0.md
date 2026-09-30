@@ -15,7 +15,8 @@ Prerequisite for everything else. Not in the README's phase list but required.
       pulled in by the phase that owns them:
     - [x] EnTT (`v3.13.2`, linked now)
     - [x] raygui (`4.0`) + isolated implementation TU (`src/render/raygui_impl.c`)
-    - [x] doctest (`v2.4.11`, linked now)
+    - [x] doctest (`v2.4.11`, linked now — bumped to `v2.5.3` 2026-09-30, see
+          "Follow-ups deferred out of Phase 0" below)
     - [x] FastNoise2 (`v0.10.0`) — `VB_WITH_WORLDGEN`
     - [x] GameNetworkingSockets (`v1.4.1`) — `VB_WITH_NET`; transitive protobuf +
           OpenSSL documented in the Linux workflow + `docs/protocol.md`
@@ -47,8 +48,17 @@ Follow-ups deferred out of Phase 0:
 - [x] First `git tag v0.0.1` so `git describe` yields a real version —
       landed and pushed to `origin` 2026-09-28, see `REMAINING_TASKS.md`'s
       Phase 0 entry / `STATE.md`'s "Current status" for the full note.
-- [ ] `CMAKE_POLICY_VERSION_MINIMUM=3.5` shim is set for CMake ≥ 4 (doctest
-      2.4.11 declares `cmake_minimum_required(3.0)`); drop it if doctest is bumped.
+- [x] doctest bumped `v2.4.11` → `v2.5.3` (2026-09-30), which declares
+      `cmake_minimum_required(VERSION 3.14)` instead of the old `3.0` floor.
+      The `CMAKE_POLICY_VERSION_MINIMUM=3.5` shim in `cmake/Dependencies.cmake`
+      stays, though: lz4 `v1.9.4` (`VB_WITH_COMPRESSION`) independently declares
+      `cmake_minimum_required(VERSION 2.8.12)`, which CMake ≥ 4 rejects the same
+      way — confirmed by actually removing the shim and rebuilding
+      `build-net-lua`'s `vb_tests` target, which failed at lz4's subbuild
+      configure step. Comment in `Dependencies.cmake` updated to say so; shim
+      only fully drops once every remaining old-floor dependency (lz4, and any
+      future one) is bumped past its own floor. Verified: full `vb_tests`
+      rebuild + run green (426 test cases, 134460 assertions).
 - [ ] Explicit source lists instead of relying on re-running CMake (targets use
       explicit lists already; keep it that way as modules grow).
 

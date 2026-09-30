@@ -39,8 +39,12 @@ Full detail: `remaining_tasks/phase0.md`.
       on the repo, so this is also the first time CI's `bundle`/`publish`
       steps will actually run against a real `git describe` version —
       worth checking that run once it appears.
-- [ ] `CMAKE_POLICY_VERSION_MINIMUM=3.5` shim is set for CMake ≥ 4 (doctest
-      2.4.11 declares `cmake_minimum_required(3.0)`); drop it if doctest is bumped.
+- [x] doctest bumped `v2.4.11` -> `v2.5.3` (2026-09-30) — landed, but the
+      `CMAKE_POLICY_VERSION_MINIMUM=3.5` shim stays: lz4 `v1.9.4`
+      (`VB_WITH_COMPRESSION`) independently needs it too (`cmake_minimum_required
+      (VERSION 2.8.12)`), confirmed by actually removing the shim and watching
+      lz4's subbuild fail to configure under CMake >= 4. See
+      `remaining_tasks/phase0.md` for the full note.
 - [ ] Explicit source lists instead of relying on re-running CMake (already
       explicit; keep it that way as modules grow).
 

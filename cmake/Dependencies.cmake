@@ -18,9 +18,11 @@
 include(FetchContent)
 set(FETCHCONTENT_QUIET OFF)
 
-# Some pinned dependencies (doctest v2.4.11) still declare
-# cmake_minimum_required(VERSION 3.0), which CMake >= 4.0 rejects outright.
-# Give those sub-builds a floor so they configure under modern CMake.
+# Some pinned dependencies declare very old cmake_minimum_required() floors
+# that CMake >= 4.0 rejects outright (e.g. lz4 v1.9.4 declares VERSION 2.8.12).
+# doctest was bumped past v2.4.11 (which declared VERSION 3.0) specifically to
+# get off this list, but lz4 still needs the floor, so the shim stays; revisit
+# per-dependency as each one is bumped past whatever old floor it still pins.
 if(CMAKE_VERSION VERSION_GREATER_EQUAL 4.0 AND NOT DEFINED CMAKE_POLICY_VERSION_MINIMUM)
   set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 endif()
@@ -119,7 +121,7 @@ if(VB_BUILD_TESTS)
   if(NOT doctest_FOUND AND NOT TARGET doctest::doctest)
     set(DOCTEST_WITH_TESTS OFF CACHE INTERNAL "")
     set(DOCTEST_NO_INSTALL ON CACHE INTERNAL "")
-    vb_fetch(doctest TAG v2.4.11 REPO https://github.com/doctest/doctest.git)
+    vb_fetch(doctest TAG v2.5.3 REPO https://github.com/doctest/doctest.git)
   endif()
 endif()
 
