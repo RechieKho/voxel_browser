@@ -31,12 +31,14 @@ constexpr std::uint32_t kVersionNoFlags = 1;
 constexpr std::uint32_t kVersion = 2;
 constexpr std::uint8_t kEntryCompressed = 1u << 0;
 
+#if VB_WITH_COMPRESSION
 // Same policy as net::kCompressionThresholdBytes (inc/vb/net/handshake.hpp):
 // below this, LZ4's own fixed overhead (block format + compress_lz4's 4-byte
 // original-size prefix) tends to not pay for itself. Kept as this module's
 // own constant rather than a cross-module include -- world/ has no business
 // depending on net/ just for one size constant.
 constexpr std::size_t kCompressionThresholdBytes = 128;
+#endif
 
 // Compresses `payload` for on-disk storage if VB_WITH_COMPRESSION is built in,
 // it's large enough to bother, and doing so actually shrinks it. Returns the
