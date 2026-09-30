@@ -34,46 +34,64 @@ content-only (e.g. the user explicitly asks for a content-pack feature).
 
 ---
 
-## Current status (2026-09-28)
+## Current status (2026-09-30)
 
-**Same-day follow-up #3: fixed the loading screen dismissing over a
-still-empty world a third time** (user-reported regression, same symptom as
-the two prior fixes noted below). Root cause this time: commit "Wire
---singleplayer's integrated server to a real RegionStore" gave
-`Singleplayer` a real `RegionStore` for the first time, which put
-`--singleplayer` through `ChunkLifecycleSystem::update()`'s step 2 disk-load
-path (`src/world/chunk_lifecycle.cpp`) that "Same-day follow-up #2" below had
-already budget-capped to `ingest_budget_` (default 32) per `update()` call --
-but that cap counted *every* not-yet-requested coord against the budget,
-disk hit or miss, before even checking which one it was. A brand new
-singleplayer world (or any mostly-unsaved view box) is almost all misses,
-and a miss costs nothing (a hash lookup into an already-decompressed
-in-memory `Region` -- the real LZ4 decompression cost happens once per
-*region file*, not per chunk, in `RegionStore::region_for()`), so gating
-misses behind the same counter as real disk hits (whose `relight_column()`
-cascade the cap was actually meant to bound) throttled a fresh world's
-*entire* initial worldgen submission down to 32 new chunk requests per real
-tick -- unbounded before this commit, since singleplayer never had a
-`RegionStore` to trigger this branch at all. Measured with a temporary
-repro test (real, non-synchronous `WorldGenWorkerPool`, `view_distance=4`'s
-567-chunk box, ~20Hz tick pacing): 18 ticks / ~6.1s to fully populate
-`world_` before the fix -- already past the 5s stall deadline on its own,
-before the client's additional meshing/upload latency on top. Fixed by only
-counting `disk_loads` on an actual hit (i.e. checking the budget *after*
-`region_store_->load()` returns non-null, not before calling it) -- a miss
-now always falls straight through to `pool_.submit()` unthrottled, same as
-when `region_store_` is nullptr, while a real hit's insert+relight still
-shares `ingest_budget_` exactly as "Same-day follow-up #2" intended. Same
-repro after the fix: 9 ticks / ~4.3s (roughly 2x the per-tick throughput,
-since submission is no longer the bottleneck). `vb_tests` 285/285 green on a
-headless/no-net/no-lua build (the subset that builds without those deps);
-see `src/world/chunk_lifecycle.cpp`'s step-2 comment for the updated
-rationale.
+**Root-caused and fixed the `PlayerHandle`-stashed-across-ticks bug**
+(REMAINING_TASKS.md's Cross-Cutting item, open since 2026-09-28 — full
+history now in `state/changelog-part3.md`, see below). The 2026-09-29
+"zero-argument call shape" theory was a red herring, ruled out by two
+decisive experiments: a second repro using `vb.every(...)`'s timer (called
+with *zero* Lua arguments at all, not just zero non-handle scalars) crashed
+identically to the `tick` event, and stopping Lua's GC entirely
+(`lua_gc(L, LUA_GCSTOP, 0)`) did **not** prevent the crash, ruling out
+premature collection. The real cause, found by temporarily printing raw
+pointers from inside `PlayerHandle::get_name()` and `Impl::run_chat()`: the
+`self` extracted for the crashing call was **byte-for-byte identical to
+`&p`** of `run_chat()`'s own local `PlayerHandle p{...}` — the Lua value
+being read wasn't a copy of the handle, it was a raw pointer into an
+already-popped C++ stack frame. sol2 (`stack_core.hpp`'s
+`stack_detail::push_reference<T>`) pushes a non-const lvalue reference to a
+registered usertype as a pointer into existing memory (no copy) by default,
+a documented perf optimization, unless `SOL_FUNCTION_CALL_VALUE_SEMANTICS`
+is defined on — every `PlayerHandle` dispatch call site constructs a named
+local and passes it straight into the Lua call (an lvalue every time), so a
+pack script that stores that argument beyond the call (storage location
+never mattered, exactly as 2026-09-28 found) holds a dangling stack pointer
+the instant a *different* C++ call path reuses that address — explaining
+both why storage location never mattered and why reading it back from a
+*later, separate* `chat`/`player_input` dispatch "worked" (same call shape
+happens to re-populate the same stack address with correct-looking values)
+while `dispatch_tick`'s entirely different call tree did not. **Fix**
+(`cmake/Dependencies.cmake`, right after `sol2`'s `vb_fetch()`):
+`SOL_FUNCTION_CALL_VALUE_SEMANTICS=1` defined on the real `sol2` target
+(resolved off the `sol2::sol2` alias via `ALIASED_TARGET`, since
+`target_compile_definitions()` rejects alias targets) — forces every
+registered-usertype function-call argument to push as an owned copy
+regardless of value category. Safe project-wide: `PlayerHandle` is the only
+usertype this project registers and is a stateless proxy (no method mutates
+`net_id`/`rt` in place), so this changes nothing observable. New permanent
+regression test in `pack_runtime_integration_test.cpp` ("a PlayerHandle
+stashed from a chat handler survives being read back from a later
+tick/timer handler") exercises both the `tick`-event and `vb.every` timer
+shapes that used to crash. `content/base/entities/zombie.lua`'s
+`player_input`-driven workaround was left as-is (comment updated to stop
+describing a now-fixed bug as current) — it never actually stored a
+`PlayerHandle`, only the zombie's own entity handle keyed by player name, so
+there was nothing to migrate. Full root-cause writeup and the empirical
+pointer-identity proof in `remaining_tasks/cross_cutting.md`'s 2026-09-30
+follow-up. Verified: full `vb_tests` 425/425 green on `build-net-lua` (plain
+rebuild) and 403/403 green on `build-asan-repro` (ASan on, exit 0 — no new
+leaks/UB), clean `-Werror` build of `vb_tests`/`voxel_browser`/
+`voxel_browser_server` (temporarily reconfigured `build-net-lua` with
+`-DVB_WARNINGS_AS_ERRORS=ON`, confirmed clean, reconfigured back to this
+dir's OFF default afterward).
 
-Before that: full reverse-chronological detail for everything back
-through 6.18 (discrete punch combat) moved to `state/changelog-part3.md`
-to keep this section within budget -- see that file's own header for
-the full topic list, or "Detail files" below.
+Before that: full reverse-chronological detail for everything back through
+6.18 (discrete punch combat) -- including "Same-day follow-up #3" (the third
+loading-screen-dismissing-over-an-empty-world fix) and the original
+`PlayerHandle` corruption investigation this section's fix above closes out
+-- moved to `state/changelog-part3.md` to keep this section within budget;
+see that file's own header for the full topic list, or "Detail files" below.
 
 ---
 

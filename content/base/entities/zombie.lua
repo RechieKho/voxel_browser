@@ -2,21 +2,15 @@
 -- engine primitives (entity:damage()/player:damage()) already existed --
 -- content/base simply never had a hostile mob using them.
 --
--- **Real engine bug found while writing this, worked around here rather
--- than fixed (see STATE.md for the full investigation):** a PlayerHandle
--- stored across calls and read back from inside vb.on("tick", ...) or a
--- script entity's own on_tick returns garbage (wrong session pointer,
--- wrong net_id) -- calling a method on a *freshly passed-in* PlayerHandle
--- from within the SAME handler call is fine (every other content/base
--- script already does exactly that; mechanics.lua/fall_damage.lua never
--- store one), only *storing it for later, cross-call use specifically
--- from that dispatch path* is broken. So this mob's chase/attack logic is
--- driven from vb.on("player_input", ...) instead of the zombie's own
--- on_tick -- that handler hands over a fresh PlayerHandle on every real
--- input, used immediately, never stored. Only the zombie's own entity
--- handle (self:get_pos()/set_pos(), which never touches a PlayerHandle at
--- all) is stored across calls, keyed by the hunted player's name (the one
--- PlayerHandle field safe to snapshot as a plain string).
+-- **Historical note:** this mob's chase/attack logic was originally driven
+-- from vb.on("player_input", ...) instead of the zombie's own on_tick to
+-- work around a real engine bug (a stored PlayerHandle read back from
+-- on_tick/vb.on("tick", ...) returned garbage) -- fixed 2026-09-30, see
+-- remaining_tasks/cross_cutting.md. Left on player_input anyway: it never
+-- actually stored a PlayerHandle in the first place (only the zombie's own
+-- entity handle, keyed by the hunted player's name), and player_input's
+-- per-real-input granularity is a fine fit for chase/attack regardless of
+-- the fixed bug -- nothing here needed migrating.
 local kSpeed = 2.0 -- blocks/second, straight-line horizontal chase
 local kAttackRange = 1.2
 local kAttackDamage = 2.0

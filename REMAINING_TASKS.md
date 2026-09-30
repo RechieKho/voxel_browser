@@ -427,22 +427,22 @@ Full detail: `remaining_tasks/phase7.md`.
 
 Full detail: `remaining_tasks/cross_cutting.md`.
 
-- [ ] **Real, unfixed engine correctness trap found 2026-09-28** while
-      building `content/base/entities/zombie.lua` (Phase 6's "mob damage"
-      item): a `script::PlayerHandle` stored across calls and read back
-      from inside `vb.on("tick", ...)` or a script entity's own `on_tick`
-      silently returns corrupted data (wrong `rt`/`session`/`net_id`) —
-      confirmed with ASan, not just inferred from a crash. Reading a
-      *freshly passed-in* `PlayerHandle` from within any handler is
-      unaffected; only a *stored* handle read back specifically from the
-      `dispatch_tick` call path is broken, not yet root-caused. **Not a
-      crash in a non-ASan build** — it just reads wrong data silently (e.g.
-      `player:damage()` becomes a no-op), a real trap for any future pack
-      that captures a player in a hook and acts on them later from
-      `on_tick`. Worked around (not fixed) in `zombie.lua` by driving its
-      logic from `vb.on("player_input", ...)` instead, which always hands
-      over a fresh handle. Full repro + ASan build instructions in
-      `remaining_tasks/cross_cutting.md`.
+- [x] **`script::PlayerHandle` stashed across ticks returning/crashing on
+      corrupted data** (found 2026-09-28 building
+      `content/base/entities/zombie.lua`, root-caused and fixed 2026-09-30).
+      Real cause: sol2 pushes a non-const lvalue reference to a registered
+      usertype as a raw pointer into the caller's own C++ stack frame, not a
+      copy, unless `SOL_FUNCTION_CALL_VALUE_SEMANTICS` is defined on — every
+      `PlayerHandle` dispatch call site constructs a named local and passes
+      it straight into the Lua call, so a pack script that stores that
+      argument beyond the call (a global, table field, upvalue — storage
+      location never mattered) holds a dangling stack pointer the instant a
+      *different* C++ call path reuses that address. Fixed by defining
+      `SOL_FUNCTION_CALL_VALUE_SEMANTICS=1` on the `sol2` target
+      (`cmake/Dependencies.cmake`) — `PlayerHandle` is the only usertype this
+      project registers and is a stateless proxy, so forcing copy semantics
+      is free. Full root-cause writeup, the empirical pointer-identity proof,
+      and verification detail in `remaining_tasks/cross_cutting.md`.
 - [ ] Keep `ENGINE_PROTOCOL_VERSION` + `docs/protocol.md` in lockstep with every
       wire change.
 - [ ] Every new `vb/protocol` struct gets a round-trip + fuzz test.

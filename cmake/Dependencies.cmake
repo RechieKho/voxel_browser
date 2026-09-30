@@ -252,6 +252,46 @@ if(VB_WITH_LUA)
     # (no member 'construct' in optional<T&>); v3.5.0 fixes it.
     vb_fetch(sol2 TAG v3.5.0 REPO https://github.com/ThePhD/sol2.git)
   endif()
+  if(TARGET sol2::sol2)
+    # Real, previously-unfixed engine bug (REMAINING_TASKS.md's Cross-Cutting
+    # "PlayerHandle stashed across ticks" item): sol2's default (this macro
+    # OFF) pushes a *non-const lvalue reference* to a registered usertype
+    # argument as an `as_reference_tag` -- a raw pointer into the caller's own
+    # C++ stack frame, not a copy (see sol2's stack_core.hpp,
+    # stack_detail::push_reference<T>) -- purely as a perf optimization for
+    # the common case where a Lua handler only uses the argument during the
+    # call. Every PlayerHandle dispatch call site in pack_runtime.cpp
+    # constructs a named local (`PlayerHandle p{...}`) and passes it into a
+    # sol2 call (`fn(p, ...)`, `fire(event, p, ...)`) -- an lvalue every
+    # time -- so a pack script that stores that argument anywhere (a global,
+    # a table field, a closure upvalue) beyond the call it was received in
+    # ends up holding a pointer to a C++ local that's already been popped off
+    # the stack by the time it's read back, reliably corrupted (not a race)
+    # the moment a *different* call path reuses that stack address for
+    # something else. Confirmed empirically (temporary instrumentation
+    # printed the extracted `self` pointer and matched it byte-for-byte
+    # against `&p` of the constructing call's own local). PlayerHandle is the
+    # only usertype this project registers, is a stateless proxy (no method
+    # ever mutates net_id/rt in place), and its own doc comment already
+    # assumes value semantics ("constructed fresh per dispatch call, so it
+    # can never dangle") -- this define makes sol2 actually honor that: it
+    # forces every registered-usertype function-call argument to push as an
+    # owned copy regardless of value category, restoring the invariant the
+    # type was designed around. Applied to the sol2::sol2 INTERFACE target
+    # (not a single TU's #define) so every translation unit that ever pushes
+    # a usertype through a Lua call sees the same behavior.
+    # `sol2::sol2` is normally an ALIAS (sol2's own CMakeLists.txt aliases its
+    # real `sol2` INTERFACE target) -- target_compile_definitions() rejects
+    # alias targets, so resolve to the real one first. A find_package()-found
+    # sol2 might expose sol2::sol2 as a real (non-alias) target instead, so
+    # fall back to it directly if there's no ALIASED_TARGET.
+    get_target_property(_vb_sol2_real_target sol2::sol2 ALIASED_TARGET)
+    if(NOT _vb_sol2_real_target)
+      set(_vb_sol2_real_target sol2::sol2)
+    endif()
+    target_compile_definitions(${_vb_sol2_real_target} INTERFACE SOL_FUNCTION_CALL_VALUE_SEMANTICS=1)
+    unset(_vb_sol2_real_target)
+  endif()
 
   # nlohmann/json — vb.storage persistence + player:open_ui ctx serialization
   # (Phase 4.2). Header-only.

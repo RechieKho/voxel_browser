@@ -1851,4 +1851,68 @@ TEST_CASE("player_landed (Phase 6.22): fires exactly once on impact, with a "
 	REQUIRE(client.inventory().size() == 1);
 }
 
+// Regression test for the "PlayerHandle stashed across ticks" engine bug
+// (REMAINING_TASKS.md's Cross-Cutting item, found 2026-09-28, root-caused and
+// fixed 2026-09-30 -- see remaining_tasks/cross_cutting.md's dated entry for
+// the full story). A PlayerHandle received by a `chat` handler is stashed
+// into a Lua global, then read back from *both* a vb.on("tick", ...) handler
+// and a vb.every(...) timer -- the two call shapes that used to crash the
+// whole vb_tests binary (a dangling reference to a destroyed C++ stack local,
+// not a race) before the SOL_FUNCTION_CALL_VALUE_SEMANTICS=1 fix in
+// cmake/Dependencies.cmake.
+TEST_CASE("a PlayerHandle stashed from a chat handler survives being read "
+		  "back from a later tick/timer handler") {
+	LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+
+	vb::script::PackRuntime rt(
+			net.server(), registry, temp_storage("stashed_player_handle"));
+	REQUIRE(rt.load_pack_file(R"(
+		tick_name = "unset"
+		timer_name = "unset"
+		vb.on("chat", function(player, text)
+			if text == "stash" then stashed = player end
+		end)
+		vb.on("tick", function(dt)
+			if stashed ~= nil then
+				tick_name = stashed:get_name()
+			end
+		end)
+		vb.every(0.05, function()
+			if stashed ~= nil then
+				timer_name = stashed:get_name()
+			end
+		end)
+	)"));
+	rt.freeze();
+
+	HandshakeServerConfig cfg;
+	cfg.world_seed = 7;
+	ServerSession server(net.server(), cfg);
+	rt.attach_session(server);
+	REQUIRE(net.server().listen(0));
+
+	Transport &ta = net.create_client();
+	auto ida = ta.connect("x", 0);
+	REQUIRE(ida);
+	ClientSession client(ta, *ida, HandshakeClientConfig{ "A", "", "v", 1 });
+
+	auto pump = [&](int n) {
+		for (int i = 0; i < n; ++i) {
+			server.tick(0.05);
+			client.tick(0.05);
+		}
+	};
+	pump(16);
+	REQUIRE(client.joined());
+
+	client.send_chat("stash");
+	pump(10); // several more ticks reading the stashed handle back
+
+	REQUIRE(rt.load_pack_file(
+			R"(assert(tick_name == "A", "tick_name was: " .. tostring(tick_name)))"));
+	REQUIRE(rt.load_pack_file(
+			R"(assert(timer_name == "A", "timer_name was: " .. tostring(timer_name)))"));
+}
+
 #endif // VB_WITH_LUA

@@ -33,6 +33,42 @@
 
 ---
 
+**Same-day follow-up #3: fixed the loading screen dismissing over a
+still-empty world a third time** (user-reported regression, same symptom as
+the two prior fixes noted below). Root cause this time: commit "Wire
+--singleplayer's integrated server to a real RegionStore" gave
+`Singleplayer` a real `RegionStore` for the first time, which put
+`--singleplayer` through `ChunkLifecycleSystem::update()`'s step 2 disk-load
+path (`src/world/chunk_lifecycle.cpp`) that "Same-day follow-up #2" below had
+already budget-capped to `ingest_budget_` (default 32) per `update()` call --
+but that cap counted *every* not-yet-requested coord against the budget,
+disk hit or miss, before even checking which one it was. A brand new
+singleplayer world (or any mostly-unsaved view box) is almost all misses,
+and a miss costs nothing (a hash lookup into an already-decompressed
+in-memory `Region` -- the real LZ4 decompression cost happens once per
+*region file*, not per chunk, in `RegionStore::region_for()`), so gating
+misses behind the same counter as real disk hits (whose `relight_column()`
+cascade the cap was actually meant to bound) throttled a fresh world's
+*entire* initial worldgen submission down to 32 new chunk requests per real
+tick -- unbounded before this commit, since singleplayer never had a
+`RegionStore` to trigger this branch at all. Measured with a temporary
+repro test (real, non-synchronous `WorldGenWorkerPool`, `view_distance=4`'s
+567-chunk box, ~20Hz tick pacing): 18 ticks / ~6.1s to fully populate
+`world_` before the fix -- already past the 5s stall deadline on its own,
+before the client's additional meshing/upload latency on top. Fixed by only
+counting `disk_loads` on an actual hit (i.e. checking the budget *after*
+`region_store_->load()` returns non-null, not before calling it) -- a miss
+now always falls straight through to `pool_.submit()` unthrottled, same as
+when `region_store_` is nullptr, while a real hit's insert+relight still
+shares `ingest_budget_` exactly as "Same-day follow-up #2" intended. Same
+repro after the fix: 9 ticks / ~4.3s (roughly 2x the per-tick throughput,
+since submission is no longer the bottleneck). `vb_tests` 285/285 green on a
+headless/no-net/no-lua build (the subset that builds without those deps);
+see `src/world/chunk_lifecycle.cpp`'s step-2 comment for the updated
+rationale.
+
+---
+
 **Landed mob damage (`content/base/entities/zombie.lua`), closing the last
 concrete item in Phase 6's "No PvP, mob damage, or hunger" line -- and
 found (but did not fix) a real, previously-unknown engine bug along the
