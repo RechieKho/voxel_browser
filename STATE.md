@@ -36,6 +36,13 @@ content-only (e.g. the user explicitly asks for a content-pack feature).
 
 ## Current status (2026-09-30)
 
+**Closed the `WorldReplicator` uncapped-send-burst gap** (§6 below has the
+full writeup): a new `set_send_budget_bytes(std::size_t)` caps
+`S2C_ChunkAdd` bytes/tick per player, wired to a new `server.toml` key
+`chunk_send_budget_bytes_per_tick` (0 = unlimited, matching every other
+budget knob). New regression test in `world_replication_test.cpp`. Full
+`vb_tests` 426/426 green on `build-net-lua`.
+
 **Root-caused and fixed the `PlayerHandle`-stashed-across-ticks bug**
 (REMAINING_TASKS.md's Cross-Cutting item, open since 2026-09-28 — full
 history now in `state/changelog-part3.md`, see below). The 2026-09-29
@@ -291,18 +298,21 @@ Other undecided:
   spawns a child process — **currently: in-process library**
   (`Singleplayer` in `src/client/main.cpp` constructs `LoopbackNetwork`/
   `ServerSession`/`ClientSession` directly).
-- **`WorldReplicator` streams a whole player's view box in one uncapped
-  burst per connect**, no per-tick pacing. GNS's send buffer was raised to
-  32 MiB (2026-09-15) which comfortably covers the shipped default view
-  distance (8/3, ~2023 chunks, ~545 KB measured) but doesn't add real
-  backpressure — a larger view distance, denser world, or several players
-  joining at once could still overflow it. Proper fix: a per-connection
-  byte-budget-per-tick on the `diff.entered` send loop. **Revisit before
-  ever raising the shipped default view distance.** Still open as of the
-  2026-09-25 disk-load-budget fix above — that fix bounds
-  `ChunkLifecycleSystem::update()`'s *ingest* side (worldgen + region-store
-  disk loads) per tick, not this *send* side; a large view box still leaves
-  in one uncapped burst once ingested.
+- ~~`WorldReplicator` streams a whole player's view box in one uncapped
+  burst per connect, no per-tick pacing.~~ **Resolved 2026-09-30:**
+  `WorldReplicator::set_send_budget_bytes(std::size_t)` caps `S2C_ChunkAdd`
+  bytes sent to one player per `tick()` call (0 = unlimited, the default —
+  GNS's 32 MiB send buffer from 2026-09-15 still covers the shipped default
+  view distance without an operator opting in). A chunk that doesn't fit is
+  simply left unset in the per-player revision map, so it's retried (and
+  re-counted) on the next `tick()` — nothing is dropped, a large view box
+  just spreads its initial burst over more ticks. The first frame of a tick
+  always sends regardless of size, so one oversized chunk can't wedge a
+  player forever. Wired to a new `server.toml` key
+  `chunk_send_budget_bytes_per_tick` (`ServerConfig`, `src/server/main.cpp`).
+  Distinct from `set_chunk_ingest_budget()`, which bounds the *ingest*
+  (worldgen/disk-load) side only — this closes the *send* side that was
+  still open after the 2026-09-25 ingest-budget fix.
 
 ---
 

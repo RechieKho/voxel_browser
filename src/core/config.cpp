@@ -82,6 +82,7 @@ ServerConfig server_from_table(const toml::table &tbl) {
 	read_bool(tbl, "persist_world", c.persist_world);
 	read_string(tbl, "world_dir", c.world_dir);
 	read_double(tbl, "autosave_interval_seconds", c.autosave_interval_seconds);
+	read_uint(tbl, "chunk_send_budget_bytes_per_tick", c.chunk_send_budget_bytes_per_tick);
 	if (auto mode = tbl["auth_mode"].value<std::string>()) {
 		if (*mode == "token") {
 			c.auth_mode = ConfigAuthMode::kToken;

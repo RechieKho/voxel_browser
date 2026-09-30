@@ -263,3 +263,43 @@ TEST_CASE("tick() re-sends an already-visible chunk whose revision changes "
 	REQUIRE(parsed);
 	CHECK(parsed->header.type == vb::protocol::MessageType::kS2CChunkAdd);
 }
+
+// STATE.md §6: a freshly-joined player's whole view box used to leave in one
+// uncapped S2C_ChunkAdd burst per connect. set_send_budget_bytes() caps how
+// many chunk-add bytes tick() will emit for one player in one call; nothing
+// is dropped -- a deferred chunk's revision is simply never recorded as sent,
+// so it's retried (and this time counted fresh) on the next tick().
+TEST_CASE("set_send_budget_bytes() paces a large initial view box across "
+		"multiple ticks instead of sending it all at once") {
+	vb::world::World world(vb::world::BlockRegistry::base());
+	wg::WorldGenWorkerPool pool(
+			wg::WorldGenerator(wg::WorldGenParams{}, vb::world::BlockRegistry::base()),
+			wg::WorldGenWorkerPool::kSynchronous);
+	WorldReplicator paced(world, pool, vb::world::BlockRegistry::base(),
+			/*view*/ 1, /*vview*/ 1); // 3x3x3 = 27 chunks
+
+	// Every real chunk-add frame is far bigger than 1 byte, but the "always
+	// send at least one frame per tick" rule (so an oversized chunk can't
+	// wedge a player forever) still guarantees exactly one frame per tick
+	// regardless of how big it is -- the second one always overflows a
+	// 1-byte budget.
+	std::vector<std::pair<NetId, Vec3d>> players{ { NetId{ 1 }, { 8, 40, 8 } } };
+	paced.set_send_budget_bytes(1);
+	CHECK(paced.send_budget_bytes() == 1);
+
+	std::size_t total_adds = 0;
+	std::size_t ticks = 0;
+	while (total_adds < 27 && ticks < 64) {
+		auto out = paced.tick(players);
+		if (!out.empty()) {
+			// A budget of exactly one chunk's bytes never lets a second frame
+			// through in the same tick.
+			CHECK(out[0].frames.size() == 1);
+			total_adds += out[0].frames.size();
+		}
+		++ticks;
+	}
+	CHECK(total_adds == 27); // every chunk still arrives eventually
+	CHECK(ticks == 27); // one chunk-add per tick, exactly as budgeted
+	CHECK(world.chunk_count() == 27); // ingest itself is unaffected by the cap
+}

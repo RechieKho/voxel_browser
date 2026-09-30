@@ -85,7 +85,21 @@ std::vector<WorldReplicator::PlayerFrames> WorldReplicator::tick(
 		pf.id = id;
 		auto &revs = last_sent_revision_[id];
 		std::vector<core::ChunkCoord> unreachable;
+		// STATE.md §6: cap S2C_ChunkAdd bytes sent to this player this tick.
+		// A chunk that doesn't fit stays unset in `revs`, so it's picked back
+		// up by the "already sent this exact revision" check next tick --
+		// nothing is lost, a large view box (a fresh join, mainly) just
+		// spreads its initial burst over more ticks. `budget_hit` short-
+		// circuits the rest of the loop once the cap is reached rather than
+		// re-checking every remaining chunk for no benefit; the first frame
+		// of a tick always goes out even if it alone exceeds the budget, so
+		// one oversized chunk can't wedge a player forever.
+		std::size_t send_bytes = 0;
+		bool budget_hit = false;
 		for (core::ChunkCoord c : visible) {
+			if (budget_hit) {
+				break;
+			}
 			const world::Chunk *chunk = world_.find_chunk(c);
 			if (chunk == nullptr) {
 				// `visible` was built moments ago from world_.has_chunk(c) ==
@@ -112,8 +126,18 @@ std::vector<WorldReplicator::PlayerFrames> WorldReplicator::tick(
 			msg.coord = c;
 			msg.revision = rev;
 			msg.payload = world::encode_chunk_payload(*chunk);
+			const std::size_t frame_bytes = msg.payload.size();
+			if (send_budget_bytes_ > 0 && send_bytes > 0 &&
+					send_bytes + frame_bytes > send_budget_bytes_) {
+				budget_hit = true;
+				break;
+			}
 			pf.frames.push_back(frame_message(msg));
 			revs[c] = rev;
+			send_bytes += frame_bytes;
+			if (send_budget_bytes_ > 0 && send_bytes >= send_budget_bytes_) {
+				budget_hit = true;
+			}
 		}
 		for (core::ChunkCoord c : unreachable) {
 			// A plain loop, not std::erase/std::remove -- MSVC STL's

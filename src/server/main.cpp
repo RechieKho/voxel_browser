@@ -328,6 +328,9 @@ int main(int argc, char **argv) {
 			registry, static_cast<int>(config.view_distance), 3);
 	pack_runtime.attach_world(*replicator);
 	replicator->set_region_store(region_store.get());
+	// STATE.md §6: bounds the send side of streaming a player's view box --
+	// see ServerConfig::chunk_send_budget_bytes_per_tick's own comment.
+	replicator->set_send_budget_bytes(config.chunk_send_budget_bytes_per_tick);
 	session.set_world_replicator(std::move(replicator));
 	pack_runtime.attach_session(session);
 

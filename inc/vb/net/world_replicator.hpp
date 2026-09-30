@@ -107,6 +107,18 @@ public:
 		lifecycle_.set_ingest_budget(chunks_per_update);
 	}
 
+	// STATE.md §6: bounds the *send* side of streaming a player's view box --
+	// distinct from set_chunk_ingest_budget() above, which only bounds the
+	// worldgen/disk-load ingest side. Without this, a large view distance (or
+	// several players joining at once) leaves in one uncapped S2C_ChunkAdd
+	// burst per connect. 0 (the default) is unlimited, matching every other
+	// per-tick budget in this codebase. A chunk deferred by this cap is
+	// simply retried on the next tick() call -- its revision is never
+	// recorded as sent, so the existing revs_ check naturally picks it back
+	// up.
+	void set_send_budget_bytes(std::size_t bytes) { send_budget_bytes_ = bytes; }
+	std::size_t send_budget_bytes() const { return send_budget_bytes_; }
+
 	const world::World &world() const { return world_; }
 	world::World &world() { return world_; }
 	std::size_t requested_chunk_count() const {
@@ -123,6 +135,7 @@ private:
 	int view_distance_;
 	int vertical_view_;
 	double reach_ = 5.5;
+	std::size_t send_budget_bytes_ = 0; // 0 = unlimited
 	std::unordered_map<core::NetId, std::vector<core::ChunkCoord>> last_sent_;
 	// The chunk revision most recently sent to each player, for each chunk
 	// they mirror. Presence/absence alone (last_sent_ above) only tells tick()

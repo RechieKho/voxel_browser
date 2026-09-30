@@ -59,6 +59,13 @@ struct ServerConfig {
 	// Real seconds between full-world autosave sweeps; 0 disables periodic
 	// autosave (edits still save on chunk unload and always at shutdown).
 	double autosave_interval_seconds = 60.0;
+	// Per-connection cap on S2C_ChunkAdd bytes sent per WorldReplicator::tick()
+	// (STATE.md §6: a joining player's whole view box used to leave in one
+	// uncapped burst). 0 (default) = unlimited, matching every other
+	// "0 = unlimited" knob above. A chunk deferred by this budget is simply
+	// retried next tick -- nothing is dropped, joining just spreads out over
+	// more ticks once a view box is large enough to exceed it.
+	std::uint32_t chunk_send_budget_bytes_per_tick = 0;
 };
 
 struct ClientConfig {
