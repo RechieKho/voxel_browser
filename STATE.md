@@ -36,6 +36,53 @@ content-only (e.g. the user explicitly asks for a content-pack feature).
 
 ## Current status (2026-09-30)
 
+**Wired `VB_WITH_NET` into macOS CI — unverified, needs a real Actions run.**
+`build_macos.yml` builds a universal (arm64+x86_64) binary, but was skipping
+`VB_WITH_NET` because brew's protobuf/OpenSSL are single-arch and GNS needs
+both. Added a `build_net_deps` job (runs once, ahead of the release/debug
+matrix) that builds protobuf v21.12 and OpenSSL 3.3.2 twice each — once
+per arch via `-DCMAKE_OSX_ARCHITECTURES=<one arch>` / `Configure
+darwin64-<arch>-cc` — then `lipo -create`s the resulting `.a` files together
+into one universal install prefix (keeping the arm64 pass's protoc binary,
+CMake package, and OpenSSL headers, since those are arch-independent text/
+tool artifacts). Uploaded as an artifact; the `build` matrix downloads and
+unpacks it, then passes `-DCMAKE_PREFIX_PATH=<prefix> -DOPENSSL_ROOT_DIR=
+<prefix> -DOPENSSL_USE_STATIC_LIBS=ON -DVB_WITH_NET=ON`. Picked protobuf
+v21.12 specifically because it predates protobuf's Abseil dependency
+(landed v22) — an Abseil dependency would mean building *that* universal
+too, since its installed CMake config is a transitive `find_dependency()`
+of protobuf's own. Picked v21.12/openssl-3.3.2 as real, existing upstream
+tags (`git ls-remote --tags` confirmed both before pinning). A single
+`-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"` pass (like the rest of this
+project's deps use) was deliberately **not** attempted for protobuf/OpenSSL:
+this repo's own pre-existing comment in `build_macos.yml` already flagged
+that as unreliable for protobuf, and OpenSSL's `Configure` script has no
+multi-arch mode at all (one target triple per invocation) — dual-build +
+`lipo` is the only option for OpenSSL regardless. GNS's `USE_CRYPTO` needed
+no code change: default is already `"OpenSSL"` on non-Windows (`libsodium`
+was ruled out — GNS's own CMakeLists fatal-errors it outside x86/x86_64 via
+a `CMAKE_SYSTEM_PROCESSOR` check that isn't universal-build-aware; there is
+no dependency-free "Reference" option for the AES/SHA256 backend in GNS
+v1.6.0, only for the separate 25519 backend). **Not run against real
+GitHub Actions** — this agent environment has no macOS runner. Verified
+what could be verified locally/via network: `build_macos.yml` parses as
+valid YAML (`python -c "import yaml; yaml.safe_load(...)"`), both pinned
+git tags resolve via `git ls-remote`, and the CMake target names/option
+names/install-guarding referenced (`libprotobuf`, `libprotobuf-lite`,
+`protobuf_BUILD_PROTOC_BINARIES`, `protobuf_BUILD_SHARED_LIBS`,
+`protobuf_WITH_ZLIB`) were confirmed against a real clone of
+`protocolbuffers/protobuf` at `v21.12`. If the first real run fails, the
+likely first suspects: (1) whether `cmake --install` on the x86_64-only
+protobuf pass errors instead of silently skipping protoc/libprotoc install
+rules when `protobuf_BUILD_PROTOC_BINARIES=OFF` (`cmake/install.cmake`
+appeared to gate them correctly by reading, but was never actually run);
+(2) whether OpenSSL 3.3.2's `opensslconf.h`-family headers are truly
+byte-identical between the two Configure targets (assumed, not diffed
+against a real build); (3) GitHub-hosted `macos-latest` actually being
+Apple Silicon (arm64) as assumed, making the "arm64 = native, x86_64 =
+cross" split correct — if that ever flips, swap which pass keeps
+protoc/headers.
+
 **Closed the `WorldReplicator` uncapped-send-burst gap** (§6 below has the
 full writeup): a new `set_send_budget_bytes(std::size_t)` caps
 `S2C_ChunkAdd` bytes/tick per player, wired to a new `server.toml` key

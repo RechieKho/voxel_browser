@@ -7,8 +7,126 @@ jobs:
   setup_metadata:
     uses: ./.github/workflows/setup_metadata.yml
 
+  # Builds a universal (arm64+x86_64) protobuf + OpenSSL install prefix that
+  # `build` below feeds to VB_WITH_NET's find_package(Protobuf)/find_package
+  # (OpenSSL) calls. Brew's protobuf/openssl are single-arch (matching the
+  # runner's own arch) and can't link into a universal binary, and neither
+  # library's own build system produces a true fat binary from one CMake/
+  # Configure invocation with two -arch values (protobuf's cross-arch
+  # configure-time checks and codegen misbehave; OpenSSL's `Configure` only
+  # ever targets one triple at a time) — so each is built once per arch and
+  # combined after the fact with `lipo`. Split into its own job (instead of
+  # inline in `build`) so the release/debug matrix below doesn't redo this
+  # twice.
+  build_net_deps:
+    runs-on: macos-latest
+    steps:
+      - name: Install ninja
+        shell: bash
+        run: brew install ninja
+
+      - name: Set up paths
+        shell: bash
+        run: |
+          echo "DEPS_PREFIX=${{ runner.temp }}/net-deps-universal" >> "$GITHUB_ENV"
+          echo "WORK=${{ runner.temp }}/net-deps-work" >> "$GITHUB_ENV"
+
+      - name: Fetch protobuf and OpenSSL sources
+        shell: bash
+        run: |
+          git clone --depth 1 --branch v21.12 \
+            https://github.com/protocolbuffers/protobuf.git "$WORK/protobuf-src"
+          git clone --depth 1 --branch openssl-3.3.2 \
+            https://github.com/openssl/openssl.git "$WORK/openssl-src"
+
+      # protobuf v21.12 predates protobuf's hard Abseil dependency (that
+      # landed in v22), so this is a plain, dependency-free static build.
+      - name: "Build protobuf for arm64 (native slice: keeps protoc + the CMake package)"
+        shell: bash
+        run: |
+          cmake -S "$WORK/protobuf-src" -B "$WORK/protobuf-build-arm64" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
+            -DCMAKE_INSTALL_PREFIX="$DEPS_PREFIX" \
+            -Dprotobuf_BUILD_TESTS=OFF \
+            -Dprotobuf_BUILD_EXAMPLES=OFF \
+            -Dprotobuf_BUILD_SHARED_LIBS=OFF \
+            -Dprotobuf_WITH_ZLIB=OFF
+          cmake --build "$WORK/protobuf-build-arm64"
+          cmake --install "$WORK/protobuf-build-arm64"
+
+      - name: Build protobuf for x86_64 (library-only cross slice, no protoc)
+        shell: bash
+        run: |
+          cmake -S "$WORK/protobuf-src" -B "$WORK/protobuf-build-x86_64" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=x86_64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
+            -DCMAKE_INSTALL_PREFIX="$WORK/protobuf-x86_64" \
+            -Dprotobuf_BUILD_TESTS=OFF \
+            -Dprotobuf_BUILD_EXAMPLES=OFF \
+            -Dprotobuf_BUILD_SHARED_LIBS=OFF \
+            -Dprotobuf_BUILD_PROTOC_BINARIES=OFF \
+            -Dprotobuf_WITH_ZLIB=OFF
+          cmake --build "$WORK/protobuf-build-x86_64" --target libprotobuf libprotobuf-lite
+          cmake --install "$WORK/protobuf-build-x86_64"
+
+      # OpenSSL's public headers (opensslconf.h et al.) are identical text
+      # between darwin64-arm64-cc and darwin64-x86_64-cc -- both are plain
+      # 64-bit LP64 targets with no arch-conditional layout -- so it's safe
+      # to keep the arm64 install's headers and only fatten the two .a files.
+      - name: "Build OpenSSL for arm64 (native slice: keeps headers)"
+        shell: bash
+        run: |
+          cd "$WORK/openssl-src"
+          perl ./Configure darwin64-arm64-cc no-shared no-tests \
+            --prefix="$DEPS_PREFIX" --openssldir="$DEPS_PREFIX/ssl"
+          make -j"$(sysctl -n hw.ncpu)"
+          make install_sw
+          make clean
+
+      - name: Build OpenSSL for x86_64 (library-only cross slice)
+        shell: bash
+        run: |
+          cd "$WORK/openssl-src"
+          perl ./Configure darwin64-x86_64-cc no-shared no-tests \
+            --prefix="$WORK/openssl-x86_64" --openssldir="$WORK/openssl-x86_64/ssl"
+          make -j"$(sysctl -n hw.ncpu)"
+          make install_sw
+
+      - name: Lipo-merge both archs into the universal prefix
+        shell: bash
+        run: |
+          for name in libprotobuf.a libprotobuf-lite.a; do
+            lipo -create \
+              "$DEPS_PREFIX/lib/$name" \
+              "$WORK/protobuf-x86_64/lib/$name" \
+              -output "$DEPS_PREFIX/lib/$name.universal"
+            mv "$DEPS_PREFIX/lib/$name.universal" "$DEPS_PREFIX/lib/$name"
+          done
+          for name in libssl.a libcrypto.a; do
+            lipo -create \
+              "$DEPS_PREFIX/lib/$name" \
+              "$WORK/openssl-x86_64/lib/$name" \
+              -output "$DEPS_PREFIX/lib/$name.universal"
+            mv "$DEPS_PREFIX/lib/$name.universal" "$DEPS_PREFIX/lib/$name"
+          done
+          lipo -info "$DEPS_PREFIX/lib/libprotobuf.a" "$DEPS_PREFIX/lib/libssl.a"
+
+      - name: Package deps prefix
+        shell: bash
+        run: tar -C "$DEPS_PREFIX" -czf "${{ runner.temp }}/net-deps-universal.tar.gz" .
+
+      - name: Upload deps artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: net-deps-universal
+          path: ${{ runner.temp }}/net-deps-universal.tar.gz
+          retention-days: 1
+
   build:
-    needs: setup_metadata
+    needs: [setup_metadata, build_net_deps]
     runs-on: ${{ matrix.os }}
 
     strategy:
@@ -37,23 +155,44 @@ jobs:
         shell: bash
         run: brew install ninja
 
+      - name: Download universal protobuf/OpenSSL
+        uses: actions/download-artifact@v4
+        with:
+          name: net-deps-universal
+          path: ${{ runner.temp }}/net-deps-universal-archive
+
+      - name: Unpack universal protobuf/OpenSSL
+        shell: bash
+        run: |
+          deps="${{ runner.temp }}/net-deps-universal"
+          mkdir -p "$deps"
+          tar -C "$deps" -xzf "${{ runner.temp }}/net-deps-universal-archive/net-deps-universal.tar.gz"
+          chmod +x "$deps/bin/protoc"
+          echo "NET_DEPS_PREFIX=$deps" >> "$GITHUB_ENV"
+
       - name: Configure
         shell: bash
-        # VB_WITH_NET is intentionally left off here: this is a universal
-        # (arm64+x86_64) build, but a brew-installed protobuf/OpenSSL is
-        # single-arch (matching the runner's host arch) and would break
-        # linking the other slice. Needs a universal protobuf (e.g. a vcpkg
-        # triplet built for both arches, or building protobuf from source for
-        # both) before enabling — tracked in STATE.md / REMAINING_TASKS.md.
+        # VB_WITH_NET now builds here: build_net_deps produced a universal
+        # (arm64+x86_64) protobuf + OpenSSL install (brew's own copies are
+        # single-arch and can't link into this universal binary). CMAKE_
+        # PREFIX_PATH makes find_package(Protobuf) pick up its CMake package;
+        # OPENSSL_ROOT_DIR does the same for find_package(OpenSSL), which GNS
+        # calls directly. See build_net_deps' own comments for why this is
+        # two separate per-arch builds lipo'd together rather than one
+        # multi-arch invocation.
         run: |
           cmake -S "${{ github.workspace }}" -B "${{ github.workspace }}/build" -G Ninja \
             -DCMAKE_BUILD_TYPE="${{ matrix.cmake_build_type_keyword }}" \
             -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
+            -DCMAKE_PREFIX_PATH="$NET_DEPS_PREFIX" \
+            -DOPENSSL_ROOT_DIR="$NET_DEPS_PREFIX" \
+            -DOPENSSL_USE_STATIC_LIBS=ON \
             -DVB_WARNINGS_AS_ERRORS=ON \
             -DVB_HEADLESS=OFF \
             -DVB_WITH_LUA=ON \
-            -DVB_WITH_REPLICATION=ON
+            -DVB_WITH_REPLICATION=ON \
+            -DVB_WITH_NET=ON
 
       - name: Build
         shell: bash

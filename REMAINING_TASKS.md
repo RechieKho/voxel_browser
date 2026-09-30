@@ -73,8 +73,15 @@ Full detail: `remaining_tasks/phase1.md`.
       mismatch". This item's own text was stale, tracking a gap that closed
       as a side effect of unrelated work rather than being picked up as its
       own task.
-- [ ] macOS CI doesn't build `VB_WITH_NET` (universal arm64+x86_64 build vs.
-      single-arch brew protobuf) — needs a universal protobuf, see `build_macos.yml`.
+- [x] macOS CI now builds `VB_WITH_NET` — landed 2026-09-30 as a new
+      `build_net_deps` job in `build_macos.yml`: builds protobuf v21.12 and
+      OpenSSL 3.3.2 once per arch (arm64 native, x86_64 cross), `lipo`-merges
+      the resulting static libs into one universal install prefix, uploads
+      it as an artifact the `build` matrix downloads and feeds to
+      `-DCMAKE_PREFIX_PATH`/`-DOPENSSL_ROOT_DIR`. **Not yet verified by a
+      real GitHub Actions run** — this agent environment has no macOS
+      runner; see `STATE.md`'s "Current status" for the full reasoning and
+      what to check if the first real run fails.
 - [x] The two-client replication test runs over `LoopbackTransport` only;
       re-run over `GnsTransport` — see "Current status" in `STATE.md` for
       the full writeup (landed 2026-09-28).
