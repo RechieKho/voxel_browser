@@ -117,6 +117,32 @@ CrackAtlas CrackAtlas::build(const world::BlockRegistry &registry, const Virtual
 	return atlas;
 }
 
+CrackAtlas::~CrackAtlas() {
+	if (image_.data != nullptr) {
+		UnloadImage(image_);
+	}
+}
+
+CrackAtlas::CrackAtlas(CrackAtlas &&other) noexcept
+		: image_(other.image_),
+		  default_rects_(std::move(other.default_rects_)),
+		  override_rects_(std::move(other.override_rects_)) {
+	other.image_ = Image{};
+}
+
+CrackAtlas &CrackAtlas::operator=(CrackAtlas &&other) noexcept {
+	if (this != &other) {
+		if (image_.data != nullptr) {
+			UnloadImage(image_);
+		}
+		image_ = other.image_;
+		default_rects_ = std::move(other.default_rects_);
+		override_rects_ = std::move(other.override_rects_);
+		other.image_ = Image{};
+	}
+	return *this;
+}
+
 Texture2D CrackAtlas::upload() {
 	Texture2D tex = LoadTextureFromImage(image_);
 	UnloadImage(image_);

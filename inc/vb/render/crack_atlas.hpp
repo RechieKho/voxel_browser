@@ -41,6 +41,13 @@ public:
 	// other first pass in this codebase).
 	static CrackAtlas build(const world::BlockRegistry &registry, const VirtualFs &virtual_fs);
 
+	CrackAtlas() = default;
+	~CrackAtlas();
+	CrackAtlas(const CrackAtlas &) = delete;
+	CrackAtlas &operator=(const CrackAtlas &) = delete;
+	CrackAtlas(CrackAtlas &&other) noexcept;
+	CrackAtlas &operator=(CrackAtlas &&other) noexcept;
+
 	// GL-context-requiring, same posture/caveats as TextureAtlas::upload().
 	Texture2D upload();
 

@@ -52,9 +52,17 @@ public:
 	// REMAINING_TASKS 7.5's documented interim placeholder, not a special
 	// case callers need to branch on.
 	//
-	// Caller owns the returned Image (must UnloadImage it, or pass it to
-	// upload() which does so).
+	// The CPU-side Image is freed automatically -- by upload(), or by the
+	// destructor if upload() is never called (e.g. a headless unit test that
+	// only exercises build()).
 	static TextureAtlas build(const world::BlockRegistry &registry, const VirtualFs &virtual_fs);
+
+	TextureAtlas() = default;
+	~TextureAtlas();
+	TextureAtlas(const TextureAtlas &) = delete;
+	TextureAtlas &operator=(const TextureAtlas &) = delete;
+	TextureAtlas(TextureAtlas &&other) noexcept;
+	TextureAtlas &operator=(TextureAtlas &&other) noexcept;
 
 	// GL-context-requiring: uploads `image_` as a real GPU texture and frees
 	// the CPU-side Image. Not unit tested (same posture as

@@ -179,6 +179,32 @@ TextureAtlas TextureAtlas::build(const world::BlockRegistry &registry, const Vir
 	return atlas;
 }
 
+TextureAtlas::~TextureAtlas() {
+	if (image_.data != nullptr) {
+		UnloadImage(image_);
+	}
+}
+
+TextureAtlas::TextureAtlas(TextureAtlas &&other) noexcept
+		: image_(other.image_),
+		  rects_(std::move(other.rects_)),
+		  average_colors_(std::move(other.average_colors_)) {
+	other.image_ = Image{};
+}
+
+TextureAtlas &TextureAtlas::operator=(TextureAtlas &&other) noexcept {
+	if (this != &other) {
+		if (image_.data != nullptr) {
+			UnloadImage(image_);
+		}
+		image_ = other.image_;
+		rects_ = std::move(other.rects_);
+		average_colors_ = std::move(other.average_colors_);
+		other.image_ = Image{};
+	}
+	return *this;
+}
+
 Texture2D TextureAtlas::upload() {
 	Texture2D tex = LoadTextureFromImage(image_);
 	UnloadImage(image_);

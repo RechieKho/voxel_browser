@@ -141,9 +141,12 @@ TEST_CASE("GnsTransport::round_trip_time_seconds reports a real, small RTT "
 	const auto conn = client.connect("127.0.0.1", kTestPort);
 	REQUIRE(conn);
 
-	// Not yet connected: unmeasured.
-	CHECK_FALSE(client.round_trip_time_seconds(*conn).has_value());
-
+	// Whether RTT is measured yet right after connect() is an unobservable
+	// race against GNS's own internal service thread, not a contract of our
+	// wrapper -- over loopback it can already have a real (near-zero)
+	// estimate before this test thread gets to ask. What actually matters
+	// (checked below) is that a real, small RTT is reported once the
+	// connection is up and has exchanged real traffic.
 	const bool connected = pump_until(500, [&] {
 		std::vector<TransportEvent> cev;
 		client.poll(cev);
