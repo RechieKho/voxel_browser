@@ -8,7 +8,11 @@ namespace vb::render {
 namespace {
 
 constexpr int kCell = CrackAtlas::kCellSize;
-constexpr int kStages = CrackAtlas::kStages;
+// Only used from CrackAtlas::build()/rect_for(), both defined outside this
+// anonymous namespace -- Clang's -Wunused-const-variable doesn't see those
+// out-of-line uses and flags this as dead, unlike kCell above (used directly
+// within draw_default_stage()/draw_override_stage() here).
+[[maybe_unused]] constexpr int kStages = CrackAtlas::kStages;
 
 // Deterministic (fixed seed per stage -- not real randomness, so a rebuild
 // on any machine produces byte-identical stages) placeholder crack pattern:

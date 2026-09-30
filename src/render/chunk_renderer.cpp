@@ -452,14 +452,17 @@ constexpr double kCullFar = 1000.0;
 } // namespace
 
 void ChunkRenderer::draw(const Camera3D &camera) const {
-	const core::Vec3d position{ camera.position.x, camera.position.y, camera.position.z };
-	const core::Vec3d forward{ camera.target.x - camera.position.x,
-		camera.target.y - camera.position.y, camera.target.z - camera.position.z };
-	const core::Vec3d up{ camera.up.x, camera.up.y, camera.up.z };
+	const core::Vec3d position{ static_cast<double>(camera.position.x), static_cast<double>(camera.position.y),
+		static_cast<double>(camera.position.z) };
+	const core::Vec3d forward{ static_cast<double>(camera.target.x - camera.position.x),
+		static_cast<double>(camera.target.y - camera.position.y),
+		static_cast<double>(camera.target.z - camera.position.z) };
+	const core::Vec3d up{ static_cast<double>(camera.up.x), static_cast<double>(camera.up.y),
+		static_cast<double>(camera.up.z) };
 	const double aspect =
 			static_cast<double>(GetRenderWidth()) / static_cast<double>(GetRenderHeight());
-	const Frustum frustum =
-			build_frustum(position, forward, up, camera.fovy, aspect, kCullNear, kCullFar);
+	const Frustum frustum = build_frustum(
+			position, forward, up, static_cast<double>(camera.fovy), aspect, kCullNear, kCullFar);
 
 	// Pass 1: opaque geometry, any order -- the depth buffer alone sorts it
 	// out. Chunks with transparent geometry too are noted for pass 2 instead
