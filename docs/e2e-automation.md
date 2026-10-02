@@ -48,15 +48,17 @@ This design copies that shape for a native raylib game client.
 - Run headless in CI on Linux/macOS/Windows with no GPU. Screenshots are an
   optional extra (Xvfb leg).
 - Run N clients against one server, with optional simulated lag/loss.
-- Zero cost when unused: compiled out by default in release, with no network
-  listener and no extra per-frame work unless `--automation` is passed.
+- **Development only.** Automation is compiled in only when
+  `VB_WITH_AUTOMATION=ON` (default `OFF`). Production builds can't contain
+  it, a production server rejects clients built with it, and the release
+  pipeline checks both. See §7.
 
 **Non-goals (for now)**
 
 - Clicking by pixel coordinates or doing image-diff golden tests. Both are
-  brittle against a voxel scene; see §9 for a limited screenshot story.
+  brittle against a voxel scene; see §10 for a limited screenshot story.
 - Bit-exact deterministic replays across processes. Real UDP is
-  non-deterministic by nature. Use auto-waiting instead (§5.3). In-process
+  non-deterministic by nature. Use auto-waiting instead (§5.2). In-process
   deterministic tests stay where they are.
 - Bots/AI players for load testing. The harness makes this easy later, but
   it's out of scope.
@@ -259,8 +261,8 @@ predicates (`player_count`, `block_is`, `player_near`).
 
 Every server command sits behind the stdio channel. With no
 `--automation` flag the code paths can't be reached, and with
-`VB_WITH_AUTOMATION=OFF` they aren't compiled at all (the usual
-`kDisabled` stub pattern from `CONTRIBUTING.md`).
+`VB_WITH_AUTOMATION=OFF` they aren't compiled at all. Unlike other gated
+features, there is no stub; see §7.2.
 
 ### 5.4 Network conditions
 
@@ -269,7 +271,8 @@ maps onto GNS's built-in `k_ESteamNetworkingConfig_FakePacketLag_*` and
 `FakePacketLoss_*` settings in `GnsTransport`, and onto a simple
 delay/drop queue in `LoopbackTransport` for singleplayer. This lets
 prediction, reconciliation, and interpolation be tested under bad
-conditions. Today that can only be checked by hand.
+conditions. Today that can only be checked by hand. `--net-sim` is
+development-only too and sits behind the same flag.
 
 ## 6. Piece D — the `vbtest` harness
 
@@ -347,32 +350,143 @@ includes the `state` snapshot taken just before each action. A small
 static HTML viewer can lay out the clients' timelines side by side, which
 is the main need when debugging "A did X, but B never saw it".
 
-## 7. Build & CI integration
+## 7. Keeping automation out of production
 
-- New option `VB_WITH_AUTOMATION` (default `ON` when `VB_BUILD_TESTS=ON`,
-  otherwise `OFF`). Release artifacts built by `build_*.yml` turn it off.
+Automation is a **development tool**. A shipped client or server must not
+be able to drive or be driven by it, and our own test bots must never
+reach a production server. There are four layers, each catching what the
+one before it might miss.
+
+### 7.1 One CMake flag, default `OFF`
+
+```cmake
+option(VB_WITH_AUTOMATION
+  "Development/test-only automation driver. Never enable for shipped builds." OFF)
+```
+
+The flag doesn't depend on `VB_BUILD_TESTS`; the plain build from the
+README's Getting Started gets no automation. Developers turn it on in a
+separate build directory, which is the multi-build-dir workflow
+`CONTRIBUTING.md` already recommends:
+
+```bash
+cmake -S . -B build-e2e -DVB_WITH_AUTOMATION=ON -DVB_WITH_NET=ON -DVB_WITH_LUA=ON
+cmake --build build-e2e && ctest --test-dir build-e2e -L e2e
+```
+
+### 7.2 What "compiled out" means
+
+**Gated by the flag. Absent from the binary when `OFF`:**
+
+- The whole `src/automation/` module: the JSON-lines host, command table,
+  and predicate engine. It isn't added to any target.
+- `SyntheticInput`.
+- CLI flags: `--automation`, `--automation-clock`, `--net-sim`.
+- All server admin commands (`set_block`, `teleport`, `give`, `run_lua`, …).
+- Setting the "automation client" handshake bit (§7.4).
+
+There is **deliberately no stub**. Other `VB_WITH_*` features link a stub
+that returns `kDisabled`, because the rest of the engine calls into them.
+Nothing in the engine calls automation; only the two `main()` entry
+points wire it in, inside `#if VB_WITH_AUTOMATION`. So with the flag
+`OFF`, the binary contains no automation code, no command names, and no
+admin entry points that could be reached by mistake.
+
+**Stays in production (it's ordinary engine code, not automation):** the
+`InputSource`/`RaylibInput` seam (§4.1) and the `ClientApp` refactor
+(§4.2). Production uses them with real raylib input.
+
+**A production binary given `--automation` exits with an error**
+("built without VB_WITH_AUTOMATION"). It never silently ignores the flag,
+so a misconfigured test setup fails loudly instead of quietly running
+nothing.
+
+### 7.3 Release pipeline can't ship it by accident
+
+- **Hard configure error.** A new `VB_DISTRIBUTION` option is set by
+  every build whose binaries get uploaded:
+  ```cmake
+  if(VB_DISTRIBUTION AND VB_WITH_AUTOMATION)
+    message(FATAL_ERROR "VB_WITH_AUTOMATION must be OFF in distribution builds")
+  endif()
+  ```
+- **Separate CI leg.** Today the `release`/`debug` legs of `build_*.yml`
+  both run tests and upload the binaries that `publish.yml` releases. Those
+  legs get `-DVB_DISTRIBUTION=ON` and keep automation off. e2e tests run in
+  a **new `e2e` matrix leg**. Its binaries are never staged or uploaded:
+  the "Stage binaries"/"Export binaries" steps stay limited to
+  `release`/`debug`.
+- **Binary self-report plus a CI check.** `describe_build()` (shown by
+  `--version`) appends `+automation` when it's compiled in. After the
+  "Stage binaries" step, a check runs `voxel_browser_server --version` and
+  `voxel_browser --version` and fails the job if either says
+  `automation`. It also checks that `voxel_browser_server --automation
+  stdio` exits non-zero. This catches someone flipping the flag in a
+  release leg, even if they also removed `VB_DISTRIBUTION`.
+
+### 7.4 Production servers refuse automation clients
+
+Even with all of the above, a developer could point an automation-enabled
+client at a production address by mistake, such as a stale config or a
+test fixture with the wrong host. Two guards:
+
+- **Handshake bit.** `C2S_Hello` gains a `client_flags` field (protocol
+  version bump), and clients built with automation set
+  `kClientFlagAutomation`. A server built **without** automation rejects
+  them during the handshake: *"automation clients are not accepted by this
+  server"*. A server built with it (a dev server) accepts them. The
+  rejection is sent before asset sync, so the rejected client costs the
+  server almost nothing.
+- **Loopback-only harness.** `vbtest` refuses to connect clients to any
+  address other than `127.0.0.1`/`::1`/`localhost` unless
+  `--vb-allow-remote-host` is passed explicitly, for running tests against
+  a dedicated *dev* server on another machine.
+
+### 7.5 What this doesn't protect against
+
+This keeps **our** test tooling out of production. It doesn't stop bots in
+general. The protocol is open and the client is open source, so anyone can
+build their own client with the flag on and clear the handshake bit, or
+write a bot from scratch. The handshake bit protects against accidents,
+not attackers.
+
+Protection against real bot floods has to be enforced by the server,
+whatever the client claims:
+
+- The existing per-connection flood guard
+  (`ServerSession::set_max_messages_per_second`).
+- `auth_mode` tokens for private servers.
+- Separate follow-up work (not part of this design): a max-player cap, a
+  per-IP connection limit, and a rate limit on new handshakes.
+
+## 8. Build & CI integration
+
+- `VB_WITH_AUTOMATION` and `VB_DISTRIBUTION` as in §7.
 - `tests/CMakeLists.txt`: `add_test(NAME e2e COMMAND ${Python3_EXECUTABLE}
   -m pytest ${CMAKE_SOURCE_DIR}/tests/e2e --vb-build-dir ${CMAKE_BINARY_DIR}
   -q --junitxml=e2e.xml)` with label `e2e`, registered only when
   `VB_WITH_AUTOMATION AND VB_WITH_NET` and Python is found.
   `ctest -L e2e` / `ctest -LE e2e` select or skip it.
-- `build_linux.yml`: run e2e in the `release` and `asan` legs (ASan
-  catches teardown and leak bugs in real multi-process shutdown). Skip it
-  under `tsan` at first, since GNS suppressions already make that leg
-  noisy. Add a separate `xvfb-run` leg later for the windowed and
-  screenshot tests.
+- `build_linux.yml`: add an `e2e` leg (`RelWithDebInfo` with ASan/UBSan
+  plus `-DVB_WITH_AUTOMATION=ON`; ASan catches teardown and leak bugs in
+  real multi-process shutdown). This leg never uploads binaries (§7.3).
+  The `release`/`debug` legs get `-DVB_DISTRIBUTION=ON` and the
+  `--version` check. The `tsan` leg keeps automation off at first, since
+  GNS suppressions already make it noisy. Add a separate `xvfb-run` leg
+  later for the windowed and screenshot tests.
 - Windows and macOS: run after Linux is stable. macOS CI doesn't build
   `VB_WITH_NET` yet (README "Known gaps"), so it only gets the
   singleplayer variants (`clients(1, singleplayer=True)`).
 - Upload `tests/e2e/**/artifacts/` on failure.
 
-## 8. Phased plan
+## 9. Phased plan
 
 | Phase | Deliverable | Rough size | Verifiable by |
 |---|---|---|---|
 | **E0** | `InputSource` seam: `RaylibInput`, all direct raylib input calls in `src/client` + `main_menu` routed through `InputFrame`; unit tests for `sample_input_cmd` | S–M | Existing tests + manual play unchanged |
 | **E1** | `ClientApp` extraction; `run_headless` re-based on it with `render=false` | M–L (highest risk: touches the 1.7k-line `main.cpp`; land behind no flag, purely structural) | `*_smoke` tests unchanged; windowed manual check |
-| **E2** | `src/automation/`: JSON-lines host, stdin thread → main-thread queue, `hello/state/step/quit/wait_for` + predicate engine; `--automation stdio` on client + server; `--port 0` reporting | M | doctest unit tests for predicate engine + command parsing |
+| **E2** | `VB_WITH_AUTOMATION` / `VB_DISTRIBUTION` options + `+automation` in `--version` + release-leg check (§7.1–7.3) **first**; then `src/automation/`: JSON-lines host, stdin thread → main-thread queue, `hello/state/step/quit/wait_for` + predicate engine; `--automation stdio` on client + server; `--port 0` reporting | M | doctest unit tests for predicate engine + command parsing; a default build's `--automation` exits non-zero |
+| **E2b** | `C2S_Hello.client_flags` + server-side rejection of automation clients (§7.4) | S | in-process `netcode_test` case: flagged client rejected by a non-automation server |
 | **E3** | Action commands (input, high-level, ui, menu, chat) + server admin commands | M | |
 | **E4** | `tests/e2e/vbtest` + fixtures + first 5 tests (join, chat, block break replicates, craft via UI, reconnect after kick); CTest `e2e` label; Linux CI legs | M | CI green |
 | **E5** | `--net-sim`, trace JSONL + failure artifacts, screenshot under Xvfb | S–M | |
@@ -381,7 +495,7 @@ is the main need when debugging "A did X, but B never saw it".
 E0–E1 are worth doing on their own: they make the client loop testable
 without any automation and remove the duplicated headless loop.
 
-## 9. Risks & open questions
+## 10. Risks & open questions
 
 1. **`main.cpp` refactor risk (E1).** The windowed loop carries
    hard-won fixes (see `STATE.md`: the NVIDIA VAO/VBO churn bug, the inventory
