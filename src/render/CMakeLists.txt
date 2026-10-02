@@ -11,6 +11,7 @@ add_library(vb_render STATIC
   crack_atlas.cpp
   crack_overlay.cpp
   entity_renderer.cpp
+  input.cpp
   main_menu.cpp
   texture_atlas.cpp
   ui_renderer.cpp

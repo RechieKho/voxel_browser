@@ -47,6 +47,7 @@
 #include "vb/render/crack_atlas.hpp"
 #include "vb/render/crack_overlay.hpp"
 #include "vb/render/entity_renderer.hpp"
+#include "vb/render/input.hpp"
 #include "vb/render/main_menu.hpp"
 #include "vb/render/ui_renderer.hpp"
 #include "vb/render/window.hpp"
@@ -509,141 +510,6 @@ struct RemoteConnection {
 	}
 };
 
-// Phase 6.17: physical-key-to-action mapping for the axes/buttons the engine
-// itself always understands (InputCmd::move/buttons -- distinct from
-// vb.register_keybind's pack-defined slots, Phase 6.3, which cover only
-// discrete named actions a pack invents). These used to be raylib key
-// literals mixed directly into sample_input_cmd's branching with no seam at
-// all; pulling them into one small table is the actual "decouple hardcoded
-// movement" -- sample_input_cmd itself no longer hardcodes which physical
-// key means what, and a future client settings screen (Phase 5.3, still not
-// attempted) has exactly one place to rebind. Note this is a *client-local*
-// physical-key mapping, not a network-visible one -- what the resulting
-// InputCmd.move/buttons/yaw/pitch actually *do* is already fully
-// pack-overridable server-side via vb.on("player_input", ...), independent
-// of which key produced them.
-struct MovementBindings {
-	int forward = KEY_W;
-	int back = KEY_S;
-	int left = KEY_A;
-	int right = KEY_D;
-	int jump = KEY_SPACE;
-	int sprint = KEY_LEFT_SHIFT;
-};
-
-// Phase 6.19: the engine pre-registers 8 action names ("move_forward",
-// "move_back", "move_left", "move_right", "jump", "sprint", "primary",
-// "secondary") into the same Phase 6.3 keybind registry every pack-custom
-// vb.register_keybind() name goes into (see PackRuntime::Impl::Impl in
-// src/script/pack_runtime.cpp) -- so they're enumerable via
-// S2C_KeybindRegistry like any other keybind, and a pack's
-// vb.on("player_input", ...) can read e.g. input.keybinds["move_forward"]
-// the same way it reads a custom one. This is purely additive:
-// InputCmd::move/buttons (and MovementBindings' physical keys) are
-// unchanged, so physics/movement code isn't affected. Lookup is by name in
-// whatever S2C_KeybindRegistry the server actually sent, never assumed to
-// be bits 0-7.
-void set_engine_keybind(vb::protocol::InputCmd &cmd, const char *name,
-		bool held, const std::vector<std::string> &keybind_names) {
-	for (std::size_t i = 0; i < keybind_names.size(); ++i) {
-		if (keybind_names[i] == name) {
-			if (held) {
-				cmd.keybinds |= (1u << i);
-			}
-			return;
-		}
-	}
-}
-
-// Phase 7.4: closes the gap `content/base/ui/pause.lua`/`ui/inventory.lua`'s
-// own header comments flagged ("nothing opens this yet") and
-// `content/examples/kitchen_sink/keybinds.lua` hit for its own custom
-// screen ("no base-pack/client UI wires these yet") -- Phase 6.3's
-// vb.register_keybind gives a pack a *named* bit in InputCmd.keybinds, but
-// nothing on the client ever mapped a physical key to a pack-registered
-// custom name (only the 8 pre-registered engine names above get one, via
-// MovementBindings). This is a minimal hardcoded default table, not a real
-// settings-screen UI (Phase 5.3's keybindings screen only covers the 6
-// MovementBindings axes) -- a future rebind screen for these is a separate
-// step past this one, same as that item's own scope note. Unlike the
-// engine-name lookup above, these are read unconditionally (not gated on
-// mouse_captured below): opening a pause/inventory screen must work whether
-// or not the mouse is currently captured for looking around.
-struct CustomKeybind {
-	const char *name;
-	int key;
-};
-constexpr CustomKeybind kCustomKeybinds[] = {
-	{ "base:pause", KEY_ESCAPE },
-	{ "base:inventory", KEY_E },
-};
-
-vb::protocol::InputCmd sample_input_cmd(std::uint32_t seq, double dt, double yaw,
-		double pitch, bool mouse_captured, const MovementBindings &bindings,
-		const std::vector<std::string> &keybind_names = {},
-		std::uint8_t selected_slot = 0) {
-	vb::protocol::InputCmd cmd;
-	cmd.seq = seq;
-	cmd.dt = static_cast<float>(dt);
-	cmd.yaw = static_cast<float>(yaw);
-	cmd.pitch = static_cast<float>(pitch);
-	cmd.selected_slot = selected_slot;
-	if (mouse_captured) {
-		const bool forward = IsKeyDown(bindings.forward);
-		const bool back = IsKeyDown(bindings.back);
-		const bool right = IsKeyDown(bindings.right);
-		const bool left = IsKeyDown(bindings.left);
-		const bool jump = IsKeyDown(bindings.jump);
-		const bool sprint = IsKeyDown(bindings.sprint);
-		// Phase 6.17: block breaking/placing is no longer an engine default
-		// (see the removed hold-to-break timer further below in this file) --
-		// the client's only job is to report these as raw held-button state,
-		// exactly like jump/sprint above. Whether holding "primary" over a
-		// voxel does anything at all is entirely up to a content pack's
-		// vb.on("player_input", ...) handler (content/base/mechanics.lua).
-		const bool primary = IsMouseButtonDown(MOUSE_BUTTON_LEFT);
-		const bool secondary = IsMouseButtonDown(MOUSE_BUTTON_RIGHT);
-
-		if (forward) {
-			cmd.move.z += 1.0f;
-		}
-		if (back) {
-			cmd.move.z -= 1.0f;
-		}
-		if (right) {
-			cmd.move.x += 1.0f;
-		}
-		if (left) {
-			cmd.move.x -= 1.0f;
-		}
-		if (jump) {
-			cmd.buttons |= vb::protocol::kInputJump;
-		}
-		if (sprint) {
-			cmd.buttons |= vb::protocol::kInputSprint;
-		}
-		if (primary) {
-			cmd.buttons |= vb::protocol::kInputPrimary;
-		}
-		if (secondary) {
-			cmd.buttons |= vb::protocol::kInputSecondary;
-		}
-
-		set_engine_keybind(cmd, "move_forward", forward, keybind_names);
-		set_engine_keybind(cmd, "move_back", back, keybind_names);
-		set_engine_keybind(cmd, "move_left", left, keybind_names);
-		set_engine_keybind(cmd, "move_right", right, keybind_names);
-		set_engine_keybind(cmd, "jump", jump, keybind_names);
-		set_engine_keybind(cmd, "sprint", sprint, keybind_names);
-		set_engine_keybind(cmd, "primary", primary, keybind_names);
-		set_engine_keybind(cmd, "secondary", secondary, keybind_names);
-	}
-	for (const CustomKeybind &kb : kCustomKeybinds) {
-		set_engine_keybind(cmd, kb.name, IsKeyDown(kb.key), keybind_names);
-	}
-	return cmd;
-}
-
 Camera3D to_camera(const vb::render::FirstPersonController &c, float fovy) {
 	const vb::core::Vec3d p = c.position();
 	const vb::core::Vec3d t = c.target();
@@ -818,8 +684,9 @@ int run_headless(const vb::core::ClientConfig &config, const vb::core::Args &arg
 		controller.update(look_in, dt);
 
 		{
-			const vb::protocol::InputCmd cmd = sample_input_cmd(++input_seq, dt,
-					controller.yaw(), controller.pitch(), false, MovementBindings{});
+			const vb::protocol::InputCmd cmd = vb::render::sample_input_cmd(vb::render::InputFrame{}, ++input_seq,
+					dt, controller.yaw(), controller.pitch(), false,
+					vb::render::MovementBindings{});
 			client->push_input(cmd);
 			if (sp) {
 				sp->tick(dt);
@@ -992,10 +859,11 @@ int main(int argc, char **argv) {
 	std::uint8_t selected_slot = 0;
 
 	// Phase 6.17: the client-local physical-key-to-action map for movement +
-	// break/place (see MovementBindings' own comment above). One instance,
+	// break/place (see vb::render::MovementBindings' own comment above). One instance,
 	// same defaults every frame -- a future settings screen would mutate
 	// this instead of inventing a second mechanism.
-	MovementBindings movement_bindings{ config.key_forward, config.key_back,
+	vb::render::RaylibInput raylib_input;
+	vb::render::MovementBindings movement_bindings{ config.key_forward, config.key_back,
 		config.key_left, config.key_right, config.key_jump, config.key_sprint };
 
 	// HUD chat (spec §5.4): a small scrolling log + an Enter-to-open text
@@ -1226,6 +1094,7 @@ int main(int argc, char **argv) {
 	};
 
 	while (!window.should_close()) {
+		const vb::render::InputFrame input = raylib_input.poll();
 		const double dt = static_cast<double>(GetFrameTime());
 
 		window.begin_frame();
@@ -1261,9 +1130,9 @@ int main(int argc, char **argv) {
 				break;
 			}
 			case AppState::kKeybindings: {
-				const auto result = menu.draw_keybindings(config);
+				const auto result = menu.draw_keybindings(config, input);
 				if (result.save) {
-					movement_bindings = MovementBindings{ config.key_forward,
+					movement_bindings = vb::render::MovementBindings{ config.key_forward,
 						config.key_back, config.key_left, config.key_right,
 						config.key_jump, config.key_sprint };
 					vb::core::save_client_config(config_path, config);
@@ -1403,10 +1272,10 @@ int main(int argc, char **argv) {
 				}
 
 				if (chat_open) {
-					if (IsKeyPressed(KEY_ESCAPE)) {
+					if (input.key_pressed(KEY_ESCAPE)) {
 						chat_open = false;
 						chat_buf.clear();
-					} else if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER)) {
+					} else if (input.key_pressed(KEY_ENTER) || input.key_pressed(KEY_KP_ENTER)) {
 						if (!chat_buf.empty()) {
 							client->send_chat(chat_buf);
 						}
@@ -1414,7 +1283,7 @@ int main(int argc, char **argv) {
 						chat_open = false;
 					}
 				} else if (!ui_runtime.is_open() &&
-						(IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER))) {
+						(input.key_pressed(KEY_ENTER) || input.key_pressed(KEY_KP_ENTER))) {
 					chat_open = true;
 				}
 
@@ -1425,13 +1294,13 @@ int main(int argc, char **argv) {
 				// value -- calling EnableCursor() every frame the inventory
 				// stayed open re-centered the cursor 60+ times a second,
 				// making it look stuck in the middle of the screen.
-				if (ui_runtime.is_open() || chat_open || IsKeyPressed(KEY_TAB) ||
-						IsKeyPressed(KEY_ESCAPE)) {
+				if (ui_runtime.is_open() || chat_open || input.key_pressed(KEY_TAB) ||
+						input.key_pressed(KEY_ESCAPE)) {
 					if (mouse_captured) {
 						mouse_captured = false;
 						EnableCursor();
 					}
-				} else if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && !mouse_captured) {
+				} else if (input.mouse_button_pressed(MOUSE_BUTTON_LEFT) && !mouse_captured) {
 					mouse_captured = true;
 					DisableCursor();
 				}
@@ -1442,7 +1311,7 @@ int main(int argc, char **argv) {
 				// chat box or UI never changes it.
 				if (mouse_captured) {
 					for (int i = 0; i < 9; ++i) {
-						if (IsKeyPressed(KEY_ONE + i)) {
+						if (input.key_pressed(KEY_ONE + i)) {
 							selected_slot = static_cast<std::uint8_t>(i);
 							break;
 						}
@@ -1454,14 +1323,12 @@ int main(int argc, char **argv) {
 				// (spec §8.4).
 				vb::render::LookMoveInput look_in;
 				if (mouse_captured) {
-					const Vector2 md = GetMouseDelta();
-					look_in.look_delta = { static_cast<double>(md.x),
-						static_cast<double>(md.y) };
+					look_in.look_delta = { input.mouse_dx, input.mouse_dy };
 				}
 				controller.update(look_in, dt);
 
 				{
-					const vb::protocol::InputCmd cmd = sample_input_cmd(++input_seq, dt,
+					const vb::protocol::InputCmd cmd = vb::render::sample_input_cmd(input, ++input_seq, dt,
 							controller.yaw(), controller.pitch(), mouse_captured,
 							movement_bindings, client->registered_keybinds(),
 							selected_slot);

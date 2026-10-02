@@ -256,7 +256,8 @@ void MainMenu::open_keybindings(const core::ClientConfig &config) {
 	k_rebinding_ = -1;
 }
 
-MainMenu::KeybindingsResult MainMenu::draw_keybindings(core::ClientConfig &config) {
+MainMenu::KeybindingsResult MainMenu::draw_keybindings(core::ClientConfig &config,
+		const InputFrame &input) {
 	KeybindingsResult result;
 
 	const float panel_w = 420.0f;
@@ -267,7 +268,7 @@ MainMenu::KeybindingsResult MainMenu::draw_keybindings(core::ClientConfig &confi
 	const float field_w = panel_w - 40.0f;
 
 	if (k_rebinding_ >= 0) {
-		const int pressed = GetKeyPressed();
+		const int pressed = input.key_pressed_first;
 		if (pressed == KEY_ESCAPE) {
 			k_rebinding_ = -1;
 		} else if (pressed != 0) {

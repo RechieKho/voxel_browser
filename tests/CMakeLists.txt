@@ -64,7 +64,7 @@ target_link_libraries(vb_tests
 # which -- like vb_render itself -- only exist when VB_BUILD_CLIENT is ON
 # (cmake/Dependencies.cmake gates the raylib fetch behind it).
 if(VB_BUILD_CLIENT)
-  target_sources(vb_tests PRIVATE unit/texture_atlas_test.cpp unit/crack_atlas_test.cpp)
+  target_sources(vb_tests PRIVATE unit/texture_atlas_test.cpp unit/crack_atlas_test.cpp unit/input_test.cpp)
   target_link_libraries(vb_tests PRIVATE vb_render)
 endif()
 
