@@ -1,6 +1,7 @@
 # Voxel Browser — End-to-End Client Automation (Design)
 
-> Status: **Proposal**, nothing here is implemented yet. Covers a
+> Status: **Proposal**; only E0 (input seam) and E1 (`ClientApp`) are
+> implemented, no automation code exists yet. Covers a
 > Playwright-style harness that drives real `voxel_browser` clients against a
 > real `voxel_browser_server` in multiplayer, so gameplay can be tested by
 > scripts instead of by hand. Complements spec §17 (Testing Strategy); the
@@ -484,7 +485,7 @@ whatever the client claims:
 | Phase | Deliverable | Rough size | Verifiable by |
 |---|---|---|---|
 | **E0** | `InputSource` seam: `RaylibInput`, all direct raylib input calls in `src/client` + `main_menu` routed through `InputFrame`; unit tests for `sample_input_cmd` | S–M | Existing tests + manual play unchanged |
-| **E1** | `ClientApp` extraction; `run_headless` re-based on it with `render=false` | M–L (highest risk: touches the 1.7k-line `main.cpp`; land behind no flag, purely structural) | `*_smoke` tests unchanged; windowed manual check |
+| **E1** (landed 2026-10-02) | `ClientApp` extraction; `run_headless` re-based on it with `render=false` | M–L (highest risk: touches the 1.7k-line `main.cpp`; land behind no flag, purely structural) | `*_smoke` tests unchanged; windowed manual check |
 | **E2** | `VB_WITH_AUTOMATION` / `VB_DISTRIBUTION` options + `+automation` in `--version` + release-leg check (§7.1–7.3) **first**; then `src/automation/`: JSON-lines host, stdin thread → main-thread queue, `hello/state/step/quit/wait_for` + predicate engine; `--automation stdio` on client + server; `--port 0` reporting | M | doctest unit tests for predicate engine + command parsing; a default build's `--automation` exits non-zero |
 | **E2b** | `C2S_Hello.client_flags` + server-side rejection of automation clients (§7.4) | S | in-process `netcode_test` case: flagged client rejected by a non-automation server |
 | **E3** | Action commands (input, high-level, ui, menu, chat) + server admin commands | M | |
@@ -546,6 +547,7 @@ checklist below is. Don't write history for work you didn't do or verify.
 | Phase | Also update |
 |---|---|
 | **E0** (landed) | `architecture_spec/rendering.md` §11.5, `CONTRIBUTING.md` module map — already done. |
+| **E1** (landed) | Done: `ARCHITECTURE_SPEC.md` §10, `topology-and-layout.md`, `CONTRIBUTING.md`, `STATE.md`. |
 | **E1** `ClientApp` | `ARCHITECTURE_SPEC.md` §10 (client loop description) and `architecture_spec/topology-and-layout.md` (new files); `STATE.md` note on `run_headless` now sharing the windowed loop; confirm README's `--headless` description is still true. |
 | **E2** options + host | `README.md` build-options table: drop *(planned)* from `VB_WITH_AUTOMATION`, add `VB_DISTRIBUTION`; `CONTRIBUTING.md` e2e bullet (real commands, `build-e2e`); `src/client/main.cpp` / `src/server/main.cpp` `--help` text for `--automation*` (only when compiled in); new `docs/automation-protocol.md` (the JSON-lines contract: every command, predicate, error code, `proto` version); `cmake/` option comments; `describe_build()` `+automation` documented in README's `--version` mention. |
 | **E2b** handshake flag | `docs/protocol.md`: add `client_flags` to the `C2S_Hello` row, add an entry to its changelog, **bump `kEngineProtocolVersion`** and record the old→new value (see "Adding a new wire message" in `CONTRIBUTING.md`); `architecture_spec/networking.md` §8.3 handshake notes; `content/` is unaffected. |

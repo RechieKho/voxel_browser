@@ -36,7 +36,7 @@ content-only (e.g. the user explicitly asks for a content-pack feature).
 
 ## Current status (2026-10-02)
 
-**E2E automation: designed, E0 landed.** `docs/e2e-automation.md` is the
+**E2E automation: designed, E0 + E1 landed.** `docs/e2e-automation.md` is the
 design for a Playwright-style multiplayer test harness (stdio JSON-lines
 driver in the client/server + a pytest `vbtest` package). Hard constraint:
 the automation driver must be **compiled out of production** —
@@ -47,11 +47,16 @@ against *our* tooling reaching production, not against third-party bots;
 flood protection stays server-side. Landed so far: E0 only — the
 `InputSource`/`InputFrame` seam (`inc/vb/render/input.hpp`,
 `src/render/input.cpp`, `tests/unit/input_test.cpp`); `sample_input_cmd` and
-`MovementBindings` moved there from `src/client/main.cpp`. No automation code
-exists yet. **Implementing any E-phase? Follow `docs/e2e-automation.md` §11**
-(per-phase doc checklist + safety invariants to re-verify) before calling it done. Next: E1 (`ClientApp` extraction out of the 1.7k-line `main.cpp`;
-do it as a pure code-move commit — that loop carries the NVIDIA VAO/VBO and
-inventory-mouse fixes).
+`MovementBindings` moved there from `src/client/main.cpp`. E1 (2026-10-02): the windowed loop moved
+verbatim out of `src/client/main.cpp` into `ClientApp` (`client_app.{hpp,cpp}`;
+`session_host.hpp` holds `Singleplayer`/`RemoteConnection`), and `--headless` is
+now `ClientApp(render=false)` + `connect_blocking()` instead of a separate loop
+(headless skips the menu, loading screen, GL resources and `client.toml`
+writes; smoke output unchanged). Verified only headless — the windowed path
+was not run (no GPU in the container), so give it a manual smoke before
+trusting it. No automation code exists yet. **Implementing any E-phase? Follow `docs/e2e-automation.md` §11**
+(per-phase doc checklist + safety invariants to re-verify) before calling it done. Next: E2 (`VB_WITH_AUTOMATION`/`VB_DISTRIBUTION` options first, then the
+stdio host + predicate engine).
 
 ## Status (2026-09-30)
 

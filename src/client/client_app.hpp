@@ -1,0 +1,157 @@
+// ClientApp: the windowed client's whole per-frame state machine (menu ->
+// connecting -> loading -> playing), extracted verbatim from src/client/main.cpp
+// (phase E1 of docs/e2e-automation.md). `frame()` is one iteration of the old
+// `while (!window.should_close())` body; behavior is unchanged.
+#pragma once
+
+#include "session_host.hpp"
+
+namespace vb::client {
+
+enum class AppState { kMenu,
+	kSettings,
+	kKeybindings,
+	kConnecting,
+	kLoading,
+	kPlaying,
+	kError };
+
+class ClientApp {
+public:
+	// `auto_connect`: skip the menu and connect right away (true =
+	// singleplayer), mirroring `--singleplayer` / `--server` on the CLI.
+	ClientApp(vb::core::ClientConfig config, std::string config_path,
+			vb::render::Window &window, const std::string &cli_server, int cli_port,
+			int configured_view_distance, std::optional<bool> auto_connect,
+			bool render = true);
+
+	// Headless only (render == false): blocks until the pending connection
+	// joined or failed -- same fixed-tick / 10s-wall-clock waits the old
+	// stand-alone run_headless() used -- then enters kPlaying. Prints the
+	// "client: joined ..." / "client: join failed: ..." lines the smoke tests
+	// match. Returns false on failure.
+	bool connect_blocking();
+
+	// Runs one frame (window.begin_frame() .. end_frame()). Returns false when
+	// the player quit from the main menu.
+	bool frame(const vb::render::InputFrame &input, double dt);
+
+	AppState app_state() const { return state; }
+
+private:
+	void begin_connect(bool as_singleplayer);
+	void enter_playing();
+
+	vb::core::ClientConfig config;
+	const std::string config_path;
+	vb::render::Window &window;
+	const int configured_view_distance;
+	const float fov;
+	// false = headless: same state machine/input/prediction/UI runtime, but no
+	// menu, GL resources or draw calls (window may be a headless Window).
+	const bool render;
+	vb::render::MainMenu menu;
+	AppState state = AppState::kMenu;
+	std::string error_message;
+	// The view distance actually in effect this connection -- starts at
+	// configured_view_distance every time begin_connect() runs, then
+	// enter_playing() clamps it down to a real server's own (possibly
+	// smaller) S2CServerInfo::view_distance once that's known. Drives
+	// kLoading's expected-chunk-count estimate and the default fog distance
+	// below, so both always agree with whatever this connection can
+	// actually stream in.
+	int view_distance = 0;
+	bool connecting_singleplayer = false;
+	std::string connecting_target;
+	int connect_ticks = 0;
+	std::chrono::steady_clock::time_point connect_deadline;
+	// Phase 7.1: hard cap on how long kLoading waits for the initial view-box
+	// of chunks to stream in before letting the player through anyway (e.g. a
+	// server whose own view_distance is smaller than this client guessed, or
+	// a slow connection) -- getting out of the way beats blocking forever.
+	// `loading_deadline` is a *stall* deadline, not a flat one: it's pushed
+	// forward every time `loading_last_uploaded` (the previous frame's
+	// uploaded_count) advances, so a large view distance that's genuinely
+	// still meshing/uploading chunks -- just slowly -- isn't cut off mid-load
+	// (an earlier flat 8s deadline handed off to kPlaying while most of the
+	// default view_distance=8 box, ~2000 chunks, was still unmeshed). Only a
+	// real stall -- e.g. a server whose own view_distance is smaller than
+	// this client guessed, so `fraction` can never reach 1.0 -- lets it fire.
+	// `loading_hard_deadline` is the absolute backstop against a pathological
+	// server that trickles in just enough chunks each tick to keep resetting
+	// the stall deadline forever.
+	std::chrono::steady_clock::time_point loading_deadline;
+	std::chrono::steady_clock::time_point loading_hard_deadline;
+	std::size_t loading_last_uploaded = 0;
+	// 2000ms measured as too tight in practice: `loading_deadline` starts
+	// counting the instant kLoading is entered, before the server has sent a
+	// single chunk -- the very first batch out of a cold worldgen pool (no
+	// cached chunks yet, every one of the view box's chunks generated fresh)
+	// can itself take longer than 2s, so `loaded_chunks` was still 0 when the
+	// stall deadline fired and kPlaying was entered with (visibly) nothing
+	// loaded -- reported as "the world does not finish loading when the
+	// loading screen disappears". 5s gives the worldgen -> mesh -> upload
+	// pipeline room to produce its first real batch without making a
+	// genuinely dead connection (no server, wrong port) wait much longer
+	// before `loading_hard_deadline` would have caught it anyway.
+	static constexpr std::chrono::milliseconds kLoadingStallTimeout{ 5000 };
+	static constexpr std::chrono::seconds kLoadingHardTimeout{ 30 };
+
+	std::unique_ptr<Singleplayer> sp;
+	std::unique_ptr<RemoteConnection> remote;
+	vb::net::ClientSession *client = nullptr;
+	vb::core::Vec3d spawn{ 0.0, 72.0, 0.0 };
+	std::string status;
+
+	vb::script::UiRuntime ui_runtime;
+	vb::render::UiRenderer ui_renderer;
+	// A separate UiRenderer instance for the always-on HUD (below): drawing
+	// both the modal screen and the HUD through one UiRenderer would thrash
+	// its per-widget-id text/list edit caches every frame (it clears them
+	// whenever the drawn ui_name changes, which "hud" vs. the modal name
+	// would do twice a frame).
+	vb::render::UiRenderer hud_renderer;
+	vb::render::FirstPersonController controller;
+	// Render-only step-up smoothing (Phase 3's "physics is exact but visually
+	// abrupt" gap) -- reset alongside `controller` in enter_playing() below so
+	// a fresh connection/respawn never inherits a stale in-flight smoothing
+	// state from a previous life.
+	vb::render::EyeHeightSmoother eye_smoother;
+	vb::physics::MoveParams move_params;
+	std::uint32_t input_seq = 0;
+	std::unique_ptr<vb::render::ChunkRenderer> chunk_renderer;
+	std::unique_ptr<vb::render::EntityRenderer> entity_renderer;
+	// REMAINING_TASKS.md 6.5's last piece: real crack-stage art + per-block
+	// crack_texture override, replacing the old flat translucent-cube
+	// overlay. Built once per session right alongside chunk_renderer's own
+	// texture atlas, below.
+	std::unique_ptr<vb::render::CrackOverlay> crack_overlay;
+	vb::render::CrackAtlas crack_atlas;
+	bool mouse_captured = false;
+	// Entity-management follow-up (held item / hotbar selection): which
+	// inventory slot (0-based) number keys 1-9 have selected, persisted
+	// across frames like input_seq above -- sample_input_cmd only ever reads
+	// this, number-key handling lives in the kPlaying loop below, gated on
+	// mouse_captured the same way movement/break/place input already is (so
+	// typing "1" into an open chat box never changes it).
+	std::uint8_t selected_slot = 0;
+
+	// Phase 6.17: the client-local physical-key-to-action map for movement +
+	// break/place (see vb::render::MovementBindings' own comment above). One instance,
+	// same defaults every frame -- a future settings screen would mutate
+	// this instead of inventing a second mechanism.
+	vb::render::MovementBindings movement_bindings{ config.key_forward, config.key_back,
+	config.key_left, config.key_right, config.key_jump, config.key_sprint };
+
+	// HUD chat (spec §5.4): a small scrolling log + an Enter-to-open text
+	// box, plain raygui like MainMenu -- no Lua, no dependency on the pack's
+	// UiRuntime chat concept (there isn't one).
+	static constexpr std::size_t kChatLogLimit = 8;
+	static constexpr int kChatBufferSize = 256;
+	std::deque<std::string> chat_log;
+	std::string chat_buf;
+	bool chat_open = false;
+
+};
+
+} // namespace vb::client

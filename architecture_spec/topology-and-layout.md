@@ -75,7 +75,7 @@ voxel_browser/
 ├── src/
 │   ├── core/  world/  worldgen/  ecs/  net/  replication/  assetsync/  script/
 │   ├── server/                 # server executable: main.cpp, tick loop, CLI
-│   └── client/                 # client executable: main.cpp, render loop, UI, input
+│   └── client/                 # client executable: main.cpp (CLI), client_app.{hpp,cpp} (ClientApp: windowed/headless state machine + frame loop), session_host.hpp (Singleplayer/RemoteConnection)
 ├── content/
 │   └── base/                   # the shipped minimal content pack (Lua + textures)
 │       ├── pack.toml           # pack manifest: name, version, entry script

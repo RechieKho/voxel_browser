@@ -17,7 +17,7 @@ The engine is split into two static libraries plus three executables
 | ------------------------ | -------------------------------------------------------------- |
 | `vb_core`               | Engine core. No rendering, no window — must build and run headless. |
 | `vb_render`              | Client-only rendering (raylib + raygui). Never linked by the server. |
-| `voxel_browser`          | The client ("the browser") executable — `src/client/main.cpp`. |
+| `voxel_browser`          | The client ("the browser") executable — `src/client/main.cpp` (CLI/window setup) + `ClientApp` (`client_app.cpp`, the per-frame state machine shared by windowed and `--headless`). |
 | `voxel_browser_server`   | The authoritative, headless server executable — `src/server/main.cpp`. |
 | `vb_tests`               | Unit + integration tests (doctest) — `tests/unit/*.cpp`.       |
 

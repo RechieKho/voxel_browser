@@ -4,7 +4,11 @@
 
 - [~] End-to-end multiplayer automation (dev-only) — designed 2026-10-02,
       see `docs/e2e-automation.md`. Phases: E0 input seam (landed), E1
-      `ClientApp` extraction, E2 `VB_WITH_AUTOMATION`/`VB_DISTRIBUTION` +
+      `ClientApp` extraction (landed 2026-10-02: `src/client/client_app.{hpp,cpp}`,
+      `session_host.hpp`; `run_headless` now = `ClientApp(render=false)` +
+      `connect_blocking()`; verified: `vb_tests` + 3 smoke tests green in a
+      `VB_WITH_LUA/WORLDGEN/COMPRESSION` build, windowed path NOT run — no GPU
+      in the CI container), E2 `VB_WITH_AUTOMATION`/`VB_DISTRIBUTION` +
       stdio host + predicates, E2b `C2S_Hello.client_flags` rejection, E3
       actions + server admin commands, E4 pytest harness + CI `e2e` leg, E5
       `--net-sim`/traces/screenshots, E6 recorder. Constraint: automation

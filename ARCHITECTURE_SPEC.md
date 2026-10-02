@@ -284,6 +284,11 @@ face-culled mesher (`vb::world::chunk_mesher`/`chunk_mesh_snapshot`) owns
 voxel meshing (Cellulose/greedy-merge was tried and reverted — see
 `architecture_spec/open-questions.md` Q2); raygui draws menus/HUD.
 
+**Client loop:** `vb::client::ClientApp` (`src/client/client_app.*`) owns the
+menu → connecting → loading → playing state machine; `frame(InputFrame, dt)` is
+one iteration. Windowed play and `--headless` run the same class — headless is
+`render=false` (no menu, GL resources or draw calls).
+
 **Chunk meshing:** `ClientChunkStore` mirrors replicated data; a mesh
 worker-thread pool builds per-face-culled buffers with baked light/AO from
 `(registry, block data, light volume, neighbor faces)`; GPU upload is

@@ -1,6 +1,6 @@
 # voxel_browser — client executable ("the browser").
 
-add_executable(voxel_browser main.cpp)
+add_executable(voxel_browser main.cpp client_app.cpp)
 
 target_link_libraries(voxel_browser
   PRIVATE
