@@ -36,7 +36,7 @@ The engine is split into two static libraries plus three executables
 | `ecs`          | `inc/vb/ecs/` (header-only)     | Component structs (`Position`, `Inventory`, ...). No registry driving them yet — `ServerSession` still simulates players directly. |
 | `assetsync`    | `src/assetsync/`, `inc/vb/assetsync/` | Content-pack manifest hashing + client-side content-addressed cache. |
 | `script`       | `src/script/`, `inc/vb/script/` | Embedded Lua VM (`vb::script::Vm`), the server pack API (`PackRuntime`), the client UI VM (`UiRuntime`), the content-pack loader. |
-| `render`       | `src/render/`, `inc/vb/render/` | Window/camera, chunk/entity renderers, raygui-backed UI + main menu. `vb_render` only. |
+| `render`       | `src/render/`, `inc/vb/render/` | Window/camera, input seam (`InputSource`/`InputFrame`, `sample_input_cmd`), chunk/entity renderers, raygui-backed UI + main menu. `vb_render` only. |
 
 A build without a phase's heavy dependency (`VB_WITH_NET`/`_LUA`/
 `_WORLDGEN`/`_COMPRESSION`/`_MESHING`, all default `OFF`) links a stub that

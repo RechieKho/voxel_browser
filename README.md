@@ -164,6 +164,7 @@ system in action.
 | `VB_WARNINGS_AS_ERRORS` | `OFF`   | `-Werror` / `/WX` (CI turns this on)                |
 | `VB_ENABLE_ASAN` / `_UBSAN` / `_TSAN` | `OFF` | sanitizer builds                       |
 | `VB_WITH_NET` / `_REPLICATION` / `_WORLDGEN` / `_COMPRESSION` / `_LUA` / `_MESHING` | `OFF` | pull in the heavy dependency owned by each later phase |
+| `VB_WITH_AUTOMATION` *(planned)* | `OFF` | dev/test-only e2e automation driver; never enable for shipped builds — see `docs/e2e-automation.md` |
 
 `VB_WITH_NET=ON` needs a real, installed protobuf (GameNetworkingSockets'
 build requirement — FetchContent-ing protobuf's source doesn't work, see the

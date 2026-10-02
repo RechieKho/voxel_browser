@@ -183,3 +183,11 @@ Target 60 FPS decoupled from the 20 Hz server tick.
 First-person camera driven by predicted local player transform. Mouse-look with
 capture toggle. Keybindings configurable via a local (non-synced) settings file.
 
+Input is read through an `InputSource` seam (`inc/vb/render/input.hpp`): the
+client polls one `InputFrame` per frame (`RaylibInput` in production) and
+`sample_input_cmd`, chat/hotbar/mouse-capture logic and the keybindings screen
+read that snapshot rather than calling raylib. `SyntheticInput` is the
+window-less, script-fed implementation used by unit tests and, later, the
+dev-only e2e automation (`docs/e2e-automation.md`). The seam is ordinary
+engine code and ships in production; only the automation driver is gated.
+

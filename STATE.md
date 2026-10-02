@@ -34,7 +34,25 @@ content-only (e.g. the user explicitly asks for a content-pack feature).
 
 ---
 
-## Current status (2026-09-30)
+## Current status (2026-10-02)
+
+**E2E automation: designed, E0 landed.** `docs/e2e-automation.md` is the
+design for a Playwright-style multiplayer test harness (stdio JSON-lines
+driver in the client/server + a pytest `vbtest` package). Hard constraint:
+the automation driver must be **compiled out of production** —
+`VB_WITH_AUTOMATION` defaults `OFF`, a `VB_DISTRIBUTION` build must refuse it
+at configure time, CI checks `--version` for `+automation`, and servers built
+without it reject automation clients in the handshake (§7). That protects
+against *our* tooling reaching production, not against third-party bots;
+flood protection stays server-side. Landed so far: E0 only — the
+`InputSource`/`InputFrame` seam (`inc/vb/render/input.hpp`,
+`src/render/input.cpp`, `tests/unit/input_test.cpp`); `sample_input_cmd` and
+`MovementBindings` moved there from `src/client/main.cpp`. No automation code
+exists yet. Next: E1 (`ClientApp` extraction out of the 1.7k-line `main.cpp`;
+do it as a pure code-move commit — that loop carries the NVIDIA VAO/VBO and
+inventory-mouse fixes).
+
+## Status (2026-09-30)
 
 **Bumped doctest `v2.4.11` -> `v2.5.3`; `CMAKE_POLICY_VERSION_MINIMUM=3.5` shim
 stays.** REMAINING_TASKS.md's Phase 0 backlog said to drop the shim "if
