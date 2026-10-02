@@ -441,7 +441,8 @@ Full detail: `remaining_tasks/cross_cutting.md`.
 - [~] **End-to-end multiplayer automation (dev-only)** — design in
       `docs/e2e-automation.md`; phases E0–E6 below it. E0 (input seam) has
       landed; the rest is open. Must stay compiled out of production builds
-      (`VB_WITH_AUTOMATION`, `VB_DISTRIBUTION`).
+      (`VB_WITH_AUTOMATION`, `VB_DISTRIBUTION`). Doc-upkeep checklist per phase:
+      `docs/e2e-automation.md` §11.
 
 - [x] **`script::PlayerHandle` stashed across ticks returning/crashing on
       corrupted data** (found 2026-09-28 building

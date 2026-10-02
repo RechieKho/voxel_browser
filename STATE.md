@@ -48,7 +48,8 @@ flood protection stays server-side. Landed so far: E0 only — the
 `InputSource`/`InputFrame` seam (`inc/vb/render/input.hpp`,
 `src/render/input.cpp`, `tests/unit/input_test.cpp`); `sample_input_cmd` and
 `MovementBindings` moved there from `src/client/main.cpp`. No automation code
-exists yet. Next: E1 (`ClientApp` extraction out of the 1.7k-line `main.cpp`;
+exists yet. **Implementing any E-phase? Follow `docs/e2e-automation.md` §11**
+(per-phase doc checklist + safety invariants to re-verify) before calling it done. Next: E1 (`ClientApp` extraction out of the 1.7k-line `main.cpp`;
 do it as a pure code-move commit — that loop carries the NVIDIA VAO/VBO and
 inventory-mouse fixes).
 

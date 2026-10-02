@@ -8,7 +8,8 @@
       stdio host + predicates, E2b `C2S_Hello.client_flags` rejection, E3
       actions + server admin commands, E4 pytest harness + CI `e2e` leg, E5
       `--net-sim`/traces/screenshots, E6 recorder. Constraint: automation
-      code must never ship — see §7 of that doc.
+      code must never ship — see §7 of that doc. Each phase's doc updates:
+      §11 of that doc.
 
 - [x] **Real engine bug found 2026-09-28 while building
       `content/base/entities/zombie.lua` (Phase 6's "mob damage" item):

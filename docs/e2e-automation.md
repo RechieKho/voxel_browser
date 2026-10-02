@@ -517,3 +517,64 @@ without any automation and remove the duplicated headless loop.
    `ui.define` widgets stable, unique `id`s. `UiRuntime` should warn on
    duplicate ids within one frame. That's cheap, and useful even without
    automation.
+
+## 11. Documentation upkeep (for agents implementing this design)
+
+This doc and several others describe the automation work as **planned**.
+Every phase that lands must flip the relevant text from "planned" to fact in
+the **same change** that ships the code. A phase isn't done until the
+checklist below is. Don't write history for work you didn't do or verify.
+
+### 11.1 Every phase (E0–E6)
+
+- [ ] **This file:** update §9's phase row (mark landed + date), correct any
+      section that the implementation contradicted (file names, flag names,
+      command names, defaults), and move resolved items out of §10.
+- [ ] **`REMAINING_TASKS.md`** "Cross-Cutting" entry: update the `[~]` line's
+      progress; change to `[x]` only when E0–E6 (or the agreed scope) are all
+      done. Put the long write-up in `remaining_tasks/cross_cutting.md` (what
+      shipped, files, tests, how verified), not in the lean file.
+- [ ] **`STATE.md`:** refresh the "Current status" automation entry (what has
+      landed, what's next, any new gotcha). Put anything verbose in
+      `state/changelog-recent.md` and link it. Machine-specific notes go in
+      `STATE.md.local`, not here.
+- [ ] **Tests:** say how you verified (which build dir/flags, which tests,
+      counts). Report failures honestly.
+
+### 11.2 Per-phase additions
+
+| Phase | Also update |
+|---|---|
+| **E0** (landed) | `architecture_spec/rendering.md` §11.5, `CONTRIBUTING.md` module map — already done. |
+| **E1** `ClientApp` | `ARCHITECTURE_SPEC.md` §10 (client loop description) and `architecture_spec/topology-and-layout.md` (new files); `STATE.md` note on `run_headless` now sharing the windowed loop; confirm README's `--headless` description is still true. |
+| **E2** options + host | `README.md` build-options table: drop *(planned)* from `VB_WITH_AUTOMATION`, add `VB_DISTRIBUTION`; `CONTRIBUTING.md` e2e bullet (real commands, `build-e2e`); `src/client/main.cpp` / `src/server/main.cpp` `--help` text for `--automation*` (only when compiled in); new `docs/automation-protocol.md` (the JSON-lines contract: every command, predicate, error code, `proto` version); `cmake/` option comments; `describe_build()` `+automation` documented in README's `--version` mention. |
+| **E2b** handshake flag | `docs/protocol.md`: add `client_flags` to the `C2S_Hello` row, add an entry to its changelog, **bump `kEngineProtocolVersion`** and record the old→new value (see "Adding a new wire message" in `CONTRIBUTING.md`); `architecture_spec/networking.md` §8.3 handshake notes; `content/` is unaffected. |
+| **E3** actions + admin cmds | `docs/automation-protocol.md` command tables; `docs/lua-api.md` only if `run_lua` exposes anything pack authors should know; list each server admin command and confirm it is `#if VB_WITH_AUTOMATION`-gated. |
+| **E4** harness + CI | `README.md` / `CONTRIBUTING.md`: install steps (`pip install -r tests/e2e/requirements.txt`), how to run (`ctest -L e2e`, `pytest tests/e2e`), how to write a test, fixtures reference (`tests/e2e/README.md`); `ARCHITECTURE_SPEC.md` §17: change "planned" to current; `.github/workflows/build_linux.yml` leg described in `STATE.md`. |
+| **E5** net-sim, traces, screenshots | `docs/automation-protocol.md` (`--net-sim` syntax, `screenshot`); `tests/e2e/README.md` (trace files, artifacts, Xvfb leg). |
+| **E6** recorder / TCP attach | New section in `docs/automation-protocol.md`; **re-check §7** — any listener (TCP) must still be compiled out of production, loopback-only, and token-protected. |
+
+### 11.3 Invariants to re-verify and re-document whenever automation code changes
+
+These are the safety claims in §7 and in `STATE.md`. If any stops being
+true, fix the code first, then fix the docs. Never relax the docs to match a
+regression.
+
+- A default build (flag `OFF`) contains no automation code, rejects
+  `--automation`, and does not print `+automation` in `--version`.
+- `VB_DISTRIBUTION=ON` with `VB_WITH_AUTOMATION=ON` is a configure error.
+- Release/`debug` CI legs set `VB_DISTRIBUTION=ON`, run the `--version`
+  check, and are the only legs whose binaries are uploaded; the `e2e` leg
+  never uploads.
+- A server built without automation rejects automation clients.
+- No automation listener binds a non-loopback address by default.
+
+### 11.4 Cross-references to keep in sync
+
+If you rename or move this file or renumber its sections, grep for
+`e2e-automation` and `§7` across `*.md`, source comments (e.g.
+`inc/vb/render/input.hpp` cites §4.1) and CI files, and update every hit.
+Files that currently point here: `ARCHITECTURE_SPEC.md`,
+`REMAINING_TASKS.md`, `remaining_tasks/cross_cutting.md`, `STATE.md`,
+`CONTRIBUTING.md`, `README.md`, `docs/protocol.md`,
+`architecture_spec/rendering.md`, `inc/vb/render/input.hpp`.
