@@ -1,5 +1,13 @@
 ## Cross-Cutting / Continuous
 
+- [~] End-to-end multiplayer automation (dev-only) — designed 2026-10-02,
+      see `docs/e2e-automation.md`. Phases: E0 input seam (landed), E1
+      `ClientApp` extraction, E2 `VB_WITH_AUTOMATION`/`VB_DISTRIBUTION` +
+      stdio host + predicates, E2b `C2S_Hello.client_flags` rejection, E3
+      actions + server admin commands, E4 pytest harness + CI `e2e` leg, E5
+      `--net-sim`/traces/screenshots, E6 recorder. Constraint: automation
+      code must never ship — see §7 of that doc.
+
 > Full history for this section; linked from `REMAINING_TASKS.md`. Ground truth for [x] items — do not duplicate here.
 
 - [x] **Real engine bug found 2026-09-28 while building

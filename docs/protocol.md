@@ -334,7 +334,7 @@ buffered, and yields `consumed` so a stream reader can advance.
 
 | Type (id)                | Fields                                                                 |
 | ------------------------ | -------------------------------------------------------------------- |
-| `C2S_Hello` (1)          | `u16 engine_protocol_version`, `u64 client_nonce`, `string client_version` |
+| `C2S_Hello` (1)          | `u16 engine_protocol_version`, `u64 client_nonce`, `string client_version` (a `client_flags` field is **planned**, see `docs/e2e-automation.md` §7.4) |
 | `S2C_ServerInfo` (2)     | `string pack_name`, `string pack_version`, `u16 engine_protocol_version`, `u16 tick_rate`, `string motd`, `u8 auth_mode` |
 | `C2S_Auth` (3)           | `string player_name`, `string token` (empty when `auth_mode = none`)   |
 | `S2C_AuthResult` (4)     | `bool ok`, `string reason`                                             |

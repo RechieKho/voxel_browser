@@ -78,6 +78,12 @@ A few things worth knowing that aren't obvious from a single build tree:
   `tests/CMakeLists.txt`) start the real binaries with `--headless` and
   assert on stdout/exit behavior — they need `VB_BUILD_SERVER`/
   `VB_BUILD_CLIENT` on (both default `ON`).
+- **End-to-end tests (planned, not built yet).** Multi-process tests driven
+  by a pytest harness will live in `tests/e2e/` and need
+  `-DVB_WITH_AUTOMATION=ON`. Use a dedicated build directory for them
+  (e.g. `build-e2e`) and **never** enable that flag in a build you intend to
+  ship; release builds will set `VB_DISTRIBUTION=ON`, which makes the
+  combination a configure error. See `docs/e2e-automation.md`.
 - **`content_pack_test.cpp`** loads the real `content/base` files (not
   inline Lua strings) — if you edit that pack, this is the test that
   catches a syntax error or a registration-count regression.
