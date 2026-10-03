@@ -9,7 +9,14 @@
       `connect_blocking()`; verified: `vb_tests` + 3 smoke tests green in a
       `VB_WITH_LUA/WORLDGEN/COMPRESSION` build, windowed path NOT run — no GPU
       in the CI container), E2 `VB_WITH_AUTOMATION`/`VB_DISTRIBUTION` +
-      stdio host + predicates, E2b `C2S_Hello.client_flags` rejection, E3
+      stdio host + predicates (landed 2026-10-03: `src/automation/`,
+      `inc/vb/automation/`, `{client,server}/automation_endpoint.hpp`,
+      `docs/automation-protocol.md`, CI `VB_DISTRIBUTION` legs + `--version`
+      check; verified: `vb_tests` 11 new `automation*` cases and `ctest` 4/4 in a
+      `VB_WITH_AUTOMATION=ON` + LUA/WORLDGEN/COMPRESSION build, ctest incl. the
+      new `*_rejects_automation` in the default build; manual stdio round trips
+      against the singleplayer client and the server; NOT run: `VB_WITH_NET`
+      builds, Windows/macOS, real CI), E2b `C2S_Hello.client_flags` rejection, E3
       actions + server admin commands, E4 pytest harness + CI `e2e` leg, E5
       `--net-sim`/traces/screenshots, E6 recorder. Constraint: automation
       code must never ship — see §7 of that doc. Each phase's doc updates:

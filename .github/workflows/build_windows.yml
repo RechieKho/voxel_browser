@@ -54,6 +54,7 @@ jobs:
             -DVB_WITH_LUA=ON ^
             -DVB_WITH_NET=ON ^
             -DVB_WITH_REPLICATION=ON ^
+            -DVB_DISTRIBUTION=ON ^
             -DCMAKE_TOOLCHAIN_FILE=%VCPKG_INSTALLATION_ROOT%\scripts\buildsystems\vcpkg.cmake
 
       - name: Build
@@ -75,6 +76,19 @@ jobs:
           cp "${{ github.workspace }}/server.toml.example" "$dist/"
           cp -r "${{ github.workspace }}/content" "$dist/"
           find "$dist/content" \( -name "storage.json" -o -type d -name "db" \) -exec rm -rf {} +
+
+      - name: Verify binaries contain no automation
+        shell: bash
+        run: |
+          dist="${{ github.workspace }}/dist"
+          for exe in voxel_browser.exe voxel_browser_server.exe; do
+            if "$dist/$exe" --version | grep -qi automation; then
+              echo "::error::$exe was built with VB_WITH_AUTOMATION"; exit 1
+            fi
+            if "$dist/$exe" --automation stdio </dev/null >/dev/null 2>&1; then
+              echo "::error::$exe accepted --automation"; exit 1
+            fi
+          done
 
       - name: Export binaries
         uses: actions/upload-artifact@v4

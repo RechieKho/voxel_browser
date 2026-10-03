@@ -250,6 +250,19 @@ void ClientApp::enter_playing() {
 	state = render ? AppState::kLoading : AppState::kPlaying;
 }
 
+const char *ClientApp::app_state_name(AppState s) {
+	switch (s) {
+		case AppState::kMenu: return "menu";
+		case AppState::kSettings: return "settings";
+		case AppState::kKeybindings: return "keybindings";
+		case AppState::kConnecting: return "connecting";
+		case AppState::kLoading: return "loading";
+		case AppState::kPlaying: return "playing";
+		case AppState::kError: return "error";
+	}
+	return "unknown";
+}
+
 bool ClientApp::connect_blocking() {
 	if (state == AppState::kError || (!sp && !remote)) {
 		return false;

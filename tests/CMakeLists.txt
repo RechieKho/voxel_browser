@@ -68,6 +68,13 @@ if(VB_BUILD_CLIENT)
   target_link_libraries(vb_tests PRIVATE vb_render)
 endif()
 
+# Development-only automation module (docs/e2e-automation.md); absent from
+# default builds.
+if(VB_WITH_AUTOMATION)
+  target_sources(vb_tests PRIVATE unit/automation_test.cpp)
+  target_link_libraries(vb_tests PRIVATE vb_automation)
+endif()
+
 # doctest.h itself trips /W4 /WX on MSVC — treat its headers as SYSTEM so the
 # project warning flags don't apply to third-party code.
 get_target_property(_vb_doctest_inc doctest::doctest INTERFACE_INCLUDE_DIRECTORIES)
@@ -102,4 +109,17 @@ if(VB_BUILD_CLIENT)
             --render-distance 2)
   set_tests_properties(singleplayer_smoke PROPERTIES
     PASS_REGULAR_EXPRESSION "joined singleplayer" TIMEOUT 60)
+endif()
+
+# A build without VB_WITH_AUTOMATION must reject --automation loudly instead of
+# silently ignoring it (docs/e2e-automation.md §7.2).
+if(NOT VB_WITH_AUTOMATION)
+  if(VB_BUILD_SERVER)
+    add_test(NAME server_rejects_automation COMMAND voxel_browser_server --automation stdio)
+    set_tests_properties(server_rejects_automation PROPERTIES WILL_FAIL TRUE)
+  endif()
+  if(VB_BUILD_CLIENT)
+    add_test(NAME client_rejects_automation COMMAND voxel_browser --automation stdio)
+    set_tests_properties(client_rejects_automation PROPERTIES WILL_FAIL TRUE)
+  endif()
 endif()

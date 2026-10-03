@@ -36,7 +36,7 @@ content-only (e.g. the user explicitly asks for a content-pack feature).
 
 ## Current status (2026-10-02)
 
-**E2E automation: designed, E0 + E1 landed.** `docs/e2e-automation.md` is the
+**E2E automation: designed, E0 + E1 + E2 landed.** `docs/e2e-automation.md` is the
 design for a Playwright-style multiplayer test harness (stdio JSON-lines
 driver in the client/server + a pytest `vbtest` package). Hard constraint:
 the automation driver must be **compiled out of production** —
@@ -54,9 +54,18 @@ now `ClientApp(render=false)` + `connect_blocking()` instead of a separate loop
 (headless skips the menu, loading screen, GL resources and `client.toml`
 writes; smoke output unchanged). Verified only headless — the windowed path
 was not run (no GPU in the container), so give it a manual smoke before
-trusting it. No automation code exists yet. **Implementing any E-phase? Follow `docs/e2e-automation.md` §11**
-(per-phase doc checklist + safety invariants to re-verify) before calling it done. Next: E2 (`VB_WITH_AUTOMATION`/`VB_DISTRIBUTION` options first, then the
-stdio host + predicate engine).
+trusting it. E2 (2026-10-03): `VB_WITH_AUTOMATION`/`VB_DISTRIBUTION` options
+(distribution+automation is a configure error; release/`debug` CI legs and the
+macOS/Windows legs set `VB_DISTRIBUTION=ON` and grep `--version` +
+`--automation stdio` of the staged binaries), `+automation` in `describe_build()`,
+and `src/automation/` (`vb_automation`: JSON-lines `Host`, predicate engine,
+protocol; endpoints in `src/{client,server}/automation_endpoint.hpp`).
+`--automation stdio` works on the server and on `--headless` clients
+(`hello/state/step/quit/wait_for`, `--automation-clock real|manual`); contract in
+`docs/automation-protocol.md`. Gotchas: GNS has no `--port 0`; protocol uses
+raw fd 0/1 (see design §10 items 7-8). No actions/admin commands yet (E3), no
+pytest harness or `e2e` CI leg yet (E4). **Implementing any E-phase? Follow `docs/e2e-automation.md` §11**
+(per-phase doc checklist + safety invariants to re-verify) before calling it done. Next: E2b (`C2S_Hello.client_flags`, protocol bump), then E3 (actions + server admin commands).
 
 ## Status (2026-09-30)
 

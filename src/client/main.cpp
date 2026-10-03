@@ -64,6 +64,11 @@
 
 #include "client_app.hpp"
 
+#if defined(VB_WITH_AUTOMATION)
+#include "automation_endpoint.hpp"
+#include "vb/automation/host.hpp"
+#endif
+
 using namespace vb::client;
 
 namespace {
@@ -81,6 +86,10 @@ void print_usage() {
 				 "  --singleplayer    run an in-process server and join it\n"
 				 "  --headless        run without a window (no rendering, skips the menu)\n"
 				 "  --frames <n>      headless: run n frames then exit (default 3)\n"
+#if defined(VB_WITH_AUTOMATION)
+				 "  --automation stdio     drive via JSON lines on stdin/stdout (dev builds; needs --headless)\n"
+				 "  --automation-clock <real|manual>  manual: frames advance only on `step`\n"
+#endif
 				 "  --version        print build info and exit\n"
 				 "  --help           show this help\n"
 				 "\n"
@@ -92,8 +101,38 @@ void print_usage() {
 
 // --headless (CI / integration-test smoke path): the same ClientApp the
 // windowed client runs, with render=false -- no menu, GL resources or draws.
+#if defined(VB_WITH_AUTOMATION)
+// Development-only: same ClientApp, but driven by the automation channel
+// instead of a fixed frame count. Runs until `quit` or the harness closes stdin.
+int run_automated(ClientApp &app, vb::automation::Host &host) {
+	ClientAutomationEndpoint endpoint(app);
+	using Clock = std::chrono::steady_clock;
+	constexpr auto kFrame = std::chrono::microseconds(16667);
+	auto next = Clock::now();
+	while (host.pump(endpoint)) {
+		if (!host.frame_allowed()) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			continue;
+		}
+		app.frame(vb::render::InputFrame{}, 1.0 / 60.0);
+		host.frame_done();
+		if (!host.manual_clock()) {
+			next += kFrame;
+			std::this_thread::sleep_until(next);
+		}
+	}
+	std::cout << "client: automation session ended\n";
+	return EXIT_SUCCESS;
+}
+#endif
+
 int run_headless(const vb::core::ClientConfig &config, const vb::core::Args &args,
-		const std::string &server, int port, bool singleplayer, int view_distance) {
+		const std::string &server, int port, bool singleplayer, int view_distance
+#if defined(VB_WITH_AUTOMATION)
+		,
+		vb::automation::Host *automation
+#endif
+) {
 	vb::render::WindowConfig wcfg;
 	wcfg.headless = true;
 	wcfg.width = static_cast<int>(config.window_width);
@@ -108,6 +147,11 @@ int run_headless(const vb::core::ClientConfig &config, const vb::core::Args &arg
 	if (!app.connect_blocking()) {
 		return EXIT_FAILURE;
 	}
+#if defined(VB_WITH_AUTOMATION)
+	if (automation != nullptr) {
+		return run_automated(app, *automation);
+	}
+#endif
 	while (!window.should_close()) {
 		app.frame(vb::render::InputFrame{}, 1.0 / 60.0);
 	}
@@ -128,6 +172,37 @@ int main(int argc, char **argv) {
 		std::cout << vb::core::describe_build() << '\n';
 		return EXIT_SUCCESS;
 	}
+
+#if defined(VB_WITH_AUTOMATION)
+	std::unique_ptr<vb::automation::Host> automation;
+	if (args.has("automation")) {
+		if (args.value_or("automation", "") != "stdio") {
+			std::cerr << "client: --automation requires the value 'stdio'\n";
+			return EXIT_FAILURE;
+		}
+		const std::string clock = args.value_or("automation-clock", "real");
+		if (clock != "real" && clock != "manual") {
+			std::cerr << "client: --automation-clock must be 'real' or 'manual'\n";
+			return EXIT_FAILURE;
+		}
+		if (!args.has("headless") && !VB_HEADLESS_DEFAULT) {
+			std::cerr << "client: --automation currently requires --headless\n";
+			return EXIT_FAILURE;
+		}
+		automation = vb::automation::Host::open_stdio();
+		if (!automation) {
+			std::cerr << "client: could not set up the automation channel\n";
+			return EXIT_FAILURE;
+		}
+		automation->set_manual_clock(clock == "manual");
+	}
+#else
+	if (args.has("automation")) {
+		// Never silently ignored: a misconfigured test setup must fail loudly.
+		std::cerr << "client: built without VB_WITH_AUTOMATION\n";
+		return EXIT_FAILURE;
+	}
+#endif
 
 	const std::string config_path = args.value_or("config", "client.toml");
 	auto loaded = vb::core::load_client_config(config_path);
@@ -156,7 +231,12 @@ int main(int argc, char **argv) {
 			  << "client: " << (headless ? "headless" : "windowed") << " mode\n";
 
 	if (headless) {
-		return run_headless(config, args, cli_server, cli_port, singleplayer, configured_view_distance);
+		return run_headless(config, args, cli_server, cli_port, singleplayer, configured_view_distance
+#if defined(VB_WITH_AUTOMATION)
+				,
+				automation.get()
+#endif
+		);
 	}
 
 	// --- windowed: main menu first (spec §5.3) -----------------------------

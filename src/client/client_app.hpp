@@ -38,6 +38,11 @@ public:
 
 	AppState app_state() const { return state; }
 
+	// Read-only views for the dev-only automation endpoint (and tests).
+	static const char *app_state_name(AppState s);
+	const vb::net::ClientSession *session() const { return client; }
+	const std::deque<std::string> &chat() const { return chat_log; }
+
 private:
 	void begin_connect(bool as_singleplayer);
 	void enter_playing();

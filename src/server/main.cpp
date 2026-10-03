@@ -38,6 +38,11 @@
 #include "vb/worldgen/generator.hpp"
 #include "vb/worldgen/worker_pool.hpp"
 
+#if defined(VB_WITH_AUTOMATION)
+#include "automation_endpoint.hpp"
+#include "vb/automation/host.hpp"
+#endif
+
 namespace {
 
 std::atomic_bool g_stop{ false };
@@ -84,6 +89,9 @@ void print_usage() {
 				 "  --seed <n>             world seed override (0 = random)\n"
 				 "  --motd <text>          message of the day override\n"
 				 "  --ticks <n>            run n ticks then exit (0 = forever)\n"
+#if defined(VB_WITH_AUTOMATION)
+				 "  --automation stdio    drive via JSON lines on stdin/stdout (dev builds only)\n"
+#endif
 				 "  --version             print build info and exit\n"
 				 "  --help                show this help\n";
 }
@@ -106,6 +114,27 @@ int main(int argc, char **argv) {
 		std::cout << vb::core::describe_build() << '\n';
 		return EXIT_SUCCESS;
 	}
+
+#if defined(VB_WITH_AUTOMATION)
+	std::unique_ptr<vb::automation::Host> automation;
+	if (args.has("automation")) {
+		if (args.value_or("automation", "") != "stdio") {
+			std::cerr << "server: --automation requires the value 'stdio'\n";
+			return EXIT_FAILURE;
+		}
+		automation = vb::automation::Host::open_stdio();
+		if (!automation) {
+			std::cerr << "server: could not set up the automation channel\n";
+			return EXIT_FAILURE;
+		}
+	}
+#else
+	if (args.has("automation")) {
+		// Never silently ignored: a misconfigured test setup must fail loudly.
+		std::cerr << "server: built without VB_WITH_AUTOMATION\n";
+		return EXIT_FAILURE;
+	}
+#endif
 
 	const std::string config_path = args.value_or("config", "server.toml");
 	auto loaded = vb::core::load_server_config(config_path);
@@ -445,16 +474,34 @@ int main(int argc, char **argv) {
 		}
 	};
 
+#if defined(VB_WITH_AUTOMATION)
+	std::unique_ptr<vb::server::ServerAutomationEndpoint> automation_endpoint;
+	if (automation) {
+		automation_endpoint = std::make_unique<vb::server::ServerAutomationEndpoint>(
+				session, world, registry, tick, transport.bound_port());
+	}
+#endif
+
 	while (!g_stop.load(std::memory_order_relaxed)) {
 		++tick;
 		session.tick(tick_dt_seconds);
 
 		for (const auto &joined : session.take_joins()) {
+#if defined(VB_WITH_AUTOMATION)
+			if (automation_endpoint) {
+				automation_endpoint->player_joined(joined.net_id, joined.name);
+			}
+#endif
 			pack_runtime.dispatch_player_join_completed(joined);
 			std::cout << "server: '" << joined.name << "' joined (net id "
 					  << static_cast<std::uint32_t>(joined.net_id) << ")\n";
 		}
 		for (const auto &left : session.take_leaves()) {
+#if defined(VB_WITH_AUTOMATION)
+			if (automation_endpoint) {
+				automation_endpoint->player_left(left.net_id);
+			}
+#endif
 			pack_runtime.dispatch_player_leave(left);
 			std::cout << "server: a player left (" << left.reason << ")\n";
 		}
@@ -465,6 +512,12 @@ int main(int argc, char **argv) {
 		if (manifest_check_ticks > 0 && tick % manifest_check_ticks == 0) {
 			manifest_refresh_check();
 		}
+
+#if defined(VB_WITH_AUTOMATION)
+		if (automation && !automation->pump(*automation_endpoint)) {
+			break; // `quit`, or the harness closed our stdin
+		}
+#endif
 
 		if (max_ticks > 0 && tick >= max_ticks) {
 			break;

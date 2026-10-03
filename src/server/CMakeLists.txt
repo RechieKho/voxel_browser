@@ -12,3 +12,8 @@ target_link_libraries(voxel_browser_server
 set_target_properties(voxel_browser_server PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
+
+# Development-only automation channel; no automation code is linked otherwise.
+if(VB_WITH_AUTOMATION)
+  target_link_libraries(voxel_browser_server PRIVATE vb_automation)
+endif()

@@ -77,6 +77,12 @@ option(VB_BUILD_SERVER   "Build the server executable (voxel_browser_server)" ON
 option(VB_BUILD_TESTS    "Build the test executable (vb_tests)"               ON)
 option(VB_HEADLESS       "Force a headless client build (no GPU/window)"      OFF)
 option(VB_WARNINGS_AS_ERRORS "Treat compiler warnings as errors"             OFF)
+option(VB_WITH_AUTOMATION "Development/test-only automation driver (docs/e2e-automation.md). Never enable for shipped builds." OFF)
+option(VB_DISTRIBUTION   "Set by every build whose binaries get uploaded/released; forbids VB_WITH_AUTOMATION" OFF)
+
+if(VB_DISTRIBUTION AND VB_WITH_AUTOMATION)
+  message(FATAL_ERROR "VB_WITH_AUTOMATION must be OFF in distribution builds")
+endif()
 
 option(VB_ENABLE_ASAN    "Enable AddressSanitizer"                            OFF)
 option(VB_ENABLE_UBSAN   "Enable UndefinedBehaviorSanitizer"                  OFF)

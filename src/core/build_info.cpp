@@ -13,6 +13,10 @@ std::string describe_build() {
 	out += ", built ";
 	out += kBuildTimestamp;
 	out += ')';
+#if defined(VB_WITH_AUTOMATION)
+	// Release pipeline greps --version for "automation" (docs/e2e-automation.md §7.3).
+	out += " +automation";
+#endif
 	return out;
 }
 
