@@ -36,7 +36,7 @@ content-only (e.g. the user explicitly asks for a content-pack feature).
 
 ## Current status (2026-10-02)
 
-**E2E automation: designed, E0 + E1 + E2 landed.** `docs/e2e-automation.md` is the
+**E2E automation: designed, E0 + E1 + E2 + E2b landed.** `docs/e2e-automation.md` is the
 design for a Playwright-style multiplayer test harness (stdio JSON-lines
 driver in the client/server + a pytest `vbtest` package). Hard constraint:
 the automation driver must be **compiled out of production** —
@@ -65,7 +65,7 @@ protocol; endpoints in `src/{client,server}/automation_endpoint.hpp`).
 `docs/automation-protocol.md`. Gotchas: GNS has no `--port 0`; protocol uses
 raw fd 0/1 (see design §10 items 7-8). No actions/admin commands yet (E3), no
 pytest harness or `e2e` CI leg yet (E4). **Implementing any E-phase? Follow `docs/e2e-automation.md` §11**
-(per-phase doc checklist + safety invariants to re-verify) before calling it done. Next: E2b (`C2S_Hello.client_flags`, protocol bump), then E3 (actions + server admin commands).
+(per-phase doc checklist + safety invariants to re-verify) before calling it done. E2b (2026-10-03): `C2S_Hello.client_flags` (protocol 26→27); automation builds set `kClientFlagAutomation`, and a server without automation refuses such clients in the first handshake step (`HandshakeServerConfig::accept_automation_clients`). Tests: 4 new `net_test.cpp` cases + a `protocol_test.cpp` round-trip; the loopback-only guard in `vbtest` is E4. Next: E3 (actions + server admin commands).
 
 ## Status (2026-09-30)
 

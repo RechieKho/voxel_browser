@@ -16,7 +16,8 @@
       `VB_WITH_AUTOMATION=ON` + LUA/WORLDGEN/COMPRESSION build, ctest incl. the
       new `*_rejects_automation` in the default build; manual stdio round trips
       against the singleplayer client and the server; NOT run: `VB_WITH_NET`
-      builds, Windows/macOS, real CI), E2b `C2S_Hello.client_flags` rejection, E3
+      builds, Windows/macOS, real CI), E2b `C2S_Hello.client_flags` rejection (landed
+      2026-10-03, protocol 27; 4 `net_test` cases + codec round-trip), E3
       actions + server admin commands, E4 pytest harness + CI `e2e` leg, E5
       `--net-sim`/traces/screenshots, E6 recorder. Constraint: automation
       code must never ship — see §7 of that doc. Each phase's doc updates:

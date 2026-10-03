@@ -40,7 +40,8 @@ is used for the compact entity component blobs; envelope + routing is ours.
 Client                                        Server
   │  Connect (GNS)                               │
   │ ───────────────────────────────────────────▶ │
-  │  C2S_Hello{ engine_version, client_nonce }    │
+  │  C2S_Hello{ engine_version, client_nonce,      │
+  │           client_flags }  (v27, see protocol.md)│
   │ ───────────────────────────────────────────▶ │
   │           S2C_ServerInfo{ pack_name,          │
   │           pack_version, engine_version,       │

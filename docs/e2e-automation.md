@@ -1,8 +1,9 @@
 # Voxel Browser — End-to-End Client Automation (Design)
 
-> Status: **In progress**; E0 (input seam), E1 (`ClientApp`) and E2 (build
-> flags, JSON-lines host, predicate engine, read-only queries) are implemented
-> (contract: `docs/automation-protocol.md`); E2b onward is not. Covers a
+> Status: **In progress**; E0 (input seam), E1 (`ClientApp`), E2 (build
+> flags, JSON-lines host, predicate engine, read-only queries) and E2b
+> (handshake `client_flags`, protocol v27) are implemented (contract:
+> `docs/automation-protocol.md`); E3 onward is not. Covers a
 > Playwright-style harness that drives real `voxel_browser` clients against a
 > real `voxel_browser_server` in multiplayer, so gameplay can be tested by
 > scripts instead of by hand. Complements spec §17 (Testing Strategy); the
@@ -438,7 +439,14 @@ test fixture with the wrong host. Two guards:
   them during the handshake: *"automation clients are not accepted by this
   server"*. A server built with it (a dev server) accepts them. The
   rejection is sent before asset sync, so the rejected client costs the
-  server almost nothing.
+  server almost nothing. **Implemented in E2b (protocol v27):** the flag is
+  `protocol::kClientFlagAutomation` (bit 0), set automatically by
+  `ClientHandshake::start()` in a `VB_WITH_AUTOMATION` build;
+  `HandshakeServerConfig::accept_automation_clients` defaults to "this binary
+  was built with automation" and is checked in `ServerHandshake::on_frame`
+  before `S2C_ServerInfo`, so no auth or asset work happens. The refusal
+  reuses `DisconnectReason::kBadHandshake` with the message above. Unknown
+  flag bits are ignored. The loopback-only half below lands with E4.
 - **Loopback-only harness.** `vbtest` refuses to connect clients to any
   address other than `127.0.0.1`/`::1`/`localhost` unless
   `--vb-allow-remote-host` is passed explicitly, for running tests against
@@ -488,7 +496,7 @@ whatever the client claims:
 | **E0** | `InputSource` seam: `RaylibInput`, all direct raylib input calls in `src/client` + `main_menu` routed through `InputFrame`; unit tests for `sample_input_cmd` | S–M | Existing tests + manual play unchanged |
 | **E1** (landed 2026-10-02) | `ClientApp` extraction; `run_headless` re-based on it with `render=false` | M–L (highest risk: touches the 1.7k-line `main.cpp`; land behind no flag, purely structural) | `*_smoke` tests unchanged; windowed manual check |
 | **E2** (landed 2026-10-03) | `VB_WITH_AUTOMATION` / `VB_DISTRIBUTION` options + `+automation` in `--version` + release-leg check (§7.1–7.3) **first**; then `src/automation/`: JSON-lines host, stdin thread → main-thread queue, `hello/state/step/quit/wait_for` + predicate engine; `--automation stdio` on client + server; ~~`--port 0` reporting~~ (not possible: GNS has no ephemeral listen port, see §10) | M | doctest unit tests for predicate engine + command parsing; a default build's `--automation` exits non-zero |
-| **E2b** | `C2S_Hello.client_flags` + server-side rejection of automation clients (§7.4) | S | in-process `netcode_test` case: flagged client rejected by a non-automation server |
+| **E2b** (landed 2026-10-03) | `C2S_Hello.client_flags` + server-side rejection of automation clients (§7.4) | S | in-process `netcode_test` case: flagged client rejected by a non-automation server |
 | **E3** | Action commands (input, high-level, ui, menu, chat) + server admin commands | M | |
 | **E4** | `tests/e2e/vbtest` + fixtures + first 5 tests (join, chat, block break replicates, craft via UI, reconnect after kick); CTest `e2e` label; Linux CI legs | M | CI green |
 | **E5** | `--net-sim`, trace JSONL + failure artifacts, screenshot under Xvfb | S–M | |
@@ -551,7 +559,7 @@ checklist below is. Don't write history for work you didn't do or verify.
 | **E1** (landed) | Done: `ARCHITECTURE_SPEC.md` §10, `topology-and-layout.md`, `CONTRIBUTING.md`, `STATE.md`. |
 | **E1** `ClientApp` | `ARCHITECTURE_SPEC.md` §10 (client loop description) and `architecture_spec/topology-and-layout.md` (new files); `STATE.md` note on `run_headless` now sharing the windowed loop; confirm README's `--headless` description is still true. |
 | **E2** options + host (done) | `README.md` build-options table: drop *(planned)* from `VB_WITH_AUTOMATION`, add `VB_DISTRIBUTION`; `CONTRIBUTING.md` e2e bullet (real commands, `build-e2e`); `src/client/main.cpp` / `src/server/main.cpp` `--help` text for `--automation*` (only when compiled in); new `docs/automation-protocol.md` (the JSON-lines contract: every command, predicate, error code, `proto` version); `cmake/` option comments; `describe_build()` `+automation` documented in README's `--version` mention. |
-| **E2b** handshake flag | `docs/protocol.md`: add `client_flags` to the `C2S_Hello` row, add an entry to its changelog, **bump `kEngineProtocolVersion`** and record the old→new value (see "Adding a new wire message" in `CONTRIBUTING.md`); `architecture_spec/networking.md` §8.3 handshake notes; `content/` is unaffected. |
+| **E2b** handshake flag (done) | `docs/protocol.md`: add `client_flags` to the `C2S_Hello` row, add an entry to its changelog, **bump `kEngineProtocolVersion`** and record the old→new value (see "Adding a new wire message" in `CONTRIBUTING.md`); `architecture_spec/networking.md` §8.3 handshake notes; `content/` is unaffected. |
 | **E3** actions + admin cmds | `docs/automation-protocol.md` command tables; `docs/lua-api.md` only if `run_lua` exposes anything pack authors should know; list each server admin command and confirm it is `#if VB_WITH_AUTOMATION`-gated. |
 | **E4** harness + CI | `README.md` / `CONTRIBUTING.md`: install steps (`pip install -r tests/e2e/requirements.txt`), how to run (`ctest -L e2e`, `pytest tests/e2e`), how to write a test, fixtures reference (`tests/e2e/README.md`); `ARCHITECTURE_SPEC.md` §17: change "planned" to current; `.github/workflows/build_linux.yml` leg described in `STATE.md`. |
 | **E5** net-sim, traces, screenshots | `docs/automation-protocol.md` (`--net-sim` syntax, `screenshot`); `tests/e2e/README.md` (trace files, artifacts, Xvfb leg). |
