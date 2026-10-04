@@ -434,6 +434,37 @@ Full detail: `remaining_tasks/phase7.md`.
 
 ---
 
+## Phase 8 — Developer CLI (`vb`) — planned (2026-10-04)
+
+User-requested: a `vb` command-line tool that downloads and manages installed
+copies of Voxel Browser in the **user's profile** (no admin rights), and
+makes hosting a server a one-command affair (`vb host`, plus named
+background instances via `vb server …`). Full design, layout, command
+surface and per-phase task lists: `architecture_spec/dev-cli.md` §11.
+
+- [x] **8.1 — Release pipeline produces installable artifacts** (prerequisite):
+      per-platform `voxel_browser-<ver>-<os>-<arch>.zip` assets + a
+      `release.toml` with SHA-256s; today's `bundle.yml` flat-merges every
+      platform's identically-named files into one artifact.
+- [x] **8.2 — `vb` skeleton + local version management**: `user_data_dir()`/
+      `user_config_dir()`/`VB_HOME`, `vb list/use/which/uninstall/link/launch`.
+- [x] **8.3 — Download & install**: curl + miniz behind `VB_BUILD_CLI`,
+      verified atomic install transaction, `vb install/update/prune/doctor`.
+- [x] **8.4 — Hosting**: engine `--stop-file` (Windows graceful stop) and
+      client `--content-pack`/`--world-dir` for `--singleplayer`;
+      `vb host`, `vb server new/start/stop/status/logs/rm`.
+- [x] **8.5 — Polish**: `list --remote`, `--json`, `self update`, bootstrap
+      scripts, server `--status-file`, completions, `vb host --watch`.
+- [x] **8.6 — Hardening**: Ed25519-signed `release.toml` (verified by `vb` and
+      `install.sh`; **inactive until the maintainer adds a key to
+      `release_keys.txt` and the `RELEASE_SIGNING_KEY` secret** — steps in
+      `architecture_spec/dev-cli.md`), `vb server service print`,
+      `vb launch --connect` protocol warning. arm64: `vb`/scripts understand
+      `linux-arm64`/`windows-arm64`, but the **CI legs are not added yet**
+      (how-to in the design doc).
+
+---
+
 ## Cross-Cutting / Continuous
 
 Full detail: `remaining_tasks/cross_cutting.md`.

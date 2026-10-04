@@ -33,15 +33,21 @@ endif()
 #   FetchContent at a nested CMakeLists.txt (used for the Lua wrapper).
 # ---------------------------------------------------------------------------
 function(vb_fetch NAME)
-  cmake_parse_arguments(ARG "" "TAG;REPO;SUBDIR" "" ${ARGN})
+  cmake_parse_arguments(ARG "FULL_CLONE" "TAG;REPO;SUBDIR" "" ${ARGN})
   set(_extra "")
   if(ARG_SUBDIR)
     set(_extra SOURCE_SUBDIR ${ARG_SUBDIR})
   endif()
+  # A commit hash (for a dependency that publishes no tags) cannot be
+  # shallow-cloned by name, so FULL_CLONE turns shallow off.
+  set(_shallow TRUE)
+  if(ARG_FULL_CLONE)
+    set(_shallow FALSE)
+  endif()
   FetchContent_Declare(${NAME}
     GIT_REPOSITORY ${ARG_REPO}
     GIT_TAG ${ARG_TAG}
-    GIT_SHALLOW TRUE
+    GIT_SHALLOW ${_shallow}
     GIT_PROGRESS TRUE
     ${_extra}
   )
@@ -111,6 +117,103 @@ find_package(tomlplusplus QUIET)
 if(NOT tomlplusplus_FOUND AND NOT TARGET tomlplusplus::tomlplusplus)
   vb_fetch(tomlplusplus TAG v3.4.0
     REPO https://github.com/marzer/tomlplusplus.git)
+endif()
+
+# ===========================================================================
+# vb CLI downloads: libcurl (HTTPS) + miniz (zip) — only for VB_BUILD_CLI
+#   libcurl: system package on Linux (libcurl4-openssl-dev) and macOS (SDK);
+#   on Windows (or anywhere find_package fails) a pinned FetchContent build
+#   using the OS TLS stack on Windows (Schannel — no OpenSSL to ship).
+#   miniz: single-file zip reader; release archives are .zip on every OS.
+# ===========================================================================
+if(VB_BUILD_CLI)
+  if(NOT WIN32)
+    find_package(CURL QUIET)
+  endif()
+  if(NOT TARGET CURL::libcurl)
+    set(BUILD_CURL_EXE OFF CACHE INTERNAL "")
+    set(BUILD_TESTING OFF CACHE INTERNAL "")
+    set(BUILD_LIBCURL_DOCS OFF CACHE INTERNAL "")
+    set(BUILD_MISC_DOCS OFF CACHE INTERNAL "")
+    set(ENABLE_CURL_MANUAL OFF CACHE INTERNAL "")
+    set(CURL_DISABLE_INSTALL ON CACHE INTERNAL "")
+    set(CURL_ENABLE_EXPORT_TARGET OFF CACHE INTERNAL "")
+    set(HTTP_ONLY ON CACHE INTERNAL "")
+    set(CURL_USE_LIBPSL OFF CACHE INTERNAL "")
+    set(USE_LIBIDN2 OFF CACHE INTERNAL "")
+    set(CURL_USE_LIBSSH2 OFF CACHE INTERNAL "")
+    set(CURL_BROTLI OFF CACHE INTERNAL "")
+    set(CURL_ZSTD OFF CACHE INTERNAL "")
+    if(WIN32)
+      set(CURL_USE_SCHANNEL ON CACHE INTERNAL "")
+    elseif(APPLE)
+      set(CURL_USE_SECTRANSP ON CACHE INTERNAL "")
+    else()
+      set(CURL_USE_OPENSSL ON CACHE INTERNAL "")
+    endif()
+    set(_vb_saved_shared ${BUILD_SHARED_LIBS})
+    set(BUILD_SHARED_LIBS OFF)
+    vb_fetch(curl TAG curl-8_10_1 REPO https://github.com/curl/curl.git)
+    set(BUILD_SHARED_LIBS ${_vb_saved_shared})
+  endif()
+
+  if(NOT TARGET miniz)
+    set(BUILD_EXAMPLES OFF CACHE INTERNAL "")
+    set(BUILD_FUZZERS OFF CACHE INTERNAL "")
+    set(BUILD_TESTS OFF CACHE INTERNAL "")
+    set(INSTALL_PROJECT OFF CACHE INTERNAL "")
+    set(AMALGAMATE_SOURCES OFF CACHE INTERNAL "")
+    vb_fetch(miniz TAG 3.0.2 REPO https://github.com/richgel999/miniz.git)
+  endif()
+endif()
+
+# ---------------------------------------------------------------------------
+# Ed25519 for release.toml signature checks (vb CLI, dev-cli.md section 3.3).
+#   orlp/ed25519: public domain / zlib, five small C files, RFC 8032 compatible
+#   (verified against OpenSSL-produced signatures -- see tests/unit/
+#   dev_cli_signing_test.cpp). It publishes no tags, so a commit is pinned.
+#   Built as its own target so the project's -Werror flags never see it.
+#   Keys are in release_keys.txt at the repo root (compiled into vb).
+# ---------------------------------------------------------------------------
+if(VB_BUILD_CLI)
+  vb_fetch(ed25519 TAG b1f19fab4aebe607805620d25a5e42566ce46a0e
+    REPO https://github.com/orlp/ed25519.git FULL_CLONE)
+  FetchContent_GetProperties(ed25519 SOURCE_DIR ed25519_SOURCE_DIR)
+  add_library(vb_ed25519 STATIC
+    "${ed25519_SOURCE_DIR}/src/fe.c" "${ed25519_SOURCE_DIR}/src/ge.c"
+    "${ed25519_SOURCE_DIR}/src/sc.c" "${ed25519_SOURCE_DIR}/src/sha512.c"
+    "${ed25519_SOURCE_DIR}/src/verify.c")
+  target_include_directories(vb_ed25519 SYSTEM PUBLIC "${ed25519_SOURCE_DIR}/src")
+  set_target_properties(vb_ed25519 PROPERTIES POSITION_INDEPENDENT_CODE ON)
+  # Signing is only needed by tests (they sign fixtures at run time).
+  add_library(vb_ed25519_signing STATIC
+    "${ed25519_SOURCE_DIR}/src/keypair.c" "${ed25519_SOURCE_DIR}/src/sign.c")
+  target_link_libraries(vb_ed25519_signing PUBLIC vb_ed25519)
+
+  # GameNetworkingSockets bundles its own Ed25519 under the same global names
+  # (ed25519_sign, ...). ELF/Mach-O linkers tolerate that; MSVC fails with
+  # LNK2005 as soon as a binary pulls in both (vb_tests does). Prefix every
+  # global symbol this vendored copy defines so it can never collide.
+  set(_vb_ed25519_api ed25519_verify ed25519_sign ed25519_create_keypair)
+  set(_vb_ed25519_internal
+    fe_0 fe_1 fe_add fe_cmov fe_copy fe_cswap fe_frombytes fe_invert
+    fe_isnegative fe_isnonzero fe_mul fe_mul121666 fe_neg fe_pow22523 fe_sq
+    fe_sq2 fe_sub fe_tobytes
+    ge_add ge_double_scalarmult_vartime ge_frombytes_negate_vartime ge_madd
+    ge_msub ge_p1p1_to_p2 ge_p1p1_to_p3 ge_p2_0 ge_p2_dbl ge_p3_0 ge_p3_dbl
+    ge_p3_to_cached ge_p3_to_p2 ge_p3_tobytes ge_scalarmult_base ge_sub
+    ge_tobytes
+    sc_muladd sc_reduce
+    sha512 sha512_final sha512_init sha512_update)
+  foreach(_sym IN LISTS _vb_ed25519_api)
+    # PUBLIC: callers (signature.cpp, the signing tests) must see the new name too.
+    target_compile_definitions(vb_ed25519 PUBLIC ${_sym}=vb_${_sym})
+  endforeach()
+  foreach(_sym IN LISTS _vb_ed25519_internal)
+    # The signing sources call the same internals, so both libraries rename them.
+    target_compile_definitions(vb_ed25519 PRIVATE ${_sym}=vb_ed25519_${_sym})
+    target_compile_definitions(vb_ed25519_signing PRIVATE ${_sym}=vb_ed25519_${_sym})
+  endforeach()
 endif()
 
 # ===========================================================================
@@ -302,13 +405,12 @@ if(VB_WITH_LUA)
     target_compile_definitions(${_vb_sol2_real_target} INTERFACE SOL_FUNCTION_CALL_VALUE_SEMANTICS=1)
     unset(_vb_sol2_real_target)
   endif()
-
 endif()
 
 # nlohmann/json — vb.storage persistence + player:open_ui ctx serialization
-# (Phase 4.2) and the development-only automation protocol (e2e design).
-# Header-only.
-if(VB_WITH_LUA OR VB_WITH_AUTOMATION)
+# (Phase 4.2), the development-only automation protocol (e2e design), and the
+# vb CLI's --json output / GitHub release listing (8.5). Header-only.
+if(VB_WITH_LUA OR VB_WITH_AUTOMATION OR VB_BUILD_CLI)
   find_package(nlohmann_json QUIET)
   if(NOT nlohmann_json_FOUND AND NOT TARGET nlohmann_json::nlohmann_json)
     vb_fetch(nlohmann_json TAG v3.11.3 REPO https://github.com/nlohmann/json.git)

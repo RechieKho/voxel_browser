@@ -60,6 +60,23 @@ target_link_libraries(vb_tests
     vb_sanitizers
 )
 
+if(VB_BUILD_CLI)
+  target_sources(vb_tests PRIVATE unit/dev_cli_test.cpp)
+  target_sources(vb_tests PRIVATE unit/dev_cli_install_test.cpp)
+  target_sources(vb_tests PRIVATE unit/dev_cli_host_test.cpp)
+  target_sources(vb_tests PRIVATE unit/dev_cli_polish_test.cpp)
+  target_sources(vb_tests PRIVATE unit/dev_cli_hardening_test.cpp)
+  target_compile_definitions(vb_tests PRIVATE VB_TEST_VB_EXE="$<TARGET_FILE:vb>")
+  add_dependencies(vb_tests vb)
+  if(VB_BUILD_SERVER)
+    # Integration tests drive the real server through `vb` (stop file, detach).
+    target_compile_definitions(vb_tests PRIVATE
+      VB_TEST_SERVER_EXE="$<TARGET_FILE:voxel_browser_server>")
+    add_dependencies(vb_tests voxel_browser_server)
+  endif()
+  target_link_libraries(vb_tests PRIVATE vb_cli_lib miniz nlohmann_json::nlohmann_json vb_ed25519_signing)
+endif()
+
 # TextureAtlas (real texture/atlas system) needs raylib's Image functions,
 # which -- like vb_render itself -- only exist when VB_BUILD_CLIENT is ON
 # (cmake/Dependencies.cmake gates the raylib fetch behind it).

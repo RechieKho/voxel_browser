@@ -89,11 +89,60 @@ yet (works locally, just not wired into that platform's workflow).
 
 ## 💻 Getting Started
 
-_(Phase 0 complete: the build system, module split, and runnable client/server
-skeletons exist. Networking, world, and scripting land in later phases — see
-`REMAINING_TASKS.md`.)_
+### Install and run with `vb`
 
-### Prerequisites
+`vb` is the developer CLI: it downloads and manages Voxel Browser for your user
+account (no administrator rights, nothing outside your profile) and runs servers.
+
+```bash
+# Linux / macOS
+curl -fsSL https://github.com/RechieKho/voxel_browser/releases/latest/download/install.sh | sh
+# Windows (PowerShell)
+irm https://github.com/RechieKho/voxel_browser/releases/latest/download/install.ps1 | iex
+```
+
+That installs `vb`, puts it on your user `PATH`, and downloads the latest game.
+Everything lives under your per-user data directory (`vb paths` prints it).
+
+```bash
+vb launch                    # start the game
+vb host                      # host a server right here (Ctrl+C stops it, world saved)
+vb host --pack ./my_pack --watch   # develop a content pack: restarts when files change
+
+vb server new survival --port 27016   # a named server that keeps running in the background
+vb server start survival
+vb server status survival             # state, players, tick rate   (add --json for scripts)
+vb server logs survival -f
+vb server config survival set motd "Welcome!"
+vb server stop survival
+
+vb server service print survival     # a systemd / launchd / Task Scheduler definition to install yourself
+vb launch --connect localhost:27016  # join a server (warns if its version can't talk to this client)
+
+vb list --remote             # releases available to install
+vb install v0.3.0            # several versions can live side by side
+vb use v0.3.0                # pick the default
+vb update                    # install the newest release
+vb self update               # update vb itself
+```
+
+Releases can be signed (`release.toml.sig`, Ed25519); once a trusted key is configured
+`vb` refuses unsigned or wrongly signed releases (`vb doctor` shows the policy).
+
+Server worlds live in `<data>/servers/<name>/`, singleplayer worlds in
+`<data>/worlds/`, so uninstalling or updating a version never touches them.
+A version a server is pinned to or running from is protected from
+`vb uninstall` / `vb prune`. Shell completion: `vb completions bash|zsh|fish|powershell`.
+`vb shim install` adds `voxel_browser` / `voxel_browser_server` launchers to
+`<data>/bin` that always run your default version.
+
+Hacking on the engine? `vb link dev ./build && vb use dev` makes your local
+build behave like an installed version, so `vb launch` and `vb host` run it.
+The full design is in `architecture_spec/dev-cli.md`.
+
+### Building from source
+
+#### Prerequisites
 
 - CMake **3.25+**
 - A C++20 compiler (GCC 11+, Clang 14+, MSVC 19.3+)
@@ -105,7 +154,7 @@ Dependencies are fetched at configure time via CMake `FetchContent` (pinned
 tags) — there are **no git submodules**. A network connection is needed for the
 first configure.
 
-### Building from Source
+#### Compiling
 
 ```bash
 git clone https://github.com/RechieKho/voxel_browser.git
@@ -153,7 +202,7 @@ right-click to place one, Enter to open the chat box — type `/craft
 base:planks` after mining some wood to see the base pack's example crafting
 system in action.
 
-### Build options
+#### Build options
 
 | Option                  | Default | Effect                                              |
 | ----------------------- | ------- | -------------------------------------------------- |

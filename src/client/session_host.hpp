@@ -106,8 +106,13 @@ inline vb::net::HandshakeServerHost sp_server_host(std::uint64_t seed) {
 }
 
 // Default content pack --singleplayer loads (matches server.toml.example's
-// own default) -- there's no client-side config for this yet, so it's fixed.
-inline constexpr const char *kSingleplayerContentPack = "content/base";
+// own default). `--content-pack <dir>` overrides it, and when the default isn't
+// found relative to the working directory it falls back to
+// `<exe dir>/content/base` (set once at the top of main(), before anything
+// reads it) so an installed client works from any directory -- `vb launch`
+// relies on that. Not `constexpr` for that reason, but still process-wide
+// state that is written once at startup and only read afterwards.
+inline std::string kSingleplayerContentPack = "content/base";
 
 // Phase 7.6 landed world persistence for the dedicated server only
 // (RegionStore wired into src/server/main.cpp) -- --singleplayer's
@@ -125,7 +130,10 @@ inline constexpr const char *kSingleplayerContentPack = "content/base";
 // this same directory for any chunk already edited, regenerating the rest
 // with the new seed -- identical in spirit to how a dedicated server behaves
 // if its own world_seed config changes with saved chunks already on disk.
-inline constexpr const char *kSingleplayerWorldDir = "world_singleplayer";
+//
+// `--world-dir <dir>` overrides it (`vb launch` points it at a per-user
+// directory so worlds outlive the installed version that created them).
+inline std::string kSingleplayerWorldDir = "world_singleplayer";
 
 inline vb::script::PackRuntime make_singleplayer_pack_runtime(
 		vb::net::Transport &transport, vb::world::BlockRegistry &registry) {

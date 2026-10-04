@@ -375,6 +375,10 @@ same commit as any message change.**
 FOV, render distance (clamped to server), mouse sensitivity, keybindings,
 asset cache size cap, last-connected servers list.
 
+Installing, versioning and hosting through the user-scoped `vb` developer
+CLI (install layout under the per-user data/config dirs, server instances,
+release manifest format): `architecture_spec/dev-cli.md`.
+
 ---
 
 ## 15. Content Pack Format (`content/base`)

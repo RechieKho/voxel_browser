@@ -85,6 +85,9 @@ void print_usage() {
 				 "  --render-distance <n>  view distance override (chunks)\n"
 				 "  --asset-cache-dir <path>  asset cache directory override\n"
 				 "  --singleplayer    run an in-process server and join it\n"
+				 "  --content-pack <dir>  singleplayer: content pack to load (default content/base,\n"
+				 "                        else <exe dir>/content/base)\n"
+				 "  --world-dir <dir>     singleplayer: where the world is saved (default world_singleplayer)\n"
 				 "  --headless        run without a window (no rendering, skips the menu)\n"
 				 "  --frames <n>      headless: run n frames then exit (default 3)\n"
 #if defined(VB_WITH_AUTOMATION)
@@ -193,6 +196,16 @@ int main(int argc, char **argv) {
 		std::cout << vb::core::describe_build() << '\n';
 		return EXIT_SUCCESS;
 	}
+
+	// An explicit --content-pack is taken literally; the default also looks
+	// beside the executable (see kSingleplayerContentPack's comment).
+	if (const auto pack = args.value("content-pack"); pack && !pack->empty()) {
+		kSingleplayerContentPack = *pack;
+	} else {
+		kSingleplayerContentPack =
+				vb::core::resolve_beside_program(kSingleplayerContentPack, args.program()).string();
+	}
+	kSingleplayerWorldDir = args.value_or("world-dir", kSingleplayerWorldDir);
 
 #if defined(VB_WITH_AUTOMATION)
 	std::unique_ptr<vb::automation::Host> automation;

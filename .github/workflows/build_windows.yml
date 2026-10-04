@@ -66,21 +66,27 @@ jobs:
         working-directory: build
         run: ctest --output-on-failure
 
-      - name: Stage binaries
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Package release archives
         shell: bash
         run: |
-          dist="${{ github.workspace }}/dist"
-          mkdir -p "$dist"
-          cp "${{ github.workspace }}/build/voxel_browser.exe" "$dist/"
-          cp "${{ github.workspace }}/build/voxel_browser_server.exe" "$dist/"
-          cp "${{ github.workspace }}/server.toml.example" "$dist/"
-          cp -r "${{ github.workspace }}/content" "$dist/"
-          find "$dist/content" \( -name "storage.json" -o -type d -name "db" \) -exec rm -rf {} +
+          python scripts/package_release.py \
+            --build-dir "${{ github.workspace }}/build" \
+            --out-dir "${{ github.workspace }}/dist" \
+            --platform "${{ matrix.target }}-${{ matrix.arch }}" \
+            --build-type "${{ matrix.build_type }}" \
+            --version "${{ needs.setup_metadata.outputs.version }}"
 
       - name: Verify binaries contain no automation
         shell: bash
         run: |
-          dist="${{ github.workspace }}/dist"
+          # The built binaries (what package_release.py zips). dist/ now holds only archives,
+          # so checking it would silently test nothing.
+          dist="${{ github.workspace }}/build"
           for exe in voxel_browser.exe voxel_browser_server.exe; do
             if "$dist/$exe" --version | grep -qi automation; then
               echo "::error::$exe was built with VB_WITH_AUTOMATION"; exit 1
@@ -104,9 +110,9 @@ jobs:
             esac
           done
 
-      - name: Export binaries
+      - name: Export archives
         uses: actions/upload-artifact@v4
         with:
           name: ${{ needs.setup_metadata.outputs.project_name }}-${{ matrix.target }}-${{ matrix.arch }}-${{ matrix.build_type }}
-          path: ${{ github.workspace }}/dist/*
+          path: ${{ github.workspace }}/dist/*.zip
           if-no-files-found: error
