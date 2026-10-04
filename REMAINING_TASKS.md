@@ -442,7 +442,7 @@ makes hosting a server a one-command affair (`vb host`, plus named
 background instances via `vb server …`). Full design, layout, command
 surface and per-phase task lists: `architecture_spec/dev-cli.md` §11.
 
-- [ ] **8.1 — Release pipeline produces installable artifacts** (prerequisite):
+- [x] **8.1 — Release pipeline produces installable artifacts** (prerequisite):
       per-platform `voxel_browser-<ver>-<os>-<arch>.zip` assets + a
       `release.toml` with SHA-256s; today's `bundle.yml` flat-merges every
       platform's identically-named files into one artifact.

@@ -6,7 +6,7 @@ on:
 jobs:
   setup_metadata:
     uses: ./.github/workflows/setup_metadata.yml
-  
+
   bundle:
     needs: setup_metadata
     runs-on: ubuntu-latest
@@ -14,8 +14,38 @@ jobs:
       - name: Check out code
         uses: actions/checkout@v4
 
-      - name: Merge artifacts
-        uses: actions/upload-artifact/merge@v4
+      - name: Download platform archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ${{ needs.setup_metadata.outputs.project_name }}-*
+          path: ${{ github.workspace }}/release
+          merge-multiple: true
+
+      - name: Write release.toml
+        run: |
+          python3 scripts/make_release_manifest.py \
+            --dir release \
+            --project "${{ needs.setup_metadata.outputs.project_name }}" \
+            --commit "${{ needs.setup_metadata.outputs.commit_hash }}"
+
+      - name: Verify archive hashes
+        working-directory: release
+        run: |
+          ls -l
+          # Same check `vb install` performs: every listed sha256 must match.
+          python3 - <<'PY'
+          import hashlib, tomllib
+          m = tomllib.load(open("release.toml", "rb"))
+          for a in m["artifact"]:
+              data = open(a["file"], "rb").read()
+              assert len(data) == a["size"], a["file"]
+              assert hashlib.sha256(data).hexdigest() == a["sha256"], a["file"]
+              print("ok", a["file"])
+          PY
+
+      - name: Export release assets
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ needs.setup_metadata.outputs.project_name }}
-          pattern: ${{ needs.setup_metadata.outputs.project_name }}-*
+          path: ${{ github.workspace }}/release/*
+          if-no-files-found: error

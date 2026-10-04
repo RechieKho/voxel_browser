@@ -1,7 +1,7 @@
 # Developer CLI (`vb`) — Design & Phased Plan
 
 > Full detail for this topic; the backlog entry is `REMAINING_TASKS.md`
-> Phase 8. Status: **8.2 implemented** (2026-10-04); 8.1 and 8.3+ not started.
+> Phase 8. Status: **8.1 and 8.2 implemented** (2026-10-04); 8.3+ not started. 8.1's CI wiring is unexercised until the next workflow run / tag.
 
 ## 1. Goals / non-goals
 
@@ -371,14 +371,15 @@ rough (S ≈ ≤1 day, M ≈ 2–3 days, L ≈ a week) for one contributor.
 
 Nothing can be downloaded reliably until this lands.
 
-- [ ] Per-platform staging produces `voxel_browser-<ver>-<os>-<arch>[-debug].zip`
+- [x] Per-platform staging produces `voxel_browser-<ver>-<os>-<arch>[-debug].zip`
       with the §4.1 layout (+ `client.toml.example`, `BUILD_INFO.toml`).
-- [ ] Replace `bundle.yml`'s flat merge with per-file release assets (or
+- [x] Replace `bundle.yml`'s flat merge with per-file release assets (or
       `merge` with `separate-directories: true` and upload each zip).
-- [ ] New script `scripts/make_release_manifest.py` (stdlib only) → `release.toml`
+- [x] New script `scripts/make_release_manifest.py` (stdlib only) → `release.toml`
       with sizes + SHA-256; `publish.yml` uploads it alongside the zips.
-- [ ] Release-type builds only in the release (asan/tsan legs never staged —
+- [x] Release-type builds only in the release (asan/tsan legs never staged —
       already the case on Linux; keep it so).
+- Implemented by `scripts/package_release.py` (per-platform zips, also a CLI-only `vb-<ver>-<platform>.zip`), `scripts/make_release_manifest.py`, and the `bundle.yml` hash verification. Zips are named from the latest tag (`setup_metadata.version`); `BUILD_INFO.toml` records the exact `git describe`.
 - **Exit:** tagging `v0.1.0` yields a release with ≥3 zips + a
   `release.toml` whose hashes match (`sha256sum -c` in the workflow).
 

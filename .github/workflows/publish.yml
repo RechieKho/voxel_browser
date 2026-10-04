@@ -30,4 +30,6 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           files: |
-            ${{ github.workspace }}/${{ needs.setup_metadata.outputs.project_name }}*
+            ${{ github.workspace }}/${{ needs.setup_metadata.outputs.project_name }}-*.zip
+            ${{ github.workspace }}/vb-*.zip
+            ${{ github.workspace }}/release.toml
