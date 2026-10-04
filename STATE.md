@@ -34,7 +34,40 @@ content-only (e.g. the user explicitly asks for a content-pack feature).
 
 ---
 
-## Current status (2026-09-30)
+## Current status (2026-10-02)
+
+**E2E automation: designed, E0 through E6 landed (all phases).** `docs/e2e-automation.md` is the
+design for a Playwright-style multiplayer test harness (stdio JSON-lines
+driver in the client/server + a pytest `vbtest` package). Hard constraint:
+the automation driver must be **compiled out of production** —
+`VB_WITH_AUTOMATION` defaults `OFF`, a `VB_DISTRIBUTION` build must refuse it
+at configure time, CI checks `--version` for `+automation`, and servers built
+without it reject automation clients in the handshake (§7). That protects
+against *our* tooling reaching production, not against third-party bots;
+flood protection stays server-side. Landed so far: E0 only — the
+`InputSource`/`InputFrame` seam (`inc/vb/render/input.hpp`,
+`src/render/input.cpp`, `tests/unit/input_test.cpp`); `sample_input_cmd` and
+`MovementBindings` moved there from `src/client/main.cpp`. E1 (2026-10-02): the windowed loop moved
+verbatim out of `src/client/main.cpp` into `ClientApp` (`client_app.{hpp,cpp}`;
+`session_host.hpp` holds `Singleplayer`/`RemoteConnection`), and `--headless` is
+now `ClientApp(render=false)` + `connect_blocking()` instead of a separate loop
+(headless skips the menu, loading screen, GL resources and `client.toml`
+writes; smoke output unchanged). Verified only headless — the windowed path
+was not run (no GPU in the container), so give it a manual smoke before
+trusting it. E2 (2026-10-03): `VB_WITH_AUTOMATION`/`VB_DISTRIBUTION` options
+(distribution+automation is a configure error; release/`debug` CI legs and the
+macOS/Windows legs set `VB_DISTRIBUTION=ON` and grep `--version` +
+`--automation stdio` of the staged binaries), `+automation` in `describe_build()`,
+and `src/automation/` (`vb_automation`: JSON-lines `Host`, predicate engine,
+protocol; endpoints in `src/{client,server}/automation_endpoint.hpp`).
+`--automation stdio` works on the server and on `--headless` clients
+(`hello/state/step/quit/wait_for`, `--automation-clock real|manual`); contract in
+`docs/automation-protocol.md`. Gotchas: GNS has no `--port 0`; protocol uses
+raw fd 0/1 (see design §10 items 7-8). No
+**Implementing any E-phase? Follow `docs/e2e-automation.md` §11**
+(per-phase doc checklist + safety invariants to re-verify) before calling it done. E2b (2026-10-03): `C2S_Hello.client_flags` (protocol 26→27); automation builds set `kClientFlagAutomation`, and a server without automation refuses such clients in the first handshake step (`HandshakeServerConfig::accept_automation_clients`). Tests: 4 new `net_test.cpp` cases + a `protocol_test.cpp` round-trip; the loopback-only guard in `vbtest` is E4. E3 (2026-10-04): client `key/mouse/look/select_slot/walk_to/break_block/place_block/chat.send/ui.*/hud.*` (`src/client/automation_endpoint.{hpp,cpp}`; multi-frame actions answer via deferred replies, `Host::respond`) and server `set_block/fill/teleport/give/set_time/set_health/kick/run_lua/block_at` (`src/server/automation_endpoint.hpp` + `#if VB_WITH_AUTOMATION` primitives on `ServerSession`/`PackRuntime`). Verified by hand with a throwaway script against a real `VB_WITH_NET` dedicated server + two real headless clients (break/place replicate to the other client, give/teleport/chat/walk/kick), 35 checks, plus the automation-off and -on `vb_tests` (430 / 440). NOT run: CI, Windows/macOS. Gotchas found: design §10 items 10-12 (`World::set_block` makes chunks; singleplayer has no pack keybinds; headless skips UI eval). E4 (2026-10-04): `tests/e2e/` (pytest `vbtest` package: sync API, `server`/`clients` fixtures with per-client cold asset caches, `expect()` auto-waiting, artifacts on failure, loopback-only guard), 10 tests, `ctest -L e2e` (registered only with AUTOMATION+NET+LUA+COMPRESSION and pytest importable), and an `e2e` job in `build_linux.yml` (ASan+UBSan, `VB_E2E_TIMEOUT_SCALE=3`; failure logs upload as `e2e-failure-logs`, deliberately not `<project>-*`). New predicates `chunk_loaded`, `on_ground`; E3's `break_block`/`place_block` fixed to send one click (they over-clicked). **Fixed a real engine crash: closing a pack UI with `ui.close()` while connected segfaulted the client** (`UiRuntime::do_close` passed a state-less nil to `lua_to_json`; regression test added). Verified locally: `ctest -L e2e` 10/10 five runs in a row (~26 s), full ctest in the NET tree, `vb_tests` 431 (off) / 443 (on) / 448 (on+NET), whole tree clean under `-Werror`. **NOT run: the CI job itself (never on a runner; ASan/LSan may find things), Windows/macOS.** Gotchas: design §10 items 13-19 (spawn is a drop; look applies after the input hook; punches hit players first; CI never compiled the automation code before). E5 (2026-10-04): `--net-sim` on both binaries (`inc/vb/net/net_sim.hpp`, `GnsTransport::set_net_sim`; refused in production builds, with `--singleplayer`, and without `VB_WITH_NET`), `rtt_ms` in the client snapshot, `@pytest.mark.net_sim`; windowed automation (no `--headless`, needs a display): `menu.set_name/connect/singleplayer`, `screenshot` (PNG), `type` (chat box, also headless); `vbtest.traceview` writes `trace.html` for every failed test; the CI `e2e` job now runs under `xvfb-run`, and all three release legs plus CTest check that `--net-sim` is refused. Verified locally: 18 e2e tests, 3 runs in a row under Xvfb (~44 s), 14 + 2 skips without a display, `vb_tests` 431 / 444 / 449, whole tree clean under `-Werror`; screenshots looked at (menu with the name filled in; the world with HUD). **NOT run: the CI job itself, Windows/macOS.** Gotchas: design §10 items 20-23 (raylib batches draw calls; windowed "joined" is not "playing"; GNS sim is process-wide). E6 (2026-10-04): `--automation tcp[:PORT]` (`src/automation/tcp.cpp`; binds 127.0.0.1 only, random token as the first line, `--automation-token`/`--automation-info`, one connection at a time, the game survives a disconnect); `--automation-record out.py` (`src/client/recorder.*`, a `ClientApp::Observer`; writes a runnable vbtest script with assertions after observable results); `vbtest.stack` + `clients(tcp=True)`/`detach`/`reattach`. Verified locally: 24 e2e tests (~60 s under Xvfb), a recorded session replays green on a fresh server (3x), the listener's bind address read from `/proc/net/tcp`, `vb_tests` 431 / 446 / 451, production tree passes all 7 flag-refusal checks, whole tree clean under `-Werror`. **NOT run: the CI job on GitHub (a feature-branch push triggers nothing: open a PR, push to a `*-workflow` branch, or dispatch manually), Windows (Winsock code is unbuilt), macOS.** A local ASan+UBSan+Xvfb run of the exact CI configuration found and fixed several CI-killing problems (design §10 items 28-31) and is now green twice. Gotchas: design §10 items 24-27. The remaining work is verification, not features: run the CI `e2e` job once, and build on Windows/macOS.
+
+## Status (2026-09-30)
 
 **Bumped doctest `v2.4.11` -> `v2.5.3`; `CMAKE_POLICY_VERSION_MINIMUM=3.5` shim
 stays.** REMAINING_TASKS.md's Phase 0 backlog said to drop the shim "if

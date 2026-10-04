@@ -4,7 +4,20 @@
 > as any change to a struct in `inc/vb/protocol/`, and bump
 > `kEngineProtocolVersion` in `cmake/version.hpp.in`.
 
-Current `ENGINE_PROTOCOL_VERSION`: **26**.
+Current `ENGINE_PROTOCOL_VERSION`: **27**.
+
+- **27** — `C2SHello` (`C2S_Hello`, 1) gains a trailing `u8 client_flags`
+  (new constant `kClientFlagAutomation = 1 << 0`). Clients built with
+  `VB_WITH_AUTOMATION` set it; a server built without automation
+  (`HandshakeServerConfig::accept_automation_clients == false`, the default
+  for such builds) refuses the connection in the very first handshake step,
+  before `S2C_ServerInfo`, with `S2C_Disconnect{kBadHandshake, "automation
+  clients are not accepted by this server"}`. Keeps dev/test clients off
+  production servers (docs/e2e-automation.md §7.4). Not a security boundary:
+  anyone can build a client that clears the bit. Side effect of appending a
+  field to the first message: a pre-27 client now fails the server's Hello
+  decode ("malformed Hello") rather than getting the friendlier
+  protocol-mismatch reason, same as any earlier Hello change would have.
 
 - **26** — `BlockRegistryRecord` (`S2C_BlockRegistry`, 40) gains `string
   crack_texture` -- mirrors `vb::world::BlockType::crack_texture` (spec
@@ -334,7 +347,7 @@ buffered, and yields `consumed` so a stream reader can advance.
 
 | Type (id)                | Fields                                                                 |
 | ------------------------ | -------------------------------------------------------------------- |
-| `C2S_Hello` (1)          | `u16 engine_protocol_version`, `u64 client_nonce`, `string client_version` |
+| `C2S_Hello` (1)          | `u16 engine_protocol_version`, `u64 client_nonce`, `string client_version` `u8 client_flags` (v27+; bit 0 = `kClientFlagAutomation`, set by `VB_WITH_AUTOMATION` builds; a server not built with automation refuses it with `kBadHandshake`, see `docs/e2e-automation.md` §7.4; unknown bits ignored) |
 | `S2C_ServerInfo` (2)     | `string pack_name`, `string pack_version`, `u16 engine_protocol_version`, `u16 tick_rate`, `string motd`, `u8 auth_mode` |
 | `C2S_Auth` (3)           | `string player_name`, `string token` (empty when `auth_mode = none`)   |
 | `S2C_AuthResult` (4)     | `bool ok`, `string reason`                                             |

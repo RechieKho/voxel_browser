@@ -15,6 +15,11 @@ PackRuntime::~PackRuntime() = default;
 PackRuntime::PackRuntime(PackRuntime &&) noexcept = default;
 PackRuntime &PackRuntime::operator=(PackRuntime &&) noexcept = default;
 
+#if defined(VB_WITH_AUTOMATION)
+bool PackRuntime::admin_give(core::NetId, std::string_view, std::uint16_t) {
+	return false;
+}
+#endif
 ScriptResult PackRuntime::load_pack_file(std::string_view, std::string_view) {
 	return { false, core::ScriptError::kDisabled,
 		"scripting disabled (built without VB_WITH_LUA)" };
@@ -2446,6 +2451,18 @@ PackRuntime::PackRuntime(net::Transport &transport,
 PackRuntime::~PackRuntime() = default;
 PackRuntime::PackRuntime(PackRuntime &&) noexcept = default;
 PackRuntime &PackRuntime::operator=(PackRuntime &&) noexcept = default;
+
+#if defined(VB_WITH_AUTOMATION)
+bool PackRuntime::admin_give(core::NetId player, std::string_view item_name, std::uint16_t count) {
+	const core::BlockId item = impl_->registry.find(item_name);
+	if (count == 0 || item == core::BlockId::kAir) {
+		return false;
+	}
+	impl_->give_item(player, item, count);
+	impl_->sync_inventory(player);
+	return true;
+}
+#endif
 
 ScriptResult PackRuntime::load_pack_file(std::string_view code,
 		std::string_view chunk_name) {

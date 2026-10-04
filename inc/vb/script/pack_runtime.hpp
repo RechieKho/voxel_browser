@@ -60,6 +60,14 @@ public:
 	PackRuntime(net::Transport &transport, world::BlockRegistry &registry,
 			std::filesystem::path storage_path, VmLimits limits = {});
 	~PackRuntime();
+
+#if defined(VB_WITH_AUTOMATION)
+	// Development-only (docs/e2e-automation.md §5.3): puts `count` of the block
+	// registered as `item_name` into a player's inventory and syncs it to
+	// them, exactly like `player:give{}`. False for an unknown item name, a
+	// zero count, or a build without scripting.
+	bool admin_give(core::NetId player, std::string_view item_name, std::uint16_t count);
+#endif
 	PackRuntime(PackRuntime &&) noexcept;
 	PackRuntime &operator=(PackRuntime &&) noexcept;
 	PackRuntime(const PackRuntime &) = delete;

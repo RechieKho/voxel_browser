@@ -17,7 +17,7 @@ The engine is split into two static libraries plus three executables
 | ------------------------ | -------------------------------------------------------------- |
 | `vb_core`               | Engine core. No rendering, no window — must build and run headless. |
 | `vb_render`              | Client-only rendering (raylib + raygui). Never linked by the server. |
-| `voxel_browser`          | The client ("the browser") executable — `src/client/main.cpp`. |
+| `voxel_browser`          | The client ("the browser") executable — `src/client/main.cpp` (CLI/window setup) + `ClientApp` (`client_app.cpp`, the per-frame state machine shared by windowed and `--headless`). |
 | `voxel_browser_server`   | The authoritative, headless server executable — `src/server/main.cpp`. |
 | `vb_tests`               | Unit + integration tests (doctest) — `tests/unit/*.cpp`.       |
 
@@ -36,7 +36,8 @@ The engine is split into two static libraries plus three executables
 | `ecs`          | `inc/vb/ecs/` (header-only)     | Component structs (`Position`, `Inventory`, ...). No registry driving them yet — `ServerSession` still simulates players directly. |
 | `assetsync`    | `src/assetsync/`, `inc/vb/assetsync/` | Content-pack manifest hashing + client-side content-addressed cache. |
 | `script`       | `src/script/`, `inc/vb/script/` | Embedded Lua VM (`vb::script::Vm`), the server pack API (`PackRuntime`), the client UI VM (`UiRuntime`), the content-pack loader. |
-| `render`       | `src/render/`, `inc/vb/render/` | Window/camera, chunk/entity renderers, raygui-backed UI + main menu. `vb_render` only. |
+| `automation`   | `src/automation/`, `inc/vb/automation/` | **Dev-only** (`VB_WITH_AUTOMATION`): JSON-lines host, command/predicate engine. Linked into the two executables only when the flag is on; endpoints live in `src/client/automation_endpoint.hpp` and `src/server/automation_endpoint.hpp`. |
+| `render`       | `src/render/`, `inc/vb/render/` | Window/camera, input seam (`InputSource`/`InputFrame`, `sample_input_cmd`), chunk/entity renderers, raygui-backed UI + main menu. `vb_render` only. |
 
 A build without a phase's heavy dependency (`VB_WITH_NET`/`_LUA`/
 `_WORLDGEN`/`_COMPRESSION`/`_MESHING`, all default `OFF`) links a stub that
@@ -78,6 +79,23 @@ A few things worth knowing that aren't obvious from a single build tree:
   `tests/CMakeLists.txt`) start the real binaries with `--headless` and
   assert on stdout/exit behavior — they need `VB_BUILD_SERVER`/
   `VB_BUILD_CLIENT` on (both default `ON`).
+- **Automation tests (`automation_test.cpp`) and the e2e harness (pytest
+  `tests/e2e/`, `ctest -L e2e`; see `tests/e2e/README.md`).** The automation driver (`src/automation/`,
+  JSON-lines over `--automation stdio`, contract in
+  `docs/automation-protocol.md`) is compiled only with
+  `-DVB_WITH_AUTOMATION=ON`; `automation_test.cpp` is added to `vb_tests`
+  then. Use a dedicated build directory (e.g.
+  `cmake -S . -B build-e2e -DVB_WITH_AUTOMATION=ON`; a real two-process
+  multiplayer run also needs `-DVB_WITH_NET=ON -DVB_WITH_LUA=ON
+  -DVB_WITH_COMPRESSION=ON`, protobuf, and `pip install -r
+  tests/e2e/requirements.txt` -- the `e2e` CTest entry is only registered when
+  all of that is present, and the windowed tests additionally want `xvfb-run` (they skip without a display); a build without automation refuses `--net-sim`, `--automation-record` and `--automation tcp` as well as `--automation`; the TCP listener binds `127.0.0.1` only and needs a token; `-DVB_WITH_WORLDGEN=ON` +
+  `-Werror` trips a FastNoise2 warning on newer GCC) and **never** enable that
+  flag in a build you intend to ship; the release/`debug` CI legs set
+  `VB_DISTRIBUTION=ON`, which makes the combination a configure error, and a
+  default build's `server_rejects_automation`/`client_rejects_automation`
+  CTest entries check that `--automation` is refused. See `docs/e2e-automation.md`; if you implement
+  any part of it, finish its §11 documentation checklist in the same change.
 - **`content_pack_test.cpp`** loads the real `content/base` files (not
   inline Lua strings) — if you edit that pack, this is the test that
   catches a syntax error or a registration-count regression.

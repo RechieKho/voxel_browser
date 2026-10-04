@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "vb/core/config.hpp"
+#include "vb/render/input.hpp"
 
 // Engine-level main menu / connect / settings / error screens (spec §5.3),
 // drawn with raygui. Not pack content -- no Lua involved here, unlike
@@ -61,7 +62,7 @@ public:
 	// persist. Rebinding is "click the action's key button, then press any
 	// physical key" -- Esc cancels a rebind in progress without changing it.
 	void open_keybindings(const core::ClientConfig &config);
-	KeybindingsResult draw_keybindings(core::ClientConfig &config);
+	KeybindingsResult draw_keybindings(core::ClientConfig &config, const InputFrame &input);
 
 	// --- connecting screen -------------------------------------------------
 	struct ConnectingResult {

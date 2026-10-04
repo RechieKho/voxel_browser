@@ -37,6 +37,7 @@ struct Harness {
 	HandshakeServerConfig server_cfg;
 	HandshakeServerHost server_host;
 	std::optional<ClientHandshake> client_hs;
+	std::uint8_t client_flags = 0; // set before start()
 
 	std::map<ConnId, ServerHandshake> server_hs;
 	bool server_completed = false;
@@ -57,7 +58,7 @@ struct Harness {
 		REQUIRE(server.listen(0));
 		auto id = client.connect("loopback", 0);
 		REQUIRE(id);
-		client_hs.emplace(HandshakeClientConfig{ "Tester", "", "vb-test", 1 });
+		client_hs.emplace(HandshakeClientConfig{ "Tester", "", "vb-test", 1, client_flags });
 	}
 
 	void pump_server() {
@@ -218,6 +219,56 @@ TEST_CASE("handshake rejects a full server") {
 	CHECK(h.client_failed);
 	CHECK(h.client_hs->status() == ClientHandshakeStatus::kFailed);
 }
+
+TEST_CASE("server refuses an automation client unless it accepts them") {
+	Harness h;
+	h.server_cfg.accept_automation_clients = false;
+	h.client_flags = proto::kClientFlagAutomation;
+	h.start();
+	h.run();
+
+	CHECK_FALSE(h.server_completed);
+	CHECK(h.client_failed);
+	CHECK(h.client_failure == "automation clients are not accepted by this server");
+	CHECK(h.client_disconnected);
+}
+
+TEST_CASE("server accepts an automation client when configured to") {
+	Harness h;
+	h.server_cfg.accept_automation_clients = true;
+	h.client_flags = proto::kClientFlagAutomation;
+	h.start();
+	h.run();
+
+	CHECK(h.server_completed);
+	CHECK_FALSE(h.client_failed);
+}
+
+// Only meaningful without VB_WITH_AUTOMATION: an automation build's
+// ClientHandshake always adds kClientFlagAutomation itself, so a client
+// without that bit doesn't exist there (the refusal case above covers that build).
+#if !defined(VB_WITH_AUTOMATION)
+TEST_CASE("server ignores unknown client flag bits and never needs them") {
+	Harness h;
+	h.server_cfg.accept_automation_clients = false;
+	h.client_flags = 0x80; // not kClientFlagAutomation
+	h.start();
+	h.run();
+
+	CHECK(h.server_completed);
+	CHECK_FALSE(h.client_failed);
+}
+
+TEST_CASE("a plain client is accepted by a server that refuses automation") {
+	Harness h;
+	h.server_cfg.accept_automation_clients = false;
+	h.start();
+	h.run();
+
+	CHECK(h.server_completed);
+	CHECK_FALSE(h.client_failed);
+}
+#endif
 
 TEST_CASE("server rejects an out-of-order message") {
 	Harness h;

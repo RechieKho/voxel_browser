@@ -1,6 +1,6 @@
 # voxel_browser — client executable ("the browser").
 
-add_executable(voxel_browser main.cpp)
+add_executable(voxel_browser main.cpp client_app.cpp)
 
 target_link_libraries(voxel_browser
   PRIVATE
@@ -19,3 +19,9 @@ target_compile_definitions(voxel_browser
 set_target_properties(voxel_browser PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
+
+# Development-only automation channel; no automation code is linked otherwise.
+if(VB_WITH_AUTOMATION)
+  target_sources(voxel_browser PRIVATE automation_endpoint.cpp recorder.cpp)
+  target_link_libraries(voxel_browser PRIVATE vb_automation)
+endif()

@@ -32,6 +32,12 @@ std::optional<double> GnsTransport::round_trip_time_seconds(ConnId) const {
 	return std::nullopt;
 }
 
+#if defined(VB_WITH_AUTOMATION)
+bool GnsTransport::set_net_sim(const NetSimParams &) {
+	return false;
+}
+#endif
+
 } // namespace vb::net
 
 #else
@@ -117,8 +123,21 @@ public:
 			constexpr int32_t kSendBufferBytes = 32 * 1024 * 1024;
 			SteamNetworkingUtils()->SetGlobalConfigValueInt32(
 					k_ESteamNetworkingConfig_SendBufferSize, kSendBufferBytes);
+#if defined(VB_WITH_AUTOMATION)
+			apply_net_sim();
+#endif
 		}
 	}
+#if defined(VB_WITH_AUTOMATION)
+	// GNS's fake-network settings are process-wide and reset when the runtime shuts down,
+	// so remember them and re-apply on every init.
+	void set_net_sim(const NetSimParams &p) {
+		net_sim_ = p;
+		if (refcount_ > 0) {
+			apply_net_sim();
+		}
+	}
+#endif
 	void release() {
 		if (--refcount_ == 0) {
 			GameNetworkingSockets_Kill();
@@ -202,6 +221,26 @@ private:
 	}
 
 	int refcount_ = 0;
+#if defined(VB_WITH_AUTOMATION)
+	NetSimParams net_sim_;
+
+	void apply_net_sim() {
+		ISteamNetworkingUtils *u = SteamNetworkingUtils();
+		const NetSimParams &p = net_sim_;
+		u->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_FakePacketLag_Send, p.lag_ms);
+		u->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketLoss_Send, static_cast<float>(p.loss_pct));
+		// Jitter: odds 100%, average jitter_ms, never more than twice that.
+		u->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketJitter_Send_Pct, p.jitter_ms > 0 ? 100.0f : 0.0f);
+		u->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketJitter_Send_Avg, static_cast<float>(p.jitter_ms));
+		u->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketJitter_Send_Max, static_cast<float>(2 * p.jitter_ms));
+		u->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketReorder_Send, static_cast<float>(p.reorder_pct));
+		u->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_FakePacketReorder_Time, 20);
+		u->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketDup_Send, static_cast<float>(p.dup_pct));
+		u->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_FakePacketDup_TimeMax, 20);
+		VB_INFO("net", "net-sim active: lag=", p.lag_ms, "ms jitter=", p.jitter_ms, "ms loss=", p.loss_pct,
+				"% reorder=", p.reorder_pct, "% dup=", p.dup_pct, "%");
+	}
+#endif
 	std::unordered_map<HSteamListenSocket, GnsTransport::Impl *> listen_owners_;
 	std::unordered_map<HSteamNetConnection, GnsTransport::Impl *> conn_owners_;
 };
@@ -459,6 +498,13 @@ std::optional<double> GnsTransport::round_trip_time_seconds(ConnId conn) const {
 	}
 	return static_cast<double>(status.m_nPing) / 1000.0;
 }
+
+#if defined(VB_WITH_AUTOMATION)
+bool GnsTransport::set_net_sim(const NetSimParams &params) {
+	GnsRuntime::instance().set_net_sim(params);
+	return true;
+}
+#endif
 
 } // namespace vb::net
 

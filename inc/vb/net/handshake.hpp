@@ -61,6 +61,15 @@ struct HandshakeServerConfig {
 	std::uint32_t max_players = 16;
 	double handshake_timeout_seconds = 10.0;
 	std::uint64_t world_seed = 0; // used for JoinAccept when the host grant is 0
+	// Whether to accept clients that set protocol::kClientFlagAutomation in
+	// C2SHello. Defaults to "only if this binary itself was built with
+	// VB_WITH_AUTOMATION", so a production server refuses dev/test clients
+	// (docs/e2e-automation.md §7.4). Tests override it explicitly.
+#if defined(VB_WITH_AUTOMATION)
+	bool accept_automation_clients = true;
+#else
+	bool accept_automation_clients = false;
+#endif
 };
 
 struct AuthOutcome {
@@ -258,6 +267,10 @@ struct HandshakeClientConfig {
 	std::string token;
 	std::string client_version = "voxel_browser";
 	std::uint64_t client_nonce = 0;
+	// Extra protocol::kClientFlag* bits to send in C2SHello. A build with
+	// VB_WITH_AUTOMATION always adds kClientFlagAutomation on top of this;
+	// tests set it directly to exercise the server policy in any build.
+	std::uint8_t client_flags = 0;
 };
 
 struct ClientHandshakeStep {

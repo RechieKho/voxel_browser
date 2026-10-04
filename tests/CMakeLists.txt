@@ -64,8 +64,15 @@ target_link_libraries(vb_tests
 # which -- like vb_render itself -- only exist when VB_BUILD_CLIENT is ON
 # (cmake/Dependencies.cmake gates the raylib fetch behind it).
 if(VB_BUILD_CLIENT)
-  target_sources(vb_tests PRIVATE unit/texture_atlas_test.cpp unit/crack_atlas_test.cpp)
+  target_sources(vb_tests PRIVATE unit/texture_atlas_test.cpp unit/crack_atlas_test.cpp unit/input_test.cpp)
   target_link_libraries(vb_tests PRIVATE vb_render)
+endif()
+
+# Development-only automation module (docs/e2e-automation.md); absent from
+# default builds.
+if(VB_WITH_AUTOMATION)
+  target_sources(vb_tests PRIVATE unit/automation_test.cpp)
+  target_link_libraries(vb_tests PRIVATE vb_automation)
 endif()
 
 # doctest.h itself trips /W4 /WX on MSVC — treat its headers as SYSTEM so the
@@ -102,4 +109,61 @@ if(VB_BUILD_CLIENT)
             --render-distance 2)
   set_tests_properties(singleplayer_smoke PROPERTIES
     PASS_REGULAR_EXPRESSION "joined singleplayer" TIMEOUT 60)
+endif()
+
+# A build without VB_WITH_AUTOMATION must reject --automation loudly instead of
+# silently ignoring it (docs/e2e-automation.md §7.2).
+if(NOT VB_WITH_AUTOMATION)
+  if(VB_BUILD_SERVER)
+    add_test(NAME server_rejects_automation COMMAND voxel_browser_server --automation stdio)
+    set_tests_properties(server_rejects_automation PROPERTIES WILL_FAIL TRUE)
+    add_test(NAME server_rejects_net_sim COMMAND voxel_browser_server --net-sim lag_ms=1 --ticks 1)
+    set_tests_properties(server_rejects_net_sim PROPERTIES WILL_FAIL TRUE)
+    add_test(NAME server_rejects_automation_tcp COMMAND voxel_browser_server --automation tcp --ticks 1)
+    set_tests_properties(server_rejects_automation_tcp PROPERTIES WILL_FAIL TRUE)
+  endif()
+  if(VB_BUILD_CLIENT)
+    add_test(NAME client_rejects_automation COMMAND voxel_browser --automation stdio)
+    set_tests_properties(client_rejects_automation PROPERTIES WILL_FAIL TRUE)
+    add_test(NAME client_rejects_net_sim COMMAND voxel_browser --net-sim lag_ms=1 --headless --frames 1)
+    set_tests_properties(client_rejects_net_sim PROPERTIES WILL_FAIL TRUE)
+    add_test(NAME client_rejects_automation_tcp COMMAND voxel_browser --automation tcp --headless --frames 1)
+    set_tests_properties(client_rejects_automation_tcp PROPERTIES WILL_FAIL TRUE)
+    add_test(NAME client_rejects_automation_record
+      COMMAND voxel_browser --automation-record ${CMAKE_BINARY_DIR}/never.py --headless --frames 1)
+    set_tests_properties(client_rejects_automation_record PROPERTIES WILL_FAIL TRUE)
+  endif()
+endif()
+
+# End-to-end multiplayer tests (docs/e2e-automation.md §8): real voxel_browser +
+# voxel_browser_server processes driven over the automation channel by pytest
+# (tests/e2e/). Registered only in a build that can run one: automation (the driver),
+# NET (a real UDP server/client pair), LUA (the base pack's mechanics and UI) and
+# COMPRESSION (asset sync, which is how clients get the pack's UI scripts), plus a
+# Python that can import pytest. Select/skip with `ctest -L e2e` / `ctest -LE e2e`.
+if(VB_WITH_AUTOMATION AND VB_WITH_NET AND VB_WITH_LUA AND VB_WITH_COMPRESSION
+    AND VB_BUILD_CLIENT AND VB_BUILD_SERVER)
+  find_package(Python3 COMPONENTS Interpreter)
+  if(Python3_FOUND)
+    execute_process(COMMAND ${Python3_EXECUTABLE} -c "import pytest"
+      RESULT_VARIABLE _vb_pytest_rc OUTPUT_QUIET ERROR_QUIET)
+    if(_vb_pytest_rc EQUAL 0)
+      add_test(NAME e2e
+        COMMAND ${Python3_EXECUTABLE} -m pytest -p no:cacheprovider -q
+                ${CMAKE_SOURCE_DIR}/tests/e2e
+                --vb-build-dir ${CMAKE_BINARY_DIR}
+                --vb-artifacts ${CMAKE_BINARY_DIR}/e2e-artifacts
+                --junitxml=${CMAKE_BINARY_DIR}/e2e.xml)
+      set_tests_properties(e2e PROPERTIES LABELS e2e TIMEOUT 900)
+      # Sanitizer builds run several times slower; vbtest scales every wait by this.
+      if(VB_ENABLE_ASAN OR VB_ENABLE_UBSAN OR VB_ENABLE_TSAN)
+        set_property(TEST e2e APPEND PROPERTY ENVIRONMENT VB_E2E_TIMEOUT_SCALE=3)
+      endif()
+    else()
+      message(STATUS "e2e tests not registered: ${Python3_EXECUTABLE} cannot import pytest "
+                     "(pip install -r tests/e2e/requirements.txt)")
+    endif()
+  else()
+    message(STATUS "e2e tests not registered: no Python 3 interpreter found")
+  endif()
 endif()

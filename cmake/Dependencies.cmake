@@ -303,8 +303,12 @@ if(VB_WITH_LUA)
     unset(_vb_sol2_real_target)
   endif()
 
-  # nlohmann/json — vb.storage persistence + player:open_ui ctx serialization
-  # (Phase 4.2). Header-only.
+endif()
+
+# nlohmann/json — vb.storage persistence + player:open_ui ctx serialization
+# (Phase 4.2) and the development-only automation protocol (e2e design).
+# Header-only.
+if(VB_WITH_LUA OR VB_WITH_AUTOMATION)
   find_package(nlohmann_json QUIET)
   if(NOT nlohmann_json_FOUND AND NOT TARGET nlohmann_json::nlohmann_json)
     vb_fetch(nlohmann_json TAG v3.11.3 REPO https://github.com/nlohmann/json.git)

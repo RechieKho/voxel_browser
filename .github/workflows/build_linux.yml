@@ -19,8 +19,10 @@ jobs:
         include:
           - build_type: release
             cmake_build_type_keyword: Release
+            distribution_cmake_flags: -DVB_DISTRIBUTION=ON
           - build_type: debug
             cmake_build_type_keyword: RelWithDebInfo
+            distribution_cmake_flags: -DVB_DISTRIBUTION=ON
           - build_type: asan
             cmake_build_type_keyword: RelWithDebInfo
             sanitizer_cmake_flags: -DVB_ENABLE_ASAN=ON -DVB_ENABLE_UBSAN=ON
@@ -60,7 +62,8 @@ jobs:
             -DVB_WITH_LUA=ON \
             -DVB_WITH_NET=ON \
             -DVB_WITH_REPLICATION=ON \
-            ${{ matrix.sanitizer_cmake_flags }}
+            ${{ matrix.sanitizer_cmake_flags }} \
+            ${{ matrix.distribution_cmake_flags }}
 
       - name: Build
         shell: bash
@@ -89,6 +92,34 @@ jobs:
           cp -r "${{ github.workspace }}/content" "$dist/"
           find "$dist/content" \( -name "storage.json" -o -type d -name "db" \) -exec rm -rf {} +
 
+      - name: Verify binaries contain no automation
+        if: matrix.build_type == 'release' || matrix.build_type == 'debug'
+        shell: bash
+        run: |
+          dist="${{ github.workspace }}/dist"
+          for exe in voxel_browser voxel_browser_server; do
+            if "$dist/$exe" --version | grep -qi automation; then
+              echo "::error::$exe was built with VB_WITH_AUTOMATION"; exit 1
+            fi
+            if "$dist/$exe" --automation stdio </dev/null >/dev/null 2>&1; then
+              echo "::error::$exe accepted --automation"; exit 1
+            fi
+            # Not `--version`: that exits 0 before any flag is checked. These are one-shot if accepted.
+            if "$dist/$exe" --net-sim lag_ms=1 --headless --frames 1 --ticks 1 </dev/null >/dev/null 2>&1; then
+              echo "::error::$exe accepted --net-sim"; exit 1
+            fi
+            if "$dist/$exe" --automation tcp </dev/null >/dev/null 2>&1; then
+              echo "::error::$exe accepted --automation tcp"; exit 1
+            fi
+            # Client-only flag (the server has no recorder and ignores it like any unknown flag).
+            case "$exe" in
+              voxel_browser|voxel_browser.exe)
+                if "$dist/$exe" --automation-record /tmp/x.py --headless --frames 1 </dev/null >/dev/null 2>&1; then
+                  echo "::error::$exe accepted --automation-record"; exit 1
+                fi ;;
+            esac
+          done
+
       - name: Export binaries
         if: matrix.build_type == 'release' || matrix.build_type == 'debug'
         uses: actions/upload-artifact@v4
@@ -96,3 +127,83 @@ jobs:
           name: ${{ needs.setup_metadata.outputs.project_name }}-${{ matrix.target }}-${{ matrix.arch }}-${{ matrix.build_type }}
           path: ${{ github.workspace }}/dist/*
           if-no-files-found: error
+
+  # End-to-end multiplayer tests (docs/e2e-automation.md §8): real client + server
+  # processes driven over the development-only automation channel. This is the only job
+  # that builds with VB_WITH_AUTOMATION=ON; it never stages or uploads binaries, and its
+  # failure-log artifact is deliberately NOT named "<project>-*" so bundle.yml's merge
+  # pattern can't sweep it into a release.
+  e2e:
+    runs-on: ubuntu-latest
+    # An ASan build of everything plus a real client/server run is slow; a hung test must not
+    # sit for the 6-hour default (the e2e CTest entry has its own 15-minute TIMEOUT).
+    timeout-minutes: 75
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      # A known interpreter with a working pip (Ubuntu 24.04's system pip refuses to install
+      # without a venv, PEP 668). CMake must find *this* python, so it goes first.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ninja-build cmake build-essential \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+            libgl1-mesa-dev libglu1-mesa-dev \
+            libssl-dev libprotobuf-dev protobuf-compiler \
+            xvfb libgl1-mesa-dri
+          python3 -m pip install -r tests/e2e/requirements.txt
+
+      # ASan + UBSan: real two-process shutdown is exactly where leaks and teardown
+      # bugs show up. NET/LUA/COMPRESSION: a real UDP server, the base pack's
+      # mechanics and UI, and asset sync (how clients receive the pack's UI scripts).
+      - name: Configure
+        shell: bash
+        run: |
+          cmake -S "${{ github.workspace }}" -B "${{ github.workspace }}/build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DVB_WARNINGS_AS_ERRORS=ON \
+            -DVB_HEADLESS=OFF \
+            -DVB_WITH_LUA=ON \
+            -DVB_WITH_NET=ON \
+            -DVB_WITH_REPLICATION=ON \
+            -DVB_WITH_COMPRESSION=ON \
+            -DVB_WITH_AUTOMATION=ON \
+            -DVB_ENABLE_ASAN=ON -DVB_ENABLE_UBSAN=ON
+
+      # CMake silently skips registering the e2e test when its python can't import pytest. A
+      # green run that executed no e2e tests is worse than a red one, so insist it is there.
+      - name: Verify the e2e test is registered
+        shell: bash
+        working-directory: build
+        run: |
+          ctest -N -L e2e
+          ctest -N -L e2e | grep -q "Total Tests: 1" || {
+            echo "::error::the e2e CTest entry was not registered (can the python CMake found import pytest?)"; exit 1; }
+
+      - name: Build
+        shell: bash
+        run: cmake --build "${{ github.workspace }}/build"
+
+      # The whole suite, not just `-L e2e`: it also runs the automation-on unit tests.
+      # Under Xvfb (software GL) so the windowed tests -- real window, menu, screenshots --
+      # run too; without a display they skip themselves.
+      - name: Test
+        shell: bash
+        working-directory: build
+        run: xvfb-run -a -s "-screen 0 1280x720x24" ctest --output-on-failure
+
+      - name: Upload e2e failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-failure-logs
+          path: ${{ github.workspace }}/build/e2e-artifacts
+          if-no-files-found: ignore

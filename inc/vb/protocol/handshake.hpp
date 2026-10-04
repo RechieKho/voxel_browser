@@ -44,11 +44,18 @@ constexpr bool valid(DisconnectReason r) {
 	return static_cast<std::uint8_t>(r) <= static_cast<std::uint8_t>(DisconnectReason::kBadHandshake);
 }
 
+// C2SHello::client_flags bits. Unknown bits are ignored by the receiver.
+// kClientFlagAutomation is set by clients built with VB_WITH_AUTOMATION
+// (docs/e2e-automation.md §7.4): a server built without it refuses them so a
+// dev/test client can never join a production server by accident.
+inline constexpr std::uint8_t kClientFlagAutomation = 1u << 0;
+
 struct C2SHello {
 	static constexpr MessageType kType = MessageType::kC2SHello;
 	std::uint16_t engine_protocol_version = 0;
 	std::uint64_t client_nonce = 0;
 	std::string client_version;
+	std::uint8_t client_flags = 0; // kClientFlag* bits (protocol v27+)
 
 	void encode(std::vector<std::byte> &out) const;
 	static Decoded<C2SHello> decode(std::span<const std::byte> in);
