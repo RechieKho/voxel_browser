@@ -400,8 +400,9 @@ TEST_CASE("systemd unit") {
 	CHECK(unit.find("TimeoutStopSec=60") != std::string::npos);
 	CHECK(unit.find("Restart=on-failure") != std::string::npos);
 	CHECK(unit.find("WantedBy=default.target") != std::string::npos); // a *user* unit
-	CHECK(unit.find("append:/home/me/.local/share/voxel_browser/servers/survival/logs/server.log") !=
-			std::string::npos);
+	// Built with fs::path's own separator (a backslash on Windows hosts), so compare
+	// against the same path rather than a hard-coded POSIX string.
+	CHECK(unit.find("append:" + s.log_file.string()) != std::string::npos);
 	CHECK(unit.find("Environment=") == std::string::npos);
 
 	// systemd expands % and $ and splits on spaces: all must stay literal.
