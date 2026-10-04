@@ -330,7 +330,9 @@ struct AimedTask : Task {
 		double yaw = 0, pitch = 0;
 		aim_angles(eye, tx, ty, tz, yaw, pitch);
 		c.app.set_look(yaw, pitch);
-		stable = (std::abs(yaw - last_yaw) < 1e-6 && std::abs(pitch - last_pitch) < 1e-6) ? stable + 1 : 0;
+		// 0.05 degrees is ~4 mm at five blocks: invisible to the server, but exact equality never holds while
+		// server corrections are still nudging the predicted position (a slow, sanitized server).
+		stable = (std::abs(yaw - last_yaw) < 0.05 && std::abs(pitch - last_pitch) < 0.05) ? stable + 1 : 0;
 		last_yaw = yaw;
 		last_pitch = pitch;
 		return true;
@@ -345,11 +347,9 @@ struct AimedTask : Task {
 // extra punches/placements before the client even sees the first result (which broke
 // the blocks behind the target and placed stones in the player's own cell).
 struct BreakBlockTask final : AimedTask {
-	static constexpr long long kStallFrames = 60; // no feedback for 1s -> click again
 	vb::core::IVec3 pos;
 	std::string before;
 	bool waiting = false;
-	long long clicked_at = 0;
 	std::uint16_t punches_at_click = 0;
 	BreakBlockTask(vb::core::IVec3 p, long long timeout_frames) :
 			AimedTask(timeout_frames), pos(p) {}
@@ -374,7 +374,6 @@ struct BreakBlockTask final : AimedTask {
 			// max_damage > 0 needs several; each is confirmed by S2C_BlockDamage.
 			c.in.hold_mouse_button(MOUSE_BUTTON_LEFT, 1);
 			waiting = true;
-			clicked_at = c.frame;
 			punches_at_click = punches(c, pos);
 		}
 	}
@@ -389,8 +388,13 @@ struct BreakBlockTask final : AimedTask {
 		if (now && *now != before) {
 			return Reply::success(json{ { "block_before", before }, { "block_after", *now } });
 		}
-		if (waiting && (punches(c, pos) != punches_at_click || c.frame - clicked_at >= kStallFrames)) {
-			waiting = false; // the last punch landed (or was lost): free to click again
+		// Free to punch again only once the server confirmed the last one. No blind retry on
+		// silence: an instant-break block gives no feedback but vanishing, and a slow server
+		// (a sanitizer build) answering late would turn a retry into a second punch that breaks
+		// the block *behind* the target. Input batches repeat recent commands, so a click is
+		// effectively never lost; if it is, the timeout says so.
+		if (waiting && punches(c, pos) != punches_at_click) {
+			waiting = false;
 		}
 		if (c.frame - start >= deadline) {
 			const auto hit = c.look_ray();

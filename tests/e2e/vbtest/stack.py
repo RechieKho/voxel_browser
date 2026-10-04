@@ -12,7 +12,7 @@ import shutil
 from .expect import expect
 from .handles import Client, Server
 from .net import check_host, free_udp_port
-from .process import ProcessDied
+from .process import ProcessDied, timeout_scale
 
 EXE = ".exe" if os.name == "nt" else ""
 DEFAULT_SERVER_CONFIG = {"world_seed": 7, "view_distance": 3, "persist_world": False, "tick_rate": 20}
@@ -84,7 +84,9 @@ class ClientFactory:
             conf = home / "client.toml"
             conf.write_text('player_name = "%s"\nrender_distance = %d\n' % (name, render_distance) +
                             ('window_width = 640\nwindow_height = 360\nvsync = false\n' if windowed else ""))
-            env = dict(os.environ, HOME=str(home), XDG_CACHE_HOME=str(cache), LOCALAPPDATA=str(cache))
+            env = dict(os.environ, HOME=str(home), XDG_CACHE_HOME=str(cache), LOCALAPPDATA=str(cache),
+                       # the client's own 10 s connect deadline, stretched like every other wait
+                       VB_CONNECT_TIMEOUT_SECONDS=str(int(10 * timeout_scale())))
             argv = [str(self.client_bin)] + ([] if windowed else ["--headless"])
             if not via_menu:  # --server connects straight away; without it a windowed client opens on the menu
                 argv += ["--server", host, "--port", str(port or self.server.port)]

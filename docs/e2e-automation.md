@@ -606,6 +606,41 @@ without any automation and remove the duplicated headless loop.
     recording and, as a user would add it, the replay) is stable. Seed 7 gives the same
     spawn and terrain, so absolute coordinates replay.
 
+28. **A CI review found three jobs-killing problems before any runner saw them (E6 follow-up).**
+    (a) The "verify no automation" step ran `--net-sim ... --version` / `--automation-record
+    ... --version`; `--version` exits 0 before any flag is checked, so every release leg would
+    have reported "accepted". It now uses the one-shot forms (`--headless --frames 1 --ticks 1`;
+    `--automation-record` is client-only), and the step script was run against both a production
+    and an automation build (passes / fails correctly). (b) **Lint**: with the clang-format the lint
+    job fetches (latest, 23.x) the original baseline had 0 violations and this branch 75
+    (`client_app.*`, `render/input.cpp`, `client/main.cpp`); every build job `needs: lint`, so
+    nothing would have run. Formatted. Test lint with the same version, not whatever is installed.
+    (c) **GCC 13 `-Wmaybe-uninitialized` false positive inside `<regex>`** when `predicate.cpp` is
+    built with ASan -O2 under `-Werror`; silenced for that file on GCC (`src/automation/CMakeLists.txt`).
+29. **CMake silently skips the `e2e` test if its python can't import pytest.** A green job that ran
+    no e2e tests is worse than a red one, so the CI job now fails if `ctest -N -L e2e` doesn't
+    list it, and uses `actions/setup-python` (Ubuntu 24.04's system pip refuses installs, PEP 668).
+30. **Running the CI configuration locally found more (ASan + UBSan + Xvfb, 24 tests, twice green after
+    the fixes).** (a) `break_block` re-clicked after 60 frames of silence; an instant-break block
+    gives no feedback but vanishing, so a slow server turned the retry into a second punch that
+    destroyed the block *behind* the target (recorder fixture failed: nothing to place against).
+    **No blind retry now.** (b) Under ASan an action right after a `walk_to` takes ~7 s (0.3 s
+    normally; the server is slow to settle after movement), so action timeouts doubled (break/place
+    10 s, walk 20 s, x3 under sanitizers) and the recorder waits 15 s for a result before dropping an
+    assertion. Aim settling tolerance loosened to 0.05 degrees. (c) The client's own hard-coded
+    10 s connect deadline expired for the second client behind `--net-sim` on a sanitized build;
+    dev builds read `VB_CONNECT_TIMEOUT_SECONDS` (the harness sets it from its timeout scale;
+    shipped builds are still exactly 10 s). UBSan also prints ~35 `invalid vptr` lines per client
+    from `GnsRuntime` (`SteamNetworkingUtils()`), identical with and without this work and
+    harmless to the tests, but they are noise worth a look (GNS hands out that interface in a way
+    UBSan's vptr check dislikes).
+31. **Still not verified by running it on GitHub:** `runner.yml` triggers only on pull requests, pushes
+    to `main` and to branches named `*-workflow`, or manual dispatch, so a push to a feature branch
+    runs **nothing**. The job structure, `xvfb`/`libgl1-mesa-dri` package names, `setup-python`, and
+    the artifact upload have only been checked by YAML parsing and by running the same commands
+    locally on Ubuntu 24.04 / GCC 13.3, which is what `ubuntu-latest` provides. 2-vCPU runners will be
+    slower than this 4-core sandbox. Windows (Winsock in `tcp.cpp`) and macOS are unbuilt.
+
 ## 11. Documentation upkeep (for agents implementing this design)
 
 This doc and several others describe the automation work as **planned**.

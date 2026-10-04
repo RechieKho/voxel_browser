@@ -89,15 +89,15 @@ class Client(_Base):
     def select_slot(self, n):
         return self.call("select_slot", n=n)
 
-    def walk_to(self, pos, tolerance=0.5, timeout=15.0):
+    def walk_to(self, pos, tolerance=0.5, timeout=20.0):
         """pos = (x, y|None, z)."""
         return self.call("walk_to", _timeout=timeout + 10.0, pos=list(pos), tolerance=tolerance,
                          timeout_ms=_ms(timeout))
 
-    def break_block(self, pos, timeout=5.0):
+    def break_block(self, pos, timeout=10.0):
         return self.call("break_block", _timeout=timeout + 10.0, pos=list(pos), timeout_ms=_ms(timeout))
 
-    def place_block(self, pos, face, timeout=5.0):
+    def place_block(self, pos, face, timeout=10.0):
         """Place against face `face` (unit axis vector) of the existing block at `pos`."""
         return self.call("place_block", _timeout=timeout + 10.0, pos=list(pos), face=list(face),
                          timeout_ms=_ms(timeout))

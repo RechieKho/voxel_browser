@@ -3,6 +3,8 @@
 
 #include "client_app.hpp"
 
+#include <cstdlib>
+
 #if defined(VB_WITH_AUTOMATION)
 #include <rlgl.h>
 #endif
@@ -20,6 +22,26 @@
 #endif
 
 namespace vb::client {
+
+namespace {
+
+// How long a connection attempt may take before the client gives up. 10 s in every shipped
+// build. Development builds let the test harness stretch it (VB_CONNECT_TIMEOUT_SECONDS), as it
+// stretches its own waits, so a sanitized client behind a simulated bad network isn't judged
+// by a clock meant for a healthy one.
+std::chrono::seconds connect_timeout() {
+#if defined(VB_WITH_AUTOMATION)
+	if (const char *v = std::getenv("VB_CONNECT_TIMEOUT_SECONDS")) {
+		const long s = std::strtol(v, nullptr, 10);
+		if (s >= 1 && s <= 600) {
+			return std::chrono::seconds(s);
+		}
+	}
+#endif
+	return std::chrono::seconds(10);
+}
+
+} // namespace
 
 ClientApp::ClientApp(vb::core::ClientConfig config_in, std::string config_path_in,
 		vb::render::Window &window_in, const std::string &cli_server, int cli_port,
@@ -60,7 +82,7 @@ void ClientApp::begin_connect(bool as_singleplayer) {
 		std::cout << "client: connecting to " << connecting_target << "...\n";
 		remote = std::make_unique<RemoteConnection>(menu.address(),
 				static_cast<std::uint16_t>(menu.port()), menu.player_name(), config);
-		connect_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+		connect_deadline = std::chrono::steady_clock::now() + connect_timeout();
 		if (!remote->session) {
 			error_message = "Could not connect to " + connecting_target +
 					" (bad address, or built without VB_WITH_NET)";
@@ -298,7 +320,7 @@ bool ClientApp::connect_blocking() {
 		client = &c;
 	} else {
 		client = &*remote->session;
-		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+		const auto deadline = std::chrono::steady_clock::now() + connect_timeout();
 		while (!client->joined() && !client->failed() &&
 				std::chrono::steady_clock::now() < deadline) {
 			client->tick(0.05);

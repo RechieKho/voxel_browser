@@ -18,7 +18,7 @@ namespace {
 constexpr double kReach = 5.0; // the distance the client's own targeting uses
 constexpr long long kWalkIdleFrames = 15; // a quarter second without a movement key = stopped
 constexpr long long kSameBlockFrames = 90; // clicks on one block this close together are one break
-constexpr long long kResultFrames = 180; // how long to wait for an action's result
+constexpr long long kResultFrames = 900; // how long to wait for an action's result (15 s at 60 fps; a sanitized server needs seconds)
 
 std::string fmt1(double v) {
 	char buf[32];
