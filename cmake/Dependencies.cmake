@@ -189,6 +189,31 @@ if(VB_BUILD_CLI)
   add_library(vb_ed25519_signing STATIC
     "${ed25519_SOURCE_DIR}/src/keypair.c" "${ed25519_SOURCE_DIR}/src/sign.c")
   target_link_libraries(vb_ed25519_signing PUBLIC vb_ed25519)
+
+  # GameNetworkingSockets bundles its own Ed25519 under the same global names
+  # (ed25519_sign, ...). ELF/Mach-O linkers tolerate that; MSVC fails with
+  # LNK2005 as soon as a binary pulls in both (vb_tests does). Prefix every
+  # global symbol this vendored copy defines so it can never collide.
+  set(_vb_ed25519_api ed25519_verify ed25519_sign ed25519_create_keypair)
+  set(_vb_ed25519_internal
+    fe_0 fe_1 fe_add fe_cmov fe_copy fe_cswap fe_frombytes fe_invert
+    fe_isnegative fe_isnonzero fe_mul fe_mul121666 fe_neg fe_pow22523 fe_sq
+    fe_sq2 fe_sub fe_tobytes
+    ge_add ge_double_scalarmult_vartime ge_frombytes_negate_vartime ge_madd
+    ge_msub ge_p1p1_to_p2 ge_p1p1_to_p3 ge_p2_0 ge_p2_dbl ge_p3_0 ge_p3_dbl
+    ge_p3_to_cached ge_p3_to_p2 ge_p3_tobytes ge_scalarmult_base ge_sub
+    ge_tobytes
+    sc_muladd sc_reduce
+    sha512 sha512_final sha512_init sha512_update)
+  foreach(_sym IN LISTS _vb_ed25519_api)
+    # PUBLIC: callers (signature.cpp, the signing tests) must see the new name too.
+    target_compile_definitions(vb_ed25519 PUBLIC ${_sym}=vb_${_sym})
+  endforeach()
+  foreach(_sym IN LISTS _vb_ed25519_internal)
+    # The signing sources call the same internals, so both libraries rename them.
+    target_compile_definitions(vb_ed25519 PRIVATE ${_sym}=vb_ed25519_${_sym})
+    target_compile_definitions(vb_ed25519_signing PRIVATE ${_sym}=vb_ed25519_${_sym})
+  endforeach()
 endif()
 
 # ===========================================================================
