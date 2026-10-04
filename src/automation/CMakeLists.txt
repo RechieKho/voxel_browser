@@ -19,6 +19,13 @@ target_link_libraries(vb_automation
     vb_sanitizers
 )
 target_compile_definitions(vb_automation PUBLIC VB_WITH_AUTOMATION=1)
+
+# GCC 13 reports -Wmaybe-uninitialized from inside libstdc++'s <regex> (std::function in
+# _State) when this file is built with ASan at -O2; with -Werror that fails the CI e2e job.
+# A false positive in a system header, so silence just that warning for just this file.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  set_source_files_properties(predicate.cpp PROPERTIES COMPILE_OPTIONS "-Wno-maybe-uninitialized")
+endif()
 if(WIN32)
   target_link_libraries(vb_automation PRIVATE ws2_32)
 endif()
