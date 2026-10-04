@@ -92,8 +92,8 @@ yaw 0 faces -Z).
 | `look_at` | `{pos}` → `{yaw, pitch}` (aim the eye at a point) |
 | `select_slot` | `{n: 1..9}` → `{slot}` (presses the number key) |
 | `walk_to` | `{pos: [x, y\|null, z], tolerance=0.5, timeout_ms=15000}` → `{feet}`; holds forward facing the target, hops when stuck. `timeout`'s `last.feet` shows where it stopped |
-| `break_block` | `{pos, timeout_ms=5000}` → `{block_before, block_after}`; aims at the block centre and punches (one click per rising edge, as `content/base/mechanics.lua` expects) until it changes |
-| `place_block` | `{pos, face: [nx,ny,nz], timeout_ms=5000}` → `{placed, at}`; right-clicks face `face` of the existing block `pos`, placing at `pos+face` with the selected slot's item. `timeout`'s `last` has `looking_at`/`face` |
+| `break_block` | `{pos, timeout_ms=5000}` → `{block_before, block_after}`; aims at the block centre, holds the aim steady for 8 frames (the server applies a command's look after running the pack's input hook), then punches once and waits for `S2C_BlockDamage`/the block change before the next punch, so it never over-punches. `timeout`'s `last` has `punches`. Note a punch hits the nearest *player* before any block |
+| `place_block` | `{pos, face: [nx,ny,nz], timeout_ms=5000}` → `{placed, at}`; same aim settling, then exactly one right-click (no retry) on face `face` of the existing block `pos`, placing at `pos+face` with the selected slot's item. `timeout`'s `last` has `looking_at`/`face` |
 | `chat.send` | `{text}` → `{}`; sends over `ClientSession::send_chat`, what Enter in the chat box does |
 | `ui.click` / `ui.fill` / `ui.select` | `{id}` / `{id, text}` / `{id, index}` → `{}` on the open modal screen (button / textbox / list) |
 | `hud.click` / `hud.fill` / `hud.select` | same, on the always-on HUD widgets |
@@ -132,7 +132,7 @@ than creating an empty chunk.
 ### State snapshots
 
 Client: `app_state` (`menu|settings|keybindings|connecting|loading|playing|error`),
-`joined`, `net_id`, `feet [x,y,z]`, `yaw`, `pitch`, `chat [str]` (the HUD's last 8
+`joined`, `net_id`, `feet [x,y,z]`, `on_ground`, `yaw`, `pitch`, `chat [str]` (the HUD's last 8
 lines), `chat_open`, `mouse_captured`, `selected_slot` (1-based),
 `inventory [{item,count}]` (item = block name), `entities [{net_id,name,pos}]`,
 `chunks_loaded`, `target_block {pos,normal,block}` (what the crosshair is on,
@@ -158,10 +158,12 @@ bad arguments is `bad_request`.
 | `chat_contains` | `{text}` / `{regex}` or `"text"` | `chat` |
 | `entity_visible` | `{name}` | `entities` |
 | `entity_near` / `player_near` | `{name,pos,radius}` | `entities` / `players` |
-| `block_is` | `{pos,block}` (registry name, e.g. `"base:air"`) | the role's own block view (client: chunk store, `false` if the chunk isn't loaded) |
+| `block_is` | `{pos,block}` (registry name, e.g. `"base:air"`) | the role's own block view; `false` if the chunk isn't loaded (both client and server, so an unloaded area never reads as air) |
 | `pos_near` | `{pos,radius}` | `feet` |
 | `health` | `{op,value}` (`< <= > >= == !=`) or a number | top-level `health` *(neither snapshot has one: clients don't receive health; use the server's `players[].health`)* |
 | `chunks_loaded` | `{min}` or a number | `chunks_loaded` |
+| `chunk_loaded` | `{pos}` | whether the chunk containing `pos` exists in the process's world (client: its mirror; server: its `World`). Wait for this before building a scene on the server |
+| `on_ground` | `true` | `on_ground` (client: landed after the spawn drop) |
 | `player_count` | `{op,value}` or a number | `player_count` (server) |
 | `ui_open` | `{name}` or `"name"` | `ui.name` |
 | `widget` | `{id, text?}` | `ui.widgets` (modal screen only) |

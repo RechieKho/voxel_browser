@@ -28,6 +28,7 @@ public:
 	virtual nlohmann::json hello_info() const { return nlohmann::json::object(); }
 	virtual nlohmann::json state() = 0; // snapshot (see predicate.hpp)
 	virtual std::optional<std::string> block_name_at(int, int, int) { return std::nullopt; }
+	virtual bool chunk_loaded_at(int, int, int) { return false; }
 	// Role-specific commands. nullopt = not mine -> "unknown_command".
 	virtual std::optional<Reply> command(const Request &) { return std::nullopt; }
 };

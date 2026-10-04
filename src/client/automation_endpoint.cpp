@@ -12,9 +12,9 @@
 
 namespace vb::client {
 
+using nlohmann::json;
 using vb::automation::Reply;
 using vb::automation::Request;
-using nlohmann::json;
 
 namespace {
 
@@ -60,21 +60,36 @@ std::optional<int> resolve_key(const std::string &raw, const vb::render::Movemen
 	for (char c : raw) {
 		n += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
 	}
-	if (n == "forward") return b.forward;
-	if (n == "back") return b.back;
-	if (n == "left") return b.left;
-	if (n == "right") return b.right;
-	if (n == "jump") return b.jump;
-	if (n == "sprint") return b.sprint;
-	if (n == "inventory") return KEY_E; // kCustomKeybinds "base:inventory"
-	if (n == "pause" || n == "escape") return KEY_ESCAPE;
-	if (n == "chat" || n == "enter") return KEY_ENTER;
-	if (n == "tab") return KEY_TAB;
-	if (n == "space") return KEY_SPACE;
-	if (n == "shift" || n == "left_shift") return KEY_LEFT_SHIFT;
-	if (n == "ctrl" || n == "left_control") return KEY_LEFT_CONTROL;
-	if (n.size() == 1 && n[0] >= 'a' && n[0] <= 'z') return KEY_A + (n[0] - 'a');
-	if (n.size() == 1 && n[0] >= '1' && n[0] <= '9') return KEY_ONE + (n[0] - '1');
+	if (n == "forward")
+		return b.forward;
+	if (n == "back")
+		return b.back;
+	if (n == "left")
+		return b.left;
+	if (n == "right")
+		return b.right;
+	if (n == "jump")
+		return b.jump;
+	if (n == "sprint")
+		return b.sprint;
+	if (n == "inventory")
+		return KEY_E; // kCustomKeybinds "base:inventory"
+	if (n == "pause" || n == "escape")
+		return KEY_ESCAPE;
+	if (n == "chat" || n == "enter")
+		return KEY_ENTER;
+	if (n == "tab")
+		return KEY_TAB;
+	if (n == "space")
+		return KEY_SPACE;
+	if (n == "shift" || n == "left_shift")
+		return KEY_LEFT_SHIFT;
+	if (n == "ctrl" || n == "left_control")
+		return KEY_LEFT_CONTROL;
+	if (n.size() == 1 && n[0] >= 'a' && n[0] <= 'z')
+		return KEY_A + (n[0] - 'a');
+	if (n.size() == 1 && n[0] >= '1' && n[0] <= '9')
+		return KEY_ONE + (n[0] - '1');
 	if (n.size() == 5 && n.rfind("slot", 0) == 0 && n[4] >= '1' && n[4] <= '9') {
 		return KEY_ONE + (n[4] - '1');
 	}
@@ -82,9 +97,12 @@ std::optional<int> resolve_key(const std::string &raw, const vb::render::Movemen
 }
 
 std::optional<int> resolve_button(const std::string &n) {
-	if (n == "left" || n == "primary") return MOUSE_BUTTON_LEFT;
-	if (n == "right" || n == "secondary") return MOUSE_BUTTON_RIGHT;
-	if (n == "middle") return MOUSE_BUTTON_MIDDLE;
+	if (n == "left" || n == "primary")
+		return MOUSE_BUTTON_LEFT;
+	if (n == "right" || n == "secondary")
+		return MOUSE_BUTTON_RIGHT;
+	if (n == "middle")
+		return MOUSE_BUTTON_MIDDLE;
 	return std::nullopt;
 }
 
@@ -103,14 +121,22 @@ void aim_angles(const vb::core::Vec3d &eye, double tx, double ty, double tz, dou
 const char *widget_type_name(vb::script::WidgetType t) {
 	using T = vb::script::WidgetType;
 	switch (t) {
-		case T::kLabel: return "label";
-		case T::kPanel: return "panel";
-		case T::kButton: return "button";
-		case T::kTextBox: return "textbox";
-		case T::kList: return "list";
-		case T::kRect: return "rect";
-		case T::kText: return "text";
-		case T::kIcon: return "icon";
+		case T::kLabel:
+			return "label";
+		case T::kPanel:
+			return "panel";
+		case T::kButton:
+			return "button";
+		case T::kTextBox:
+			return "textbox";
+		case T::kList:
+			return "list";
+		case T::kRect:
+			return "rect";
+		case T::kText:
+			return "text";
+		case T::kIcon:
+			return "icon";
 	}
 	return "unknown";
 }
@@ -188,7 +214,8 @@ using Ctx = ClientAutomationEndpoint::Ctx;
 struct HoldTask final : Task {
 	long long frames;
 	long long seen = 0;
-	explicit HoldTask(long long n) : frames(n) {}
+	explicit HoldTask(long long n) :
+			frames(n) {}
 	std::optional<Reply> post(Ctx &) override {
 		if (++seen >= frames) {
 			return Reply::success(json{ { "frames", frames } });
@@ -199,7 +226,8 @@ struct HoldTask final : Task {
 
 struct SelectSlotTask final : Task {
 	int slot; // 0-based
-	explicit SelectSlotTask(int s) : slot(s) {}
+	explicit SelectSlotTask(int s) :
+			slot(s) {}
 	void pre(Ctx &c) override {
 		c.ensure_captured();
 		c.in.press_key(KEY_ONE + slot);
@@ -271,11 +299,22 @@ struct WalkToTask final : Task {
 // Shared by break/place: look at `target`, and complain early if something
 // other than the intended voxel/face is what the player would actually hit.
 struct AimedTask : Task {
+	// The server runs the pack's player_input hook for a command *before* it applies that
+	// command's look direction, so a click sent in the same frame as a look change punches
+	// along the previous direction. Hold the aim steady this many frames (two server ticks
+	// plus loopback latency) before clicking. A human can't look and click within one 16 ms
+	// frame; automation can, and would silently whiff.
+	static constexpr int kSettleFrames = 8;
 	long long deadline;
 	long long start = -1;
 	json fail;
+	double last_yaw = 1e9, last_pitch = 1e9;
+	int stable = 0;
 
-	explicit AimedTask(long long timeout_frames) : deadline(timeout_frames) {}
+	explicit AimedTask(long long timeout_frames) :
+			deadline(timeout_frames) {}
+
+	bool settled() const { return stable >= kSettleFrames; }
 
 	// Returns false (and sets `fail`) if the aim point is out of reach.
 	bool aim(Ctx &c, double tx, double ty, double tz) {
@@ -289,6 +328,9 @@ struct AimedTask : Task {
 		double yaw = 0, pitch = 0;
 		aim_angles(eye, tx, ty, tz, yaw, pitch);
 		c.app.set_look(yaw, pitch);
+		stable = (std::abs(yaw - last_yaw) < 1e-6 && std::abs(pitch - last_pitch) < 1e-6) ? stable + 1 : 0;
+		last_yaw = yaw;
+		last_pitch = pitch;
 		return true;
 	}
 	std::optional<Reply> failure() const {
@@ -296,11 +338,25 @@ struct AimedTask : Task {
 	}
 };
 
+// Both actions below send ONE click and then wait for the server's answer, because the
+// answer takes a round trip: clicking every other frame meanwhile would land several
+// extra punches/placements before the client even sees the first result (which broke
+// the blocks behind the target and placed stones in the player's own cell).
 struct BreakBlockTask final : AimedTask {
+	static constexpr long long kStallFrames = 60; // no feedback for 1s -> click again
 	vb::core::IVec3 pos;
 	std::string before;
-	long long frames_run = 0;
-	BreakBlockTask(vb::core::IVec3 p, long long timeout_frames) : AimedTask(timeout_frames), pos(p) {}
+	bool waiting = false;
+	long long clicked_at = 0;
+	std::uint16_t punches_at_click = 0;
+	BreakBlockTask(vb::core::IVec3 p, long long timeout_frames) :
+			AimedTask(timeout_frames), pos(p) {}
+
+	static std::uint16_t punches(const Ctx &c, const vb::core::IVec3 &p) {
+		const auto &damage = c.session()->block_damage();
+		const auto it = damage.find(p);
+		return it == damage.end() ? std::uint16_t{ 0 } : it->second;
+	}
 
 	void pre(Ctx &c) override {
 		if (start < 0) {
@@ -311,10 +367,13 @@ struct BreakBlockTask final : AimedTask {
 		if (!aim(c, pos.x + 0.5, pos.y + 0.5, pos.z + 0.5)) {
 			return;
 		}
-		// One punch per rising edge (content/base/mechanics.lua): press on
-		// even frames, release on odd ones.
-		if (frames_run++ % 2 == 0) {
+		if (!waiting && settled()) {
+			// One punch per rising edge (content/base/mechanics.lua). A block with
+			// max_damage > 0 needs several; each is confirmed by S2C_BlockDamage.
 			c.in.hold_mouse_button(MOUSE_BUTTON_LEFT, 1);
+			waiting = true;
+			clicked_at = c.frame;
+			punches_at_click = punches(c, pos);
 		}
 	}
 	std::optional<Reply> post(Ctx &c) override {
@@ -328,9 +387,12 @@ struct BreakBlockTask final : AimedTask {
 		if (now && *now != before) {
 			return Reply::success(json{ { "block_before", before }, { "block_after", *now } });
 		}
+		if (waiting && (punches(c, pos) != punches_at_click || c.frame - clicked_at >= kStallFrames)) {
+			waiting = false; // the last punch landed (or was lost): free to click again
+		}
 		if (c.frame - start >= deadline) {
 			const auto hit = c.look_ray();
-			json last{ { "block", now.value_or("") } };
+			json last{ { "block", now.value_or("") }, { "punches", punches(c, pos) } };
 			if (hit.hit) {
 				last["looking_at"] = ivec3_json(hit.voxel);
 			}
@@ -342,7 +404,7 @@ struct BreakBlockTask final : AimedTask {
 
 struct PlaceBlockTask final : AimedTask {
 	vb::core::IVec3 pos, face, dest;
-	long long frames_run = 0;
+	bool clicked = false;
 	std::string before;
 	PlaceBlockTask(vb::core::IVec3 p, vb::core::IVec3 f, long long timeout_frames) :
 			AimedTask(timeout_frames), pos(p), face(f), dest{ p.x + f.x, p.y + f.y, p.z + f.z } {}
@@ -356,8 +418,10 @@ struct PlaceBlockTask final : AimedTask {
 		if (!aim(c, pos.x + 0.5 + 0.5 * face.x, pos.y + 0.5 + 0.5 * face.y, pos.z + 0.5 + 0.5 * face.z)) {
 			return;
 		}
-		if (frames_run++ % 2 == 0) {
+		if (!clicked && settled()) {
+			// Exactly one click, no retry: a second one could place a second block.
 			c.in.hold_mouse_button(MOUSE_BUTTON_RIGHT, 1);
+			clicked = true;
 		}
 	}
 	std::optional<Reply> post(Ctx &c) override {
@@ -450,6 +514,7 @@ json ClientAutomationEndpoint::state() {
 	if (c->joined()) {
 		const auto feet = c->predicted_feet();
 		s["feet"] = { feet.x, feet.y, feet.z };
+		s["on_ground"] = c->predicted_state().on_ground;
 		s["yaw"] = app_.yaw();
 		s["pitch"] = app_.pitch();
 		const vb::world::VoxelRayHit hit = vb::world::raycast_voxel(c->chunk_store(), app_.eye(),
@@ -487,6 +552,11 @@ json ClientAutomationEndpoint::state() {
 std::optional<std::string> ClientAutomationEndpoint::block_name_at(int x, int y, int z) {
 	Ctx ctx{ app_, input_, frame_ };
 	return ctx.block_name(vb::core::IVec3{ x, y, z });
+}
+
+bool ClientAutomationEndpoint::chunk_loaded_at(int x, int y, int z) {
+	const vb::net::ClientSession *c = app_.session();
+	return c != nullptr && c->chunk_store().has(vb::core::chunk_of(vb::core::IVec3{ x, y, z }));
 }
 
 std::optional<Reply> ClientAutomationEndpoint::command(const Request &req) {

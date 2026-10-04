@@ -58,7 +58,16 @@ public:
 		};
 	}
 
+	bool chunk_loaded_at(int x, int y, int z) override {
+		return world_.has_chunk(vb::core::chunk_of(vb::core::IVec3{ x, y, z }));
+	}
+
 	std::optional<std::string> block_name_at(int x, int y, int z) override {
+		// Same contract as the client: an unloaded chunk has no block (World::get_block
+		// would claim air), so `block_is` is false there instead of misleadingly true.
+		if (!chunk_loaded_at(x, y, z)) {
+			return std::nullopt;
+		}
 		const vb::core::BlockId id = world_.get_block(vb::core::IVec3{ x, y, z });
 		if (!registry_.contains(id)) {
 			return std::nullopt;
@@ -67,8 +76,8 @@ public:
 	}
 
 	std::optional<vb::automation::Reply> command(const vb::automation::Request &req) override {
-		using vb::automation::Reply;
 		using nlohmann::json;
+		using vb::automation::Reply;
 		const json &a = req.args;
 		auto bad = [](std::string m) { return Reply::error("bad_request", std::move(m)); };
 

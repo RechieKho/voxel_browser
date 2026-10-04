@@ -3,8 +3,9 @@
 > Status: **In progress**; E0 (input seam), E1 (`ClientApp`), E2 (build
 > flags, JSON-lines host, predicate engine, read-only queries), E2b
 > (handshake `client_flags`, protocol v27) and E3 (client actions, server
-> admin commands) are implemented (contract: `docs/automation-protocol.md`);
-> E4 onward is not. Covers a
+> admin commands) and E4 (pytest `vbtest` harness, `e2e` CTest label, CI job)
+> are implemented (contract: `docs/automation-protocol.md`; how to write tests:
+> `tests/e2e/README.md`); E5 onward is not. Covers a
 > Playwright-style harness that drives real `voxel_browser` clients against a
 > real `voxel_browser_server` in multiplayer, so gameplay can be tested by
 > scripts instead of by hand. Complements spec §17 (Testing Strategy); the
@@ -287,61 +288,62 @@ The alternative was TypeScript with `@playwright/test` used only as a
 runner. It's closer to Playwright, but it brings a Node toolchain into a
 pure C++/CMake/Lua repo.
 
-The API is async and mirrors Playwright's naming:
+**Implemented as a synchronous API** (decided in E4, a change from the async sketch this
+section originally had). Threads read the pipes, so tests are plain functions with no
+`await`/`pytest-asyncio` (pytest is the only dependency), and nothing is lost: retrying
+still happens inside the process (`expect` is one `wait_for`), and tests almost never need
+two things at once. The API mirrors Playwright's naming:
 
 ```python
 # tests/e2e/test_multiplayer_basics.py
 from vbtest import expect
 
-async def test_block_break_replicates(server, clients):
-    a, b = await clients(2)                       # spawn + join both
-    await server.set_block((4, 70, 4), "base:stone")
-    await server.teleport(a, (4, 71, 6))
-    await expect(b).to_see_block((4, 70, 4), "base:stone")
+def test_block_break_replicates(server, clients):
+    alice, bob = clients(2, names=["Alice", "Bob"])    # spawn + join both
+    x, y, z = block_under_feet(alice)                  # after expect(alice).to_be_on_ground()
+    server.set_block((x, y, z - 2), "base:stone")
+    expect(bob).to_see_block((x, y, z - 2), "base:stone")
 
-    await a.break_block((4, 70, 4))               # look + hold primary
-    await expect(b).to_see_block((4, 70, 4), "base:air", timeout=5)
-    await expect(a).to_have_inventory("base:stone", 1)
+    alice.break_block((x, y, z - 2))                   # aims + clicks like a player
+    expect(bob).to_see_block((x, y, z - 2), "base:air")
 
-async def test_chat_roundtrip(clients):
-    a, b = await clients(2, names=["Alice", "Bob"])
-    await a.chat("hello bob")
-    await expect(b).to_have_chat("<Alice> hello bob")
+def test_craft_planks_with_the_chat_command(server, clients):
+    (alice,) = clients(1, names=["Alice"])
+    server.give(alice, "base:wood", 1)
+    alice.chat("/craft base:planks")                   # crafting is a chat command, not a UI
+    expect(alice).to_have_inventory("base:planks", 4)
 
-async def test_craft_planks_via_inventory_ui(server, client):
-    await server.give(client, "base:wood", 1)
-    await client.key_press("inventory")           # logical keybind name
-    await expect(client).to_have_ui_open("base:inventory")
-    await client.ui("craft_planks").click()       # locator by widget id
-    await expect(client).to_have_inventory("base:planks", 4)
-
-@pytest.mark.net_sim(lag_ms=150, loss_pct=5)
-async def test_remote_movement_is_seen_under_lag(clients):
-    a, b = await clients(2)
-    await a.walk_to((10, None, 0))
-    await expect(b).to_see_entity("Player1", near=(10, None, 0), radius=1.5)
+def test_inventory_screen_opens_and_closes(server, clients):
+    (alice,) = clients(1, names=["Alice"])
+    alice.key_press("inventory")                       # logical keybind name
+    expect(alice).to_have_ui_open("base:inventory")
+    alice.ui("close").click()                          # locator by widget id
+    expect(alice).not_.to_have_ui_open("base:inventory")
 ```
+
+(`--net-sim` tests, `@pytest.mark.net_sim(...)`, arrive with E5.)
 
 **Fixtures (`tests/e2e/conftest.py`):**
 
 - `binaries`: locates `voxel_browser{,_server}` from `--vb-build-dir` or
   the `VB_BUILD_DIR` env var (set by CTest).
 - `server`: one per test (function scope). Uses a temp dir copy of
-  `server.toml.example`, a fixed seed, `--port 0`, and the base pack (or a
-  `tests/e2e/packs/<name>` pack via `@pytest.mark.pack(...)`). It also gets
-  a fresh region dir, since the world is regenerated per test and there's
-  no persistence yet.
+  `server.toml.example`, a fixed seed, a free UDP port picked by the harness
+  (GNS can't listen on port 0, §10 item 7), and a private copy of the base pack
+  (so `vb.storage` can't dirty the repo; `@pytest.mark.vb_server(...)` adds
+  `server.toml` keys; other packs via `@pytest.mark.pack(...)` are not built yet).
+  Persistence is off, so every test gets a fresh world.
 - `clients(n, names=…)`: a factory. Each client gets its **own temp asset
   cache dir** (so asset sync is exercised cold) and its own
   `client.toml`, spawns with
   `--headless --automation stdio --server 127.0.0.1 --port <bound>`, and
   awaits `wait_for joined`.
-- Teardown: `quit` → wait → kill. On failure, attach each process's
-  stderr log, the JSONL command trace, and the final `state` snapshot of
-  every client to the report.
+- Teardown: `quit` → wait → kill. A failed test keeps each process's stderr
+  log, JSONL command trace and final `state` snapshot under the artifacts
+  directory (passing tests delete theirs) and prints the path.
 
 The `vbtest` package itself (`tests/e2e/vbtest/`) is about 500 lines:
-an asyncio subprocess wrapper with request/response correlation,
+a subprocess wrapper with request/response correlation,
 `Client`/`Server` handles, `Locator`, and an `expect()` that just builds a
 predicate and sends one `wait_for` (so retrying happens in-process, every
 frame).
@@ -447,7 +449,7 @@ test fixture with the wrong host. Two guards:
   was built with automation" and is checked in `ServerHandshake::on_frame`
   before `S2C_ServerInfo`, so no auth or asset work happens. The refusal
   reuses `DisconnectReason::kBadHandshake` with the message above. Unknown
-  flag bits are ignored. The loopback-only half below lands with E4.
+  flag bits are ignored. The loopback-only half is implemented in E4 (`tests/e2e/vbtest/net.py`; `clients(host=...)` raises `UnsafeHostError` unless `--vb-allow-remote-host`).
 - **Loopback-only harness.** `vbtest` refuses to connect clients to any
   address other than `127.0.0.1`/`::1`/`localhost` unless
   `--vb-allow-remote-host` is passed explicitly, for running tests against
@@ -499,7 +501,7 @@ whatever the client claims:
 | **E2** (landed 2026-10-03) | `VB_WITH_AUTOMATION` / `VB_DISTRIBUTION` options + `+automation` in `--version` + release-leg check (§7.1–7.3) **first**; then `src/automation/`: JSON-lines host, stdin thread → main-thread queue, `hello/state/step/quit/wait_for` + predicate engine; `--automation stdio` on client + server; ~~`--port 0` reporting~~ (not possible: GNS has no ephemeral listen port, see §10) | M | doctest unit tests for predicate engine + command parsing; a default build's `--automation` exits non-zero |
 | **E2b** (landed 2026-10-03) | `C2S_Hello.client_flags` + server-side rejection of automation clients (§7.4) | S | in-process `netcode_test` case: flagged client rejected by a non-automation server |
 | **E3** (landed 2026-10-04) | Action commands (input, high-level, ui, chat) + server admin commands. `menu.*`, `screenshot` and typing into the chat box are windowed-only and moved to E5 | M | two real clients + a dedicated server driven by a throwaway script: break/place replicate, give/teleport/chat/walk/kick; unit test for deferred replies |
-| **E4** | `tests/e2e/vbtest` + fixtures + first 5 tests (join, chat, block break replicates, craft via UI, reconnect after kick); CTest `e2e` label; Linux CI legs | M | CI green |
+| **E4** (landed 2026-10-04) | `tests/e2e/vbtest` + fixtures + 10 tests (join + cold-cache asset sync, chat, break and place replicate, craft via chat, inventory screen, server teleport/health, walking, kick + reconnect, loopback-only guard); CTest `e2e` label; a Linux `e2e` CI job. New: `chunk_loaded`/`on_ground` predicates | M | 10/10, five runs in a row, locally; **CI itself not run** |
 | **E5** | `--net-sim`, trace JSONL + failure artifacts, screenshot under Xvfb | S–M | |
 | **E6** (optional) | Recorder ("codegen"): `--automation-record out.py` logs a human session's *semantic* actions (connect, look, hold, ui.click id) as a vbtest script skeleton; TCP attach mode; HTML trace viewer | M | |
 
@@ -528,6 +530,39 @@ without any automation and remove the duplicated headless loop.
    `ui.define` widgets stable, unique `id`s. `UiRuntime` should warn on
    duplicate ids within one frame. That's cheap, and useful even without
    automation.
+
+13. **Spawn is a drop (found in E4).** Players spawn about a block above the ground, so
+    right after join `feet.y` is mid-fall and a landed player's is e.g. `62.9999`.
+    Anything that reads a position must `expect(c).to_be_on_ground()` first (new
+    `on_ground` snapshot field/predicate) and round with an epsilon.
+14. **The server applies a command's look *after* the pack's input hook (found in E4).**
+    `player_input` handlers (and so `player:punch()`/`place_block` raycasts) see the
+    *previous* command's yaw/pitch, so a click in the same frame as a look change goes the
+    old way. Invisible to humans; automation holds its aim steady 8 frames before clicking
+    (`AimedTask::kSettleFrames`). An engine ordering quirk, left alone.
+15. **A punch hits the nearest player before any block (found in E4).** Both test players
+    spawn on the same spot, so one's punches land on the other. Tests `teleport` the second
+    player away first.
+16. **Clicks are confirmed by a round trip (found in E4).** E3's `break_block`/`place_block`
+    clicked every other frame until the client *saw* the change, so several extra clicks were
+    already in flight: `place_block` spent 4 items and put stones in the player's own cell.
+    Both now send one click and wait for feedback (`S2C_BlockDamage` for breaking; no retry
+    for placing).
+17. **Real engine crash fixed (found in E4): `ui.close()` with a session attached.**
+    `UiRuntime::do_close()` passed a state-less `sol::lua_nil` to `lua_to_json()`, which
+    dereferenced a null `lua_State` and segfaulted the client whenever a pack UI was closed
+    from Lua with a live connection (every unit test ran without a session, which returns
+    early). One-line fix plus a regression test in `ui_runtime_test.cpp`.
+18. **CI had never compiled the automation code (found in E4).** Every existing leg builds
+    with automation off, so `-Werror` problems in E2/E3 code (a `-Wdangling-reference` in
+    `predicate.cpp`, missing-field-initializers in the tests, clang-format drift in the new
+    endpoint files) only surfaced when the dev tree was built with `VB_WARNINGS_AS_ERRORS=ON`.
+    Fixed; the new `e2e` job is the first to build it. Pre-existing files (`client_app.cpp`
+    etc.) have clang-format violations under clang-format 18 that predate this work and were
+    left alone.
+19. **Not verified: the CI job itself.** `e2e` in `build_linux.yml` (ASan + UBSan, 3x
+    timeouts) has never run on a runner; LeakSanitizer or ASan may report things in the
+    child processes that the local, un-sanitized runs can't show. Expect a first-run fix-up.
 
 ## 11. Documentation upkeep (for agents implementing this design)
 
@@ -562,7 +597,7 @@ checklist below is. Don't write history for work you didn't do or verify.
 | **E2** options + host (done) | `README.md` build-options table: drop *(planned)* from `VB_WITH_AUTOMATION`, add `VB_DISTRIBUTION`; `CONTRIBUTING.md` e2e bullet (real commands, `build-e2e`); `src/client/main.cpp` / `src/server/main.cpp` `--help` text for `--automation*` (only when compiled in); new `docs/automation-protocol.md` (the JSON-lines contract: every command, predicate, error code, `proto` version); `cmake/` option comments; `describe_build()` `+automation` documented in README's `--version` mention. |
 | **E2b** handshake flag (done) | `docs/protocol.md`: add `client_flags` to the `C2S_Hello` row, add an entry to its changelog, **bump `kEngineProtocolVersion`** and record the old→new value (see "Adding a new wire message" in `CONTRIBUTING.md`); `architecture_spec/networking.md` §8.3 handshake notes; `content/` is unaffected. |
 | **E3** actions + admin cmds (done) | Done: `docs/automation-protocol.md` tables, `STATE.md`, backlog. `lua-api.md` untouched (`run_lua` adds no pack API). Gating confirmed: every server admin primitive (`ServerSession::{player_health,set_player_health,teleport_player,set_time_of_day,kick_player}`, `PackRuntime::admin_give`) and every endpoint is under `#if defined(VB_WITH_AUTOMATION)`; the automation-off server binary has none of the command strings. |
-| **E4** harness + CI | `README.md` / `CONTRIBUTING.md`: install steps (`pip install -r tests/e2e/requirements.txt`), how to run (`ctest -L e2e`, `pytest tests/e2e`), how to write a test, fixtures reference (`tests/e2e/README.md`); `ARCHITECTURE_SPEC.md` §17: change "planned" to current; `.github/workflows/build_linux.yml` leg described in `STATE.md`. |
+| **E4** harness + CI (done) | Done: `tests/e2e/README.md`, `CONTRIBUTING.md`, `ARCHITECTURE_SPEC.md` §17, `automation-protocol.md` (new predicates/state), `STATE.md`, backlog, `.gitignore`. The CI job is `e2e` in `build_linux.yml`; its failure-log artifact is named `e2e-failure-logs` on purpose (bundle.yml merges `<project>-*`). |
 | **E5** net-sim, traces, screenshots | `docs/automation-protocol.md` (`--net-sim` syntax, `screenshot`); `tests/e2e/README.md` (trace files, artifacts, Xvfb leg). |
 | **E6** recorder / TCP attach | New section in `docs/automation-protocol.md`; **re-check §7** — any listener (TCP) must still be compiled out of production, loopback-only, and token-protected. |
 

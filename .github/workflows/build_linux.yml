@@ -113,3 +113,60 @@ jobs:
           name: ${{ needs.setup_metadata.outputs.project_name }}-${{ matrix.target }}-${{ matrix.arch }}-${{ matrix.build_type }}
           path: ${{ github.workspace }}/dist/*
           if-no-files-found: error
+
+  # End-to-end multiplayer tests (docs/e2e-automation.md §8): real client + server
+  # processes driven over the development-only automation channel. This is the only job
+  # that builds with VB_WITH_AUTOMATION=ON; it never stages or uploads binaries, and its
+  # failure-log artifact is deliberately NOT named "<project>-*" so bundle.yml's merge
+  # pattern can't sweep it into a release.
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ninja-build cmake build-essential \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+            libgl1-mesa-dev libglu1-mesa-dev \
+            libssl-dev libprotobuf-dev protobuf-compiler
+          python3 -m pip install -r tests/e2e/requirements.txt
+
+      # ASan + UBSan: real two-process shutdown is exactly where leaks and teardown
+      # bugs show up. NET/LUA/COMPRESSION: a real UDP server, the base pack's
+      # mechanics and UI, and asset sync (how clients receive the pack's UI scripts).
+      - name: Configure
+        shell: bash
+        run: |
+          cmake -S "${{ github.workspace }}" -B "${{ github.workspace }}/build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DVB_WARNINGS_AS_ERRORS=ON \
+            -DVB_HEADLESS=OFF \
+            -DVB_WITH_LUA=ON \
+            -DVB_WITH_NET=ON \
+            -DVB_WITH_REPLICATION=ON \
+            -DVB_WITH_COMPRESSION=ON \
+            -DVB_WITH_AUTOMATION=ON \
+            -DVB_ENABLE_ASAN=ON -DVB_ENABLE_UBSAN=ON
+
+      - name: Build
+        shell: bash
+        run: cmake --build "${{ github.workspace }}/build"
+
+      # The whole suite, not just `-L e2e`: it also runs the automation-on unit tests.
+      - name: Test
+        shell: bash
+        working-directory: build
+        run: ctest --output-on-failure
+
+      - name: Upload e2e failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-failure-logs
+          path: ${{ github.workspace }}/build/e2e-artifacts
+          if-no-files-found: ignore

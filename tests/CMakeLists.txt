@@ -123,3 +123,36 @@ if(NOT VB_WITH_AUTOMATION)
     set_tests_properties(client_rejects_automation PROPERTIES WILL_FAIL TRUE)
   endif()
 endif()
+
+# End-to-end multiplayer tests (docs/e2e-automation.md §8): real voxel_browser +
+# voxel_browser_server processes driven over the automation channel by pytest
+# (tests/e2e/). Registered only in a build that can run one: automation (the driver),
+# NET (a real UDP server/client pair), LUA (the base pack's mechanics and UI) and
+# COMPRESSION (asset sync, which is how clients get the pack's UI scripts), plus a
+# Python that can import pytest. Select/skip with `ctest -L e2e` / `ctest -LE e2e`.
+if(VB_WITH_AUTOMATION AND VB_WITH_NET AND VB_WITH_LUA AND VB_WITH_COMPRESSION
+    AND VB_BUILD_CLIENT AND VB_BUILD_SERVER)
+  find_package(Python3 COMPONENTS Interpreter)
+  if(Python3_FOUND)
+    execute_process(COMMAND ${Python3_EXECUTABLE} -c "import pytest"
+      RESULT_VARIABLE _vb_pytest_rc OUTPUT_QUIET ERROR_QUIET)
+    if(_vb_pytest_rc EQUAL 0)
+      add_test(NAME e2e
+        COMMAND ${Python3_EXECUTABLE} -m pytest -p no:cacheprovider -q
+                ${CMAKE_SOURCE_DIR}/tests/e2e
+                --vb-build-dir ${CMAKE_BINARY_DIR}
+                --vb-artifacts ${CMAKE_BINARY_DIR}/e2e-artifacts
+                --junitxml=${CMAKE_BINARY_DIR}/e2e.xml)
+      set_tests_properties(e2e PROPERTIES LABELS e2e TIMEOUT 900)
+      # Sanitizer builds run several times slower; vbtest scales every wait by this.
+      if(VB_ENABLE_ASAN OR VB_ENABLE_UBSAN OR VB_ENABLE_TSAN)
+        set_property(TEST e2e APPEND PROPERTY ENVIRONMENT VB_E2E_TIMEOUT_SCALE=3)
+      endif()
+    else()
+      message(STATUS "e2e tests not registered: ${Python3_EXECUTABLE} cannot import pytest "
+                     "(pip install -r tests/e2e/requirements.txt)")
+    endif()
+  else()
+    message(STATUS "e2e tests not registered: no Python 3 interpreter found")
+  endif()
+endif()

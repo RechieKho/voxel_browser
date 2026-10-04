@@ -130,6 +130,11 @@ struct Eval {
 			return result(f != nullptr && f->is_boolean() && f->get<bool>(),
 					f != nullptr ? *f : json(false));
 		}
+		if (name == "on_ground") {
+			const json *f = state_field("on_ground");
+			return result(f != nullptr && f->is_boolean() && f->get<bool>(),
+					f != nullptr ? *f : json(false));
+		}
 		if (name == "app_state") {
 			const json a = normalize(arg, "is");
 			const json *f = state_field("app_state");
@@ -204,6 +209,16 @@ struct Eval {
 			}
 			return result(have && *have == arg["block"].get<std::string>(),
 					json{ { "block", have ? json(*have) : json() } });
+		}
+		if (name == "chunk_loaded") {
+			double p[3];
+			if (!arg.is_object() || !read_pos(arg.value("pos", json()), p)) {
+				return fail("chunk_loaded: needs 'pos' [x,y,z]");
+			}
+			const bool loaded = ctx.chunk_loaded &&
+					ctx.chunk_loaded(static_cast<int>(std::floor(p[0])), static_cast<int>(std::floor(p[1])),
+							static_cast<int>(std::floor(p[2])));
+			return result(loaded, json{ { "loaded", loaded } });
 		}
 		if (name == "ui_open") {
 			const json a = normalize(arg, "name");
@@ -280,8 +295,9 @@ struct Eval {
 		if (!pred.is_object() || pred.size() != 1) {
 			return fail("a predicate is an object with exactly one key");
 		}
-		const std::string name = pred.begin().key();
-		const json &arg = pred.begin().value();
+		const auto entry = pred.begin(); // named: value() refers into `pred`, not the iterator
+		const std::string name = entry.key();
+		const json &arg = entry.value();
 		if (name == "all" || name == "any") {
 			if (!arg.is_array() || arg.empty()) {
 				return fail(name + ": needs a non-empty array");

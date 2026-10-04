@@ -292,7 +292,8 @@ Reply Host::handle_wait_for(const Request &req, Endpoint &endpoint, Clock::time_
 	}
 	const json state = endpoint.state();
 	const PredicateContext ctx{ state,
-		[&endpoint](int x, int y, int z) { return endpoint.block_name_at(x, y, z); } };
+		[&endpoint](int x, int y, int z) { return endpoint.block_name_at(x, y, z); },
+		[&endpoint](int x, int y, int z) { return endpoint.chunk_loaded_at(x, y, z); } };
 	EvalResult r = evaluate_predicate(req.args["pred"], ctx);
 	if (!r.error.empty()) {
 		return Reply::error("bad_request", r.error);
@@ -311,7 +312,8 @@ void Host::evaluate_waits(Endpoint &endpoint, Clock::time_point now) {
 	}
 	const json state = endpoint.state();
 	const PredicateContext ctx{ state,
-		[&endpoint](int x, int y, int z) { return endpoint.block_name_at(x, y, z); } };
+		[&endpoint](int x, int y, int z) { return endpoint.block_name_at(x, y, z); },
+		[&endpoint](int x, int y, int z) { return endpoint.chunk_loaded_at(x, y, z); } };
 	for (auto it = waits_.begin(); it != waits_.end();) {
 		EvalResult r = evaluate_predicate(it->pred, ctx);
 		if (r.matched) {

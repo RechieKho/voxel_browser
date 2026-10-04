@@ -20,7 +20,9 @@
       2026-10-03, protocol 27; 4 `net_test` cases + codec round-trip), E3
       actions + server admin commands (landed 2026-10-04; hand-verified with
       two real clients against a real dedicated server, 35 checks; windowed-only
-      `menu.*`/`screenshot`/chat typing moved to E5), E4 pytest harness + CI `e2e` leg, E5
+      `menu.*`/`screenshot`/chat typing moved to E5), E4 pytest harness + CI `e2e` leg
+      (landed 2026-10-04: 10 tests, `ctest -L e2e` 10/10 locally x5; CI job not yet
+      run on a runner; also fixed a real `ui.close()` segfault found by it), E5
       `--net-sim`/traces/screenshots, E6 recorder. Constraint: automation
       code must never ship — see §7 of that doc. Each phase's doc updates:
       §11 of that doc.

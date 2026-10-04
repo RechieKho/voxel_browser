@@ -470,7 +470,10 @@ void UiRuntime::Impl::do_close() {
 	if (current_name.empty()) {
 		return;
 	}
-	send_event("close", sol::lua_nil);
+	// A real nil object, built on this VM's state: a bare sol::lua_nil converts to a
+	// state-less reference, and lua_to_json() then dereferences a null lua_State
+	// once a session is attached (found by the e2e inventory-screen test).
+	send_event("close", sol::make_object(lua_state(), sol::lua_nil));
 	if (current_on_close.valid()) {
 		vm.begin_call_budget();
 		sol::protected_function_result r = current_on_close();

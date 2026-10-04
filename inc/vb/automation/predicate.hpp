@@ -3,7 +3,7 @@
 // over the pipe. Composable with all/any/not.
 //
 // Snapshot fields read (missing fields read as "not true", never an error):
-//   joined(bool) app_state(str) feet([x,y,z]) health(num) chunks_loaded(int)
+//   joined(bool) on_ground(bool) app_state(str) feet([x,y,z]) health(num) chunks_loaded(int)
 //   chat([str]) entities([{name,pos}]) ui({name,widgets[{id,text}]})
 //   inventory([{item,count}]) players([{name,pos}]) player_count(int)
 #pragma once
@@ -19,7 +19,9 @@ namespace vb::automation {
 struct PredicateContext {
 	const nlohmann::json &state;
 	// Block registry *name* (e.g. "base:air") at a world voxel, if loaded.
-	std::function<std::optional<std::string>(int, int, int)> block_name_at;
+	std::function<std::optional<std::string>(int, int, int)> block_name_at = nullptr;
+	// Is the chunk containing this world voxel loaded in this process's world?
+	std::function<bool(int, int, int)> chunk_loaded = nullptr;
 };
 
 struct EvalResult {

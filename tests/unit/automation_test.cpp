@@ -289,3 +289,25 @@ TEST_CASE("automation: a deferred reply is sent by Host::respond, not at dispatc
 	CHECK(frame["ok"] == true);
 	CHECK(frame["result"]["done"] == true);
 }
+
+TEST_CASE("automation: chunk_loaded asks the process, and a missing hook is just not-loaded") {
+	const json state = json::object();
+	const PredicateContext ctx{ state, nullptr, [](int x, int, int) { return x < 10; } };
+	const json at = json{ { "chunk_loaded", json{ { "pos", json::array({ 0, 0, 0 }) } } } };
+	const json far = json{ { "chunk_loaded", json{ { "pos", json::array({ 50, 0, 0 }) } } } };
+	CHECK(evaluate_predicate(at, ctx).matched);
+	CHECK_FALSE(evaluate_predicate(far, ctx).matched);
+
+	const PredicateContext none{ state };
+	const EvalResult r = evaluate_predicate(at, none);
+	CHECK_FALSE(r.matched);
+	CHECK(r.error.empty());
+
+	CHECK_FALSE(evaluate_predicate(json{ { "chunk_loaded", json::object() } }, ctx).error.empty());
+}
+
+TEST_CASE("automation: on_ground reads the snapshot and is false when absent") {
+	CHECK(eval(json{ { "on_ground", true } }, json{ { "on_ground", true } }));
+	CHECK_FALSE(eval(json{ { "on_ground", true } }, json{ { "on_ground", false } }));
+	CHECK_FALSE(eval(json{ { "on_ground", true } }, json::object()));
+}

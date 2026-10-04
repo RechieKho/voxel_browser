@@ -435,12 +435,13 @@ servers to the extent practical (no code exec, no arbitrary FS writes).
   against a committed golden value across Linux/macOS/Windows.
 - **Soak**: N simulated clients doing random walks + edits for M minutes,
   watch for leaks (ASan/LSan) and unbounded queue growth.
-- **End-to-end (planned, dev-only)**: real `voxel_browser` and
+- **End-to-end (dev-only)**: real `voxel_browser` and
   `voxel_browser_server` processes driven over a stdio JSON-lines channel by
-  a pytest harness (Playwright-style locators and auto-waiting). Compiled in
-  only with `VB_WITH_AUTOMATION=ON` (default `OFF`, rejected in
-  `VB_DISTRIBUTION` builds), so shipped binaries never contain it. Design:
-  `docs/e2e-automation.md`.
+  a pytest harness (`tests/e2e/`: Playwright-style locators and auto-waiting;
+  `ctest -L e2e`; its own Linux CI job). Compiled in only with
+  `VB_WITH_AUTOMATION=ON` (default `OFF`, rejected in `VB_DISTRIBUTION`
+  builds), so shipped binaries never contain it. Design:
+  `docs/e2e-automation.md`; usage: `tests/e2e/README.md`.
 - Frameworks: doctest/Catch2 for unit; a small custom harness for
   integration. Sanitizer builds wired into the debug CI matrix.
 

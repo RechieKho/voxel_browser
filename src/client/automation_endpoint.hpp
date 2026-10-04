@@ -35,6 +35,7 @@ public:
 	std::string role() const override { return "client"; }
 	nlohmann::json state() override;
 	std::optional<std::string> block_name_at(int x, int y, int z) override;
+	bool chunk_loaded_at(int x, int y, int z) override;
 	std::optional<vb::automation::Reply> command(const vb::automation::Request &req) override;
 
 	struct Task;

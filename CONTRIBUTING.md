@@ -80,14 +80,16 @@ A few things worth knowing that aren't obvious from a single build tree:
   assert on stdout/exit behavior — they need `VB_BUILD_SERVER`/
   `VB_BUILD_CLIENT` on (both default `ON`).
 - **Automation tests (`automation_test.cpp`) and the e2e harness (pytest
-  `tests/e2e/`, planned — phase E4).** The automation driver (`src/automation/`,
+  `tests/e2e/`, `ctest -L e2e`; see `tests/e2e/README.md`).** The automation driver (`src/automation/`,
   JSON-lines over `--automation stdio`, contract in
   `docs/automation-protocol.md`) is compiled only with
   `-DVB_WITH_AUTOMATION=ON`; `automation_test.cpp` is added to `vb_tests`
   then. Use a dedicated build directory (e.g.
   `cmake -S . -B build-e2e -DVB_WITH_AUTOMATION=ON`; a real two-process
   multiplayer run also needs `-DVB_WITH_NET=ON -DVB_WITH_LUA=ON
-  -DVB_WITH_COMPRESSION=ON` and protobuf, and `-DVB_WITH_WORLDGEN=ON` +
+  -DVB_WITH_COMPRESSION=ON`, protobuf, and `pip install -r
+  tests/e2e/requirements.txt` -- the `e2e` CTest entry is only registered when
+  all of that is present; `-DVB_WITH_WORLDGEN=ON` +
   `-Werror` trips a FastNoise2 warning on newer GCC) and **never** enable that
   flag in a build you intend to ship; the release/`debug` CI legs set
   `VB_DISTRIBUTION=ON`, which makes the combination a configure error, and a
