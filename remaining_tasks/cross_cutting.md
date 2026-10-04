@@ -18,7 +18,9 @@
       against the singleplayer client and the server; NOT run: `VB_WITH_NET`
       builds, Windows/macOS, real CI), E2b `C2S_Hello.client_flags` rejection (landed
       2026-10-03, protocol 27; 4 `net_test` cases + codec round-trip), E3
-      actions + server admin commands, E4 pytest harness + CI `e2e` leg, E5
+      actions + server admin commands (landed 2026-10-04; hand-verified with
+      two real clients against a real dedicated server, 35 checks; windowed-only
+      `menu.*`/`screenshot`/chat typing moved to E5), E4 pytest harness + CI `e2e` leg, E5
       `--net-sim`/traces/screenshots, E6 recorder. Constraint: automation
       code must never ship — see §7 of that doc. Each phase's doc updates:
       §11 of that doc.

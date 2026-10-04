@@ -266,3 +266,26 @@ TEST_CASE("automation: stdin EOF asks the process to exit") {
 	}
 	CHECK_FALSE(alive);
 }
+
+TEST_CASE("automation: a deferred reply is sent by Host::respond, not at dispatch") {
+	struct DeferEndpoint : TestEndpoint {
+		std::optional<Reply> command(const Request &r) override {
+			if (r.cmd == "later") {
+				return Reply::defer();
+			}
+			return std::nullopt;
+		}
+	} ep;
+	std::istringstream in("{\"id\":7,\"cmd\":\"later\"}\n");
+	std::ostringstream out;
+	Host host(in, out);
+	for (int i = 0; i < 2000 && host.pump(ep); ++i) {
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
+	CHECK(out.str().empty()); // dispatched, but nothing answered yet
+	host.respond(json(7), Reply::success(json{ { "done", true } }));
+	const json frame = json::parse(out.str());
+	CHECK(frame["id"] == 7);
+	CHECK(frame["ok"] == true);
+	CHECK(frame["result"]["done"] == true);
+}

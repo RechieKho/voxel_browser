@@ -105,7 +105,7 @@ void print_usage() {
 // Development-only: same ClientApp, but driven by the automation channel
 // instead of a fixed frame count. Runs until `quit` or the harness closes stdin.
 int run_automated(ClientApp &app, vb::automation::Host &host) {
-	ClientAutomationEndpoint endpoint(app);
+	ClientAutomationEndpoint endpoint(app, host);
 	using Clock = std::chrono::steady_clock;
 	constexpr auto kFrame = std::chrono::microseconds(16667);
 	auto next = Clock::now();
@@ -114,7 +114,11 @@ int run_automated(ClientApp &app, vb::automation::Host &host) {
 			std::this_thread::sleep_for(std::chrono::milliseconds(1));
 			continue;
 		}
-		app.frame(vb::render::InputFrame{}, 1.0 / 60.0);
+		// Actions queue this frame's synthetic input, the real ClientApp frame
+		// consumes it, then finished actions answer their requests.
+		endpoint.begin_frame();
+		app.frame(endpoint.input().poll(), 1.0 / 60.0);
+		endpoint.end_frame();
 		host.frame_done();
 		if (!host.manual_clock()) {
 			next += kFrame;

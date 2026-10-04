@@ -25,6 +25,16 @@ struct Reply {
 	std::string code; // error only
 	std::string message; // error only
 	nlohmann::json extra = nlohmann::json::object(); // merged into the error object
+	// Endpoint::command() returns this when the answer comes later (a
+	// multi-frame action): the Host sends nothing now, and the endpoint calls
+	// Host::respond() with the request's id once the action finished.
+	bool deferred = false;
+
+	static Reply defer() {
+		Reply r;
+		r.deferred = true;
+		return r;
+	}
 
 	static Reply success(nlohmann::json result = nlohmann::json::object()) {
 		Reply r;

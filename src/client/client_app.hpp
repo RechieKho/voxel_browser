@@ -43,6 +43,39 @@ public:
 	const vb::net::ClientSession *session() const { return client; }
 	const std::deque<std::string> &chat() const { return chat_log; }
 
+#if defined(VB_WITH_AUTOMATION)
+	// --- development-only automation access (docs/e2e-automation.md §5.1) ---
+	// Compiled out of production builds with the rest of the automation code.
+	// Everything here either reads state or pokes the same members the real
+	// input path already drives; none of it is a protocol shortcut.
+
+	// Headless clients skip drawing, and with it the modal-screen / HUD Lua
+	// render calls that populate widget lists. Automation needs those lists
+	// (ui.click, state.ui), so this makes frame() evaluate them even when
+	// render == false. Off by default so plain --headless is unchanged.
+	void set_headless_ui_eval(bool on) { headless_ui_eval = on; }
+
+	double yaw() const { return controller.yaw(); }
+	double pitch() const { return controller.pitch(); }
+	vb::core::Vec3d eye() const { return controller.position(); }
+	// Absolute look (the real path is mouse deltas; tests want exact aim).
+	void set_look(double yaw_deg, double pitch_deg) { controller.set_look(yaw_deg, pitch_deg); }
+	bool mouse_captured_state() const { return mouse_captured; }
+	void set_mouse_captured(bool on) { mouse_captured = on; }
+	std::uint8_t selected_hotbar_slot() const { return selected_slot; }
+	bool chat_box_open() const { return chat_open; }
+	const vb::render::MovementBindings &bindings() const { return movement_bindings; }
+
+	vb::script::UiRuntime &ui() { return ui_runtime; }
+	const vb::script::UiRuntime &ui() const { return ui_runtime; }
+	// The HUD widget list from the most recent headless evaluation.
+	const std::vector<vb::script::Widget> &hud_widgets() const { return hud_widget_cache; }
+
+	// What the chat box does on Enter: send `text` over the real chat path.
+	// (The raygui text box itself is only exercisable in a windowed client.)
+	void submit_chat(std::string_view text);
+#endif
+
 private:
 	void begin_connect(bool as_singleplayer);
 	void enter_playing();
@@ -156,6 +189,10 @@ private:
 	std::deque<std::string> chat_log;
 	std::string chat_buf;
 	bool chat_open = false;
+#if defined(VB_WITH_AUTOMATION)
+	bool headless_ui_eval = false;
+	std::vector<vb::script::Widget> hud_widget_cache;
+#endif
 
 };
 

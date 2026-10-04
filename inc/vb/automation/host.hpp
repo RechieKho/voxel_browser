@@ -62,6 +62,9 @@ public:
 	// Call after each frame actually run; completes `step` requests.
 	void frame_done();
 
+	// Answers a request whose Endpoint::command() returned Reply::defer().
+	void respond(const nlohmann::json &id, const Reply &reply);
+
 	void emit_event(const std::string &name, nlohmann::json fields);
 	bool quit_requested() const { return quit_; }
 

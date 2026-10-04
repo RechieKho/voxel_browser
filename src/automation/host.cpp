@@ -175,6 +175,10 @@ void Host::send(const json &frame) {
 	out_->flush();
 }
 
+void Host::respond(const json &id, const Reply &reply) {
+	send(make_response(id, reply));
+}
+
 void Host::emit_event(const std::string &name, json fields) {
 	send(make_event(name, std::move(fields)));
 }
@@ -269,7 +273,9 @@ void Host::dispatch(Endpoint &endpoint, const Request &req, Clock::time_point no
 		return;
 	}
 	if (auto reply = endpoint.command(req)) {
-		send(make_response(req.id, *reply));
+		if (!reply->deferred) {
+			send(make_response(req.id, *reply));
+		}
 		return;
 	}
 	send(make_response(req.id, Reply::error("unknown_command", "unknown command '" + req.cmd + "'")));

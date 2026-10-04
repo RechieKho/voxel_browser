@@ -1,69 +1,51 @@
 // Client half of the development-only automation channel
-// (docs/e2e-automation.md §5.1). Only included under VB_WITH_AUTOMATION.
-// E2 scope: read-only queries; action commands arrive in E3.
+// (docs/e2e-automation.md §5.1, contract in docs/automation-protocol.md).
+// Only included under VB_WITH_AUTOMATION.
+//
+// E2: read-only queries. E3: input / UI / chat commands and the multi-frame
+// actions (walk_to, break_block, place_block) built on top of them. Actions feed
+// a SyntheticInput that the run loop hands to ClientApp::frame(), so they
+// exercise exactly the code path a player's keyboard and mouse do.
 #pragma once
+
+#include <memory>
+#include <vector>
 
 #include "client_app.hpp"
 #include "vb/automation/host.hpp"
+#include "vb/render/input.hpp"
 
 namespace vb::client {
 
 class ClientAutomationEndpoint final : public vb::automation::Endpoint {
 public:
-	explicit ClientAutomationEndpoint(const ClientApp &app) :
-			app_(app) {}
+	ClientAutomationEndpoint(ClientApp &app, vb::automation::Host &host);
+	~ClientAutomationEndpoint() override;
+
+	// Input the next ClientApp::frame() should be given.
+	vb::render::InputSource &input() { return input_; }
+
+	// Run-loop hooks, once per frame around ClientApp::frame():
+	//   begin_frame(); app.frame(input().poll(), dt); end_frame();
+	// begin_frame lets running actions queue this frame's input; end_frame
+	// checks their completion and answers the deferred replies.
+	void begin_frame();
+	void end_frame();
 
 	std::string role() const override { return "client"; }
+	nlohmann::json state() override;
+	std::optional<std::string> block_name_at(int x, int y, int z) override;
+	std::optional<vb::automation::Reply> command(const vb::automation::Request &req) override;
 
-	nlohmann::json state() override {
-		const vb::net::ClientSession *c = app_.session();
-		nlohmann::json s{
-			{ "app_state", ClientApp::app_state_name(app_.app_state()) },
-			{ "joined", c != nullptr && c->joined() },
-			{ "chat", nlohmann::json(std::vector<std::string>(app_.chat().begin(), app_.chat().end())) },
-			{ "entities", nlohmann::json::array() },
-			{ "chunks_loaded", 0 },
-		};
-		if (c == nullptr) {
-			return s;
-		}
-		if (const auto &ja = c->join_accept()) {
-			s["net_id"] = static_cast<std::uint32_t>(ja->your_net_id);
-		}
-		if (c->joined()) {
-			const auto feet = c->predicted_feet();
-			s["feet"] = { feet.x, feet.y, feet.z };
-		}
-		s["chunks_loaded"] = c->chunk_store().size();
-		const auto &names = c->players();
-		for (const auto &[id, rec] : c->remote_entities()) {
-			const auto it = names.find(id);
-			s["entities"].push_back({
-					{ "net_id", static_cast<std::uint32_t>(id) },
-					{ "name", it != names.end() ? it->second : std::string() },
-					{ "pos", { rec.pos.x, rec.pos.y, rec.pos.z } },
-			});
-		}
-		return s;
-	}
-
-	std::optional<std::string> block_name_at(int x, int y, int z) override {
-		const vb::net::ClientSession *c = app_.session();
-		if (c == nullptr) {
-			return std::nullopt;
-		}
-		const auto &store = c->chunk_store();
-		const vb::core::IVec3 p{ x, y, z };
-		if (!store.has(vb::core::chunk_of(p))) {
-			return std::nullopt; // not streamed in yet
-		}
-		const vb::core::BlockId id = store.block_at(p);
-		return store.registry().contains(id) ? std::optional<std::string>(store.registry().get(id).name)
-											 : std::nullopt;
-	}
+	struct Task;
+	struct Ctx;
 
 private:
-	const ClientApp &app_;
+	ClientApp &app_;
+	vb::automation::Host &host_;
+	vb::render::SyntheticInput input_;
+	std::vector<std::unique_ptr<Task>> tasks_;
+	long long frame_ = 0;
 };
 
 } // namespace vb::client

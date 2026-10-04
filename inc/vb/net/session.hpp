@@ -103,6 +103,26 @@ public:
 	// connection.
 	std::optional<physics::MoveState> player_move_state(core::NetId id) const;
 
+#if defined(VB_WITH_AUTOMATION)
+	// --- development-only automation primitives (docs/e2e-automation.md §5.3) ---
+	// Compiled out of production builds with the rest of the automation code;
+	// nothing in the engine itself calls them.
+
+	// Current / max health of a playing connection.
+	std::optional<std::pair<float, float>> player_health(core::NetId id) const;
+	// Sets health exactly. Lowering goes through damage_player (so reaching 0
+	// kills + respawns as usual, cause "automation"); raising just heals.
+	// False if `id` isn't a playing connection.
+	bool set_player_health(core::NetId id, float value);
+	// Moves a player to `pos`, zeroing velocity and keeping their look
+	// direction; the client reconciles to it like any authoritative correction.
+	bool teleport_player(core::NetId id, core::Vec3d pos);
+	// Jumps the day/night clock and tells every client immediately.
+	void set_time_of_day(std::uint32_t ticks);
+	// Closes a playing connection with `reason`.
+	bool kick_player(core::NetId id, std::string_view reason);
+#endif
+
 	// Entity-management follow-up (held item / hotbar selection, Phase
 	// 6.20): the latest `InputCmd::selected_slot` reported by a playing
 	// connection (post `vb.on("player_input", ...)` override, if any), or 0

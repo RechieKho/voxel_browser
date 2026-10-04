@@ -639,6 +639,63 @@ std::optional<physics::MoveState> ServerSession::player_move_state(core::NetId i
 	return std::nullopt;
 }
 
+#if defined(VB_WITH_AUTOMATION)
+std::optional<std::pair<float, float>> ServerSession::player_health(core::NetId id) const {
+	for (const auto &[conn, state] : conns_) {
+		(void)conn;
+		if (state.playing && state.net_id == id) {
+			const auto &h = registry_.get<ecs::Health>(state.entity);
+			return std::make_pair(h.current, h.max);
+		}
+	}
+	return std::nullopt;
+}
+
+bool ServerSession::set_player_health(core::NetId id, float value) {
+	for (auto &[conn, state] : conns_) {
+		(void)conn;
+		if (!state.playing || state.net_id != id) {
+			continue;
+		}
+		auto &h = registry_.get<ecs::Health>(state.entity);
+		const float target = std::clamp(value, 0.0f, h.max);
+		if (target < h.current) {
+			apply_damage(state, h.current - target, "automation");
+		} else {
+			h.current = target;
+		}
+		return true;
+	}
+	return false;
+}
+
+bool ServerSession::teleport_player(core::NetId id, core::Vec3d pos) {
+	for (const auto &[conn, state] : conns_) {
+		(void)conn;
+		if (state.playing && state.net_id == id) {
+			const auto &rot = registry_.get<ecs::Rotation>(state.entity);
+			set_player_state(id, pos, { rot.yaw, rot.pitch }, {});
+			return true;
+		}
+	}
+	return false;
+}
+
+void ServerSession::set_time_of_day(std::uint32_t ticks) {
+	time_of_day_ticks_ = static_cast<double>(ticks);
+	broadcast_time_of_day();
+}
+
+bool ServerSession::kick_player(core::NetId id, std::string_view reason) {
+	const ConnId conn = conn_for_player(id);
+	if (conn == ConnId::kInvalid) {
+		return false;
+	}
+	drop(conn, std::string(reason));
+	return true;
+}
+#endif
+
 std::uint8_t ServerSession::selected_slot(core::NetId id) const {
 	for (const auto &[conn, state] : conns_) {
 		(void)conn;

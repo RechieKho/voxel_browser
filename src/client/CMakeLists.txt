@@ -22,5 +22,6 @@ set_target_properties(voxel_browser PROPERTIES
 
 # Development-only automation channel; no automation code is linked otherwise.
 if(VB_WITH_AUTOMATION)
+  target_sources(voxel_browser PRIVATE automation_endpoint.cpp)
   target_link_libraries(voxel_browser PRIVATE vb_automation)
 endif()

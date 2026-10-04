@@ -478,7 +478,7 @@ int main(int argc, char **argv) {
 	std::unique_ptr<vb::server::ServerAutomationEndpoint> automation_endpoint;
 	if (automation) {
 		automation_endpoint = std::make_unique<vb::server::ServerAutomationEndpoint>(
-				session, world, registry, tick, transport.bound_port());
+				session, world, registry, pack_runtime, tick, transport.bound_port());
 	}
 #endif
 

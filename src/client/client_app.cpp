@@ -621,6 +621,17 @@ bool ClientApp::frame(const vb::render::InputFrame &input, double dt) {
 				ui_runtime.set_inventory(std::move(slots), selected_slot + 1);
 			}
 
+#if defined(VB_WITH_AUTOMATION)
+			// Automation needs the widget lists a windowed client would get as
+			// a side effect of drawing; evaluate them without drawing.
+			if (!render && headless_ui_eval) {
+				if (ui_runtime.is_open()) {
+					ui_runtime.render_frame();
+				}
+				hud_widget_cache = ui_runtime.render_hud();
+			}
+#endif
+
 			if (!render) {
 				break; // everything below is GL drawing
 			}
@@ -822,3 +833,11 @@ bool ClientApp::frame(const vb::render::InputFrame &input, double dt) {
 }
 
 } // namespace vb::client
+
+#if defined(VB_WITH_AUTOMATION)
+void vb::client::ClientApp::submit_chat(std::string_view text) {
+	if (client != nullptr && !text.empty()) {
+		client->send_chat(text);
+	}
+}
+#endif

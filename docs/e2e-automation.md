@@ -1,9 +1,10 @@
 # Voxel Browser — End-to-End Client Automation (Design)
 
 > Status: **In progress**; E0 (input seam), E1 (`ClientApp`), E2 (build
-> flags, JSON-lines host, predicate engine, read-only queries) and E2b
-> (handshake `client_flags`, protocol v27) are implemented (contract:
-> `docs/automation-protocol.md`); E3 onward is not. Covers a
+> flags, JSON-lines host, predicate engine, read-only queries), E2b
+> (handshake `client_flags`, protocol v27) and E3 (client actions, server
+> admin commands) are implemented (contract: `docs/automation-protocol.md`);
+> E4 onward is not. Covers a
 > Playwright-style harness that drives real `voxel_browser` clients against a
 > real `voxel_browser_server` in multiplayer, so gameplay can be tested by
 > scripts instead of by hand. Complements spec §17 (Testing Strategy); the
@@ -497,7 +498,7 @@ whatever the client claims:
 | **E1** (landed 2026-10-02) | `ClientApp` extraction; `run_headless` re-based on it with `render=false` | M–L (highest risk: touches the 1.7k-line `main.cpp`; land behind no flag, purely structural) | `*_smoke` tests unchanged; windowed manual check |
 | **E2** (landed 2026-10-03) | `VB_WITH_AUTOMATION` / `VB_DISTRIBUTION` options + `+automation` in `--version` + release-leg check (§7.1–7.3) **first**; then `src/automation/`: JSON-lines host, stdin thread → main-thread queue, `hello/state/step/quit/wait_for` + predicate engine; `--automation stdio` on client + server; ~~`--port 0` reporting~~ (not possible: GNS has no ephemeral listen port, see §10) | M | doctest unit tests for predicate engine + command parsing; a default build's `--automation` exits non-zero |
 | **E2b** (landed 2026-10-03) | `C2S_Hello.client_flags` + server-side rejection of automation clients (§7.4) | S | in-process `netcode_test` case: flagged client rejected by a non-automation server |
-| **E3** | Action commands (input, high-level, ui, menu, chat) + server admin commands | M | |
+| **E3** (landed 2026-10-04) | Action commands (input, high-level, ui, chat) + server admin commands. `menu.*`, `screenshot` and typing into the chat box are windowed-only and moved to E5 | M | two real clients + a dedicated server driven by a throwaway script: break/place replicate, give/teleport/chat/walk/kick; unit test for deferred replies |
 | **E4** | `tests/e2e/vbtest` + fixtures + first 5 tests (join, chat, block break replicates, craft via UI, reconnect after kick); CTest `e2e` label; Linux CI legs | M | CI green |
 | **E5** | `--net-sim`, trace JSONL + failure artifacts, screenshot under Xvfb | S–M | |
 | **E6** (optional) | Recorder ("codegen"): `--automation-record out.py` logs a human session's *semantic* actions (connect, look, hold, ui.click id) as a vbtest script skeleton; TCP attach mode; HTML trace viewer | M | |
@@ -560,7 +561,7 @@ checklist below is. Don't write history for work you didn't do or verify.
 | **E1** `ClientApp` | `ARCHITECTURE_SPEC.md` §10 (client loop description) and `architecture_spec/topology-and-layout.md` (new files); `STATE.md` note on `run_headless` now sharing the windowed loop; confirm README's `--headless` description is still true. |
 | **E2** options + host (done) | `README.md` build-options table: drop *(planned)* from `VB_WITH_AUTOMATION`, add `VB_DISTRIBUTION`; `CONTRIBUTING.md` e2e bullet (real commands, `build-e2e`); `src/client/main.cpp` / `src/server/main.cpp` `--help` text for `--automation*` (only when compiled in); new `docs/automation-protocol.md` (the JSON-lines contract: every command, predicate, error code, `proto` version); `cmake/` option comments; `describe_build()` `+automation` documented in README's `--version` mention. |
 | **E2b** handshake flag (done) | `docs/protocol.md`: add `client_flags` to the `C2S_Hello` row, add an entry to its changelog, **bump `kEngineProtocolVersion`** and record the old→new value (see "Adding a new wire message" in `CONTRIBUTING.md`); `architecture_spec/networking.md` §8.3 handshake notes; `content/` is unaffected. |
-| **E3** actions + admin cmds | `docs/automation-protocol.md` command tables; `docs/lua-api.md` only if `run_lua` exposes anything pack authors should know; list each server admin command and confirm it is `#if VB_WITH_AUTOMATION`-gated. |
+| **E3** actions + admin cmds (done) | Done: `docs/automation-protocol.md` tables, `STATE.md`, backlog. `lua-api.md` untouched (`run_lua` adds no pack API). Gating confirmed: every server admin primitive (`ServerSession::{player_health,set_player_health,teleport_player,set_time_of_day,kick_player}`, `PackRuntime::admin_give`) and every endpoint is under `#if defined(VB_WITH_AUTOMATION)`; the automation-off server binary has none of the command strings. |
 | **E4** harness + CI | `README.md` / `CONTRIBUTING.md`: install steps (`pip install -r tests/e2e/requirements.txt`), how to run (`ctest -L e2e`, `pytest tests/e2e`), how to write a test, fixtures reference (`tests/e2e/README.md`); `ARCHITECTURE_SPEC.md` §17: change "planned" to current; `.github/workflows/build_linux.yml` leg described in `STATE.md`. |
 | **E5** net-sim, traces, screenshots | `docs/automation-protocol.md` (`--net-sim` syntax, `screenshot`); `tests/e2e/README.md` (trace files, artifacts, Xvfb leg). |
 | **E6** recorder / TCP attach | New section in `docs/automation-protocol.md`; **re-check §7** — any listener (TCP) must still be compiled out of production, loopback-only, and token-protected. |
@@ -598,5 +599,19 @@ Files that currently point here: `ARCHITECTURE_SPEC.md`,
    redirecting only `std::cout` misses Lua's `print`, which writes to C
    `stdout`. The host therefore reads fd 0 with raw `read(2)` and duplicates
    fd 1 for protocol frames, pointing fd 1 itself at stderr.
-9. **Client `--automation` requires `--headless`** until E3 adds
-   `SyntheticInput` and the menu-injection commands to the windowed path.
+9. **Client `--automation` requires `--headless`.** E3 added
+   `SyntheticInput` for headless, but `menu.*`/`screenshot`/typing into the
+   raygui chat box need a window, so the windowed path (Xvfb) is E5.
+10. **`World::set_block` creates chunks on demand and returns "changed", not
+   "chunk exists" (found in E3).** The server `set_block`/`fill` therefore check
+   `has_chunk` first and refuse edits outside loaded chunks, instead of
+   silently creating empty ones. Tests must build near a player.
+11. **Singleplayer never installs the pack keybind registry (found in E3).**
+   `make_singleplayer_host` calls `install_join_veto` and
+   `install_entity_kind_registry` but not `install_keybind_registry` (only the
+   dedicated server does), so pack keybinds (`base:inventory`, `base:pause`)
+   don't reach a `--singleplayer` client: pressing the inventory key opens
+   nothing. Pre-existing and left alone; UI tests must use a dedicated server.
+12. **Headless clients skip modal-UI/HUD evaluation** (it only ran as a side
+   effect of drawing). `ClientApp::set_headless_ui_eval()` turns it on; the
+   automation endpoint does, plain `--headless` stays unchanged.

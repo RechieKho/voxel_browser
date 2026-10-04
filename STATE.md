@@ -36,7 +36,7 @@ content-only (e.g. the user explicitly asks for a content-pack feature).
 
 ## Current status (2026-10-02)
 
-**E2E automation: designed, E0 + E1 + E2 + E2b landed.** `docs/e2e-automation.md` is the
+**E2E automation: designed, E0 + E1 + E2 + E2b + E3 landed.** `docs/e2e-automation.md` is the
 design for a Playwright-style multiplayer test harness (stdio JSON-lines
 driver in the client/server + a pytest `vbtest` package). Hard constraint:
 the automation driver must be **compiled out of production** —
@@ -63,9 +63,9 @@ protocol; endpoints in `src/{client,server}/automation_endpoint.hpp`).
 `--automation stdio` works on the server and on `--headless` clients
 (`hello/state/step/quit/wait_for`, `--automation-clock real|manual`); contract in
 `docs/automation-protocol.md`. Gotchas: GNS has no `--port 0`; protocol uses
-raw fd 0/1 (see design §10 items 7-8). No actions/admin commands yet (E3), no
+raw fd 0/1 (see design §10 items 7-8). No
 pytest harness or `e2e` CI leg yet (E4). **Implementing any E-phase? Follow `docs/e2e-automation.md` §11**
-(per-phase doc checklist + safety invariants to re-verify) before calling it done. E2b (2026-10-03): `C2S_Hello.client_flags` (protocol 26→27); automation builds set `kClientFlagAutomation`, and a server without automation refuses such clients in the first handshake step (`HandshakeServerConfig::accept_automation_clients`). Tests: 4 new `net_test.cpp` cases + a `protocol_test.cpp` round-trip; the loopback-only guard in `vbtest` is E4. Next: E3 (actions + server admin commands).
+(per-phase doc checklist + safety invariants to re-verify) before calling it done. E2b (2026-10-03): `C2S_Hello.client_flags` (protocol 26→27); automation builds set `kClientFlagAutomation`, and a server without automation refuses such clients in the first handshake step (`HandshakeServerConfig::accept_automation_clients`). Tests: 4 new `net_test.cpp` cases + a `protocol_test.cpp` round-trip; the loopback-only guard in `vbtest` is E4. E3 (2026-10-04): client `key/mouse/look/select_slot/walk_to/break_block/place_block/chat.send/ui.*/hud.*` (`src/client/automation_endpoint.{hpp,cpp}`; multi-frame actions answer via deferred replies, `Host::respond`) and server `set_block/fill/teleport/give/set_time/set_health/kick/run_lua/block_at` (`src/server/automation_endpoint.hpp` + `#if VB_WITH_AUTOMATION` primitives on `ServerSession`/`PackRuntime`). Verified by hand with a throwaway script against a real `VB_WITH_NET` dedicated server + two real headless clients (break/place replicate to the other client, give/teleport/chat/walk/kick), 35 checks, plus the automation-off and -on `vb_tests` (430 / 440). NOT run: CI, Windows/macOS. Gotchas found: design §10 items 10-12 (`World::set_block` makes chunks; singleplayer has no pack keybinds; headless skips UI eval). Next: E4 (pytest `vbtest` + `e2e` CTest/CI leg; the loopback-only guard from §7.4).
 
 ## Status (2026-09-30)
 
