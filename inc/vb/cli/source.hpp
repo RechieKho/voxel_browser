@@ -6,6 +6,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "vb/cli/store.hpp" // Status
 
@@ -29,8 +30,15 @@ public:
 	virtual Status fetch_file(std::string_view version, const std::string &file,
 			const std::filesystem::path &dest, const ProgressFn &progress) = 0;
 
+	// Release tags this source offers, newest first (`vb list --remote`).
+	virtual Status list_versions(std::vector<std::string> &out) = 0;
+
 	virtual std::string describe() const = 0;
 };
+
+// Parses the GitHub "list releases" API response: keeps clean vX.Y.Z tags of
+// published (non-draft, non-prerelease) releases, newest first, no duplicates.
+Status parse_release_list(std::string_view json, std::vector<std::string> &out);
 
 // DirSource: <dir>/release.toml + zips; serves exactly the one version that
 // manifest describes ("latest" or that tag).

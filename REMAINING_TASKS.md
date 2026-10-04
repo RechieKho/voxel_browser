@@ -453,7 +453,7 @@ surface and per-phase task lists: `architecture_spec/dev-cli.md` §11.
 - [x] **8.4 — Hosting**: engine `--stop-file` (Windows graceful stop) and
       client `--content-pack`/`--world-dir` for `--singleplayer`;
       `vb host`, `vb server new/start/stop/status/logs/rm`.
-- [ ] **8.5 — Polish**: `list --remote`, `--json`, `self update`, bootstrap
+- [x] **8.5 — Polish**: `list --remote`, `--json`, `self update`, bootstrap
       scripts, server `--status-file`, completions, `vb host --watch`.
 - [ ] **8.6 — Hardening**: signed manifests, service-unit printing,
       protocol-mismatch warnings, arm64 artifacts.

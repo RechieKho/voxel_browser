@@ -3,6 +3,7 @@
 
 add_library(vb_cli_lib STATIC
   commands.cpp
+  completions.cpp
   installer.cpp
   instance.cpp
   layout.cpp
@@ -10,9 +11,13 @@ add_library(vb_cli_lib STATIC
   portcheck.cpp
   process.cpp
   release_manifest.cpp
+  self_update.cpp
+  server_config.cpp
+  shim.cpp
   source.cpp
   store.cpp
   version.cpp
+  watch.cpp
   zip.cpp
 )
 
@@ -24,6 +29,7 @@ target_link_libraries(vb_cli_lib
   PRIVATE
     tomlplusplus::tomlplusplus
     CURL::libcurl
+    nlohmann_json::nlohmann_json
     miniz
     vb_warnings
     vb_sanitizers

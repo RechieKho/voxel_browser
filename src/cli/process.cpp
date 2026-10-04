@@ -16,6 +16,7 @@
 #include <fstream>
 #include <sstream>
 #if defined(__APPLE__)
+#include <mach-o/dyld.h>
 #include <sys/sysctl.h>
 #include <sys/types.h>
 #endif
@@ -161,6 +162,21 @@ std::optional<std::uint64_t> process_start_token(Pid pid) {
 		return std::nullopt;
 	}
 	return (static_cast<std::uint64_t>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
+}
+
+std::filesystem::path current_executable_path() {
+	std::wstring buf(1024, L'\0');
+	for (;;) {
+		const DWORD n = GetModuleFileNameW(nullptr, buf.data(), static_cast<DWORD>(buf.size()));
+		if (n == 0) {
+			return {};
+		}
+		if (n < buf.size()) {
+			buf.resize(n);
+			return std::filesystem::path(buf);
+		}
+		buf.resize(buf.size() * 2);
+	}
 }
 
 bool request_stop(Pid) {
@@ -418,6 +434,25 @@ std::optional<std::uint64_t> process_start_token(Pid pid) {
 		return 1;
 	}
 	return std::nullopt;
+#endif
+}
+
+std::filesystem::path current_executable_path() {
+	std::error_code ec;
+#if defined(__linux__)
+	const auto p = std::filesystem::read_symlink("/proc/self/exe", ec);
+	return ec ? std::filesystem::path{} : p;
+#elif defined(__APPLE__)
+	std::uint32_t size = 0;
+	_NSGetExecutablePath(nullptr, &size);
+	std::string buf(size, '\0');
+	if (_NSGetExecutablePath(buf.data(), &size) != 0) {
+		return {};
+	}
+	const auto p = std::filesystem::canonical(buf.c_str(), ec);
+	return ec ? std::filesystem::path{} : p;
+#else
+	return {};
 #endif
 }
 

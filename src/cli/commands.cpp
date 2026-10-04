@@ -1,7 +1,9 @@
 #include "vb/cli/commands.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <fstream>
 #include <functional>
 #include <iomanip>
@@ -9,6 +11,8 @@
 #include <map>
 #include <set>
 #include <thread>
+
+#include <nlohmann/json.hpp>
 #if defined(_WIN32)
 #include <io.h>
 #define VB_ISATTY _isatty
@@ -19,15 +23,21 @@
 #define VB_STDOUT_FD STDOUT_FILENO
 #endif
 
+#include "vb/cli/completions.hpp"
 #include "vb/cli/installer.hpp"
 #include "vb/cli/instance.hpp"
 #include "vb/cli/process.hpp"
 #include "vb/cli/release_manifest.hpp"
+#include "vb/cli/self_update.hpp"
+#include "vb/cli/server_config.hpp"
+#include "vb/cli/shim.hpp"
 #include "vb/cli/source.hpp"
 #include "vb/cli/store.hpp"
 #include "vb/cli/version.hpp"
+#include "vb/cli/watch.hpp"
 #include "vb/core/build_info.hpp"
 #include "vb/core/config.hpp"
+#include "vb/core/version.hpp"
 
 namespace vb::cli {
 
@@ -99,9 +109,26 @@ bool take_version_flag(std::vector<std::string> &args, std::string &version) {
 	return true;
 }
 
-int cmd_paths(const Ctx &c, const std::vector<std::string> &args) {
+using json = nlohmann::json;
+
+void print_json(const Ctx &c, const json &j) {
+	c.out << j.dump(2) << "\n";
+}
+
+std::int64_t unix_now() {
+	return std::chrono::duration_cast<std::chrono::seconds>(
+			std::chrono::system_clock::now().time_since_epoch())
+			.count();
+}
+
+int cmd_paths(const Ctx &c, std::vector<std::string> args) {
+	const bool as_json = take_flag(args, "--json");
 	if (!args.empty()) {
-		return usage_error(c, "`paths` takes no arguments");
+		return usage_error(c, "usage: vb paths [--json]");
+	}
+	if (as_json) {
+		print_json(c, { { "data", c.layout.data().string() }, { "config", c.layout.config().string() }, { "cache", c.layout.cache().string() } });
+		return kExitOk;
 	}
 	c.out << "data:   " << c.layout.data().string() << "\n"
 		  << "config: " << c.layout.config().string() << "\n"
@@ -109,14 +136,64 @@ int cmd_paths(const Ctx &c, const std::vector<std::string> &args) {
 	return kExitOk;
 }
 
-int cmd_list(const Ctx &c, const std::vector<std::string> &args) {
+int list_remote(const Ctx &c, bool as_json) {
+	std::string why;
+	const auto source = make_source(configured_source_spec(c.layout), &why);
+	if (!source) {
+		return failure(c, why);
+	}
+	std::vector<std::string> versions;
+	if (const Status s = source->list_versions(versions); !s) {
+		return failure(c, s.error);
+	}
+	std::set<std::string> installed;
+	for (const Entry &e : list_entries(c.layout)) {
+		installed.insert(e.name);
+	}
+	if (as_json) {
+		json arr = json::array();
+		for (const std::string &v : versions) {
+			arr.push_back({ { "version", v }, { "installed", installed.count(v) != 0 } });
+		}
+		print_json(c, arr);
+		return kExitOk;
+	}
+	if (versions.empty()) {
+		c.out << "no releases published at " << source->describe() << "\n";
+		return kExitOk;
+	}
+	for (std::size_t i = 0; i < versions.size(); ++i) {
+		c.out << "  " << versions[i] << (i == 0 ? "  (latest)" : "")
+			  << (installed.count(versions[i]) != 0 ? "  installed" : "") << "\n";
+	}
+	return kExitOk;
+}
+
+int cmd_list(const Ctx &c, std::vector<std::string> args) {
+	const bool as_json = take_flag(args, "--json");
+	const bool remote = take_flag(args, "--remote");
 	if (!args.empty()) {
-		return usage_error(c, "`list` takes no arguments yet (`--remote` arrives with 8.5)");
+		return usage_error(c, "usage: vb list [--remote] [--json]");
+	}
+	if (remote) {
+		return list_remote(c, as_json);
 	}
 	const auto entries = list_entries(c.layout);
+	if (as_json) {
+		json arr = json::array();
+		for (const Entry &e : entries) {
+			arr.push_back({ { "name", e.name },
+					{ "kind", e.kind == EntryKind::Link ? "link" : "release" },
+					{ "default", e.is_default },
+					{ "path", e.root.string() },
+					{ "exists", e.root_exists } });
+		}
+		print_json(c, arr);
+		return kExitOk;
+	}
 	if (entries.empty()) {
-		c.out << "nothing installed. Register a local build with "
-				 "`vb link dev <build-dir>`.\n";
+		c.out << "nothing installed. `vb install` downloads the latest release, or register a "
+				 "local build with `vb link dev <build-dir>`.\n";
 		return kExitOk;
 	}
 	for (const Entry &e : entries) {
@@ -146,19 +223,20 @@ int cmd_use(const Ctx &c, const std::vector<std::string> &args) {
 }
 
 int cmd_which(const Ctx &c, std::vector<std::string> args) {
+	const bool as_json = take_flag(args, "--json");
 	std::string version;
 	if (!take_version_flag(args, version)) {
 		return usage_error(c, "--version needs a value");
 	}
 	Binary which = Binary::Client;
 	if (args.size() > 1) {
-		return usage_error(c, "usage: vb which [client|server] [--version <v>]");
+		return usage_error(c, "usage: vb which [client|server] [--version <v>] [--json]");
 	}
 	if (args.size() == 1) {
 		if (args[0] == "server") {
 			which = Binary::Server;
 		} else if (args[0] != "client") {
-			return usage_error(c, "usage: vb which [client|server] [--version <v>]");
+			return usage_error(c, "usage: vb which [client|server] [--version <v>] [--json]");
 		}
 	}
 	std::string why;
@@ -170,6 +248,10 @@ int cmd_which(const Ctx &c, std::vector<std::string> args) {
 	if (!bin) {
 		return failure(c, e->name + " has no " + binary_file_name(which) + " in " +
 				e->root.string());
+	}
+	if (as_json) {
+		print_json(c, { { "version", e->name }, { "kind", which == Binary::Server ? "server" : "client" }, { "path", bin->string() } });
+		return kExitOk;
 	}
 	c.out << bin->string() << "\n";
 	return kExitOk;
@@ -583,8 +665,83 @@ std::string normalise_pack(const std::string &pack) {
 	return std::filesystem::absolute(pack, ec).lexically_normal().string();
 }
 
-int cmd_host(const Ctx &c, const std::vector<std::string> &raw) {
+// `vb host --watch`: keeps the server running and restarts it when the pack
+// changes on disk. The server runs in a worker thread (foreground, so its
+// output stays on this terminal) while this thread polls the pack.
+int host_watch(const Ctx &c, const Instance &inst, const Overrides &ov) {
+	constexpr auto kPoll = std::chrono::milliseconds(400);
+	constexpr auto kQuiet = std::chrono::milliseconds(700); // wait out a burst of saves
+	LaunchPlan plan;
+	if (const Status s = plan_launch(c.layout, inst, ov, plan); !s) {
+		return failure(c, s.error);
+	}
+	c.out << "watching " << plan.pack.string() << " for changes\n"
+		  << std::flush;
+	PackSnapshot snapshot = snapshot_pack(plan.pack);
+	for (;;) {
+		StartResult result;
+		std::atomic<bool> finished{ false };
+		std::thread server([&] {
+			result = start_instance(c.layout, inst, ov, true, c.out);
+			finished = true;
+		});
+		bool restart = false;
+		bool waiting_for_edit = false; // the server stopped by itself with an error
+		while (!restart) {
+			std::this_thread::sleep_for(kPoll);
+			if (finished && !waiting_for_edit) {
+				// 130/143: stopped by SIGINT/SIGTERM (a user's Ctrl+C, `vb server stop`,
+				// or one that landed before the server's handlers were up) -- a
+				// request to stop, not a crash worth waiting for an edit over.
+				const bool stopped_on_request = result.exit_code == 0 || result.exit_code == 130 ||
+						result.exit_code == 143;
+				if (!result.status || stopped_on_request) {
+					break; // a start failure, Ctrl+C or a normal exit: we are done
+				}
+				c.out << "[vb] server exited with code " << result.exit_code
+					  << "; waiting for the pack to change...\n"
+					  << std::flush;
+				waiting_for_edit = true;
+			}
+			PackSnapshot now = snapshot_pack(plan.pack);
+			if (now == snapshot) {
+				continue;
+			}
+			for (;;) { // debounce: act once the files have stopped changing
+				std::this_thread::sleep_for(kQuiet);
+				PackSnapshot again = snapshot_pack(plan.pack);
+				const bool stable = again == now;
+				now = std::move(again);
+				if (stable) {
+					break;
+				}
+			}
+			c.out << "[vb] pack changed (" << describe_changes(snapshot, now) << ") -- restarting\n"
+				  << std::flush;
+			snapshot = std::move(now);
+			if (!finished) {
+				// The record appears a moment after the thread starts the server.
+				for (int i = 0; i < 100 && !finished && !running_record(inst); ++i) {
+					std::this_thread::sleep_for(std::chrono::milliseconds(100));
+				}
+				std::ostringstream quiet;
+				stop_instance(inst, 30, true, quiet);
+			}
+			restart = true;
+		}
+		server.join();
+		if (!restart) {
+			if (!result.status) {
+				return failure(c, result.status.error);
+			}
+			return result.exit_code == 130 || result.exit_code == 143 ? 0 : result.exit_code;
+		}
+	}
+}
+
+int cmd_host(const Ctx &c, std::vector<std::string> raw) {
 	auto [rest, extra] = split_passthrough(raw);
+	const bool watch = take_flag(rest, "--watch");
 	const Opts o = parse_opts(rest, { "--version", "--port", "--pack" }, {});
 	if (!o.error.empty() || !o.positional.empty()) {
 		return usage_error(c, o.error.empty() ? "unexpected argument '" + o.positional[0] + "' (pass server arguments after `--`)" : o.error);
@@ -620,6 +777,9 @@ int cmd_host(const Ctx &c, const std::vector<std::string> &raw) {
 			return failure(c, why);
 		}
 	}
+	if (watch) {
+		return host_watch(c, *inst, ov);
+	}
 	const StartResult r = start_instance(c.layout, *inst, ov, true, c.out);
 	if (!r.status) {
 		return failure(c, r.status.error);
@@ -649,38 +809,93 @@ std::string configured_port(const Instance &inst) {
 	return cfg ? std::to_string(cfg->port) : "?";
 }
 
+// One instance as the user sees it: config + run record + (fresh) server status.
+struct InstanceView {
+	Instance inst;
+	std::optional<RunRecord> rec;
+	std::optional<ServerStatus> status; // only when the server wrote it recently
+	std::string port;
+};
+
+InstanceView view_of(const Instance &inst, std::int64_t now) {
+	InstanceView v{ inst, running_record(inst), std::nullopt, configured_port(inst) };
+	if (v.rec) {
+		if (auto st = read_server_status(inst); st && status_is_fresh(*st, now)) {
+			v.status = std::move(st);
+		}
+	}
+	return v;
+}
+
+json to_json(const InstanceView &v, std::int64_t now) {
+	json j = { { "name", v.inst.name },
+		{ "version", v.inst.version },
+		{ "pack", v.inst.pack },
+		{ "port", v.port == "?" ? json(nullptr) : json(std::stoi(v.port)) },
+		{ "dir", v.inst.dir.string() },
+		{ "log", instance_log_file(v.inst).string() },
+		{ "running", v.rec.has_value() } };
+	if (v.rec) {
+		j["pid"] = v.rec->pid;
+		j["running_version"] = v.rec->version;
+		j["uptime_seconds"] = now - v.rec->started_unix;
+	}
+	if (v.status) {
+		j["players"] = v.status->players;
+		j["max_players"] = v.status->max_players;
+		j["tick_rate"] = v.status->tick_rate;
+		j["target_tick_rate"] = v.status->target_tick_rate;
+		j["seed"] = v.status->seed;
+		j["motd"] = v.status->motd;
+	}
+	return j;
+}
+
 void print_instance_table(const Ctx &c, const std::vector<Instance> &instances) {
+	const std::int64_t now = unix_now();
+	std::vector<InstanceView> views;
 	std::size_t name_w = 4;
 	std::size_t ver_w = 7;
 	for (const Instance &i : instances) {
+		views.push_back(view_of(i, now));
 		name_w = std::max(name_w, i.name.size());
 		ver_w = std::max(ver_w, i.version.size());
 	}
 	c.out << std::left << std::setw(static_cast<int>(name_w) + 2) << "NAME"
 		  << std::setw(static_cast<int>(ver_w) + 2) << "VERSION" << std::setw(8) << "PORT"
+		  << std::setw(9) << "PLAYERS"
 		  << "STATE\n";
-	const std::int64_t now = std::chrono::duration_cast<std::chrono::seconds>(
-			std::chrono::system_clock::now().time_since_epoch())
-									 .count();
-	for (const Instance &i : instances) {
-		const auto rec = running_record(i);
-		c.out << std::left << std::setw(static_cast<int>(name_w) + 2) << i.name
-			  << std::setw(static_cast<int>(ver_w) + 2) << i.version << std::setw(8)
-			  << configured_port(i);
-		if (rec) {
-			c.out << "running (pid " << rec->pid << ", up " << format_uptime(now - rec->started_unix)
-				  << ")\n";
+	for (const InstanceView &v : views) {
+		const std::string players = v.status
+				? std::to_string(v.status->players.size()) + "/" + std::to_string(v.status->max_players)
+				: "-";
+		c.out << std::left << std::setw(static_cast<int>(name_w) + 2) << v.inst.name
+			  << std::setw(static_cast<int>(ver_w) + 2) << v.inst.version << std::setw(8) << v.port
+			  << std::setw(9) << players;
+		if (v.rec) {
+			c.out << "running (pid " << v.rec->pid << ", up "
+				  << format_uptime(now - v.rec->started_unix) << ")\n";
 		} else {
 			c.out << "stopped\n";
 		}
 	}
 }
 
-int server_list(const Ctx &c, const std::vector<std::string> &args) {
+int server_list(const Ctx &c, std::vector<std::string> args) {
+	const bool as_json = take_flag(args, "--json");
 	if (!args.empty()) {
-		return usage_error(c, "usage: vb server list");
+		return usage_error(c, "usage: vb server list [--json]");
 	}
 	const auto instances = list_instances(c.layout);
+	if (as_json) {
+		const std::int64_t now = unix_now();
+		json arr = json::array();
+		for (const Instance &i : instances) {
+			arr.push_back(to_json(view_of(i, now), now));
+		}
+		print_json(c, arr);
+		return kExitOk;
+	}
 	if (instances.empty()) {
 		c.out << "no servers yet. `vb host` runs one right away; "
 				 "`vb server new <name>` creates a persistent one.\n";
@@ -793,35 +1008,56 @@ int server_restart(const Ctx &c, const std::vector<std::string> &args) {
 	return r.status ? kExitOk : failure(c, r.status.error);
 }
 
-int server_status(const Ctx &c, const std::vector<std::string> &args) {
+int server_status(const Ctx &c, std::vector<std::string> args) {
+	const bool as_json = take_flag(args, "--json");
 	const Opts o = parse_opts(args, {}, {});
 	if (!o.error.empty() || o.positional.size() > 1) {
-		return usage_error(c, o.error.empty() ? "usage: vb server status [<name>]" : o.error);
+		return usage_error(c, o.error.empty() ? "usage: vb server status [<name>] [--json]" : o.error);
 	}
 	if (o.positional.empty()) {
-		return server_list(c, {});
+		return server_list(c, as_json ? std::vector<std::string>{ "--json" } : std::vector<std::string>{});
 	}
 	std::string why;
 	const auto inst = load_instance(c.layout, o.positional[0], &why);
 	if (!inst) {
 		return failure(c, why);
 	}
-	const auto rec = running_record(*inst);
-	const std::int64_t now = std::chrono::duration_cast<std::chrono::seconds>(
-			std::chrono::system_clock::now().time_since_epoch())
-									 .count();
+	const std::int64_t now = unix_now();
+	const InstanceView v = view_of(*inst, now);
+	if (as_json) {
+		print_json(c, to_json(v, now));
+		return kExitOk;
+	}
 	c.out << "name:    " << inst->name << "\n"
 		  << "state:   ";
-	if (rec) {
-		c.out << "running (pid " << rec->pid << ", up " << format_uptime(now - rec->started_unix)
+	if (v.rec) {
+		c.out << "running (pid " << v.rec->pid << ", up " << format_uptime(now - v.rec->started_unix)
 			  << ")\n";
 	} else {
 		c.out << "stopped\n";
 	}
-	c.out << "version: " << inst->version << (rec ? " (running " + rec->version + ")" : "") << "\n"
+	c.out << "version: " << inst->version << (v.rec ? " (running " + v.rec->version + ")" : "") << "\n"
 		  << "pack:    " << inst->pack << "\n"
-		  << "port:    " << configured_port(*inst) << "\n"
-		  << "dir:     " << inst->dir.string() << "\n"
+		  << "port:    " << v.port << "\n";
+	if (v.status) {
+		std::ostringstream tps;
+		if (v.status->tick_rate > 0.0) {
+			tps << std::fixed << std::setprecision(1) << v.status->tick_rate << " / "
+				<< v.status->target_tick_rate << " Hz";
+		} else {
+			tps << "measuring... / " << v.status->target_tick_rate << " Hz"; // first interval
+		}
+		c.out << "ticks:   " << tps.str() << "\n"
+			  << "players: " << v.status->players.size() << "/" << v.status->max_players;
+		for (std::size_t i = 0; i < v.status->players.size(); ++i) {
+			c.out << (i == 0 ? "  (" : ", ") << v.status->players[i];
+		}
+		c.out << (v.status->players.empty() ? "" : ")") << "\n"
+			  << "seed:    " << v.status->seed << "\n";
+	} else if (v.rec) {
+		c.out << "players: (no recent status from the server)\n";
+	}
+	c.out << "dir:     " << inst->dir.string() << "\n"
 		  << "log:     " << instance_log_file(*inst).string() << "\n";
 	if (const std::string tail = tail_log(*inst, 5); !tail.empty()) {
 		c.out << "recent log:\n"
@@ -871,6 +1107,154 @@ int server_logs(const Ctx &c, const std::vector<std::string> &args) {
 	}
 }
 
+// PATH lookup for the editor (run_foreground does no PATH search of its own).
+std::filesystem::path find_executable(const std::string &name) {
+	namespace fs = std::filesystem;
+	if (name.find('/') != std::string::npos || name.find('\\') != std::string::npos) {
+		return name;
+	}
+	const char *path_env = std::getenv("PATH");
+	if (path_env == nullptr) {
+		return {};
+	}
+#if defined(_WIN32)
+	const char sep = ';';
+	const std::vector<std::string> suffixes = { ".exe", ".com" };
+#else
+	const char sep = ':';
+	const std::vector<std::string> suffixes = { "" };
+#endif
+	std::string rest = path_env;
+	std::size_t pos = 0;
+	while (pos <= rest.size()) {
+		std::size_t end = rest.find(sep, pos);
+		if (end == std::string::npos) {
+			end = rest.size();
+		}
+		const std::string dir = rest.substr(pos, end - pos);
+		for (const std::string &suffix : suffixes) {
+			std::error_code ec;
+			const fs::path candidate = fs::path(dir.empty() ? "." : dir) / (name + suffix);
+			if (fs::is_regular_file(candidate, ec)) {
+				return candidate;
+			}
+		}
+		pos = end + 1;
+	}
+	return {};
+}
+
+// $VISUAL / $EDITOR (which may carry arguments: "code --wait"), else a default.
+std::vector<std::string> editor_command() {
+	for (const char *var : { "VISUAL", "EDITOR" }) {
+		if (const char *v = std::getenv(var); v != nullptr && *v != '\0') {
+			std::vector<std::string> parts;
+			std::istringstream in(v);
+			for (std::string w; in >> w;) {
+				parts.push_back(w);
+			}
+			if (!parts.empty()) {
+				return parts;
+			}
+		}
+	}
+#if defined(_WIN32)
+	return { "notepad" };
+#else
+	return { "vi" };
+#endif
+}
+
+int server_config(const Ctx &c, const std::vector<std::string> &args) {
+	constexpr const char *kUsage =
+			"usage: vb server config <name> [get [<key>] | set <key> <value> | unset <key> | edit]";
+	if (args.empty()) {
+		return usage_error(c, kUsage);
+	}
+	std::string why;
+	const auto inst = load_instance(c.layout, args[0], &why);
+	if (!inst) {
+		return failure(c, why);
+	}
+	const std::filesystem::path file = instance_server_toml(*inst);
+	const std::string sub = args.size() > 1 ? args[1] : "get";
+	const auto note_if_running = [&] {
+		if (running_record(*inst)) {
+			c.out << "'" << inst->name << "' is running; restart it to apply (`vb server restart "
+				  << inst->name << "`)\n";
+		}
+	};
+	if (sub == "get") {
+		if (args.size() > 3) {
+			return usage_error(c, kUsage);
+		}
+		if (args.size() == 3) {
+			const auto v = get_server_config_value(file, args[2], &why);
+			if (!v) {
+				return failure(c, why);
+			}
+			c.out << *v << "\n";
+			return kExitOk;
+		}
+		const auto all = dump_server_config(file, &why);
+		if (!all) {
+			return failure(c, why);
+		}
+		c.out << *all;
+		return kExitOk;
+	}
+	if (sub == "set" && args.size() == 4) {
+		if (const Status s = set_server_config_value(file, args[2], args[3]); !s) {
+			return failure(c, s.error);
+		}
+		c.out << args[2] << " = " << args[3] << "\n";
+		note_if_running();
+		return kExitOk;
+	}
+	if (sub == "unset" && args.size() == 3) {
+		if (const Status s = unset_server_config_key(file, args[2]); !s) {
+			return failure(c, s.error);
+		}
+		c.out << args[2] << " reset to the default\n";
+		note_if_running();
+		return kExitOk;
+	}
+	if (sub == "edit" && args.size() == 2) {
+		std::vector<std::string> cmd = editor_command();
+		const std::filesystem::path exe = find_executable(cmd.front());
+		if (exe.empty()) {
+			return failure(c, "editor '" + cmd.front() + "' not found; set $EDITOR");
+		}
+		std::error_code ec;
+		std::string before;
+		{
+			std::ifstream in(file, std::ios::binary);
+			std::ostringstream ss;
+			ss << in.rdbuf();
+			before = ss.str();
+		}
+		cmd.erase(cmd.begin());
+		cmd.push_back(file.string());
+		const RunResult r = run_foreground(exe, cmd);
+		if (!r.error.empty()) {
+			return failure(c, r.error);
+		}
+		// An edit the engine would reject must not be left in place for the
+		// next start to trip over: restore the old file, keep the bad one aside.
+		if (auto loaded = vb::core::load_server_config(file.string()); !loaded) {
+			std::filesystem::path rejected = file;
+			rejected += ".rejected";
+			std::filesystem::copy_file(file, rejected,
+					std::filesystem::copy_options::overwrite_existing, ec);
+			std::ofstream(file, std::ios::binary | std::ios::trunc) << before;
+			return failure(c, "your edit is not valid (" + std::string(vb::core::message(loaded.error())) + "); restored the previous " + "server.toml and kept yours as " + rejected.string());
+		}
+		note_if_running();
+		return kExitOk;
+	}
+	return usage_error(c, kUsage);
+}
+
 int server_rm(const Ctx &c, const std::vector<std::string> &args) {
 	const Opts o = parse_opts(args, {}, { "--keep-world", "--yes" });
 	int code = kExitOk;
@@ -891,26 +1275,161 @@ int server_rm(const Ctx &c, const std::vector<std::string> &args) {
 	return kExitOk;
 }
 
+const std::vector<std::string> &server_subcommand_names() {
+	static const std::vector<std::string> names = { "new", "list", "start", "stop", "restart",
+		"status", "logs", "config", "rm" };
+	return names;
+}
+
 int cmd_server(const Ctx &c, const std::vector<std::string> &args) {
 	static const std::map<std::string, std::function<int(const Ctx &, const std::vector<std::string> &)>>
 			sub = {
+				{ "config", server_config },
 				{ "new", server_new },
-				{ "list", server_list },
+				{ "list", [](const Ctx &ctx, const std::vector<std::string> &a) { return server_list(ctx, a); } },
 				{ "start", server_start },
 				{ "stop", server_stop },
 				{ "restart", server_restart },
-				{ "status", server_status },
+				{ "status", [](const Ctx &ctx, const std::vector<std::string> &a) { return server_status(ctx, a); } },
 				{ "logs", server_logs },
 				{ "rm", server_rm },
 			};
 	if (args.empty()) {
-		return usage_error(c, "usage: vb server <new|list|start|stop|restart|status|logs|rm> ...");
+		return usage_error(c, "usage: vb server <new|list|start|stop|restart|status|logs|config|rm> ...");
 	}
 	const auto it = sub.find(args[0]);
 	if (it == sub.end()) {
 		return usage_error(c, "unknown server command '" + args[0] + "'");
 	}
 	return it->second(c, std::vector<std::string>(args.begin() + 1, args.end()));
+}
+
+const std::map<std::string, Command> &commands();
+
+int cmd_self(const Ctx &c, std::vector<std::string> args) {
+	if (args.empty() || args[0] != "update") {
+		return usage_error(c, "usage: vb self update [--check] [--force]");
+	}
+	args.erase(args.begin());
+	SelfUpdateOptions opts;
+	opts.check_only = take_flag(args, "--check");
+	opts.force = take_flag(args, "--force");
+	if (!args.empty()) {
+		return usage_error(c, "usage: vb self update [--check] [--force]");
+	}
+	opts.current_version = vb::kVersionString;
+	opts.progress = make_progress(c);
+	std::string why;
+	const auto source = make_source(configured_source_spec(c.layout), &why);
+	if (!source) {
+		return failure(c, why);
+	}
+	const SelfUpdateResult r = self_update(c.layout, *source, opts);
+	if (opts.progress) {
+		c.out << "\n";
+	}
+	if (!r.status) {
+		return failure(c, r.status.error);
+	}
+	if (r.updated) {
+		c.out << "vb updated: " << opts.current_version << " -> " << r.latest << "\n";
+	} else if (r.up_to_date) {
+		c.out << "vb is up to date (" << opts.current_version << ")\n";
+	} else {
+		c.out << "update available: " << opts.current_version << " -> " << r.latest
+			  << " (run `vb self update`)\n";
+	}
+	return kExitOk;
+}
+
+bool dir_on_path(const std::filesystem::path &dir) {
+	const char *path_env = std::getenv("PATH");
+	if (path_env == nullptr) {
+		return false;
+	}
+#if defined(_WIN32)
+	const char sep = ';';
+#else
+	const char sep = ':';
+#endif
+	std::string rest = path_env;
+	std::size_t pos = 0;
+	while (pos <= rest.size()) {
+		std::size_t end = rest.find(sep, pos);
+		if (end == std::string::npos) {
+			end = rest.size();
+		}
+		if (std::filesystem::path(rest.substr(pos, end - pos)).lexically_normal() == dir.lexically_normal()) {
+			return true;
+		}
+		pos = end + 1;
+	}
+	return false;
+}
+
+int cmd_shim(const Ctx &c, const std::vector<std::string> &args) {
+	if (args.size() != 1 || (args[0] != "install" && args[0] != "remove")) {
+		return usage_error(c, "usage: vb shim <install|remove>");
+	}
+	std::vector<std::filesystem::path> files;
+	if (args[0] == "remove") {
+		if (const Status s = remove_shims(c.layout, files); !s) {
+			return failure(c, s.error);
+		}
+		for (const auto &f : files) {
+			c.out << "removed " << f.string() << "\n";
+		}
+		if (files.empty()) {
+			c.out << "no shims installed\n";
+		}
+		return kExitOk;
+	}
+	const std::filesystem::path self = current_executable_path();
+	if (const Status s = install_shims(c.layout, self, files); !s) {
+		return failure(c, s.error);
+	}
+	for (const auto &f : files) {
+		c.out << "wrote " << f.string() << "\n";
+	}
+	if (!dir_on_path(shim_dir(c.layout))) {
+		c.out << "add " << shim_dir(c.layout).string() << " to your PATH to use them from any shell\n";
+	}
+	return kExitOk;
+}
+
+int cmd_completions(const Ctx &c, const std::vector<std::string> &args) {
+	if (args.size() != 1) {
+		return usage_error(c, "usage: vb completions <bash|zsh|fish|powershell>");
+	}
+	CompletionSpec spec;
+	for (const auto &[name, cmd] : commands()) {
+		spec.commands.emplace_back(name, cmd.summary);
+	}
+	spec.server_subcommands = server_subcommand_names();
+	spec.config_subcommands = { "get", "set", "unset", "edit" };
+	const std::string text = generate_completions(args[0], spec);
+	if (text.empty()) {
+		return usage_error(c, "unknown shell '" + args[0] + "' (bash, zsh, fish or powershell)");
+	}
+	c.out << text;
+	return kExitOk;
+}
+
+// Hidden helper the completion scripts call: names, one per line.
+int cmd_complete_helper(const Ctx &c, const std::vector<std::string> &args) {
+	if (args.size() == 1 && args[0] == "instances") {
+		for (const Instance &i : list_instances(c.layout)) {
+			c.out << i.name << "\n";
+		}
+		return kExitOk;
+	}
+	if (args.size() == 1 && args[0] == "versions") {
+		for (const Entry &e : list_entries(c.layout)) {
+			c.out << e.name << "\n";
+		}
+		return kExitOk;
+	}
+	return kExitUsage;
 }
 
 const std::map<std::string, Command> &commands() {
@@ -921,10 +1440,12 @@ const std::map<std::string, Command> &commands() {
 		{ "update", { "update", "install the latest release", cmd_update } },
 		{ "prune", { "prune [--keep N]", "remove old, non-default versions", cmd_prune } },
 		{ "doctor", { "doctor", "check paths, versions and configuration", cmd_doctor } },
-		{ "list", { "list", "show installed versions and links (* = default)", cmd_list } },
+		{ "list",
+				{ "list [--remote] [--json]", "show installed versions and links (* = default)",
+						[](const Ctx &c, const std::vector<std::string> &a) { return cmd_list(c, a); } } },
 		{ "use", { "use <version>", "set the default version", cmd_use } },
 		{ "which",
-				{ "which [client|server] [--version <v>]", "print a binary's path",
+				{ "which [client|server] [--version <v>] [--json]", "print a binary's path",
 						[](const Ctx &c, const std::vector<std::string> &a) {
 							return cmd_which(c, a);
 						} } },
@@ -945,12 +1466,24 @@ const std::map<std::string, Command> &commands() {
 				{ "launch [--version <v>] [-- client args...]", "start the client",
 						cmd_launch } },
 		{ "host",
-				{ "host [--version v] [--port n] [--pack dir] [-- server args...]",
-						"run a server in the foreground (Ctrl+C stops it)", cmd_host } },
+				{ "host [--version v] [--port n] [--pack dir] [--watch] [-- server args...]",
+						"run a server in the foreground (Ctrl+C stops it)",
+						[](const Ctx &c, const std::vector<std::string> &a) { return cmd_host(c, a); } } },
 		{ "server",
-				{ "server <new|list|start|stop|restart|status|logs|rm> ...",
+				{ "server <new|list|start|stop|restart|status|logs|config|rm> ...",
 						"manage named, background server instances", cmd_server } },
-		{ "paths", { "paths", "print the data/config/cache directories", cmd_paths } },
+		{ "self",
+				{ "self update [--check] [--force]", "update vb itself to the latest release",
+						[](const Ctx &c, const std::vector<std::string> &a) { return cmd_self(c, a); } } },
+		{ "shim",
+				{ "shim <install|remove>", "put voxel_browser / voxel_browser_server launchers in <data>/bin",
+						cmd_shim } },
+		{ "completions",
+				{ "completions <bash|zsh|fish|powershell>", "print a shell completion script",
+						cmd_completions } },
+		{ "paths",
+				{ "paths [--json]", "print the data/config/cache directories",
+						[](const Ctx &c, const std::vector<std::string> &a) { return cmd_paths(c, a); } } },
 	};
 	return table;
 }
@@ -985,6 +1518,9 @@ int run_cli(const std::vector<std::string> &args, const Layout &layout, std::ost
 	if (first == "-V" || first == "--version") {
 		out << vb::core::describe_build() << "\n";
 		return kExitOk;
+	}
+	if (first == "__complete") { // hidden: used by the generated completion scripts
+		return cmd_complete_helper(ctx, std::vector<std::string>(args.begin() + 1, args.end()));
 	}
 	const auto it = commands().find(first);
 	if (it == commands().end()) {

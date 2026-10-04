@@ -286,10 +286,13 @@ vb prune [--keep N]                  # remove old unpinned, unused versions
 vb link <name> <build-dir>           # register a local build as a pseudo-version
 vb unlink <name>
 vb which [client|server] [--version v]
+vb self update [--check] [--force]    # update vb itself
+vb shim install|remove                # voxel_browser / voxel_browser_server launchers in <data>/bin
+vb completions bash|zsh|fish|powershell
 
 # run
 vb launch [--version v] [-- client args…]        # start the client
-vb host [--version v] [--port n] [--pack dir] [-- server args…]
+vb host [--version v] [--port n] [--pack dir] [--watch] [-- server args…]
 
 # instances
 vb server new <name> [--version v] [--pack dir|builtin:base] [--port n]
@@ -299,6 +302,7 @@ vb server stop <name> [--timeout s] [--kill]
 vb server restart <name>
 vb server status [<name>]
 vb server logs <name> [-f] [-n lines]
+vb server config <name> [get [key] | set key value | unset key | edit]
 vb server config <name> [get <key> | set <key> <value> | edit]
 vb server rm <name> [--keep-world]
 
@@ -458,17 +462,59 @@ Nothing can be downloaded reliably until this lands.
 
 ### 8.5 — Polish & ecosystem (M)
 
-- [ ] `vb list --remote` via GitHub REST API (`nlohmann_json`).
-- [ ] `--json` output on `list`/`status`/`paths`/`which`.
-- [ ] `vb self update`; `scripts/install.sh` / `install.ps1` bootstrap; `bin/` shims.
-- [ ] Server `--status-file` + rich `vb server status` (§6.5).
-- [ ] `vb server config get/set/edit`; log rotation.
-- [ ] Shell completions (bash/zsh/fish/PowerShell) generated from the
+- [x] `vb list --remote` via the GitHub REST API (`nlohmann_json`).
+- [x] `--json` output on `list`/`paths`/`which`/`server list`/`server status`.
+- [x] `vb self update`; `scripts/install.sh` / `install.ps1` bootstrap; `bin/` shims.
+- [x] Server `--status-file` + rich `vb server status` (§6.5).
+- [x] `vb server config get/set/unset/edit`; log rotation.
+- [x] Shell completions (bash/zsh/fish/PowerShell) generated from the
       dispatcher's command table.
-- [ ] `vb host --pack dir --watch`: restart the server when files under the
+- [x] `vb host --pack dir --watch`: restart the server when files under the
       pack change (debounced) — the content-author hot loop until
       server-side hot reload exists.
-- [ ] README "Getting Started" rewritten around `vb`.
+- [x] README "Getting Started" rewritten around `vb`.
+- Notes / decisions:
+  - `list --remote` asks `api.github.com/repos/<repo>/releases` (published,
+    non-draft, non-prerelease, clean `vX.Y.Z` tags only). A non-GitHub base URL
+    is assumed to be GitHub Enterprise-shaped (`<base>/api/v3`); a plain
+    static mirror cannot be listed. Unauthenticated API calls are rate
+    limited and say so.
+  - `self update` takes the newest release's `vb` archive (verified exactly
+    like an install) and replaces the running binary: rename-over on POSIX;
+    on Windows the running `vb.exe` is renamed to `vb.exe.old` and deleted by
+    the next `vb` start. A development build (version not a clean tag) is only
+    replaced with `--force`; `--check` reports without changing anything.
+  - Shims (`vb shim install|remove`) are small scripts in `<data>/bin` that
+    call back into `vb` (`vb launch -- "$@"` / `vb which server`), so they
+    follow `vb use` with no PATH edits. They embed `vb`'s absolute path:
+    re-run `vb shim install` if `vb` moves.
+  - The server writes `run/status.toml` (`--status-file`) at start, every 5 s
+    and at shutdown, atomically. `seed` is a string because a u64 can exceed
+    TOML's signed 64-bit integers. `vb` shows it only while fresh (< 20 s old
+    and `running = true`); an older server without the flag just shows no
+    player list.
+  - `server config` edits are textual: one `key = value` line is replaced,
+    appended or removed, so comments and layout survive; values are type
+    checked (the engine's loader silently ignores wrong-typed keys) and the
+    whole file is re-validated with the engine's loader before it replaces
+    the old one. `edit` runs `$VISUAL`/`$EDITOR` and, if the result is invalid,
+    restores the previous file and keeps the bad one as `server.toml.rejected`.
+  - Log rotation: before each detached start, `logs/server.log` over 10 MiB
+    becomes `server.log.1` (keeping 3). Foreground runs write to the terminal.
+  - `host --watch` ignores what a running pack writes itself (`storage.json`,
+    `db/`) and dot-files, or it would restart in a loop; it waits for the
+    files to stop changing for 0.7 s before restarting; a server that dies
+    with an error waits for the next edit instead of exiting; Ctrl+C,
+    `vb server stop` and a normal exit end the watch.
+  - Completion scripts are generated from the command table and call the
+    hidden `vb __complete instances|versions` for live names.
+  - The server now installs its SIGINT/SIGTERM handlers first thing in
+    `main`. Before, a stop that arrived while a server was still loading its
+    world killed it by signal (exit 143) instead of stopping it cleanly.
+  - Not verified here: `install.ps1` (no PowerShell available — a direct
+    port of the tested `install.sh`), and the zsh/fish/PowerShell completion
+    scripts (only bash was exercised). The Windows self-update rename dance
+    and macOS paths are compiled by CI only.
 
 ### 8.6 — Hardening (S–M, as needed)
 

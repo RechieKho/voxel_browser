@@ -31,7 +31,8 @@ bool read_all(const fs::path &p, std::string &out) {
 	return true;
 }
 
-// Size + SHA-256 check of a downloaded archive.
+} // namespace
+
 Status verify_archive(const fs::path &file, const ArtifactInfo &a) {
 	std::error_code ec;
 	const auto size = fs::file_size(file, ec);
@@ -48,6 +49,8 @@ Status verify_archive(const fs::path &file, const ArtifactInfo &a) {
 	}
 	return {};
 }
+
+namespace {
 
 std::string random_suffix() {
 	std::random_device rd;

@@ -33,6 +33,7 @@ std::filesystem::path instance_server_toml(const Instance &i);
 std::filesystem::path instance_world_dir(const Instance &i);
 std::filesystem::path instance_log_file(const Instance &i);
 std::filesystem::path instance_run_dir(const Instance &i);
+std::filesystem::path instance_status_file(const Instance &i);
 
 // Empty when `name` is acceptable: [A-Za-z0-9][A-Za-z0-9._-]{0,63}.
 std::string validate_instance_name(const std::string &name);
@@ -78,6 +79,7 @@ struct Overrides {
 };
 
 struct LaunchPlan {
+	std::filesystem::path pack; // resolved content pack directory
 	std::filesystem::path exe;
 	std::filesystem::path cwd;
 	std::vector<std::string> args;
@@ -115,5 +117,35 @@ std::map<std::string, std::vector<std::string>> instance_version_users(const Lay
 
 // Last `lines` lines of the log (empty when there is none).
 std::string tail_log(const Instance &inst, int lines);
+
+} // namespace vb::cli
+
+namespace vb::cli {
+
+// What the server last wrote to --status-file (dev-cli.md §6.5).
+struct ServerStatus {
+	bool running = false; // the server's own claim; false after a clean shutdown
+	std::int64_t updated_unix = 0;
+	std::int64_t uptime_seconds = 0;
+	std::int64_t tick = 0;
+	int target_tick_rate = 0;
+	double tick_rate = 0.0; // achieved, over the last interval
+	int max_players = 0;
+	std::string seed;
+	std::string motd;
+	std::vector<std::string> players;
+};
+
+// nullopt when there is no (parseable) status file.
+std::optional<ServerStatus> read_server_status(const Instance &inst);
+
+// A status is "fresh" if it was written within `max_age_seconds` of `now_unix`;
+// an older one belongs to a hung or pre-status-file server and is not shown.
+bool status_is_fresh(const ServerStatus &s, std::int64_t now_unix, std::int64_t max_age_seconds = 20);
+
+// Rotates logs/server.log -> server.log.1 -> ... -> server.log.<keep> when the
+// log is larger than `max_bytes` (so a long-lived server cannot fill the disk).
+// Called before each detached start; never while the server holds it open.
+void rotate_log(const Instance &inst, std::uintmax_t max_bytes = 10u << 20, int keep = 3);
 
 } // namespace vb::cli

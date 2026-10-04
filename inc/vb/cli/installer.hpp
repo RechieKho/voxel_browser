@@ -33,6 +33,9 @@ struct InstallResult {
 InstallResult install_release(const Layout &layout, Source &source,
 		std::string_view version_or_latest, const InstallOptions &opts);
 
+// Size + SHA-256 check of a downloaded archive against its manifest entry.
+Status verify_archive(const std::filesystem::path &file, const ArtifactInfo &artifact);
+
 // Removes all but the `keep` newest installed releases, never the default and
 // never a tag in `protected_versions` (in use by a server instance). Returns the
 // removed tags; tags spared only because they are protected go to `skipped`.

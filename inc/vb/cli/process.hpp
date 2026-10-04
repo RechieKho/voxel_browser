@@ -49,6 +49,9 @@ std::optional<std::uint64_t> process_start_token(Pid pid);
 // the server's --stop-file instead. True when the request was delivered.
 bool request_stop(Pid pid);
 
+// Absolute path of the running executable; empty if it cannot be determined.
+std::filesystem::path current_executable_path();
+
 // Ends the process immediately (SIGKILL / TerminateProcess).
 bool force_kill(Pid pid);
 

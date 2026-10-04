@@ -6,7 +6,10 @@
 #include <sstream>
 #include <system_error>
 
+#include <algorithm>
+
 #include <curl/curl.h>
+#include <nlohmann/json.hpp>
 #include <toml++/toml.hpp>
 
 #include "vb/cli/version.hpp"
@@ -80,6 +83,22 @@ public:
 		return {};
 	}
 
+	Status list_versions(std::vector<std::string> &out) override {
+		std::string text;
+		if (const Status s = fetch_manifest("latest", text); !s) {
+			return s;
+		}
+		try {
+			const toml::table t = toml::parse(text);
+			if (const auto v = t["version"].value<std::string>()) {
+				out.push_back(*v);
+			}
+		} catch (const toml::parse_error &) {
+			return { "release.toml in " + dir_.string() + " is not valid TOML" };
+		}
+		return {};
+	}
+
 	std::string describe() const override { return "dir:" + dir_.string(); }
 
 private:
@@ -106,11 +125,12 @@ struct CurlHandle {
 struct MemSink {
 	std::string data;
 	bool overflow = false;
+	std::size_t limit = kMaxManifestBytes;
 };
 
 std::size_t mem_write(char *p, std::size_t sz, std::size_t n, void *ud) {
 	auto *s = static_cast<MemSink *>(ud);
-	if (s->data.size() + sz * n > kMaxManifestBytes) {
+	if (s->data.size() + sz * n > s->limit) {
 		s->overflow = true;
 		return 0;
 	}
@@ -251,6 +271,40 @@ public:
 		return {};
 	}
 
+	Status list_versions(std::vector<std::string> &out) override {
+		CurlHandle c;
+		if (c.h == nullptr) {
+			return { "curl init failed" };
+		}
+		// github.com serves its API from a different host; any other base is
+		// taken to be GitHub Enterprise-shaped (<base>/api/v3).
+		const std::string api = base_ == "https://github.com" ? "https://api.github.com"
+															  : base_ + "/api/v3";
+		const std::string url = api + "/repos/" + repo_ + "/releases?per_page=100";
+		MemSink sink;
+		sink.limit = 8u << 20; // a page of 100 releases with notes is a few MB at most
+		common_options(c.h, allow_http());
+		curl_slist *headers = curl_slist_append(nullptr, "Accept: application/vnd.github+json");
+		curl_easy_setopt(c.h, CURLOPT_HTTPHEADER, headers);
+		curl_easy_setopt(c.h, CURLOPT_URL, url.c_str());
+		curl_easy_setopt(c.h, CURLOPT_WRITEFUNCTION, mem_write);
+		curl_easy_setopt(c.h, CURLOPT_WRITEDATA, &sink);
+		char err[CURL_ERROR_SIZE] = {};
+		curl_easy_setopt(c.h, CURLOPT_ERRORBUFFER, err);
+		const CURLcode rc = curl_easy_perform(c.h);
+		curl_slist_free_all(headers);
+		if (rc != CURLE_OK) {
+			long code = 0;
+			curl_easy_getinfo(c.h, CURLINFO_RESPONSE_CODE, &code);
+			std::string why = code == 403 || code == 429
+					? "rate limited by the API (try again later)"
+					: (sink.overflow ? "response too large"
+									 : (err[0] != 0 ? err : curl_easy_strerror(rc)));
+			return { "cannot list releases from " + url + ": " + why };
+		}
+		return parse_release_list(sink.data, out);
+	}
+
 	std::string describe() const override { return base_ + "/" + repo_; }
 
 private:
@@ -287,6 +341,28 @@ bool valid_repo(std::string_view s) {
 }
 
 } // namespace
+
+Status parse_release_list(std::string_view json, std::vector<std::string> &out) {
+	nlohmann::json doc = nlohmann::json::parse(json.begin(), json.end(), nullptr, false);
+	if (doc.is_discarded() || !doc.is_array()) {
+		return { "unexpected response from the release API (not a JSON list)" };
+	}
+	std::vector<Version> found;
+	for (const nlohmann::json &rel : doc) {
+		if (!rel.is_object() || rel.value("draft", false) || rel.value("prerelease", false)) {
+			continue;
+		}
+		const std::string tag = rel.value("tag_name", std::string());
+		if (const auto v = parse_version(tag); v && std::find(found.begin(), found.end(), *v) == found.end()) {
+			found.push_back(*v);
+		}
+	}
+	std::sort(found.begin(), found.end(), [](const Version &a, const Version &b) { return b < a; });
+	for (const Version &v : found) {
+		out.push_back(to_tag(v));
+	}
+	return {};
+}
 
 std::unique_ptr<Source> make_dir_source(fs::path dir) {
 	return std::make_unique<DirSource>(std::move(dir));

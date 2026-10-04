@@ -14,10 +14,13 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <random>
+#include <sstream>
 #include <string>
 #include <system_error>
 #include <thread>
@@ -85,11 +88,59 @@ void print_usage() {
 				 "  --seed <n>             world seed override (0 = random)\n"
 				 "  --motd <text>          message of the day override\n"
 				 "  --ticks <n>            run n ticks then exit (0 = forever)\n"
+				 "  --status-file <path>   rewrite this TOML file every few seconds with uptime,\n"
+				 "                         tick rate, players and seed (read by `vb server status`)\n"
 				 "  --stop-file <path>     stop cleanly (saving the world) once this file exists;\n"
 				 "                         checked about once a second (how `vb server stop` works\n"
 				 "                         on Windows, where a detached process gets no signals)\n"
 				 "  --version             print build info and exit\n"
 				 "  --help                show this help\n";
+}
+
+// Quotes `s` as a TOML basic string (player names are user-supplied).
+std::string toml_string(const std::string &s) {
+	std::string out = "\"";
+	for (const char c : s) {
+		switch (c) {
+			case '\\':
+				out += "\\\\";
+				break;
+			case '"':
+				out += "\\\"";
+				break;
+			case '\n':
+				out += "\\n";
+				break;
+			case '\r':
+				out += "\\r";
+				break;
+			case '\t':
+				out += "\\t";
+				break;
+			default:
+				if (static_cast<unsigned char>(c) < 0x20) {
+					out += '?';
+				} else {
+					out += c;
+				}
+		}
+	}
+	return out + "\"";
+}
+
+// Writes via a temp file + rename so a reader never sees a half-written file.
+void write_status_file(const std::filesystem::path &path, const std::string &text) {
+	std::filesystem::path tmp = path;
+	tmp += ".tmp";
+	{
+		std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+		out << text;
+		if (!out) {
+			return; // status is best-effort; never take the server down over it
+		}
+	}
+	std::error_code ec;
+	std::filesystem::rename(tmp, path, ec);
 }
 
 std::uint64_t random_seed() {
@@ -104,6 +155,11 @@ int main(int argc, char **argv) {
 	// would otherwise block-buffer it: joins/leaves would only appear at exit,
 	// defeating `vb server logs -f`. Output here is low-volume, so flush each write.
 	std::cout << std::unitbuf;
+	// Before the (slow) world/pack setup, so a stop request that arrives while
+	// starting up -- `vb server stop` right after `start`, a watch restart --
+	// ends the run cleanly instead of killing the process mid-setup.
+	std::signal(SIGINT, handle_signal);
+	std::signal(SIGTERM, handle_signal);
 	const vb::core::Args args(argc, argv);
 
 	if (args.has("help", 'h')) {
@@ -130,6 +186,7 @@ int main(int argc, char **argv) {
 	// remove (`vb` does) -- deleting it here would make "stop requested" and
 	// "stop honoured" indistinguishable to whoever wrote it.
 	const std::filesystem::path stop_file = args.value_or("stop-file", "");
+	const std::filesystem::path status_file = args.value_or("status-file", "");
 	const std::uint64_t seed = config.world_seed != 0 ? config.world_seed : random_seed();
 
 	vb::net::GnsTransport transport;
@@ -382,9 +439,6 @@ int main(int argc, char **argv) {
 	session.set_day_length_seconds(
 			pack_runtime.effective_day_length_seconds(config.day_length_seconds));
 
-	std::signal(SIGINT, handle_signal);
-	std::signal(SIGTERM, handle_signal);
-
 	std::cout << vb::core::describe_build() << '\n'
 			  << "server: bind " << config.bind_address << ':' << config.port
 			  << " (bound port " << transport.bound_port() << "), pack '"
@@ -457,6 +511,56 @@ int main(int argc, char **argv) {
 		}
 	};
 
+	// --status-file: who is online and how the tick loop is keeping up. Written
+	// at start, every kStatusIntervalSeconds, and once more at shutdown
+	// (running = false), always atomically.
+	constexpr double kStatusIntervalSeconds = 5.0;
+	std::map<std::uint32_t, std::string> online;
+	const auto status_started = std::chrono::steady_clock::now();
+	auto window_start = status_started;
+	long long window_ticks = 0;
+	double achieved_tick_rate = 0.0;
+	const auto emit_status = [&](bool running) {
+		if (status_file.empty()) {
+			return;
+		}
+		const auto now = std::chrono::steady_clock::now();
+		const double window = std::chrono::duration<double>(now - window_start).count();
+		if (window >= 1.0 && window_ticks > 0) {
+			achieved_tick_rate = static_cast<double>(window_ticks) / window;
+		}
+		window_start = now;
+		window_ticks = 0;
+		std::ostringstream os;
+		os << "running = " << (running ? "true" : "false") << "\n"
+		   << "updated = "
+		   << std::chrono::duration_cast<std::chrono::seconds>(
+					  std::chrono::system_clock::now().time_since_epoch())
+						.count()
+		   << "\n"
+		   << "uptime_seconds = " << std::chrono::duration_cast<std::chrono::seconds>(now - status_started).count()
+		   << "\n"
+		   << "tick = " << tick << "\n"
+		   << "target_tick_rate = " << config.tick_rate << "\n"
+		   << "tick_rate = " << std::fixed << std::setprecision(1) << achieved_tick_rate
+		   << std::defaultfloat << "\n"
+		   << "max_players = " << config.max_players << "\n"
+		   << "seed = \"" << seed << "\"\n" // string: u64 can exceed TOML's signed 64-bit integers
+		   << "motd = " << toml_string(config.motd) << "\n"
+		   << "players = [";
+		bool first = true;
+		for (const auto &[id, name] : online) {
+			os << (first ? "" : ", ") << toml_string(name);
+			first = false;
+		}
+		os << "]\n";
+		write_status_file(status_file, os.str());
+	};
+	const long long status_ticks = status_file.empty()
+			? 0
+			: std::max<long long>(1, std::llround(kStatusIntervalSeconds * config.tick_rate));
+	emit_status(true);
+
 	// Same once-a-second cadence as manifest_check_ticks: a stat() per tick
 	// would be harmless, but a one-second stop latency is fine and cheaper.
 	const long long stop_file_check_ticks =
@@ -473,16 +577,22 @@ int main(int argc, char **argv) {
 			}
 		}
 
+		++window_ticks;
 		for (const auto &joined : session.take_joins()) {
+			online[static_cast<std::uint32_t>(joined.net_id)] = joined.name;
 			pack_runtime.dispatch_player_join_completed(joined);
 			std::cout << "server: '" << joined.name << "' joined (net id "
 					  << static_cast<std::uint32_t>(joined.net_id) << ")\n";
 		}
 		for (const auto &left : session.take_leaves()) {
+			online.erase(static_cast<std::uint32_t>(left.net_id));
 			pack_runtime.dispatch_player_leave(left);
 			std::cout << "server: a player left (" << left.reason << ")\n";
 		}
 
+		if (status_ticks > 0 && tick % status_ticks == 0) {
+			emit_status(true);
+		}
 		if (autosave_ticks > 0 && tick % autosave_ticks == 0) {
 			autosave_sweep();
 		}
@@ -502,6 +612,7 @@ int main(int argc, char **argv) {
 	// is the difference between "at most autosave_interval_seconds of edits
 	// lost on a clean shutdown" and "up to that much lost on *every* stop".
 	autosave_sweep();
+	emit_status(false);
 
 	std::cout << "server: stopped after " << tick << " ticks\n";
 	return EXIT_SUCCESS;

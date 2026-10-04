@@ -49,6 +49,7 @@ void remove_run_files(const Instance &i) {
 	std::error_code ec;
 	fs::remove(run_file(i), ec);
 	fs::remove(stop_file(i), ec);
+	fs::remove(instance_status_file(i), ec);
 }
 
 Status write_run_record(const Instance &inst, const RunRecord &r) {
@@ -112,6 +113,7 @@ fs::path instance_server_toml(const Instance &i) { return i.dir / "server.toml";
 fs::path instance_world_dir(const Instance &i) { return i.dir / "world"; }
 fs::path instance_log_file(const Instance &i) { return i.dir / "logs" / "server.log"; }
 fs::path instance_run_dir(const Instance &i) { return i.dir / "run"; }
+fs::path instance_status_file(const Instance &i) { return instance_run_dir(i) / "status.toml"; }
 
 std::string validate_instance_name(const std::string &name) {
 	if (name.empty() || name.size() > 64) {
@@ -310,6 +312,7 @@ Status plan_launch(const Layout &layout, const Instance &inst, const Overrides &
 		return { config.string() + ": " + std::string(vb::core::message(loaded.error())) };
 	}
 	out.exe = *exe;
+	out.pack = *pack;
 	out.cwd = inst.dir;
 	out.version_name = entry->name;
 	out.port = ov.port.value_or(loaded->port);
@@ -320,6 +323,8 @@ Status plan_launch(const Layout &layout, const Instance &inst, const Overrides &
 	}
 	out.args.push_back("--stop-file");
 	out.args.push_back(stop_file(inst).string());
+	out.args.push_back("--status-file");
+	out.args.push_back(instance_status_file(inst).string());
 	out.args.insert(out.args.end(), ov.extra_args.begin(), ov.extra_args.end());
 	return {};
 }
@@ -402,6 +407,7 @@ StartResult start_instance(const Layout &layout, const Instance &inst, const Ove
 		return { record_status, r.exit_code };
 	}
 
+	rotate_log(inst);
 	const SpawnResult sp = spawn_detached(plan.exe, plan.args, plan.cwd, instance_log_file(inst));
 	if (!sp.error.empty()) {
 		return fail(sp.error);
@@ -474,6 +480,55 @@ std::map<std::string, std::vector<std::string>> instance_version_users(const Lay
 		}
 	}
 	return users;
+}
+
+std::optional<ServerStatus> read_server_status(const Instance &inst) {
+	try {
+		const toml::table t = toml::parse_file(instance_status_file(inst).string());
+		ServerStatus st;
+		st.running = t["running"].value_or(false);
+		st.updated_unix = t["updated"].value_or<std::int64_t>(0);
+		st.uptime_seconds = t["uptime_seconds"].value_or<std::int64_t>(0);
+		st.tick = t["tick"].value_or<std::int64_t>(0);
+		st.target_tick_rate = static_cast<int>(t["target_tick_rate"].value_or<std::int64_t>(0));
+		st.tick_rate = t["tick_rate"].value_or(0.0);
+		st.max_players = static_cast<int>(t["max_players"].value_or<std::int64_t>(0));
+		st.seed = t["seed"].value_or<std::string>("");
+		st.motd = t["motd"].value_or<std::string>("");
+		if (const toml::array *players = t["players"].as_array()) {
+			for (const toml::node &n : *players) {
+				if (const auto name = n.value<std::string>()) {
+					st.players.push_back(*name);
+				}
+			}
+		}
+		return st;
+	} catch (const toml::parse_error &) {
+		return std::nullopt;
+	}
+}
+
+bool status_is_fresh(const ServerStatus &s, std::int64_t now_unix, std::int64_t max_age_seconds) {
+	return s.running && now_unix - s.updated_unix <= max_age_seconds;
+}
+
+void rotate_log(const Instance &inst, std::uintmax_t max_bytes, int keep) {
+	std::error_code ec;
+	const fs::path log = instance_log_file(inst);
+	const auto size = fs::file_size(log, ec);
+	if (ec || size <= max_bytes || keep < 1) {
+		return;
+	}
+	const auto numbered = [&](int n) {
+		fs::path p = log;
+		p += "." + std::to_string(n);
+		return p;
+	};
+	fs::remove(numbered(keep), ec);
+	for (int n = keep - 1; n >= 1; --n) {
+		fs::rename(numbered(n), numbered(n + 1), ec); // a missing .n is fine
+	}
+	fs::rename(log, numbered(1), ec);
 }
 
 } // namespace vb::cli
