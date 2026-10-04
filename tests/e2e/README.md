@@ -40,10 +40,14 @@ python3 -m pytest tests/e2e --vb-build-dir build-e2e -k break
 | `--vb-keep-artifacts` | keep artifacts of passing tests too |
 | `--vb-allow-remote-host` | let clients connect to a non-loopback host (a dedicated **dev** server only) |
 | `VB_E2E_TIMEOUT_SCALE` | multiply every wait (CTest sets 3 for sanitizer builds) |
+| `DISPLAY` | windowed tests need one; they skip themselves without it. Run the suite under `xvfb-run -a -s "-screen 0 1280x720x24" ...` (software GL is enough) |
 
 A failed test leaves, per process, `<name>.stderr.log`, `<name>.trace.jsonl` (every request
-and reply with timestamps) and `<name>.final_state.json` under the artifacts directory; the
-path is printed with the failure.
+and reply with timestamps) and `<name>.final_state.json` under the artifacts directory, plus
+**`trace.html`**: one self-contained page with a column per process in wall-clock order
+(requests blue, replies green, errors red), the quickest way to see "Alice did X but Bob never
+saw it". The path is printed with the failure; rebuild a page with
+`python3 -m vbtest.traceview <artifact dir>`.
 
 ## Writing tests
 
@@ -75,7 +79,19 @@ path is printed with the failure.
 - Click actions hold their aim steady for a few frames first (the server applies a command's
   look direction *after* running the pack's input hook), so `break_block`/`place_block` take
   about a tenth of a second longer than the raw round trip.
-- Windowed-only features (menu, screenshots, typing into the chat box) are not available.
+- **Windowed clients** (`clients(1, windowed=True)`, or `via_menu=True` to start on the main
+  menu and call `menu_connect`) open a real window: slower to reach `playing` (a loading screen
+  meshes the first chunks), and they need a display. `client.screenshot(path)` saves a PNG;
+  `vbtest.png.stats(path)` gives size, distinct colours and mean colour, enough to assert a
+  frame isn't blank (a flat UI has few colours: don't expect photo-like numbers).
+- `client.type("text")` fills the chat box like keystrokes; `key_press("enter")` sends it.
+
+### Bad networks
+
+`@pytest.mark.net_sim(lag_ms=100, jitter_ms=20, loss_pct=3)` starts the server and every client
+with `--net-sim`. Each side only delays what *it sends*, so `lag_ms=100` is about 200 ms of round
+trip: assert it with `expect(client).to_have_rtt_at_least(150)`, and give waits generous
+timeouts. See `test_bad_network.py`.
 
 ## Layout
 
@@ -85,5 +101,8 @@ vbtest/process.py JSON-lines client for one process (+ trace/stderr logs)
 vbtest/handles.py Server / Client / Locator
 vbtest/expect.py  expect(...).to_see_block(...) etc.
 vbtest/net.py     free UDP port, "never aim bots at a real server" guard
-test_*.py         the tests
+vbtest/scene.py   build-a-scene helpers (block_under_feet, clear_corridor, step_aside)
+vbtest/png.py     tiny PNG reader for screenshot assertions
+vbtest/traceview.py  failed-test trace.html generator
+test_*.py         the tests (basics, bad network, windowed, trace viewer)
 ```

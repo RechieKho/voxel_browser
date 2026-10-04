@@ -3,6 +3,10 @@
 
 #include "client_app.hpp"
 
+#if defined(VB_WITH_AUTOMATION)
+#include <rlgl.h>
+#endif
+
 namespace vb::client {
 
 ClientApp::ClientApp(vb::core::ClientConfig config_in, std::string config_path_in,
@@ -298,7 +302,13 @@ bool ClientApp::frame(const vb::render::InputFrame &input, double dt) {
 
 	switch (state) {
 		case AppState::kMenu: {
-			const auto result = menu.draw_main(config.recent_servers);
+			auto result = menu.draw_main(config.recent_servers);
+#if defined(VB_WITH_AUTOMATION)
+			if (pending_menu) { // automation: the click a player would have made
+				result = *pending_menu;
+				pending_menu.reset();
+			}
+#endif
 			if (result.connect) {
 				begin_connect(false);
 			} else if (result.singleplayer) {
@@ -828,6 +838,23 @@ bool ClientApp::frame(const vb::render::InputFrame &input, double dt) {
 		}
 	}
 
+#if defined(VB_WITH_AUTOMATION)
+	if (screenshot_state_ == Screenshot::kPending) {
+		// Before end_frame(): the frame has been drawn but not yet swapped out. raylib
+		// batches draw calls until EndDrawing(), so flush the batch first or the read
+		// returns only the clear colour. (raylib's TakeScreenshot() is avoided: it strips
+		// the directory from the path.)
+		rlDrawRenderBatchActive();
+		Image shot = LoadImageFromScreen();
+		screenshot_w_ = shot.width;
+		screenshot_h_ = shot.height;
+		screenshot_state_ = (shot.data != nullptr && ExportImage(shot, screenshot_path_.c_str()))
+				? Screenshot::kDone
+				: Screenshot::kFailed;
+		UnloadImage(shot);
+	}
+#endif
+
 	window.end_frame();
 	return true;
 }
@@ -839,5 +866,26 @@ void vb::client::ClientApp::submit_chat(std::string_view text) {
 	if (client != nullptr && !text.empty()) {
 		client->send_chat(text);
 	}
+}
+
+bool vb::client::ClientApp::type_chat(std::string_view text) {
+	if (state != AppState::kPlaying || ui_runtime.is_open()) {
+		return false; // a player can't type into the chat box here either
+	}
+	chat_open = true;
+	if (chat_buf.size() + text.size() >= static_cast<std::size_t>(kChatBufferSize)) {
+		return false; // would overflow the box's fixed buffer
+	}
+	chat_buf.append(text);
+	return true;
+}
+
+bool vb::client::ClientApp::request_screenshot(std::string path) {
+	if (!render || screenshot_state_ == Screenshot::kPending) {
+		return false;
+	}
+	screenshot_path_ = std::move(path);
+	screenshot_state_ = Screenshot::kPending;
+	return true;
 }
 #endif

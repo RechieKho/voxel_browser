@@ -87,8 +87,9 @@ void print_usage() {
 				 "  --headless        run without a window (no rendering, skips the menu)\n"
 				 "  --frames <n>      headless: run n frames then exit (default 3)\n"
 #if defined(VB_WITH_AUTOMATION)
-				 "  --automation stdio     drive via JSON lines on stdin/stdout (dev builds; needs --headless)\n"
+				 "  --automation stdio     drive via JSON lines on stdin/stdout (dev builds; windowed needs a display, e.g. xvfb-run)\n"
 				 "  --automation-clock <real|manual>  manual: frames advance only on `step`\n"
+				 "  --net-sim <spec>  fake lag/jitter/loss on sent packets, e.g. lag_ms=100,loss_pct=2 (dev builds only)\n"
 #endif
 				 "  --version        print build info and exit\n"
 				 "  --help           show this help\n"
@@ -104,12 +105,12 @@ void print_usage() {
 #if defined(VB_WITH_AUTOMATION)
 // Development-only: same ClientApp, but driven by the automation channel
 // instead of a fixed frame count. Runs until `quit` or the harness closes stdin.
-int run_automated(ClientApp &app, vb::automation::Host &host) {
+int run_automated(ClientApp &app, vb::automation::Host &host, vb::render::Window *window = nullptr) {
 	ClientAutomationEndpoint endpoint(app, host);
 	using Clock = std::chrono::steady_clock;
 	constexpr auto kFrame = std::chrono::microseconds(16667);
 	auto next = Clock::now();
-	while (host.pump(endpoint)) {
+	while (host.pump(endpoint) && (window == nullptr || !window->should_close())) {
 		if (!host.frame_allowed()) {
 			std::this_thread::sleep_for(std::chrono::milliseconds(1));
 			continue;
@@ -117,8 +118,11 @@ int run_automated(ClientApp &app, vb::automation::Host &host) {
 		// Actions queue this frame's synthetic input, the real ClientApp frame
 		// consumes it, then finished actions answer their requests.
 		endpoint.begin_frame();
-		app.frame(endpoint.input().poll(), 1.0 / 60.0);
+		const bool keep_running = app.frame(endpoint.input().poll(), 1.0 / 60.0);
 		endpoint.end_frame();
+		if (!keep_running) {
+			break;
+		}
 		host.frame_done();
 		if (!host.manual_clock()) {
 			next += kFrame;
@@ -189,10 +193,6 @@ int main(int argc, char **argv) {
 			std::cerr << "client: --automation-clock must be 'real' or 'manual'\n";
 			return EXIT_FAILURE;
 		}
-		if (!args.has("headless") && !VB_HEADLESS_DEFAULT) {
-			std::cerr << "client: --automation currently requires --headless\n";
-			return EXIT_FAILURE;
-		}
 		automation = vb::automation::Host::open_stdio();
 		if (!automation) {
 			std::cerr << "client: could not set up the automation channel\n";
@@ -200,8 +200,24 @@ int main(int argc, char **argv) {
 		}
 		automation->set_manual_clock(clock == "manual");
 	}
+	if (args.has("net-sim")) {
+		std::string error;
+		const auto sim = vb::net::parse_net_sim(args.value_or("net-sim", ""), error);
+		if (!sim) {
+			std::cerr << "client: " << error << '\n';
+			return EXIT_FAILURE;
+		}
+		if (args.has("singleplayer")) {
+			std::cerr << "client: --net-sim applies to real (GNS) connections, not --singleplayer\n";
+			return EXIT_FAILURE;
+		}
+		if (!vb::net::GnsTransport::set_net_sim(*sim)) {
+			std::cerr << "client: --net-sim needs a build with VB_WITH_NET\n";
+			return EXIT_FAILURE;
+		}
+	}
 #else
-	if (args.has("automation")) {
+	if (args.has("automation") || args.has("net-sim")) {
 		// Never silently ignored: a misconfigured test setup must fail loudly.
 		std::cerr << "client: built without VB_WITH_AUTOMATION\n";
 		return EXIT_FAILURE;
@@ -261,6 +277,13 @@ int main(int argc, char **argv) {
 			configured_view_distance, auto_connect);
 	vb::render::RaylibInput raylib_input;
 
+#if defined(VB_WITH_AUTOMATION)
+	if (automation) {
+		// A windowed client driven over the channel: starts on the menu (or connects
+		// straight away with --server/--singleplayer) and takes synthetic input.
+		return run_automated(app, *automation, &window);
+	}
+#endif
 	while (!window.should_close()) {
 		const vb::render::InputFrame input = raylib_input.poll();
 		const double dt = static_cast<double>(GetFrameTime());

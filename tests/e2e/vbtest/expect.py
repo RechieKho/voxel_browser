@@ -43,12 +43,20 @@ class Expectation:
         return self._check("chunk containing %s loaded" % list(pos), {"chunk_loaded": {"pos": list(pos)}}, timeout)
 
     # -- client ------------------------------------------------------------
+    def to_be_in_state(self, app_state, timeout=30.0):
+        """menu | connecting | loading | playing | error | ..."""
+        return self._check("app state %r" % app_state, {"app_state": {"is": app_state}}, timeout)
+
     def to_be_joined(self, timeout=30.0):
         return self._check("to be joined", {"joined": True}, timeout)
 
     def to_be_on_ground(self, timeout=10.0):
         """Landed after the spawn drop. Wait for this before using the player's position."""
         return self._check("to be on the ground", {"on_ground": True}, timeout)
+
+    def to_have_rtt_at_least(self, ms, timeout=15.0):
+        """Measured round-trip time to the server (needs a real connection; GNS takes a moment to measure)."""
+        return self._check("round-trip time >= %g ms" % ms, {"rtt_ms": {"op": ">=", "value": ms}}, timeout)
 
     def to_have_loaded_chunks(self, minimum, timeout=30.0):
         return self._check("%d chunks loaded" % minimum, {"chunks_loaded": {"min": minimum}}, timeout)

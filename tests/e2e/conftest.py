@@ -22,7 +22,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 
-from vbtest import Client, ProcessDied, Server, expect  # noqa: E402
+from vbtest import Client, ProcessDied, Server, expect, traceview  # noqa: E402
 from vbtest.net import check_host, free_udp_port  # noqa: E402
 
 EXE = ".exe" if os.name == "nt" else ""
@@ -41,6 +41,8 @@ def pytest_addoption(parser):
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "vb_server(**toml): extra server.toml keys for this test's server")
+    config.addinivalue_line("markers", "net_sim(**params): fake network conditions for the server and every client "
+                            "(lag_ms, jitter_ms, loss_pct, reorder_pct, dup_pct)")
 
 
 @pytest.hookimpl(tryfirst=True, hookwrapper=True)
@@ -63,6 +65,16 @@ def binaries(request):
             pytest.fail("%s was not built with -DVB_WITH_AUTOMATION=ON (--version: %r)" % (p, version.strip()),
                         pytrace=False)
     return paths
+
+
+def net_sim_args(request):
+    """`--net-sim ...` for a test marked @pytest.mark.net_sim(lag_ms=..., ...), else nothing."""
+    params = {}
+    for marker in request.node.iter_markers("net_sim"):
+        params.update(marker.kwargs)
+    if not params:
+        return []
+    return ["--net-sim", ",".join("%s=%s" % (k, v) for k, v in params.items())]
 
 
 @pytest.fixture
@@ -97,6 +109,11 @@ def _procs(request, artifact_dir):
                     (artifact_dir / (p.name + ".final_state.json")).write_text("unavailable: %s\n" % e)
     for p in reversed(procs):
         p.close()
+    if rep is None or rep.failed:
+        try:
+            traceview.write(str(artifact_dir))  # one HTML timeline across all processes
+        except Exception as e:  # never let a viewer bug hide the real failure
+            (artifact_dir / "trace.html.error").write_text("%s\n" % e)
 
 
 @pytest.fixture
@@ -116,7 +133,7 @@ def server(request, binaries, artifact_dir, tmp_path, _procs):
             lines.append("%s = %s" % (k, json.dumps(v).lower() if isinstance(v, bool) else json.dumps(v)))
         toml = tmp_path / "server.toml"
         toml.write_text("\n".join(lines) + "\n")
-        proc = Server("server", [str(binaries["server"]), "--config", str(toml), "--automation", "stdio"],
+        proc = Server("server", [str(binaries["server"]), "--config", str(toml), "--automation", "stdio"] + net_sim_args(request),
                       artifact_dir, cwd=str(tmp_path))
         _procs.append(proc)
         try:
@@ -136,8 +153,15 @@ def clients(request, binaries, server, artifact_dir, tmp_path, _procs):
     counter = [0]
     allow_remote = request.config.getoption("--vb-allow-remote-host")
 
-    def make(n=1, names=None, host="127.0.0.1", port=None, join=True, render_distance=2):
+    def make(n=1, names=None, host="127.0.0.1", port=None, join=True, render_distance=2, windowed=False,
+             via_menu=False):
+        """windowed=True opens a real window (needs a display, e.g. `xvfb-run -a pytest ...`);
+        via_menu=True starts on the main menu instead of connecting (drive it with `menu_connect`)."""
         check_host(host, allow_remote)  # §7.4: test bots never go near a real server
+        if via_menu:
+            windowed, join = True, False  # the menu only exists in a window
+        if windowed and not os.environ.get("DISPLAY"):
+            pytest.skip("windowed tests need a display: run under xvfb-run (e.g. `xvfb-run -a ctest -L e2e`)")
         made = []
         for i in range(n):
             counter[0] += 1
@@ -147,22 +171,27 @@ def clients(request, binaries, server, artifact_dir, tmp_path, _procs):
             cache = home / "cache"
             cache.mkdir(parents=True)
             conf = home / "client.toml"
-            conf.write_text('player_name = "%s"\nrender_distance = %d\n' % (name, render_distance))
+            conf.write_text('player_name = "%s"\nrender_distance = %d\n' % (name, render_distance) +
+                            ('window_width = 640\nwindow_height = 360\nvsync = false\n' if windowed else ""))
             env = dict(os.environ, HOME=str(home), XDG_CACHE_HOME=str(cache), LOCALAPPDATA=str(cache))
-            c = Client("client-" + name,
-                       [str(binaries["client"]), "--headless", "--server", host, "--port", str(port or server.port),
-                        "--name", name, "--config", str(conf), "--render-distance", str(render_distance),
-                        "--automation", "stdio"],
-                       artifact_dir, env=env)
+            argv = [str(binaries["client"])] + ([] if windowed else ["--headless"])
+            if not via_menu:  # --server connects straight away; without it a windowed client opens on the menu
+                argv += ["--server", host, "--port", str(port or server.port)]
+            argv += ["--name", name, "--config", str(conf), "--render-distance", str(render_distance),
+                     "--automation", "stdio"] + net_sim_args(request)
+            c = Client("client-" + name, argv, artifact_dir, env=env)
             c.player_name = name
             c.cache_dir = cache
             _procs.append(c)
             made.append(c)
+        for c in made:
+            c.hello()  # headless: answered once connected (or it exits with its error); windowed: at once
         if join:
             for c in made:
-                c.hello()  # answered once the client finished connecting (or exits with its error)
                 expect(c).to_be_joined()
                 expect(c).to_have_loaded_chunks(8)
+                # Windowed clients sit on a loading screen until their first chunks are meshed.
+                expect(c).to_be_in_state("playing", timeout=60)
         return made
 
     return make

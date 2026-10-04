@@ -2,9 +2,10 @@
 
 See tests/e2e/README.md and docs/e2e-automation.md.
 """
+from . import traceview
 from .expect import expect
 from .handles import Client, Locator, Server
 from .net import UnsafeHostError
 from .process import AutomationError, ProcessDied
 
-__all__ = ["expect", "Client", "Server", "Locator", "AutomationError", "ProcessDied", "UnsafeHostError"]
+__all__ = ["traceview", "expect", "Client", "Server", "Locator", "AutomationError", "ProcessDied", "UnsafeHostError"]

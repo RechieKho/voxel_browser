@@ -91,6 +91,7 @@ void print_usage() {
 				 "  --ticks <n>            run n ticks then exit (0 = forever)\n"
 #if defined(VB_WITH_AUTOMATION)
 				 "  --automation stdio    drive via JSON lines on stdin/stdout (dev builds only)\n"
+				 "  --net-sim <spec>      fake lag/jitter/loss on sent packets, e.g. lag_ms=100,loss_pct=2 (dev builds only)\n"
 #endif
 				 "  --version             print build info and exit\n"
 				 "  --help                show this help\n";
@@ -128,8 +129,20 @@ int main(int argc, char **argv) {
 			return EXIT_FAILURE;
 		}
 	}
+	if (args.has("net-sim")) {
+		std::string error;
+		const auto sim = vb::net::parse_net_sim(args.value_or("net-sim", ""), error);
+		if (!sim) {
+			std::cerr << "server: " << error << '\n';
+			return EXIT_FAILURE;
+		}
+		if (!vb::net::GnsTransport::set_net_sim(*sim)) {
+			std::cerr << "server: --net-sim needs a build with VB_WITH_NET\n";
+			return EXIT_FAILURE;
+		}
+	}
 #else
-	if (args.has("automation")) {
+	if (args.has("automation") || args.has("net-sim")) {
 		// Never silently ignored: a misconfigured test setup must fail loudly.
 		std::cerr << "server: built without VB_WITH_AUTOMATION\n";
 		return EXIT_FAILURE;

@@ -3,7 +3,7 @@
 // over the pipe. Composable with all/any/not.
 //
 // Snapshot fields read (missing fields read as "not true", never an error):
-//   joined(bool) on_ground(bool) app_state(str) feet([x,y,z]) health(num) chunks_loaded(int)
+//   joined(bool) on_ground(bool) rtt_ms(num) app_state(str) feet([x,y,z]) health(num) chunks_loaded(int)
 //   chat([str]) entities([{name,pos}]) ui({name,widgets[{id,text}]})
 //   inventory([{item,count}]) players([{name,pos}]) player_count(int)
 #pragma once

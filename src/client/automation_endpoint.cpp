@@ -200,6 +200,8 @@ struct ClientAutomationEndpoint::Ctx {
 struct ClientAutomationEndpoint::Task {
 	json id;
 	virtual ~Task() = default;
+	// Most actions work through the connected session; a screenshot of the menu doesn't.
+	virtual bool needs_session() const { return true; }
 	virtual void pre(Ctx &) {}
 	// nullopt = still running.
 	virtual std::optional<Reply> post(Ctx &) = 0;
@@ -448,6 +450,33 @@ struct PlaceBlockTask final : AimedTask {
 	}
 };
 
+// Completes once the frame that was asked to save a screenshot has done so.
+struct ScreenshotTask final : Task {
+	std::string path;
+	long long start = -1;
+	explicit ScreenshotTask(std::string p) :
+			path(std::move(p)) {}
+	bool needs_session() const override { return false; }
+	std::optional<Reply> post(Ctx &c) override {
+		if (start < 0) {
+			start = c.frame;
+		}
+		switch (c.app.screenshot_state()) {
+			case ClientApp::Screenshot::kDone:
+				return Reply::success(json{ { "path", path }, { "width", c.app.screenshot_width() },
+						{ "height", c.app.screenshot_height() } });
+			case ClientApp::Screenshot::kFailed:
+				return Reply::error("failed", "could not write the screenshot", json{ { "path", path } });
+			default:
+				break;
+		}
+		if (c.frame - start > 600) {
+			return Reply::error("timeout", "the screenshot was never taken");
+		}
+		return std::nullopt;
+	}
+};
+
 } // namespace
 
 // --- endpoint --------------------------------------------------------------
@@ -460,12 +489,11 @@ ClientAutomationEndpoint::ClientAutomationEndpoint(ClientApp &app, vb::automatio
 ClientAutomationEndpoint::~ClientAutomationEndpoint() = default;
 
 void ClientAutomationEndpoint::begin_frame() {
-	if (app_.session() == nullptr || tasks_.empty()) {
-		return;
-	}
 	Ctx ctx{ app_, input_, frame_ };
 	for (auto &t : tasks_) {
-		t->pre(ctx);
+		if (!t->needs_session() || app_.session() != nullptr) {
+			t->pre(ctx);
+		}
 	}
 }
 
@@ -473,7 +501,7 @@ void ClientAutomationEndpoint::end_frame() {
 	Ctx ctx{ app_, input_, frame_ };
 	for (auto it = tasks_.begin(); it != tasks_.end();) {
 		std::optional<Reply> done;
-		if (app_.session() == nullptr) {
+		if ((*it)->needs_session() && app_.session() == nullptr) {
 			done = Reply::error("not_playing", "the client has no session");
 		} else {
 			done = (*it)->post(ctx);
@@ -530,6 +558,9 @@ json ClientAutomationEndpoint::state() {
 		}
 	}
 	s["chunks_loaded"] = c->chunk_store().size();
+	if (const auto rtt = c->rtt_seconds()) {
+		s["rtt_ms"] = *rtt * 1000.0; // absent until GNS has measured one
+	}
 	const auto &registry = c->chunk_store().registry();
 	json inv = json::array();
 	for (const auto &slot : c->inventory()) {
@@ -702,6 +733,51 @@ std::optional<Reply> ClientAutomationEndpoint::command(const Request &req) {
 			return bad("chat.send: needs non-empty string 'text'");
 		}
 		app_.submit_chat(a["text"].get<std::string>());
+		return Reply::success();
+	}
+
+	// --- windowed-only: menu, screenshots, typing ----------------------------------
+	if (req.cmd == "menu.set_name" || req.cmd == "menu.connect" || req.cmd == "menu.singleplayer") {
+		if (!app_.menu_active()) {
+			return Reply::error("not_in_menu", "the client is not on the main menu",
+					json{ { "app_state", ClientApp::app_state_name(app_.app_state()) } });
+		}
+		const std::string name = a.value("name", std::string());
+		if (req.cmd == "menu.set_name") {
+			if (name.empty()) {
+				return bad("menu.set_name: needs non-empty string 'name'");
+			}
+			app_.menu_set_name(name);
+		} else if (req.cmd == "menu.singleplayer") {
+			app_.menu_singleplayer(name);
+		} else {
+			if (!a.contains("host") || !a["host"].is_string() || !a.contains("port") || !a["port"].is_number_integer()) {
+				return bad("menu.connect: needs string 'host' and integer 'port'");
+			}
+			app_.menu_connect(a["host"].get<std::string>(), a["port"].get<int>(), name);
+		}
+		return Reply::success(); // the transition shows up in app_state over the next frames
+	}
+	if (req.cmd == "screenshot") {
+		if (!a.contains("path") || !a["path"].is_string() || a["path"].get<std::string>().empty()) {
+			return bad("screenshot: needs string 'path'");
+		}
+		const std::string path = a["path"].get<std::string>();
+		if (!app_.request_screenshot(path)) {
+			return Reply::error("unsupported", "no framebuffer to capture (headless client, or one is already pending)");
+		}
+		return start_task(std::make_unique<ScreenshotTask>(path));
+	}
+	if (req.cmd == "type") {
+		if (auto err = need_playing()) {
+			return err;
+		}
+		if (!a.contains("text") || !a["text"].is_string() || a["text"].get<std::string>().empty()) {
+			return bad("type: needs non-empty string 'text'");
+		}
+		if (!app_.type_chat(a["text"].get<std::string>())) {
+			return Reply::error("failed", "cannot type here (a UI screen is open, or the chat box is full)");
+		}
 		return Reply::success();
 	}
 

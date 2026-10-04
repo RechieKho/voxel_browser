@@ -274,6 +274,8 @@ struct Eval {
 		}
 		if (name == "health")
 			return numeric_compare("health", "health", arg, "==");
+		if (name == "rtt_ms")
+			return numeric_compare("rtt_ms", "rtt_ms", arg, ">=");
 		if (name == "player_count")
 			return numeric_compare("player_count", "player_count", arg, "==");
 		if (name == "chunks_loaded") {

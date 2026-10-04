@@ -440,7 +440,7 @@ Full detail: `remaining_tasks/cross_cutting.md`.
 
 - [~] **End-to-end multiplayer automation (dev-only)** — design in
       `docs/e2e-automation.md`; phases E0–E6 below it. E0 (input seam) and
-      E1 (`ClientApp`) and E2 (flags, stdio host, predicate engine) E2b (handshake `client_flags`, protocol v27) E3 (client actions + server admin commands) and E4 (pytest harness, `e2e` CTest/CI job) have landed; the rest is open. Must stay compiled out of production builds
+      E1 (`ClientApp`) and E2 (flags, stdio host, predicate engine) E2b (handshake `client_flags`, protocol v27) E3 (client actions + server admin commands) E4 (pytest harness, `e2e` CTest/CI job) and E5 (`--net-sim`, windowed clients, screenshots, trace viewer) have landed; the rest is open. Must stay compiled out of production builds
       (`VB_WITH_AUTOMATION`, `VB_DISTRIBUTION`). Doc-upkeep checklist per phase:
       `docs/e2e-automation.md` §11.
 

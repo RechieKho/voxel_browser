@@ -105,6 +105,25 @@ class Client(_Base):
     def chat(self, text):
         return self.call("chat.send", text=text)
 
+    # windowed-only --------------------------------------------------------
+    def menu_set_name(self, name):
+        return self.call("menu.set_name", name=name)
+
+    def menu_connect(self, host, port, name=None):
+        """Click "Connect" on the main menu (the transition shows up in `app_state`)."""
+        return self.call("menu.connect", host=host, port=port, **({"name": name} if name else {}))
+
+    def menu_singleplayer(self, name=None):
+        return self.call("menu.singleplayer", **({"name": name} if name else {}))
+
+    def type(self, text):
+        """Type into the chat box as keyboard characters would (then `key_press("enter")` sends it)."""
+        return self.call("type", text=text)
+
+    def screenshot(self, path):
+        """Save the framebuffer as a PNG; windowed clients only. Returns {path, width, height}."""
+        return self.call("screenshot", _timeout=30.0, path=str(path))
+
     # UI --------------------------------------------------------------------
     def ui(self, widget_id):
         return Locator(self, widget_id, hud=False)

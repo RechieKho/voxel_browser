@@ -10,6 +10,7 @@
 #include "vb/automation/predicate.hpp"
 #include "vb/automation/protocol.hpp"
 #include "vb/core/build_info.hpp"
+#include "vb/net/net_sim.hpp"
 
 using namespace vb::automation;
 using nlohmann::json;
@@ -310,4 +311,29 @@ TEST_CASE("automation: on_ground reads the snapshot and is false when absent") {
 	CHECK(eval(json{ { "on_ground", true } }, json{ { "on_ground", true } }));
 	CHECK_FALSE(eval(json{ { "on_ground", true } }, json{ { "on_ground", false } }));
 	CHECK_FALSE(eval(json{ { "on_ground", true } }, json::object()));
+}
+
+TEST_CASE("net-sim: spec parsing") {
+	std::string err;
+	const auto p = vb::net::parse_net_sim("lag_ms=120,jitter_ms=30,loss_pct=5.5,reorder_pct=1,dup_pct=2", err);
+	REQUIRE(p);
+	CHECK(p->lag_ms == 120);
+	CHECK(p->jitter_ms == 30);
+	CHECK(p->loss_pct == doctest::Approx(5.5));
+	CHECK(p->reorder_pct == doctest::Approx(1.0));
+	CHECK(p->dup_pct == doctest::Approx(2.0));
+	CHECK(p->active());
+
+	const auto one = vb::net::parse_net_sim("loss_pct=10", err);
+	REQUIRE(one);
+	CHECK(one->lag_ms == 0);
+	CHECK(one->active());
+	CHECK_FALSE(vb::net::parse_net_sim("lag_ms=0", err)->active());
+
+	for (const char *bad : { "", "lag_ms", "lag_ms=", "=5", "lag_ms=abc", "lag_ms=-1", "lag_ms=99999", "loss_pct=101",
+				 "latency=5", "lag_ms=5,,loss_pct=1", "lag_ms=5,", "lag_ms=1 5" }) {
+		err.clear();
+		CHECK_FALSE(vb::net::parse_net_sim(bad, err));
+		CHECK_FALSE(err.empty());
+	}
 }

@@ -4,8 +4,9 @@
 > flags, JSON-lines host, predicate engine, read-only queries), E2b
 > (handshake `client_flags`, protocol v27) and E3 (client actions, server
 > admin commands) and E4 (pytest `vbtest` harness, `e2e` CTest label, CI job)
-> are implemented (contract: `docs/automation-protocol.md`; how to write tests:
-> `tests/e2e/README.md`); E5 onward is not. Covers a
+> and E5 (`--net-sim`, windowed clients with menu commands and screenshots, typed
+> chat, trace viewer) are implemented (contract: `docs/automation-protocol.md`; how to
+> write tests: `tests/e2e/README.md`); only E6 (recorder, TCP attach) is not. Covers a
 > Playwright-style harness that drives real `voxel_browser` clients against a
 > real `voxel_browser_server` in multiplayer, so gameplay can be tested by
 > scripts instead of by hand. Complements spec §17 (Testing Strategy); the
@@ -271,13 +272,15 @@ features, there is no stub; see §7.2.
 
 ### 5.4 Network conditions
 
-Add `--net-sim lag_ms=120,jitter_ms=30,loss_pct=5` to both binaries. It
-maps onto GNS's built-in `k_ESteamNetworkingConfig_FakePacketLag_*` and
-`FakePacketLoss_*` settings in `GnsTransport`, and onto a simple
-delay/drop queue in `LoopbackTransport` for singleplayer. This lets
-prediction, reconciliation, and interpolation be tested under bad
-conditions. Today that can only be checked by hand. `--net-sim` is
-development-only too and sits behind the same flag.
+`--net-sim lag_ms=120,jitter_ms=30,loss_pct=5` on both binaries, mapped onto GNS's
+global `FakePacketLag/Jitter/Loss/Reorder/Dup_Send` settings (`GnsTransport::set_net_sim`,
+`inc/vb/net/net_sim.hpp`). This lets prediction, reconciliation and interpolation be tested
+under bad conditions, which could previously only be checked by hand. **Implemented in E5.**
+Each side only delays what it *sends*, so tests give both binaries the spec. Two changes from
+the original sketch: GNS has real jitter settings (no need to approximate), and there is **no
+`LoopbackTransport` queue**: singleplayer is refused, since it has no network to degrade.
+`--net-sim` is development-only too and sits behind the same flag (a production build
+refuses it, checked by CTest and the release legs).
 
 ## 6. Piece D — the `vbtest` harness
 
@@ -321,7 +324,7 @@ def test_inventory_screen_opens_and_closes(server, clients):
     expect(alice).not_.to_have_ui_open("base:inventory")
 ```
 
-(`--net-sim` tests, `@pytest.mark.net_sim(...)`, arrive with E5.)
+(Bad-network tests use `@pytest.mark.net_sim(lag_ms=..., loss_pct=...)`; see `tests/e2e/test_bad_network.py`.)
 
 **Fixtures (`tests/e2e/conftest.py`):**
 
@@ -348,13 +351,19 @@ a subprocess wrapper with request/response correlation,
 predicate and sends one `wait_for` (so retrying happens in-process, every
 frame).
 
-### 6.1 Tracing (Playwright trace-viewer analogue, later phase)
+### 6.1 Tracing (Playwright trace-viewer analogue; implemented in E5)
 
 Every command and response gets a timestamp and is written to
 `<test>/trace.jsonl` for each process. When the test fails, it also
 includes the `state` snapshot taken just before each action. A small
 static HTML viewer can lay out the clients' timelines side by side, which
 is the main need when debugging "A did X, but B never saw it".
+
+**Implemented as** `tests/e2e/vbtest/traceview.py`: every process already logs
+`<name>.trace.jsonl` (now with an absolute `ts`), and when a test fails the fixtures write
+`<artifacts>/<test>/trace.html`: a self-contained page with one column per process, rows in
+wall-clock order, requests/replies/errors colour-coded, plus each process's final state and
+stderr tail. Re-create one with `python3 -m vbtest.traceview <artifact dir>`.
 
 ## 7. Keeping automation out of production
 
@@ -502,7 +511,7 @@ whatever the client claims:
 | **E2b** (landed 2026-10-03) | `C2S_Hello.client_flags` + server-side rejection of automation clients (§7.4) | S | in-process `netcode_test` case: flagged client rejected by a non-automation server |
 | **E3** (landed 2026-10-04) | Action commands (input, high-level, ui, chat) + server admin commands. `menu.*`, `screenshot` and typing into the chat box are windowed-only and moved to E5 | M | two real clients + a dedicated server driven by a throwaway script: break/place replicate, give/teleport/chat/walk/kick; unit test for deferred replies |
 | **E4** (landed 2026-10-04) | `tests/e2e/vbtest` + fixtures + 10 tests (join + cold-cache asset sync, chat, break and place replicate, craft via chat, inventory screen, server teleport/health, walking, kick + reconnect, loopback-only guard); CTest `e2e` label; a Linux `e2e` CI job. New: `chunk_loaded`/`on_ground` predicates | M | 10/10, five runs in a row, locally; **CI itself not run** |
-| **E5** | `--net-sim`, trace JSONL + failure artifacts, screenshot under Xvfb | S–M | |
+| **E5** (landed 2026-10-04) | `--net-sim`; windowed automation (`menu.*`, `screenshot`, `type`) under Xvfb; trace viewer (`trace.html`); `rtt_ms`; CI job runs under `xvfb-run` | M | 18 e2e tests (3 new bad-network/windowed files), 3 runs under Xvfb all green; **CI itself not run** |
 | **E6** (optional) | Recorder ("codegen"): `--automation-record out.py` logs a human session's *semantic* actions (connect, look, hold, ui.click id) as a vbtest script skeleton; TCP attach mode; HTML trace viewer | M | |
 
 E0–E1 are worth doing on their own: they make the client loop testable
@@ -564,6 +573,20 @@ without any automation and remove the duplicated headless loop.
     timeouts) has never run on a runner; LeakSanitizer or ASan may report things in the
     child processes that the local, un-sanitized runs can't show. Expect a first-run fix-up.
 
+20. **raylib batches draw calls until `EndDrawing()` (found in E5).** A screenshot read
+    before that returns only the clear colour (menu "blank" at 18,18,22). The capture
+    flushes the batch (`rlDrawRenderBatchActive()`) first, and uses
+    `LoadImageFromScreen` + `ExportImage` because `TakeScreenshot()` strips the directory
+    from the path.
+21. **A windowed client is "joined" long before it is "playing".** After the handshake it sits
+    on a loading screen until its first chunks are meshed and uploaded, so `type`, clicks etc.
+    need `app_state == playing` (the harness waits for it).
+22. **GNS fake-network settings are process-wide and reset when the runtime shuts down**, so
+    `GnsTransport::set_net_sim` stores them and re-applies on every init, which also lets it
+    be called before any transport exists (the client creates its transport only on connect).
+23. **A flat UI has few colours.** The menu screenshot has 6 distinct colours; "not blank"
+    assertions use the mean colour and a low colour-count floor, not photo-like thresholds.
+
 ## 11. Documentation upkeep (for agents implementing this design)
 
 This doc and several others describe the automation work as **planned**.
@@ -598,7 +621,7 @@ checklist below is. Don't write history for work you didn't do or verify.
 | **E2b** handshake flag (done) | `docs/protocol.md`: add `client_flags` to the `C2S_Hello` row, add an entry to its changelog, **bump `kEngineProtocolVersion`** and record the old→new value (see "Adding a new wire message" in `CONTRIBUTING.md`); `architecture_spec/networking.md` §8.3 handshake notes; `content/` is unaffected. |
 | **E3** actions + admin cmds (done) | Done: `docs/automation-protocol.md` tables, `STATE.md`, backlog. `lua-api.md` untouched (`run_lua` adds no pack API). Gating confirmed: every server admin primitive (`ServerSession::{player_health,set_player_health,teleport_player,set_time_of_day,kick_player}`, `PackRuntime::admin_give`) and every endpoint is under `#if defined(VB_WITH_AUTOMATION)`; the automation-off server binary has none of the command strings. |
 | **E4** harness + CI (done) | Done: `tests/e2e/README.md`, `CONTRIBUTING.md`, `ARCHITECTURE_SPEC.md` §17, `automation-protocol.md` (new predicates/state), `STATE.md`, backlog, `.gitignore`. The CI job is `e2e` in `build_linux.yml`; its failure-log artifact is named `e2e-failure-logs` on purpose (bundle.yml merges `<project>-*`). |
-| **E5** net-sim, traces, screenshots | `docs/automation-protocol.md` (`--net-sim` syntax, `screenshot`); `tests/e2e/README.md` (trace files, artifacts, Xvfb leg). |
+| **E5** net-sim, traces, screenshots (done) | Done: `automation-protocol.md` (net-sim, windowed commands, `rtt_ms`), `tests/e2e/README.md` (markers, Xvfb, `trace.html`), `CONTRIBUTING.md`, `STATE.md`, backlog, CI (`xvfb-run`, `--net-sim` refusal checks in all three release legs, `*_rejects_net_sim` CTests). |
 | **E6** recorder / TCP attach | New section in `docs/automation-protocol.md`; **re-check §7** — any listener (TCP) must still be compiled out of production, loopback-only, and token-protected. |
 
 ### 11.3 Invariants to re-verify and re-document whenever automation code changes
@@ -634,9 +657,9 @@ Files that currently point here: `ARCHITECTURE_SPEC.md`,
    redirecting only `std::cout` misses Lua's `print`, which writes to C
    `stdout`. The host therefore reads fd 0 with raw `read(2)` and duplicates
    fd 1 for protocol frames, pointing fd 1 itself at stderr.
-9. **Client `--automation` requires `--headless`.** E3 added
-   `SyntheticInput` for headless, but `menu.*`/`screenshot`/typing into the
-   raygui chat box need a window, so the windowed path (Xvfb) is E5.
+9. **Windowed automation (E5).** The client can now run `--automation` in a real window
+   (under `xvfb-run`, software GL). raygui can't be clicked by script, so menu commands
+   inject the click's *result* and fill the menu's fields.
 10. **`World::set_block` creates chunks on demand and returns "changed", not
    "chunk exists" (found in E3).** The server `set_block`/`fill` therefore check
    `has_chunk` first and refuse edits outside loaded chunks, instead of

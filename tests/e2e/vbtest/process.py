@@ -64,7 +64,10 @@ class Process:
     # -- plumbing ----------------------------------------------------------
     def _log(self, direction, obj):
         with self._lock:
-            self._trace.write(json.dumps({"t": round(time.time() - self._t0, 3), "dir": direction, "msg": obj}) + "\n")
+            now = time.time()
+            # `ts` (epoch seconds) lets tools interleave the traces of several processes.
+            self._trace.write(json.dumps({"ts": round(now, 4), "t": round(now - self._t0, 3), "dir": direction,
+                                          "msg": obj}) + "\n")
             self._trace.flush()
 
     def _read(self):

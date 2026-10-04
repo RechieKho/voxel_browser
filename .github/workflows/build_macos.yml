@@ -226,6 +226,9 @@ jobs:
             if "$dist/$exe" --automation stdio </dev/null >/dev/null 2>&1; then
               echo "::error::$exe accepted --automation"; exit 1
             fi
+            if "$dist/$exe" --net-sim lag_ms=1 --version </dev/null >/dev/null 2>&1; then
+              echo "::error::$exe accepted --net-sim"; exit 1
+            fi
           done
 
       - name: Export binaries

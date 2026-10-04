@@ -72,8 +72,40 @@ public:
 	const std::vector<vb::script::Widget> &hud_widgets() const { return hud_widget_cache; }
 
 	// What the chat box does on Enter: send `text` over the real chat path.
-	// (The raygui text box itself is only exercisable in a windowed client.)
 	void submit_chat(std::string_view text);
+	// Types into the chat box exactly as keyboard characters would (opening it first if
+	// needed); pressing Enter then submits it through the normal frame logic. The raygui
+	// box that draws the text only exists in a windowed client, but the buffer and the
+	// Enter handling are shared, so this works headless too.
+	bool type_chat(std::string_view text);
+
+	// --- main-menu injection (windowed clients; raygui can't be clicked by script) ---
+	// The menu is drawn by raygui from raylib's real input state, so these set the same
+	// fields a player would type into and hand kMenu the same result a click would.
+	bool menu_active() const { return state == AppState::kMenu; }
+	void menu_set_name(std::string_view name) {
+		const std::string address = menu.address(); // prefill() reassigns it: pass a copy
+		menu.prefill(address, menu.port(), name);
+	}
+	void menu_connect(std::string_view host, int port, std::string_view name) {
+		menu.prefill(host, port, name);
+		pending_menu = vb::render::MainMenu::MainResult{ .connect = true };
+	}
+	void menu_singleplayer(std::string_view name) {
+		const std::string address = menu.address();
+		menu.prefill(address, menu.port(), name);
+		pending_menu = vb::render::MainMenu::MainResult{ .singleplayer = true };
+	}
+
+	// Saves the framebuffer to `path` (PNG) at the end of the next frame. Windowed only.
+	enum class Screenshot { kNone,
+		kPending,
+		kDone,
+		kFailed };
+	bool request_screenshot(std::string path);
+	Screenshot screenshot_state() const { return screenshot_state_; }
+	int screenshot_width() const { return screenshot_w_; }
+	int screenshot_height() const { return screenshot_h_; }
 #endif
 
 private:
@@ -192,6 +224,10 @@ private:
 #if defined(VB_WITH_AUTOMATION)
 	bool headless_ui_eval = false;
 	std::vector<vb::script::Widget> hud_widget_cache;
+	std::optional<vb::render::MainMenu::MainResult> pending_menu;
+	std::string screenshot_path_;
+	Screenshot screenshot_state_ = Screenshot::kNone;
+	int screenshot_w_ = 0, screenshot_h_ = 0;
 #endif
 
 };

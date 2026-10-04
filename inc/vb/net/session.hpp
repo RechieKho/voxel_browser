@@ -733,6 +733,10 @@ public:
 		return remote_;
 	}
 	std::uint32_t last_server_tick() const { return last_server_tick_; }
+#if defined(VB_WITH_AUTOMATION)
+	// Development-only: transport round-trip time for the automation snapshot (`rtt_ms`).
+	std::optional<double> rtt_seconds() const { return transport_.round_trip_time_seconds(conn_); }
+#endif
 
 	// Wall-clock estimate of the server's current tick, as a fractional
 	// (not just integer last-received) value -- REMAINING_TASKS.md Phase

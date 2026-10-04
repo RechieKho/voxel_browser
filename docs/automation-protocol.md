@@ -6,11 +6,11 @@ rules: `docs/e2e-automation.md` (§5 protocol, §7 keeping it out of production)
 Production binaries contain none of this and exit non-zero on `--automation`.
 
 **Protocol version: 1** (`kAutomationProtocolVersion`, `inc/vb/automation/protocol.hpp`).
-Implemented so far: phase E2 (host, `hello/state/step/quit/wait_for`, predicate
+Implemented so far (through phase E5): phase E2 (host, `hello/state/step/quit/wait_for`, predicate
 engine, read-only state) and phase E3 (client input / UI / chat / multi-frame
 actions, server admin commands, deferred replies). Windowed-only commands
 (`menu.*`, `screenshot`, typing into the raygui chat box) are not implemented;
-see "Not implemented" below.
+windowed clients are driven the same way (see "Windowed clients" below).
 
 ## Transport
 
@@ -21,9 +21,11 @@ see "Not implemented" below.
 - At startup fd 1 is duplicated for protocol frames and then redirected to
   **stderr**, so `std::cout`, `printf` and Lua's `print` can never corrupt a
   frame. Read logs from stderr.
-- The client currently requires `--headless`. `--automation-clock real|manual`
-  (client): `real` (default) runs frames at 60 Hz wall clock; `manual` only
-  advances on `step`.
+- The client runs headless (`--headless`) or in a real window (no `--headless`; needs a
+  display, e.g. `xvfb-run -a`). `--automation-clock real|manual` (client): `real`
+  (default) runs frames at 60 Hz wall clock; `manual` only advances on `step`.
+- `--net-sim <spec>` (both binaries, E5): fake network conditions, see "Network
+  simulation" below.
 - Any `--automation` value other than `stdio` is an error; a build without the
   flag prints `built without VB_WITH_AUTOMATION` and exits 1.
 
@@ -56,7 +58,8 @@ second), so they behave the same under `--automation-clock manual`.
 | `bad_request` | unparseable line, missing/invalid fields, malformed predicate (extra `message`) |
 | `unknown_command` | `cmd` not implemented by this role |
 | `proto_mismatch` | `hello.proto` ≠ host's protocol version |
-| `unsupported` | e.g. `step` without `--automation-clock manual` |
+| `unsupported` | e.g. `step` without `--automation-clock manual`; `screenshot` on a headless client |
+| `not_in_menu` | `menu.*` while the client isn't on the main menu (extra `app_state`) |
 | `timeout` | `wait_for` or a client action ran out of time; `error.last` holds what was observed |
 | `not_playing` | client action needs `app_state` = `playing` (and a joined session) |
 | `out_of_reach` | `break_block`/`place_block` target is farther than the reach (5.0); extra `distance`, `reach` |
@@ -119,15 +122,41 @@ Build the scene in loaded chunks (e.g. near spawn, or after teleporting a
 player and waiting for `chunks_loaded`): an edit outside them is refused rather
 than creating an empty chunk.
 
+## Windowed clients (E5)
+
+Without `--headless` the client opens a real window and starts on the main menu (or
+connects straight away with `--server`/`--singleplayer`), driven by the same synthetic
+input. raygui reads raylib's real mouse state, which a script can't produce, so the menu
+commands inject the *result* of a click and fill the fields a player would type into.
+
+| Command | Args → result |
+|---|---|
+| `menu.set_name` | `{name}` → `{}` |
+| `menu.connect` | `{host, port, name?}` → `{}`; the transition shows up in `app_state` (`connecting` → `loading` → `playing`; the loading screen needs frames to mesh the first chunks) |
+| `menu.singleplayer` | `{name?}` → `{}` |
+| `screenshot` | `{path}` → `{path, width, height}`; saves the framebuffer as a PNG at the end of the next frame (works on the menu and in game). `unsupported` on a headless client |
+| `type` | `{text}` → `{}`; appends to the chat box as keyboard characters would, opening it first; `key.press enter` then sends it. Works headless too (the box's buffer and Enter handling are shared; only raygui's drawing of it is windowed) |
+
+## Network simulation (`--net-sim`, E5)
+
+`--net-sim lag_ms=120,jitter_ms=30,loss_pct=5[,reorder_pct=..][,dup_pct=..]` on either
+binary, mapped onto GameNetworkingSockets' global fake-packet settings. It acts on
+packets **this process sends**: give the server and the clients the same spec for a
+symmetric link (so `lag_ms=100` shows up as roughly 200 ms of round-trip time).
+`lag_ms`/`jitter_ms` are 0..5000, the percentages 0..100; jitter averages `jitter_ms` and is
+capped at twice that. Unknown keys, bad numbers and trailing commas are errors. It needs a
+`VB_WITH_NET` build, applies to real (GNS) connections only (`--singleplayer` is refused:
+it uses an in-process loopback), and a build without `VB_WITH_AUTOMATION` refuses the flag
+like `--automation`. The client snapshot's `rtt_ms` (and the `rtt_ms` predicate) is the
+measured round-trip time, so a test can prove the simulation took effect.
+
 ## Not implemented
- 
-- `menu.set_name` / `menu.connect` / `menu.singleplayer` and `screenshot`:
-  windowed-only (the menu is drawn by raygui; headless clients skip it and join
-  from the command line). Deferred with the Xvfb leg (E5).
-- `type{text}` and typing into the chat box: the box's text comes from raygui,
-  so it only exists in a windowed client. Use `chat.send`.
+
+- Clicking raygui widgets by pixel (menu *results* are injected instead), settings and
+  keybindings screens.
 - The `health` predicate on a client: health isn't replicated to clients. Read
   `players[].health` from the server's `state` instead.
+- `--net-sim` for `--singleplayer` (loopback transport has no delay/drop queue).
 
 ### State snapshots
 
@@ -135,7 +164,7 @@ Client: `app_state` (`menu|settings|keybindings|connecting|loading|playing|error
 `joined`, `net_id`, `feet [x,y,z]`, `on_ground`, `yaw`, `pitch`, `chat [str]` (the HUD's last 8
 lines), `chat_open`, `mouse_captured`, `selected_slot` (1-based),
 `inventory [{item,count}]` (item = block name), `entities [{net_id,name,pos}]`,
-`chunks_loaded`, `target_block {pos,normal,block}` (what the crosshair is on,
+`chunks_loaded`, `rtt_ms` (once measured; real connections only), `target_block {pos,normal,block}` (what the crosshair is on,
 within reach; absent if nothing), `ui {name, widgets}` (only while a modal screen
 is open), `hud {widgets}`, `busy_actions` (in-flight multi-frame commands).
 Widgets are `{id, type, text}` (+ `items`, `list_index` for lists); `type` is
@@ -164,6 +193,7 @@ bad arguments is `bad_request`.
 | `chunks_loaded` | `{min}` or a number | `chunks_loaded` |
 | `chunk_loaded` | `{pos}` | whether the chunk containing `pos` exists in the process's world (client: its mirror; server: its `World`). Wait for this before building a scene on the server |
 | `on_ground` | `true` | `on_ground` (client: landed after the spawn drop) |
+| `rtt_ms` | `{op,value}` (use `{"op":">=","value":150}`; a bare number means `==`) | `rtt_ms` (client, real connections) |
 | `player_count` | `{op,value}` or a number | `player_count` (server) |
 | `ui_open` | `{name}` or `"name"` | `ui.name` |
 | `widget` | `{id, text?}` | `ui.widgets` (modal screen only) |
