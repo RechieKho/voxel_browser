@@ -1,7 +1,7 @@
 # Developer CLI (`vb`) — Design & Phased Plan
 
 > Full detail for this topic; the backlog entry is `REMAINING_TASKS.md`
-> Phase 8. Status: **design, not started** (2026-10-04).
+> Phase 8. Status: **8.2 implemented** (2026-10-04); 8.1 and 8.3+ not started.
 
 ## 1. Goals / non-goals
 
@@ -384,15 +384,15 @@ Nothing can be downloaded reliably until this lands.
 
 ### 8.2 — `vb` skeleton + local version management (M)
 
-- [ ] `paths.hpp`: `user_data_dir()`, `user_config_dir()`, `VB_HOME` override
+- [x] `paths.hpp`: `user_data_dir()`, `user_config_dir()`, `VB_HOME` override
       (+ tests in `core_test.cpp`).
-- [ ] `VB_BUILD_CLI`, `src/cli/`, subcommand dispatcher, `--help`/`--version`,
+- [x] `VB_BUILD_CLI`, `src/cli/`, subcommand dispatcher, `--help`/`--version`,
       exit-code conventions.
-- [ ] `Version`, `Layout`, `cli.toml` read/write, the `lock` file.
-- [ ] `vb paths`, `vb list` (installed), `vb use`, `vb which`, `vb uninstall`,
+- [x] `Version`, `Layout`, `cli.toml` read/write. (The `lock` file moves to 8.3: nothing mutates shared state concurrently until `install` exists.)
+- [x] `vb paths`, `vb list` (installed), `vb use`, `vb which`, `vb uninstall`,
       `vb link`/`unlink` (the dev loop works before any downloading exists:
       `vb link dev ./build && vb use dev`).
-- [ ] `vb launch` (client with `--config <config>/client.toml`).
+- [x] `vb launch` (client with `--config <config>/client.toml`).
 - **Exit:** a developer can `vb link dev build/ && vb launch` and get the
   client; `vb uninstall` of a linked version only removes the link.
 

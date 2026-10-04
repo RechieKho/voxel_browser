@@ -74,6 +74,7 @@ get_directory_property(VB_HAS_PARENT PARENT_DIRECTORY)
 # --- Options ---------------------------------------------------------------
 option(VB_BUILD_CLIENT   "Build the client executable (voxel_browser)"        ON)
 option(VB_BUILD_SERVER   "Build the server executable (voxel_browser_server)" ON)
+option(VB_BUILD_CLI      "Build the developer CLI (vb)"                       ON)
 option(VB_BUILD_TESTS    "Build the test executable (vb_tests)"               ON)
 option(VB_HEADLESS       "Force a headless client build (no GPU/window)"      OFF)
 option(VB_WARNINGS_AS_ERRORS "Treat compiler warnings as errors"             OFF)

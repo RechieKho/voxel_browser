@@ -446,7 +446,7 @@ surface and per-phase task lists: `architecture_spec/dev-cli.md` §11.
       per-platform `voxel_browser-<ver>-<os>-<arch>.zip` assets + a
       `release.toml` with SHA-256s; today's `bundle.yml` flat-merges every
       platform's identically-named files into one artifact.
-- [ ] **8.2 — `vb` skeleton + local version management**: `user_data_dir()`/
+- [x] **8.2 — `vb` skeleton + local version management**: `user_data_dir()`/
       `user_config_dir()`/`VB_HOME`, `vb list/use/which/uninstall/link/launch`.
 - [ ] **8.3 — Download & install**: curl + miniz behind `VB_BUILD_CLI`,
       verified atomic install transaction, `vb install/update/prune/doctor`.

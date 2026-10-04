@@ -22,9 +22,56 @@ std::filesystem::path env_path(const char *name) {
 #endif
 }
 
+std::filesystem::path vb_home() { return env_path("VB_HOME"); }
+
 } // namespace
 
+std::filesystem::path user_data_dir() {
+	if (const auto home = vb_home(); !home.empty()) {
+		return home;
+	}
+#if defined(_WIN32)
+	std::filesystem::path base = env_path("LOCALAPPDATA");
+	if (base.empty()) {
+		base = env_path("TEMP");
+	}
+	return base / "voxel_browser";
+#elif defined(__APPLE__)
+	return env_path("HOME") / "Library" / "Application Support" / "voxel_browser";
+#else
+	std::filesystem::path xdg = env_path("XDG_DATA_HOME");
+	if (!xdg.empty()) {
+		return xdg / "voxel_browser";
+	}
+	return env_path("HOME") / ".local" / "share" / "voxel_browser";
+#endif
+}
+
+std::filesystem::path user_config_dir() {
+	if (const auto home = vb_home(); !home.empty()) {
+		return home / "config";
+	}
+#if defined(_WIN32)
+	std::filesystem::path base = env_path("APPDATA");
+	if (base.empty()) {
+		base = env_path("TEMP");
+	}
+	return base / "voxel_browser";
+#elif defined(__APPLE__)
+	return env_path("HOME") / "Library" / "Application Support" / "voxel_browser" / "config";
+#else
+	std::filesystem::path xdg = env_path("XDG_CONFIG_HOME");
+	if (!xdg.empty()) {
+		return xdg / "voxel_browser";
+	}
+	return env_path("HOME") / ".config" / "voxel_browser";
+#endif
+}
+
 std::filesystem::path user_cache_dir() {
+	if (const auto home = vb_home(); !home.empty()) {
+		return home / "cache";
+	}
 #if defined(_WIN32)
 	std::filesystem::path base = env_path("LOCALAPPDATA");
 	if (base.empty()) {

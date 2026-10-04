@@ -19,6 +19,10 @@ if(VB_BUILD_SERVER)
   add_subdirectory(server)
 endif()
 
+if(VB_BUILD_CLI)
+  add_subdirectory(cli)
+endif()
+
 if(VB_BUILD_CLIENT)
   add_subdirectory(client)
 endif()

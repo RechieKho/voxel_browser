@@ -60,6 +60,11 @@ target_link_libraries(vb_tests
     vb_sanitizers
 )
 
+if(VB_BUILD_CLI)
+  target_sources(vb_tests PRIVATE unit/dev_cli_test.cpp)
+  target_link_libraries(vb_tests PRIVATE vb_cli_lib)
+endif()
+
 # TextureAtlas (real texture/atlas system) needs raylib's Image functions,
 # which -- like vb_render itself -- only exist when VB_BUILD_CLIENT is ON
 # (cmake/Dependencies.cmake gates the raylib fetch behind it).
