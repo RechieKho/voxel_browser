@@ -99,6 +99,30 @@ A few things worth knowing that aren't obvious from a single build tree:
 - **`content_pack_test.cpp`** loads the real `content/base` files (not
   inline Lua strings) — if you edit that pack, this is the test that
   catches a syntax error or a registration-count regression.
+- **Testing `content/base` itself** (see `docs/content-base-testing.md` for
+  the full design): put a new check in the lowest of these three layers
+  that can hold it — promote to a higher layer only when the thing under
+  test *is* the round trip (asset sync, input → server → UI push,
+  rendering), not to duplicate a lower-layer case for its own sake.
+  - **`content_base_data_test.cpp`** / **`content_base_behaviour_test.cpp`**
+    (Layer 1, doctest, `VB_WITH_LUA`): server-side pack checks — block
+    properties/textures/biomes/entity registrations, drops, crafting,
+    `mechanics.lua`'s rising-edge punch/place, fall damage, keybinds,
+    `vb.storage` persistence. Both share `content_base_fixture.hpp`'s
+    `BasePackFixture` (a real `PackRuntime` + `ServerSession` + one joined
+    `ClientSession` over `LoopbackNetwork`, loading the real
+    `content/base/` directory) — extend that fixture rather than
+    re-deriving its ~40 lines of setup in a new test file.
+  - **`content_base_ui_test.cpp`** (Layer 2, doctest, `VB_WITH_LUA`): loads
+    `content/base/ui/*.lua` into a real `UiRuntime` the same way
+    `src/client/client_app.cpp`'s singleplayer path does, and asserts the
+    rendered widget trees. This is the only place that opens these files at
+    all — before it existed, a syntax error in `hud.lua` passed the entire
+    suite.
+  - **`tests/e2e/test_base_pack.py`** (Layer 3, pytest, `ctest -L e2e`):
+    reserved for checks that genuinely need two real processes and a cold
+    cache (asset sync, a real windowed render, a second client observing
+    replication) — see `tests/e2e/README.md`.
 
 ## Code style
 

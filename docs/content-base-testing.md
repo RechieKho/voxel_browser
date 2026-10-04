@@ -1,10 +1,39 @@
 # Testing `content/base` — design and phased plan
 
-> Status: **planned**, nothing implemented yet. This is the design and the
-> executable task list for giving the shipped base content pack real test
-> coverage, using the automation that already exists (`docs/automation-protocol.md`,
-> `docs/e2e-automation.md`, `tests/e2e/README.md`) plus the in-process
-> `PackRuntime`/`UiRuntime` harnesses the unit suite already uses.
+> Status: **C0–C4 implemented, C5 partial** (this file). Phases C0 (fixture),
+> C1 (declarative surface), C2 (server-side behaviour), C3 (UI pack files)
+> and C4 (e2e journeys) are done — see `tests/unit/content_base_fixture.hpp`,
+> `content_base_data_test.cpp`, `content_base_behaviour_test.cpp`,
+> `content_base_ui_test.cpp` and `tests/e2e/test_base_pack.py`. C5's CI/docs
+> checks are done (this status line, CONTRIBUTING.md); the findings below
+> are what's left.
+>
+> **Findings from implementing this:**
+> - No read-back accessor exists for `vb.register_biome` entries (C1 task 4
+>   anticipated this) — `content_base_data_test.cpp`'s biome test works
+>   around it by spying on `vb.register_biome` via a prelude loaded before
+>   `load_content_pack`, which only works because `blocks/*.lua` share one
+>   Lua global namespace with `biomes/*.lua`.
+> - `PlayerHandle` has no `get_health()` (unlike script entities'
+>   `entity:get_health()`) — the fall-damage HP-curve assertions in
+>   `content_base_behaviour_test.cpp` only run in a `VB_WITH_AUTOMATION`
+>   build (`ServerSession::player_health()`), same as CI's dedicated
+>   Lua+automation leg.
+> - `tests/e2e/vbtest/stack.py` never pinned `asset_cache_dir` in the
+>   generated `client.toml`, so on macOS (where `user_cache_dir()` hardcodes
+>   `~/Library/Caches`, ignoring `XDG_CACHE_HOME`) the harness's own
+>   `client.cache_dir` attribute pointed at a directory the client never
+>   actually wrote to — `test_multiplayer_basics.py`'s existing cache
+>   assertion was silently checking the wrong path on that platform. Fixed
+>   as part of adding `test_base_pack.py`'s asset-sync test.
+> - The automation protocol's `entity_visible`/`entity_near` predicates only
+>   match by player name (`src/client/automation_endpoint.cpp`'s `names`
+>   map) — a script-spawned entity like `base:zombie` has no player name,
+>   so C4 task 4 ("a second player sees the zombie") isn't expressible with
+>   the current harness. Would need a by-kind or by-net_id entity query.
+>
+> Below this line is the original design and phased task list, kept as the
+> record of what was planned and why — not updated to past tense.
 
 ## 1. Why
 
