@@ -42,6 +42,11 @@
 #include "vb/worldgen/generator.hpp"
 #include "vb/worldgen/worker_pool.hpp"
 
+#if defined(VB_WITH_AUTOMATION)
+#include "automation_endpoint.hpp"
+#include "vb/automation/host.hpp"
+#endif
+
 namespace {
 
 std::atomic_bool g_stop{ false };
@@ -93,6 +98,13 @@ void print_usage() {
 				 "  --stop-file <path>     stop cleanly (saving the world) once this file exists;\n"
 				 "                         checked about once a second (how `vb server stop` works\n"
 				 "                         on Windows, where a detached process gets no signals)\n"
+#if defined(VB_WITH_AUTOMATION)
+				 "  --automation stdio|tcp[:PORT]  drive via JSON lines on stdin/stdout, or on a token-protected\n"
+				 "                        127.0.0.1-only socket (dev builds only)\n"
+				 "  --automation-token <t>   fixed token for tcp (default: random)\n"
+				 "  --automation-info <file> write {host,port,token,pid} here for tcp (default: print to stderr)\n"
+				 "  --net-sim <spec>      fake lag/jitter/loss on sent packets, e.g. lag_ms=100,loss_pct=2 (dev builds only)\n"
+#endif
 				 "  --version             print build info and exit\n"
 				 "  --help                show this help\n";
 }
@@ -170,6 +182,37 @@ int main(int argc, char **argv) {
 		std::cout << vb::core::describe_build() << '\n';
 		return EXIT_SUCCESS;
 	}
+
+#if defined(VB_WITH_AUTOMATION)
+	std::unique_ptr<vb::automation::Host> automation;
+	if (args.has("automation")) {
+		std::string automation_error;
+		automation = vb::automation::Host::open_spec(args.value_or("automation", ""),
+				args.value_or("automation-token", ""), args.value_or("automation-info", ""), automation_error);
+		if (!automation) {
+			std::cerr << "server: " << automation_error << '\n';
+			return EXIT_FAILURE;
+		}
+	}
+	if (args.has("net-sim")) {
+		std::string error;
+		const auto sim = vb::net::parse_net_sim(args.value_or("net-sim", ""), error);
+		if (!sim) {
+			std::cerr << "server: " << error << '\n';
+			return EXIT_FAILURE;
+		}
+		if (!vb::net::GnsTransport::set_net_sim(*sim)) {
+			std::cerr << "server: --net-sim needs a build with VB_WITH_NET\n";
+			return EXIT_FAILURE;
+		}
+	}
+#else
+	if (args.has("automation") || args.has("net-sim")) {
+		// Never silently ignored: a misconfigured test setup must fail loudly.
+		std::cerr << "server: built without VB_WITH_AUTOMATION\n";
+		return EXIT_FAILURE;
+	}
+#endif
 
 	const std::string config_path = args.value_or("config", "server.toml");
 	auto loaded = vb::core::load_server_config(config_path);
@@ -565,6 +608,13 @@ int main(int argc, char **argv) {
 	// would be harmless, but a one-second stop latency is fine and cheaper.
 	const long long stop_file_check_ticks =
 			stop_file.empty() ? 0 : std::max<long long>(1, config.tick_rate);
+#if defined(VB_WITH_AUTOMATION)
+	std::unique_ptr<vb::server::ServerAutomationEndpoint> automation_endpoint;
+	if (automation) {
+		automation_endpoint = std::make_unique<vb::server::ServerAutomationEndpoint>(
+				session, world, registry, pack_runtime, tick, transport.bound_port());
+	}
+#endif
 
 	while (!g_stop.load(std::memory_order_relaxed)) {
 		++tick;
@@ -580,12 +630,22 @@ int main(int argc, char **argv) {
 		++window_ticks;
 		for (const auto &joined : session.take_joins()) {
 			online[static_cast<std::uint32_t>(joined.net_id)] = joined.name;
+#if defined(VB_WITH_AUTOMATION)
+			if (automation_endpoint) {
+				automation_endpoint->player_joined(joined.net_id, joined.name);
+			}
+#endif
 			pack_runtime.dispatch_player_join_completed(joined);
 			std::cout << "server: '" << joined.name << "' joined (net id "
 					  << static_cast<std::uint32_t>(joined.net_id) << ")\n";
 		}
 		for (const auto &left : session.take_leaves()) {
 			online.erase(static_cast<std::uint32_t>(left.net_id));
+#if defined(VB_WITH_AUTOMATION)
+			if (automation_endpoint) {
+				automation_endpoint->player_left(left.net_id);
+			}
+#endif
 			pack_runtime.dispatch_player_leave(left);
 			std::cout << "server: a player left (" << left.reason << ")\n";
 		}
@@ -599,6 +659,12 @@ int main(int argc, char **argv) {
 		if (manifest_check_ticks > 0 && tick % manifest_check_ticks == 0) {
 			manifest_refresh_check();
 		}
+
+#if defined(VB_WITH_AUTOMATION)
+		if (automation && !automation->pump(*automation_endpoint)) {
+			break; // `quit`, or the harness closed our stdin
+		}
+#endif
 
 		if (max_ticks > 0 && tick >= max_ticks) {
 			break;

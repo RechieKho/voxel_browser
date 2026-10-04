@@ -11,6 +11,10 @@ add_subdirectory(assetsync)
 add_subdirectory(replication)
 add_subdirectory(net)
 
+if(VB_WITH_AUTOMATION)
+  add_subdirectory(automation)
+endif()
+
 if(VB_BUILD_CLIENT)
   add_subdirectory(render)
 endif()

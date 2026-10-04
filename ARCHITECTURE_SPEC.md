@@ -284,6 +284,11 @@ face-culled mesher (`vb::world::chunk_mesher`/`chunk_mesh_snapshot`) owns
 voxel meshing (Cellulose/greedy-merge was tried and reverted — see
 `architecture_spec/open-questions.md` Q2); raygui draws menus/HUD.
 
+**Client loop:** `vb::client::ClientApp` (`src/client/client_app.*`) owns the
+menu → connecting → loading → playing state machine; `frame(InputFrame, dt)` is
+one iteration. Windowed play and `--headless` run the same class — headless is
+`render=false` (no menu, GL resources or draw calls).
+
 **Chunk meshing:** `ClientChunkStore` mirrors replicated data; a mesh
 worker-thread pool builds per-face-culled buffers with baked light/AO from
 `(registry, block data, light volume, neighbor faces)`; GPU upload is
@@ -434,6 +439,14 @@ servers to the extent practical (no code exec, no arbitrary FS writes).
   against a committed golden value across Linux/macOS/Windows.
 - **Soak**: N simulated clients doing random walks + edits for M minutes,
   watch for leaks (ASan/LSan) and unbounded queue growth.
+- **End-to-end (dev-only)**: real `voxel_browser` and
+  `voxel_browser_server` processes driven over a stdio JSON-lines channel by
+  a pytest harness (`tests/e2e/`: Playwright-style locators and auto-waiting;
+  `ctest -L e2e`; its own Linux CI job; a loopback+token TCP attach mode and a session recorder
+  that writes a vbtest script). Compiled in only with
+  `VB_WITH_AUTOMATION=ON` (default `OFF`, rejected in `VB_DISTRIBUTION`
+  builds), so shipped binaries never contain it. Design:
+  `docs/e2e-automation.md`; usage: `tests/e2e/README.md`.
 - Frameworks: doctest/Catch2 for unit; a small custom harness for
   integration. Sanitizer builds wired into the debug CI matrix.
 

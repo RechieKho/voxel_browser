@@ -122,6 +122,14 @@ ServerHandshakeStep ServerHandshake::on_frame(const Frame &frame) {
 						"engine protocol version mismatch");
 			}
 
+			if ((hello->client_flags & protocol::kClientFlagAutomation) != 0 &&
+					!config_.accept_automation_clients) {
+				// Refused before ServerInfo, so before auth and asset sync:
+				// a rejected dev client costs this server almost nothing.
+				return fail(DisconnectReason::kBadHandshake,
+						"automation clients are not accepted by this server");
+			}
+
 			protocol::S2CServerInfo info;
 			info.pack_name = config_.pack_name;
 			info.pack_version = config_.pack_version;
@@ -305,6 +313,10 @@ ClientHandshakeStep ClientHandshake::start() {
 	hello.engine_protocol_version = kEngineProtocolVersion;
 	hello.client_nonce = config_.client_nonce;
 	hello.client_version = config_.client_version;
+	hello.client_flags = config_.client_flags;
+#if defined(VB_WITH_AUTOMATION)
+	hello.client_flags |= protocol::kClientFlagAutomation;
+#endif
 
 	status_ = ClientHandshakeStatus::kConnecting;
 	ClientHandshakeStep step;

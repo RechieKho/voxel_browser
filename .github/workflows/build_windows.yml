@@ -54,6 +54,7 @@ jobs:
             -DVB_WITH_LUA=ON ^
             -DVB_WITH_NET=ON ^
             -DVB_WITH_REPLICATION=ON ^
+            -DVB_DISTRIBUTION=ON ^
             -DCMAKE_TOOLCHAIN_FILE=%VCPKG_INSTALLATION_ROOT%\scripts\buildsystems\vcpkg.cmake
 
       - name: Build
@@ -79,6 +80,35 @@ jobs:
             --platform "${{ matrix.target }}-${{ matrix.arch }}" \
             --build-type "${{ matrix.build_type }}" \
             --version "${{ needs.setup_metadata.outputs.version }}"
+
+      - name: Verify binaries contain no automation
+        shell: bash
+        run: |
+          # The built binaries (what package_release.py zips). dist/ now holds only archives,
+          # so checking it would silently test nothing.
+          dist="${{ github.workspace }}/build"
+          for exe in voxel_browser.exe voxel_browser_server.exe; do
+            if "$dist/$exe" --version | grep -qi automation; then
+              echo "::error::$exe was built with VB_WITH_AUTOMATION"; exit 1
+            fi
+            if "$dist/$exe" --automation stdio </dev/null >/dev/null 2>&1; then
+              echo "::error::$exe accepted --automation"; exit 1
+            fi
+            # Not `--version`: that exits 0 before any flag is checked. These are one-shot if accepted.
+            if "$dist/$exe" --net-sim lag_ms=1 --headless --frames 1 --ticks 1 </dev/null >/dev/null 2>&1; then
+              echo "::error::$exe accepted --net-sim"; exit 1
+            fi
+            if "$dist/$exe" --automation tcp </dev/null >/dev/null 2>&1; then
+              echo "::error::$exe accepted --automation tcp"; exit 1
+            fi
+            # Client-only flag (the server has no recorder and ignores it like any unknown flag).
+            case "$exe" in
+              voxel_browser|voxel_browser.exe)
+                if "$dist/$exe" --automation-record /tmp/x.py --headless --frames 1 </dev/null >/dev/null 2>&1; then
+                  echo "::error::$exe accepted --automation-record"; exit 1
+                fi ;;
+            esac
+          done
 
       - name: Export archives
         uses: actions/upload-artifact@v4

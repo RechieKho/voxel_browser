@@ -24,6 +24,7 @@ void C2SHello::encode(std::vector<std::byte> &out) const {
 	w.u16(engine_protocol_version);
 	w.u64(client_nonce);
 	w.string(client_version);
+	w.u8(client_flags);
 }
 
 Decoded<C2SHello> C2SHello::decode(std::span<const std::byte> in) {
@@ -32,6 +33,7 @@ Decoded<C2SHello> C2SHello::decode(std::span<const std::byte> in) {
 	m.engine_protocol_version = r.u16();
 	m.client_nonce = r.u64();
 	m.client_version = r.string();
+	m.client_flags = r.u8();
 	return finish(r, std::move(m));
 }
 

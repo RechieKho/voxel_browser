@@ -1,0 +1,3 @@
+# Only pytest is needed: the vbtest harness is synchronous (threads for the
+# pipes), so no async plugin. Python 3.8+.
+pytest>=7

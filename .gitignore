@@ -22,3 +22,8 @@ content/**/storage.json
 content/**/db/
 
 .cache/*
+
+# End-to-end test artifacts (logs/traces of failed runs) and Python caches.
+tests/e2e/artifacts/
+tests/e2e/.pytest_cache/
+__pycache__/

@@ -82,3 +82,9 @@ if(VB_WITH_LUA)
   target_link_libraries(vb_core PUBLIC lua::lua sol2::sol2 nlohmann_json::nlohmann_json)
   target_compile_definitions(vb_core PUBLIC VB_WITH_LUA=1)
 endif()
+
+# Visible to build_info.cpp so --version reports "+automation" (§7.3). Defined
+# publicly so every consumer agrees; the automation module itself is separate.
+if(VB_WITH_AUTOMATION)
+  target_compile_definitions(vb_core PUBLIC VB_WITH_AUTOMATION=1)
+endif()

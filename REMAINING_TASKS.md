@@ -469,6 +469,12 @@ surface and per-phase task lists: `architecture_spec/dev-cli.md` §11.
 
 Full detail: `remaining_tasks/cross_cutting.md`.
 
+- [~] **End-to-end multiplayer automation (dev-only)** — design in
+      `docs/e2e-automation.md`; phases E0–E6 below it. E0 (input seam) and
+      E1 (`ClientApp`) and E2 (flags, stdio host, predicate engine) E2b (handshake `client_flags`, protocol v27) E3 (client actions + server admin commands) E4 (pytest harness, `e2e` CTest/CI job) E5 (`--net-sim`, windowed clients, screenshots, trace viewer) and E6 (TCP attach, session recorder) have landed (all phases); still open: the CI job has never run on a runner, and Windows/macOS are unbuilt; the rest is open. Must stay compiled out of production builds
+      (`VB_WITH_AUTOMATION`, `VB_DISTRIBUTION`). Doc-upkeep checklist per phase:
+      `docs/e2e-automation.md` §11.
+
 - [x] **`script::PlayerHandle` stashed across ticks returning/crashing on
       corrupted data** (found 2026-09-28 building
       `content/base/entities/zombie.lua`, root-caused and fixed 2026-09-30).

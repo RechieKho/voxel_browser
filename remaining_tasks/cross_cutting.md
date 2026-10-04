@@ -2,6 +2,34 @@
 
 > Full history for this section; linked from `REMAINING_TASKS.md`. Ground truth for [x] items — do not duplicate here.
 
+- [~] End-to-end multiplayer automation (dev-only) — designed 2026-10-02,
+      see `docs/e2e-automation.md`. Phases: E0 input seam (landed), E1
+      `ClientApp` extraction (landed 2026-10-02: `src/client/client_app.{hpp,cpp}`,
+      `session_host.hpp`; `run_headless` now = `ClientApp(render=false)` +
+      `connect_blocking()`; verified: `vb_tests` + 3 smoke tests green in a
+      `VB_WITH_LUA/WORLDGEN/COMPRESSION` build, windowed path NOT run — no GPU
+      in the CI container), E2 `VB_WITH_AUTOMATION`/`VB_DISTRIBUTION` +
+      stdio host + predicates (landed 2026-10-03: `src/automation/`,
+      `inc/vb/automation/`, `{client,server}/automation_endpoint.hpp`,
+      `docs/automation-protocol.md`, CI `VB_DISTRIBUTION` legs + `--version`
+      check; verified: `vb_tests` 11 new `automation*` cases and `ctest` 4/4 in a
+      `VB_WITH_AUTOMATION=ON` + LUA/WORLDGEN/COMPRESSION build, ctest incl. the
+      new `*_rejects_automation` in the default build; manual stdio round trips
+      against the singleplayer client and the server; NOT run: `VB_WITH_NET`
+      builds, Windows/macOS, real CI), E2b `C2S_Hello.client_flags` rejection (landed
+      2026-10-03, protocol 27; 4 `net_test` cases + codec round-trip), E3
+      actions + server admin commands (landed 2026-10-04; hand-verified with
+      two real clients against a real dedicated server, 35 checks; windowed-only
+      `menu.*`/`screenshot`/chat typing moved to E5), E4 pytest harness + CI `e2e` leg
+      (landed 2026-10-04: 10 tests, `ctest -L e2e` 10/10 locally x5; CI job not yet
+      run on a runner; also fixed a real `ui.close()` segfault found by it), E5
+      `--net-sim`/windowed clients/screenshots/trace viewer (landed 2026-10-04: 18 e2e
+      tests, 3x under Xvfb green; CI job not yet run on a runner), E6 TCP attach + session
+      recorder (landed 2026-10-04: 24 e2e tests; a recorded session replays green on a fresh
+      server; Windows Winsock path unbuilt). Constraint: automation
+      code must never ship — see §7 of that doc. Each phase's doc updates:
+      §11 of that doc.
+
 - [x] **Real engine bug found 2026-09-28 while building
       `content/base/entities/zombie.lua` (Phase 6's "mob damage" item):
       a `script::PlayerHandle` stored across calls and read back from

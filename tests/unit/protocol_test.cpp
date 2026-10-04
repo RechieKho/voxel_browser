@@ -111,6 +111,11 @@ TEST_CASE("handshake structs round-trip") {
 	CHECK(h2.engine_protocol_version == vb::kEngineProtocolVersion);
 	CHECK(h2.client_nonce == 0x1122334455667788ull);
 	CHECK(h2.client_version == "vb-test/0");
+	CHECK(h2.client_flags == 0);
+
+	C2SHello flagged{ vb::kEngineProtocolVersion, 1, "vb-test/0",
+		kClientFlagAutomation };
+	CHECK(round_trip(flagged).client_flags == kClientFlagAutomation);
 
 	S2CServerInfo info{ "base", "1.0.0", vb::kEngineProtocolVersion, 20, 6, "hello!",
 		AuthMode::kNone };

@@ -2,6 +2,8 @@
 
 #include <ostream>
 
+#include "vb/net/loopback.hpp"
+#include "vb/net/session.hpp"
 #include "vb/script/ui_runtime.hpp"
 
 #if !VB_WITH_LUA
@@ -114,6 +116,36 @@ TEST_CASE("report_click invokes the widget's on_click callback from the latest f
 	// send_event()/ui.close() on an unattached runtime (no attach_session
 	// call) must be a safe no-op -- verified implicitly by not crashing.
 	CHECK(ui.load_pack_file("assert(clicked == true)"));
+}
+
+TEST_CASE("close() with a session attached sends the close event instead of crashing") {
+	// Regression: do_close() passed a state-less nil object to lua_to_json(), which
+	// dereferenced a null lua_State -- but only once a session is attached, which no
+	// other test here does (send_event() returns early without one).
+	vb::net::LoopbackNetwork net;
+	REQUIRE(net.server().listen(0));
+	vb::net::Transport &transport = net.create_client();
+	auto conn = transport.connect("loopback", 0);
+	REQUIRE(conn);
+	vb::net::ClientSession session(transport, *conn,
+			vb::net::HandshakeClientConfig{ "Tester", "", "vb-test", 1 });
+
+	UiRuntime ui;
+	ui.attach_session(session);
+	REQUIRE(ui.load_pack_file(R"(
+		ui.define("test", function(state)
+			return { widgets = { { id = "close", type = "button", x = 0, y = 0, w = 10, h = 10,
+			                       text = "x", on_click = function() ui.close() end } } }
+		end)
+	)"));
+	ui.open("test", "{}");
+	ui.render_frame();
+	ui.report_click("close"); // ui.close() from Lua -> do_close() -> send_event("close", nil)
+	CHECK_FALSE(ui.is_open());
+
+	ui.open("test", "{}");
+	ui.close(); // and the C++ entry point
+	CHECK_FALSE(ui.is_open());
 }
 
 TEST_CASE("close() invokes on_close (from the latest frame) exactly once and clears state") {

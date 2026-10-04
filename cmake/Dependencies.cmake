@@ -383,9 +383,9 @@ if(VB_WITH_LUA)
 endif()
 
 # nlohmann/json — vb.storage persistence + player:open_ui ctx serialization
-# (Phase 4.2), and the vb CLI's --json output / GitHub release listing (8.5).
-# Header-only.
-if(VB_WITH_LUA OR VB_BUILD_CLI)
+# (Phase 4.2), the development-only automation protocol (e2e design), and the
+# vb CLI's --json output / GitHub release listing (8.5). Header-only.
+if(VB_WITH_LUA OR VB_WITH_AUTOMATION OR VB_BUILD_CLI)
   find_package(nlohmann_json QUIET)
   if(NOT nlohmann_json_FOUND AND NOT TARGET nlohmann_json::nlohmann_json)
     vb_fetch(nlohmann_json TAG v3.11.3 REPO https://github.com/nlohmann/json.git)

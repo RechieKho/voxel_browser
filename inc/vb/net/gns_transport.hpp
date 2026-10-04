@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <memory>
 
+#include "vb/net/net_sim.hpp"
 #include "vb/net/transport.hpp"
 
 // Transport backend over GameNetworkingSockets — real UDP (spec §8.1), built
@@ -49,6 +50,14 @@ public:
 	// path has no ephemeral-port allocation -- listen(0) always fails with
 	// kBindFailed, so callers must always pass a concrete port.
 	std::uint16_t bound_port() const;
+
+#if defined(VB_WITH_AUTOMATION)
+	// Development-only (docs/e2e-automation.md §5.4): fake lag/jitter/loss/reorder/dup on
+	// every packet this process sends, through GNS's process-wide fake-packet settings.
+	// Stored and (re)applied whenever the GNS runtime initializes, so it can be called
+	// before any transport exists. False when built without VB_WITH_NET.
+	static bool set_net_sim(const NetSimParams &params);
+#endif
 
 	struct Impl;
 
