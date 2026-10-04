@@ -448,7 +448,7 @@ surface and per-phase task lists: `architecture_spec/dev-cli.md` §11.
       platform's identically-named files into one artifact.
 - [x] **8.2 — `vb` skeleton + local version management**: `user_data_dir()`/
       `user_config_dir()`/`VB_HOME`, `vb list/use/which/uninstall/link/launch`.
-- [ ] **8.3 — Download & install**: curl + miniz behind `VB_BUILD_CLI`,
+- [x] **8.3 — Download & install**: curl + miniz behind `VB_BUILD_CLI`,
       verified atomic install transaction, `vb install/update/prune/doctor`.
 - [ ] **8.4 — Hosting**: engine `--stop-file` (Windows graceful stop) and
       client `--content-pack`/`--world-dir` for `--singleplayer`;

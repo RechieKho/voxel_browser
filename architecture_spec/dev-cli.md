@@ -1,7 +1,7 @@
 # Developer CLI (`vb`) — Design & Phased Plan
 
 > Full detail for this topic; the backlog entry is `REMAINING_TASKS.md`
-> Phase 8. Status: **8.1 and 8.2 implemented** (2026-10-04); 8.3+ not started. 8.1's CI wiring is unexercised until the next workflow run / tag.
+> Phase 8. Status: **8.1–8.3 implemented** (2026-10-04); 8.4+ not started. 8.1's CI wiring is unexercised until the next workflow run / tag.
 
 ## 1. Goals / non-goals
 
@@ -399,15 +399,16 @@ Nothing can be downloaded reliably until this lands.
 
 ### 8.3 — Download & install (L)
 
-- [ ] Dependencies: curl (Schannel on Windows / system elsewhere), miniz,
+- [x] Dependencies: curl (Schannel on Windows / system elsewhere), miniz,
       behind `VB_BUILD_CLI`; CI dependency installs updated.
-- [ ] `Source` interface; `DirSource`, `HttpSource` (redirects, `Range`
+- [x] `Source` interface; `DirSource`, `HttpSource` (redirects, `Range`
       resume, timeouts, proxy from env, progress callback).
-- [ ] `release.toml` parser + platform selection (`linux-x86_64`,
+- [x] `release.toml` parser + platform selection (`linux-x86_64`,
       `macos-universal`, `windows-x86_64`; clear error on unsupported).
-- [ ] Safe zip extraction + exec bits; §5.3 transaction.
-- [ ] `vb install`, `vb update`, `vb prune`, `vb doctor` (first cut).
-- [ ] Unit + integration tests per §10 (DirSource only in CI).
+- [x] Safe zip extraction + exec bits; §5.3 transaction.
+- [x] `vb install`, `vb update`, `vb prune`, `vb doctor` (first cut).
+- [x] Unit + integration tests per §10 (DirSource only in CI).
+- Notes: sources are `owner/repo`, `owner/repo@<mirror-base-url>` or `dir:/path` (`VB_SOURCE` env or `source` in cli.toml). The `lock` file (flock/LockFileEx) landed here. Verified on Linux, including resume of a partial download against a Range-capable local HTTP server; the Windows (curl/Schannel, Win32 lock) and macOS paths are compiled by CI only. `HttpSource` has no automated test yet (needs `VB_TEST_NETWORK`).
 - **Exit:** on a clean machine (`VB_HOME` empty), `vb install latest && vb launch`
   works on all three OSes; corrupt download is rejected with no partial install.
 

@@ -114,6 +114,54 @@ if(NOT tomlplusplus_FOUND AND NOT TARGET tomlplusplus::tomlplusplus)
 endif()
 
 # ===========================================================================
+# vb CLI downloads: libcurl (HTTPS) + miniz (zip) — only for VB_BUILD_CLI
+#   libcurl: system package on Linux (libcurl4-openssl-dev) and macOS (SDK);
+#   on Windows (or anywhere find_package fails) a pinned FetchContent build
+#   using the OS TLS stack on Windows (Schannel — no OpenSSL to ship).
+#   miniz: single-file zip reader; release archives are .zip on every OS.
+# ===========================================================================
+if(VB_BUILD_CLI)
+  if(NOT WIN32)
+    find_package(CURL QUIET)
+  endif()
+  if(NOT TARGET CURL::libcurl)
+    set(BUILD_CURL_EXE OFF CACHE INTERNAL "")
+    set(BUILD_TESTING OFF CACHE INTERNAL "")
+    set(BUILD_LIBCURL_DOCS OFF CACHE INTERNAL "")
+    set(BUILD_MISC_DOCS OFF CACHE INTERNAL "")
+    set(ENABLE_CURL_MANUAL OFF CACHE INTERNAL "")
+    set(CURL_DISABLE_INSTALL ON CACHE INTERNAL "")
+    set(CURL_ENABLE_EXPORT_TARGET OFF CACHE INTERNAL "")
+    set(HTTP_ONLY ON CACHE INTERNAL "")
+    set(CURL_USE_LIBPSL OFF CACHE INTERNAL "")
+    set(USE_LIBIDN2 OFF CACHE INTERNAL "")
+    set(CURL_USE_LIBSSH2 OFF CACHE INTERNAL "")
+    set(CURL_BROTLI OFF CACHE INTERNAL "")
+    set(CURL_ZSTD OFF CACHE INTERNAL "")
+    if(WIN32)
+      set(CURL_USE_SCHANNEL ON CACHE INTERNAL "")
+    elseif(APPLE)
+      set(CURL_USE_SECTRANSP ON CACHE INTERNAL "")
+    else()
+      set(CURL_USE_OPENSSL ON CACHE INTERNAL "")
+    endif()
+    set(_vb_saved_shared ${BUILD_SHARED_LIBS})
+    set(BUILD_SHARED_LIBS OFF)
+    vb_fetch(curl TAG curl-8_10_1 REPO https://github.com/curl/curl.git)
+    set(BUILD_SHARED_LIBS ${_vb_saved_shared})
+  endif()
+
+  if(NOT TARGET miniz)
+    set(BUILD_EXAMPLES OFF CACHE INTERNAL "")
+    set(BUILD_FUZZERS OFF CACHE INTERNAL "")
+    set(BUILD_TESTS OFF CACHE INTERNAL "")
+    set(INSTALL_PROJECT OFF CACHE INTERNAL "")
+    set(AMALGAMATE_SOURCES OFF CACHE INTERNAL "")
+    vb_fetch(miniz TAG 3.0.2 REPO https://github.com/richgel999/miniz.git)
+  endif()
+endif()
+
+# ===========================================================================
 # doctest — test framework (Phase 0 test target)
 # ===========================================================================
 if(VB_BUILD_TESTS)

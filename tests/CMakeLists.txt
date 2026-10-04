@@ -62,7 +62,8 @@ target_link_libraries(vb_tests
 
 if(VB_BUILD_CLI)
   target_sources(vb_tests PRIVATE unit/dev_cli_test.cpp)
-  target_link_libraries(vb_tests PRIVATE vb_cli_lib)
+  target_sources(vb_tests PRIVATE unit/dev_cli_install_test.cpp)
+  target_link_libraries(vb_tests PRIVATE vb_cli_lib miniz)
 endif()
 
 # TextureAtlas (real texture/atlas system) needs raylib's Image functions,
