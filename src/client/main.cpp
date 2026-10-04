@@ -104,7 +104,6 @@ void print_usage() {
 				 "(dropping back to the menu on failure instead of exiting).\n";
 }
 
-
 // --headless (CI / integration-test smoke path): the same ClientApp the
 // windowed client runs, with render=false -- no menu, GL resources or draws.
 #if defined(VB_WITH_AUTOMATION)

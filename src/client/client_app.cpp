@@ -68,7 +68,7 @@ void ClientApp::begin_connect(bool as_singleplayer) {
 			std::cout << "client: "
 					  << (render ? error_message
 								 : "could not connect to " + connecting_target +
-										 " (bad address, or built without VB_WITH_NET)")
+												 " (bad address, or built without VB_WITH_NET)")
 					  << '\n';
 			state = AppState::kError;
 		} else {
@@ -167,70 +167,70 @@ void ClientApp::enter_playing() {
 	input_seq = 0;
 	// Everything below builds GPU resources; a render=false (headless) app has no GL context.
 	if (render) {
-	chunk_renderer = std::make_unique<vb::render::ChunkRenderer>();
-	// Real texture/atlas system: built once per session, right after the
-	// block registry (S2C_BlockRegistry, already applied by now -- see
-	// client->move_params() above reading back another join-time
-	// message the same way) and every referenced texture's bytes are
-	// available, and before kLoading starts streaming/meshing any chunk
-	// -- so every chunk mesh this session uploads already gets real
-	// atlas UVs from its very first upload, no re-upload-on-atlas-
-	// arrival case to handle. `remote` resolves texture paths against
-	// its already-synced Asset Sync virtual FS; `sp` (--singleplayer)
-	// has no asset sync at all (client + server share one in-process
-	// registry/content pack), so it reads the same
-	// `kSingleplayerContentPack` the integrated server's PackRuntime
-	// loaded from, straight off disk instead.
-	{
-		const vb::render::VirtualFs vfs = remote ? remote->asset_cache.virtual_fs()
-												 : load_textures_from_disk(client->chunk_store().registry(),
-														   kSingleplayerContentPack);
-		vb::render::TextureAtlas atlas =
-				vb::render::TextureAtlas::build(client->chunk_store().registry(), vfs);
-		std::vector<vb::render::AtlasRect> rects;
-		std::vector<Color> averages;
-		rects.reserve(atlas.block_count());
-		averages.reserve(atlas.block_count());
-		for (std::size_t i = 0; i < atlas.block_count(); ++i) {
-			const auto id = static_cast<vb::core::BlockId>(i);
-			rects.push_back(atlas.rect_for(id));
-			averages.push_back(atlas.average_color_for(id));
-		}
-		chunk_renderer->set_atlas(atlas.upload(), std::move(rects), std::move(averages));
-
-		// REMAINING_TASKS.md 6.5's last piece: same join-time, same vfs
-		// -- a block's crack_texture (if any) is synced/on-disk exactly
-		// like its regular texture.
-		crack_atlas = vb::render::CrackAtlas::build(client->chunk_store().registry(), vfs);
-		crack_overlay = std::make_unique<vb::render::CrackOverlay>();
-		crack_overlay->set_texture(crack_atlas.upload());
-	}
-	entity_renderer = std::make_unique<vb::render::EntityRenderer>();
-	// Entity-management follow-up: build any registered kind's real
-	// spritesheet (S2C_EntityKindRegistry.visual) the same session the
-	// block texture atlas above was built -- both are one-shot,
-	// join-time setup reading from the same synced/disk content pack. A
-	// kind that never set `visual = {...}` is untouched, keeping its
-	// flat placeholder billboard exactly as before this existed.
-	{
-		vb::render::VirtualFs entity_vfs = remote
-				? remote->asset_cache.virtual_fs()
-				: load_entity_textures_from_disk(client->entity_kind_registry(), kSingleplayerContentPack);
-		const auto &entity_kinds = client->entity_kind_registry();
-		for (std::size_t i = 0; i < entity_kinds.size(); ++i) {
-			const auto &rec = entity_kinds[i];
-			if (rec.visual) {
-				entity_renderer->set_kind_visual(
-						static_cast<vb::core::EntityKindId>(i + 1), *rec.visual, entity_vfs);
+		chunk_renderer = std::make_unique<vb::render::ChunkRenderer>();
+		// Real texture/atlas system: built once per session, right after the
+		// block registry (S2C_BlockRegistry, already applied by now -- see
+		// client->move_params() above reading back another join-time
+		// message the same way) and every referenced texture's bytes are
+		// available, and before kLoading starts streaming/meshing any chunk
+		// -- so every chunk mesh this session uploads already gets real
+		// atlas UVs from its very first upload, no re-upload-on-atlas-
+		// arrival case to handle. `remote` resolves texture paths against
+		// its already-synced Asset Sync virtual FS; `sp` (--singleplayer)
+		// has no asset sync at all (client + server share one in-process
+		// registry/content pack), so it reads the same
+		// `kSingleplayerContentPack` the integrated server's PackRuntime
+		// loaded from, straight off disk instead.
+		{
+			const vb::render::VirtualFs vfs = remote ? remote->asset_cache.virtual_fs()
+													 : load_textures_from_disk(client->chunk_store().registry(),
+															   kSingleplayerContentPack);
+			vb::render::TextureAtlas atlas =
+					vb::render::TextureAtlas::build(client->chunk_store().registry(), vfs);
+			std::vector<vb::render::AtlasRect> rects;
+			std::vector<Color> averages;
+			rects.reserve(atlas.block_count());
+			averages.reserve(atlas.block_count());
+			for (std::size_t i = 0; i < atlas.block_count(); ++i) {
+				const auto id = static_cast<vb::core::BlockId>(i);
+				rects.push_back(atlas.rect_for(id));
+				averages.push_back(atlas.average_color_for(id));
 			}
+			chunk_renderer->set_atlas(atlas.upload(), std::move(rects), std::move(averages));
+
+			// REMAINING_TASKS.md 6.5's last piece: same join-time, same vfs
+			// -- a block's crack_texture (if any) is synced/on-disk exactly
+			// like its regular texture.
+			crack_atlas = vb::render::CrackAtlas::build(client->chunk_store().registry(), vfs);
+			crack_overlay = std::make_unique<vb::render::CrackOverlay>();
+			crack_overlay->set_texture(crack_atlas.upload());
 		}
-		// Entity-management follow-up: kept for the rest of the session
-		// so sync() can lazily decode a per-instance visual_override's
-		// texture whenever one shows up (unlike the kind visuals above,
-		// an override's owning entity can spawn at any later time, not
-		// just during this one join-time pass).
-		entity_renderer->set_virtual_fs(std::move(entity_vfs));
-	}
+		entity_renderer = std::make_unique<vb::render::EntityRenderer>();
+		// Entity-management follow-up: build any registered kind's real
+		// spritesheet (S2C_EntityKindRegistry.visual) the same session the
+		// block texture atlas above was built -- both are one-shot,
+		// join-time setup reading from the same synced/disk content pack. A
+		// kind that never set `visual = {...}` is untouched, keeping its
+		// flat placeholder billboard exactly as before this existed.
+		{
+			vb::render::VirtualFs entity_vfs = remote
+					? remote->asset_cache.virtual_fs()
+					: load_entity_textures_from_disk(client->entity_kind_registry(), kSingleplayerContentPack);
+			const auto &entity_kinds = client->entity_kind_registry();
+			for (std::size_t i = 0; i < entity_kinds.size(); ++i) {
+				const auto &rec = entity_kinds[i];
+				if (rec.visual) {
+					entity_renderer->set_kind_visual(
+							static_cast<vb::core::EntityKindId>(i + 1), *rec.visual, entity_vfs);
+				}
+			}
+			// Entity-management follow-up: kept for the rest of the session
+			// so sync() can lazily decode a per-instance visual_override's
+			// texture whenever one shows up (unlike the kind visuals above,
+			// an override's owning entity can spawn at any later time, not
+			// just during this one join-time pass).
+			entity_renderer->set_virtual_fs(std::move(entity_vfs));
+		}
 	}
 	mouse_captured = false;
 	chat_log.clear();
@@ -268,13 +268,20 @@ void ClientApp::enter_playing() {
 
 const char *ClientApp::app_state_name(AppState s) {
 	switch (s) {
-		case AppState::kMenu: return "menu";
-		case AppState::kSettings: return "settings";
-		case AppState::kKeybindings: return "keybindings";
-		case AppState::kConnecting: return "connecting";
-		case AppState::kLoading: return "loading";
-		case AppState::kPlaying: return "playing";
-		case AppState::kError: return "error";
+		case AppState::kMenu:
+			return "menu";
+		case AppState::kSettings:
+			return "settings";
+		case AppState::kKeybindings:
+			return "keybindings";
+		case AppState::kConnecting:
+			return "connecting";
+		case AppState::kLoading:
+			return "loading";
+		case AppState::kPlaying:
+			return "playing";
+		case AppState::kError:
+			return "error";
 	}
 	return "unknown";
 }

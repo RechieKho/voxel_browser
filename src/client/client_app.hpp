@@ -234,7 +234,7 @@ private:
 	// same defaults every frame -- a future settings screen would mutate
 	// this instead of inventing a second mechanism.
 	vb::render::MovementBindings movement_bindings{ config.key_forward, config.key_back,
-	config.key_left, config.key_right, config.key_jump, config.key_sprint };
+		config.key_left, config.key_right, config.key_jump, config.key_sprint };
 
 	// HUD chat (spec §5.4): a small scrolling log + an Enter-to-open text
 	// box, plain raygui like MainMenu -- no Lua, no dependency on the pack's
@@ -253,7 +253,6 @@ private:
 	Screenshot screenshot_state_ = Screenshot::kNone;
 	int screenshot_w_ = 0, screenshot_h_ = 0;
 #endif
-
 };
 
 } // namespace vb::client

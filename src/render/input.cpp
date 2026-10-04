@@ -94,8 +94,7 @@ InputFrame SyntheticInput::poll() {
 }
 
 MovementBindings::MovementBindings() :
-		forward(KEY_W), back(KEY_S), left(KEY_A), right(KEY_D), jump(KEY_SPACE),
-		sprint(KEY_LEFT_SHIFT) {}
+		forward(KEY_W), back(KEY_S), left(KEY_A), right(KEY_D), jump(KEY_SPACE), sprint(KEY_LEFT_SHIFT) {}
 
 namespace {
 

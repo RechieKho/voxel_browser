@@ -104,15 +104,20 @@ jobs:
             if "$dist/$exe" --automation stdio </dev/null >/dev/null 2>&1; then
               echo "::error::$exe accepted --automation"; exit 1
             fi
-            if "$dist/$exe" --net-sim lag_ms=1 --version </dev/null >/dev/null 2>&1; then
+            # Not `--version`: that exits 0 before any flag is checked. These are one-shot if accepted.
+            if "$dist/$exe" --net-sim lag_ms=1 --headless --frames 1 --ticks 1 </dev/null >/dev/null 2>&1; then
               echo "::error::$exe accepted --net-sim"; exit 1
             fi
             if "$dist/$exe" --automation tcp </dev/null >/dev/null 2>&1; then
               echo "::error::$exe accepted --automation tcp"; exit 1
             fi
-            if "$dist/$exe" --automation-record /tmp/x.py --version </dev/null >/dev/null 2>&1; then
-              echo "::error::$exe accepted --automation-record"; exit 1
-            fi
+            # Client-only flag (the server has no recorder and ignores it like any unknown flag).
+            case "$exe" in
+              voxel_browser|voxel_browser.exe)
+                if "$dist/$exe" --automation-record /tmp/x.py --headless --frames 1 </dev/null >/dev/null 2>&1; then
+                  echo "::error::$exe accepted --automation-record"; exit 1
+                fi ;;
+            esac
           done
 
       - name: Export binaries
@@ -130,9 +135,19 @@ jobs:
   # pattern can't sweep it into a release.
   e2e:
     runs-on: ubuntu-latest
+    # An ASan build of everything plus a real client/server run is slow; a hung test must not
+    # sit for the 6-hour default (the e2e CTest entry has its own 15-minute TIMEOUT).
+    timeout-minutes: 75
     steps:
       - name: Check out code
         uses: actions/checkout@v4
+
+      # A known interpreter with a working pip (Ubuntu 24.04's system pip refuses to install
+      # without a venv, PEP 668). CMake must find *this* python, so it goes first.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
       - name: Install dependencies
         shell: bash
@@ -162,6 +177,16 @@ jobs:
             -DVB_WITH_COMPRESSION=ON \
             -DVB_WITH_AUTOMATION=ON \
             -DVB_ENABLE_ASAN=ON -DVB_ENABLE_UBSAN=ON
+
+      # CMake silently skips registering the e2e test when its python can't import pytest. A
+      # green run that executed no e2e tests is worse than a red one, so insist it is there.
+      - name: Verify the e2e test is registered
+        shell: bash
+        working-directory: build
+        run: |
+          ctest -N -L e2e
+          ctest -N -L e2e | grep -q "Total Tests: 1" || {
+            echo "::error::the e2e CTest entry was not registered (can the python CMake found import pytest?)"; exit 1; }
 
       - name: Build
         shell: bash

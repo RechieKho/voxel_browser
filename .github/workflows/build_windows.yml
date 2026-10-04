@@ -88,15 +88,20 @@ jobs:
             if "$dist/$exe" --automation stdio </dev/null >/dev/null 2>&1; then
               echo "::error::$exe accepted --automation"; exit 1
             fi
-            if "$dist/$exe" --net-sim lag_ms=1 --version </dev/null >/dev/null 2>&1; then
+            # Not `--version`: that exits 0 before any flag is checked. These are one-shot if accepted.
+            if "$dist/$exe" --net-sim lag_ms=1 --headless --frames 1 --ticks 1 </dev/null >/dev/null 2>&1; then
               echo "::error::$exe accepted --net-sim"; exit 1
             fi
             if "$dist/$exe" --automation tcp </dev/null >/dev/null 2>&1; then
               echo "::error::$exe accepted --automation tcp"; exit 1
             fi
-            if "$dist/$exe" --automation-record /tmp/x.py --version </dev/null >/dev/null 2>&1; then
-              echo "::error::$exe accepted --automation-record"; exit 1
-            fi
+            # Client-only flag (the server has no recorder and ignores it like any unknown flag).
+            case "$exe" in
+              voxel_browser|voxel_browser.exe)
+                if "$dist/$exe" --automation-record /tmp/x.py --headless --frames 1 </dev/null >/dev/null 2>&1; then
+                  echo "::error::$exe accepted --automation-record"; exit 1
+                fi ;;
+            esac
           done
 
       - name: Export binaries
