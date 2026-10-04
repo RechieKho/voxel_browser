@@ -31,6 +31,12 @@ struct Status {
 	explicit operator bool() const { return error.empty(); }
 };
 
+// Quotes `s` as a TOML basic string.
+std::string toml_quote(const std::string &s);
+// Writes `text` to `path` (creating parent dirs) via write-then-rename, so a
+// crash never leaves a truncated file behind.
+Status write_text_atomic(const std::filesystem::path &path, const std::string &text);
+
 // File name of a binary for this platform ("voxel_browser_server[.exe]").
 std::string binary_file_name(Binary which);
 

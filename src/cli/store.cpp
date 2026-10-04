@@ -13,9 +13,6 @@ namespace vb::cli {
 
 namespace fs = std::filesystem;
 
-namespace {
-
-// Quotes `s` as a TOML basic string.
 std::string toml_quote(const std::string &s) {
 	std::string out = "\"";
 	for (const char c : s) {
@@ -31,7 +28,7 @@ std::string toml_quote(const std::string &s) {
 	return out + "\"";
 }
 
-Status write_text(const fs::path &path, const std::string &text) {
+Status write_text_atomic(const fs::path &path, const std::string &text) {
 	std::error_code ec;
 	fs::create_directories(path.parent_path(), ec);
 	if (ec) {
@@ -53,6 +50,8 @@ Status write_text(const fs::path &path, const std::string &text) {
 	}
 	return {};
 }
+
+namespace {
 
 std::optional<fs::path> read_link_target(const fs::path &file) {
 	try {
@@ -97,7 +96,7 @@ Status write_default_version(const Layout &layout, const std::string &name) {
 	tbl.insert_or_assign("default_version", name);
 	std::ostringstream os;
 	os << tbl << "\n";
-	return write_text(layout.cli_toml(), os.str());
+	return write_text_atomic(layout.cli_toml(), os.str());
 }
 
 std::vector<Entry> list_entries(const Layout &layout) {
@@ -209,7 +208,7 @@ Status add_link(const Layout &layout, std::string_view name, const fs::path &bui
 	if (ec || !fs::is_directory(abs, ec)) {
 		return { build_dir.string() + " is not a directory" };
 	}
-	return write_text(layout.link_file(name), "path = " + toml_quote(abs.generic_string()) + "\n");
+	return write_text_atomic(layout.link_file(name), "path = " + toml_quote(abs.generic_string()) + "\n");
 }
 
 Status remove_link(const Layout &layout, std::string_view name) {

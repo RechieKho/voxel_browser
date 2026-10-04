@@ -19,6 +19,7 @@
 #include <mutex>
 #include <random>
 #include <string>
+#include <system_error>
 #include <thread>
 
 #include "vb/assetsync/manifest.hpp"
@@ -84,6 +85,9 @@ void print_usage() {
 				 "  --seed <n>             world seed override (0 = random)\n"
 				 "  --motd <text>          message of the day override\n"
 				 "  --ticks <n>            run n ticks then exit (0 = forever)\n"
+				 "  --stop-file <path>     stop cleanly (saving the world) once this file exists;\n"
+				 "                         checked about once a second (how `vb server stop` works\n"
+				 "                         on Windows, where a detached process gets no signals)\n"
 				 "  --version             print build info and exit\n"
 				 "  --help                show this help\n";
 }
@@ -96,6 +100,10 @@ std::uint64_t random_seed() {
 } // namespace
 
 int main(int argc, char **argv) {
+	// Run under `vb server start` the output goes to a log file, where stdio
+	// would otherwise block-buffer it: joins/leaves would only appear at exit,
+	// defeating `vb server logs -f`. Output here is low-volume, so flush each write.
+	std::cout << std::unitbuf;
 	const vb::core::Args args(argc, argv);
 
 	if (args.has("help", 'h')) {
@@ -118,6 +126,10 @@ int main(int argc, char **argv) {
 	vb::core::apply_cli_overrides(config, args);
 
 	const long long max_ticks = args.int_or("ticks", 0);
+	// Empty = disabled. A stale file from a previous run is the launcher's to
+	// remove (`vb` does) -- deleting it here would make "stop requested" and
+	// "stop honoured" indistinguishable to whoever wrote it.
+	const std::filesystem::path stop_file = args.value_or("stop-file", "");
 	const std::uint64_t seed = config.world_seed != 0 ? config.world_seed : random_seed();
 
 	vb::net::GnsTransport transport;
@@ -445,9 +457,21 @@ int main(int argc, char **argv) {
 		}
 	};
 
+	// Same once-a-second cadence as manifest_check_ticks: a stat() per tick
+	// would be harmless, but a one-second stop latency is fine and cheaper.
+	const long long stop_file_check_ticks =
+			stop_file.empty() ? 0 : std::max<long long>(1, config.tick_rate);
+
 	while (!g_stop.load(std::memory_order_relaxed)) {
 		++tick;
 		session.tick(tick_dt_seconds);
+		if (stop_file_check_ticks > 0 && tick % stop_file_check_ticks == 0) {
+			std::error_code stop_ec;
+			if (std::filesystem::exists(stop_file, stop_ec)) {
+				std::cout << "server: stop file '" << stop_file.string() << "' found, stopping\n";
+				break;
+			}
+		}
 
 		for (const auto &joined : session.take_joins()) {
 			pack_runtime.dispatch_player_join_completed(joined);

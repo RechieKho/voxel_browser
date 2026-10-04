@@ -450,7 +450,7 @@ surface and per-phase task lists: `architecture_spec/dev-cli.md` §11.
       `user_config_dir()`/`VB_HOME`, `vb list/use/which/uninstall/link/launch`.
 - [x] **8.3 — Download & install**: curl + miniz behind `VB_BUILD_CLI`,
       verified atomic install transaction, `vb install/update/prune/doctor`.
-- [ ] **8.4 — Hosting**: engine `--stop-file` (Windows graceful stop) and
+- [x] **8.4 — Hosting**: engine `--stop-file` (Windows graceful stop) and
       client `--content-pack`/`--world-dir` for `--singleplayer`;
       `vb host`, `vb server new/start/stop/status/logs/rm`.
 - [ ] **8.5 — Polish**: `list --remote`, `--json`, `self update`, bootstrap

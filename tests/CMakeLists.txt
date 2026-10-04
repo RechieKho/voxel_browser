@@ -63,6 +63,13 @@ target_link_libraries(vb_tests
 if(VB_BUILD_CLI)
   target_sources(vb_tests PRIVATE unit/dev_cli_test.cpp)
   target_sources(vb_tests PRIVATE unit/dev_cli_install_test.cpp)
+  target_sources(vb_tests PRIVATE unit/dev_cli_host_test.cpp)
+  if(VB_BUILD_SERVER)
+    # Integration tests drive the real server through `vb` (stop file, detach).
+    target_compile_definitions(vb_tests PRIVATE
+      VB_TEST_SERVER_EXE="$<TARGET_FILE:voxel_browser_server>")
+    add_dependencies(vb_tests voxel_browser_server)
+  endif()
   target_link_libraries(vb_tests PRIVATE vb_cli_lib miniz)
 endif()
 

@@ -1,10 +1,14 @@
 #include "vb/cli/commands.hpp"
 
 #include <algorithm>
-#include <functional>
-#include <iostream>
+#include <chrono>
 #include <fstream>
+#include <functional>
+#include <iomanip>
+#include <iostream>
 #include <map>
+#include <set>
+#include <thread>
 #if defined(_WIN32)
 #include <io.h>
 #define VB_ISATTY _isatty
@@ -16,12 +20,14 @@
 #endif
 
 #include "vb/cli/installer.hpp"
+#include "vb/cli/instance.hpp"
 #include "vb/cli/process.hpp"
 #include "vb/cli/release_manifest.hpp"
 #include "vb/cli/source.hpp"
 #include "vb/cli/store.hpp"
 #include "vb/cli/version.hpp"
 #include "vb/core/build_info.hpp"
+#include "vb/core/config.hpp"
 
 namespace vb::cli {
 
@@ -59,6 +65,16 @@ std::pair<std::vector<std::string>, std::vector<std::string>> split_passthrough(
 		return { args, {} };
 	}
 	return { { args.begin(), it }, { it + 1, args.end() } };
+}
+
+// Removes a bare `--flag` from `args`; true when it was present.
+bool take_flag(std::vector<std::string> &args, const std::string &flag) {
+	const auto it = std::find(args.begin(), args.end(), flag);
+	if (it == args.end()) {
+		return false;
+	}
+	args.erase(it);
+	return true;
 }
 
 // Extracts `--version <v>` / `--version=<v>` from `args` (removing it).
@@ -159,9 +175,35 @@ int cmd_which(const Ctx &c, std::vector<std::string> args) {
 	return kExitOk;
 }
 
-int cmd_uninstall(const Ctx &c, const std::vector<std::string> &args) {
+// Refuses (returns a message) when a server instance pins or is running from
+// `version` -- unless the caller passed --force.
+std::string version_in_use_message(const Ctx &c, const std::string &version) {
+	std::string wanted = version;
+	if (const auto v = parse_version(wanted)) {
+		wanted = to_tag(*v);
+	}
+	const auto users = instance_version_users(c.layout);
+	const auto it = users.find(wanted);
+	if (it == users.end() || it->second.empty()) {
+		return {};
+	}
+	std::string names;
+	for (const std::string &n : it->second) {
+		names += (names.empty() ? "" : ", ") + n;
+	}
+	return "'" + wanted + "' is used by server instance(s): " + names +
+			" (stop/repin them, or pass --force to remove it anyway)";
+}
+
+int cmd_uninstall(const Ctx &c, std::vector<std::string> args) {
+	const bool force = take_flag(args, "--force");
 	if (args.size() != 1) {
-		return usage_error(c, "usage: vb uninstall <version>");
+		return usage_error(c, "usage: vb uninstall <version> [--force]");
+	}
+	if (!force) {
+		if (const std::string msg = version_in_use_message(c, args[0]); !msg.empty()) {
+			return failure(c, msg);
+		}
 	}
 	if (const Status s = uninstall(c.layout, args[0]); !s) {
 		return failure(c, s.error);
@@ -181,9 +223,15 @@ int cmd_link(const Ctx &c, const std::vector<std::string> &args) {
 	return kExitOk;
 }
 
-int cmd_unlink(const Ctx &c, const std::vector<std::string> &args) {
+int cmd_unlink(const Ctx &c, std::vector<std::string> args) {
+	const bool force = take_flag(args, "--force");
 	if (args.size() != 1) {
-		return usage_error(c, "usage: vb unlink <name>");
+		return usage_error(c, "usage: vb unlink <name> [--force]");
+	}
+	if (!force) {
+		if (const std::string msg = version_in_use_message(c, args[0]); !msg.empty()) {
+			return failure(c, msg);
+		}
 	}
 	if (const Status s = remove_link(c.layout, args[0]); !s) {
 		return failure(c, s.error);
@@ -331,12 +379,27 @@ int cmd_prune(const Ctx &c, const std::vector<std::string> &args) {
 		}
 		keep = std::stoi(val);
 	}
+	std::set<std::string> in_use;
+	const auto users = instance_version_users(c.layout);
+	for (const auto &[version, who] : users) {
+		if (!who.empty()) {
+			in_use.insert(version);
+		}
+	}
 	std::vector<std::string> removed;
-	if (const Status s = prune_releases(c.layout, keep, removed); !s) {
+	std::vector<std::string> skipped;
+	if (const Status s = prune_releases(c.layout, keep, removed, in_use, &skipped); !s) {
 		return failure(c, s.error);
 	}
 	for (const std::string &name : removed) {
 		c.out << "removed " << name << "\n";
+	}
+	for (const std::string &name : skipped) {
+		std::string names;
+		for (const std::string &n : users.at(name)) {
+			names += (names.empty() ? "" : ", ") + n;
+		}
+		c.out << "kept " << name << " (used by server instance(s): " << names << ")\n";
 	}
 	if (removed.empty()) {
 		c.out << "nothing to prune\n";
@@ -429,9 +492,28 @@ int cmd_launch(const Ctx &c, const std::vector<std::string> &raw) {
 	// them; an explicit --config from the user wins.
 	const bool has_config = std::any_of(passthrough.begin(), passthrough.end(),
 			[](const std::string &a) { return a == "--config" || a.rfind("--config=", 0) == 0; });
+	const auto has_opt = [&](const std::string &name) {
+		return std::any_of(passthrough.begin(), passthrough.end(), [&](const std::string &a) {
+			return a == name || a.rfind(name + "=", 0) == 0;
+		});
+	};
 	std::vector<std::string> args;
 	if (!has_config) {
 		args = { "--config", c.layout.client_toml().string() };
+	}
+	// Singleplayer worlds live in the user's data dir, not in (or next to) the
+	// version they were created with, so they survive uninstall/update.
+	if (!has_opt("--world-dir")) {
+		args.push_back("--world-dir");
+		args.push_back(c.layout.singleplayer_world_dir().string());
+	}
+	// The bundled content/base of *this* version (for a link: the source tree
+	// beside the build dir), whatever the working directory is.
+	if (!has_opt("--content-pack")) {
+		if (const auto pack = resolve_pack("builtin:base", e->root)) {
+			args.push_back("--content-pack");
+			args.push_back(pack->string());
+		}
 	}
 	args.insert(args.end(), passthrough.begin(), passthrough.end());
 	const RunResult r = run_foreground(*bin, args);
@@ -439,6 +521,396 @@ int cmd_launch(const Ctx &c, const std::vector<std::string> &raw) {
 		return failure(c, r.error);
 	}
 	return r.exit_code;
+}
+
+// ---- hosting -----------------------------------------------------------
+
+struct Opts {
+	std::map<std::string, std::string> values;
+	std::set<std::string> flags;
+	std::vector<std::string> positional;
+	std::string error;
+};
+
+// Minimal option parser: `--name value`, `--name=value`, bare flags, positionals.
+Opts parse_opts(const std::vector<std::string> &args, const std::set<std::string> &value_opts,
+		const std::set<std::string> &flag_opts) {
+	Opts o;
+	for (std::size_t i = 0; i < args.size(); ++i) {
+		const std::string &a = args[i];
+		const std::size_t eq = a.find('=');
+		const std::string key = (a.rfind("--", 0) == 0 && eq != std::string::npos) ? a.substr(0, eq) : a;
+		if (value_opts.count(key) != 0) {
+			if (key.size() != a.size()) {
+				o.values[key] = a.substr(eq + 1);
+			} else if (i + 1 < args.size()) {
+				o.values[key] = args[++i];
+			} else {
+				o.error = key + " needs a value";
+				return o;
+			}
+		} else if (flag_opts.count(a) != 0) {
+			o.flags.insert(a);
+		} else if (!a.empty() && a[0] == '-') {
+			o.error = "unknown option '" + a + "'";
+			return o;
+		} else {
+			o.positional.push_back(a);
+		}
+	}
+	return o;
+}
+
+bool parse_port(const std::string &text, std::uint16_t &out) {
+	if (text.empty() || text.size() > 5 || text.find_first_not_of("0123456789") != std::string::npos) {
+		return false;
+	}
+	const int v = std::stoi(text);
+	if (v < 1 || v > 65535) {
+		return false;
+	}
+	out = static_cast<std::uint16_t>(v);
+	return true;
+}
+
+// Pack argument as typed: `builtin:<name>` stays, anything else is a directory
+// made absolute against the current working directory.
+std::string normalise_pack(const std::string &pack) {
+	if (pack.empty() || pack.rfind("builtin:", 0) == 0) {
+		return pack;
+	}
+	std::error_code ec;
+	return std::filesystem::absolute(pack, ec).lexically_normal().string();
+}
+
+int cmd_host(const Ctx &c, const std::vector<std::string> &raw) {
+	auto [rest, extra] = split_passthrough(raw);
+	const Opts o = parse_opts(rest, { "--version", "--port", "--pack" }, {});
+	if (!o.error.empty() || !o.positional.empty()) {
+		return usage_error(c, o.error.empty() ? "unexpected argument '" + o.positional[0] + "' (pass server arguments after `--`)" : o.error);
+	}
+	Overrides ov;
+	if (const auto it = o.values.find("--version"); it != o.values.end()) {
+		ov.version = it->second;
+	}
+	if (const auto it = o.values.find("--pack"); it != o.values.end()) {
+		ov.pack = normalise_pack(it->second);
+	}
+	if (const auto it = o.values.find("--port"); it != o.values.end()) {
+		std::uint16_t port = 0;
+		if (!parse_port(it->second, port)) {
+			return usage_error(c, "--port needs a number from 1 to 65535");
+		}
+		ov.port = port;
+	}
+	ov.extra_args = extra;
+
+	// The "default" instance is created on first use; per-run flags above are
+	// deliberately not saved into it.
+	std::string why;
+	auto inst = load_instance(c.layout, kDefaultInstanceName, &why);
+	if (!inst) {
+		if (const Status s = create_instance(c.layout, kDefaultInstanceName, "default",
+					"builtin:base", std::nullopt);
+				!s) {
+			return failure(c, s.error);
+		}
+		inst = load_instance(c.layout, kDefaultInstanceName, &why);
+		if (!inst) {
+			return failure(c, why);
+		}
+	}
+	const StartResult r = start_instance(c.layout, *inst, ov, true, c.out);
+	if (!r.status) {
+		return failure(c, r.status.error);
+	}
+	return r.exit_code;
+}
+
+std::string format_uptime(std::int64_t seconds) {
+	if (seconds < 0) {
+		seconds = 0;
+	}
+	std::ostringstream os;
+	if (seconds >= 86400) {
+		os << seconds / 86400 << "d " << (seconds % 86400) / 3600 << "h";
+	} else if (seconds >= 3600) {
+		os << seconds / 3600 << "h " << std::setw(2) << std::setfill('0') << (seconds % 3600) / 60 << "m";
+	} else if (seconds >= 60) {
+		os << seconds / 60 << "m " << std::setw(2) << std::setfill('0') << seconds % 60 << "s";
+	} else {
+		os << seconds << "s";
+	}
+	return os.str();
+}
+
+std::string configured_port(const Instance &inst) {
+	auto cfg = vb::core::load_server_config(instance_server_toml(inst).string());
+	return cfg ? std::to_string(cfg->port) : "?";
+}
+
+void print_instance_table(const Ctx &c, const std::vector<Instance> &instances) {
+	std::size_t name_w = 4;
+	std::size_t ver_w = 7;
+	for (const Instance &i : instances) {
+		name_w = std::max(name_w, i.name.size());
+		ver_w = std::max(ver_w, i.version.size());
+	}
+	c.out << std::left << std::setw(static_cast<int>(name_w) + 2) << "NAME"
+		  << std::setw(static_cast<int>(ver_w) + 2) << "VERSION" << std::setw(8) << "PORT"
+		  << "STATE\n";
+	const std::int64_t now = std::chrono::duration_cast<std::chrono::seconds>(
+			std::chrono::system_clock::now().time_since_epoch())
+									 .count();
+	for (const Instance &i : instances) {
+		const auto rec = running_record(i);
+		c.out << std::left << std::setw(static_cast<int>(name_w) + 2) << i.name
+			  << std::setw(static_cast<int>(ver_w) + 2) << i.version << std::setw(8)
+			  << configured_port(i);
+		if (rec) {
+			c.out << "running (pid " << rec->pid << ", up " << format_uptime(now - rec->started_unix)
+				  << ")\n";
+		} else {
+			c.out << "stopped\n";
+		}
+	}
+}
+
+int server_list(const Ctx &c, const std::vector<std::string> &args) {
+	if (!args.empty()) {
+		return usage_error(c, "usage: vb server list");
+	}
+	const auto instances = list_instances(c.layout);
+	if (instances.empty()) {
+		c.out << "no servers yet. `vb host` runs one right away; "
+				 "`vb server new <name>` creates a persistent one.\n";
+		return kExitOk;
+	}
+	print_instance_table(c, instances);
+	return kExitOk;
+}
+
+int server_new(const Ctx &c, const std::vector<std::string> &args) {
+	const Opts o = parse_opts(args, { "--version", "--pack", "--port" }, {});
+	if (!o.error.empty() || o.positional.size() != 1) {
+		return usage_error(c, o.error.empty() ? "usage: vb server new <name> [--version <v>] [--pack <dir>|builtin:<name>] [--port <n>]" : o.error);
+	}
+	std::optional<std::uint16_t> port;
+	if (const auto it = o.values.find("--port"); it != o.values.end()) {
+		std::uint16_t p = 0;
+		if (!parse_port(it->second, p)) {
+			return usage_error(c, "--port needs a number from 1 to 65535");
+		}
+		port = p;
+	}
+	const auto get = [&](const char *k, const char *fallback) {
+		const auto it = o.values.find(k);
+		return it == o.values.end() ? std::string(fallback) : it->second;
+	};
+	const std::string pack = normalise_pack(get("--pack", "builtin:base"));
+	if (const Status s = create_instance(c.layout, o.positional[0], get("--version", "default"),
+				pack, port);
+			!s) {
+		return failure(c, s.error);
+	}
+	const auto inst = load_instance(c.layout, o.positional[0]);
+	c.out << "created server '" << o.positional[0] << "' in " << inst->dir.string()
+		  << "\nstart it with `vb server start " << o.positional[0] << "`\n";
+	return kExitOk;
+}
+
+// Loads the instance named by the single positional argument.
+std::optional<Instance> instance_arg(const Ctx &c, const Opts &o, const char *usage, int &code) {
+	if (!o.error.empty() || o.positional.size() != 1) {
+		code = usage_error(c, o.error.empty() ? usage : o.error);
+		return std::nullopt;
+	}
+	std::string why;
+	auto inst = load_instance(c.layout, o.positional[0], &why);
+	if (!inst) {
+		code = failure(c, why);
+	}
+	return inst;
+}
+
+int server_start(const Ctx &c, const std::vector<std::string> &args) {
+	const Opts o = parse_opts(args, {}, { "--foreground" });
+	int code = kExitOk;
+	const auto inst = instance_arg(c, o, "usage: vb server start <name> [--foreground]", code);
+	if (!inst) {
+		return code;
+	}
+	const bool fg = o.flags.count("--foreground") != 0;
+	const StartResult r = start_instance(c.layout, *inst, {}, fg, c.out);
+	if (!r.status) {
+		return failure(c, r.status.error);
+	}
+	return r.exit_code;
+}
+
+bool parse_seconds(const std::string &text, int &out) {
+	if (text.empty() || text.size() > 5 || text.find_first_not_of("0123456789") != std::string::npos) {
+		return false;
+	}
+	out = std::stoi(text);
+	return true;
+}
+
+int server_stop(const Ctx &c, const std::vector<std::string> &args) {
+	const Opts o = parse_opts(args, { "--timeout" }, { "--kill" });
+	int timeout = 30;
+	if (const auto it = o.values.find("--timeout"); it != o.values.end() &&
+			!parse_seconds(it->second, timeout)) {
+		return usage_error(c, "--timeout needs a number of seconds");
+	}
+	int code = kExitOk;
+	const auto inst = instance_arg(c, o, "usage: vb server stop <name> [--timeout <seconds>] [--kill]", code);
+	if (!inst) {
+		return code;
+	}
+	if (const Status s = stop_instance(*inst, timeout, o.flags.count("--kill") != 0, c.out); !s) {
+		return failure(c, s.error);
+	}
+	return kExitOk;
+}
+
+int server_restart(const Ctx &c, const std::vector<std::string> &args) {
+	const Opts o = parse_opts(args, { "--timeout" }, { "--kill" });
+	int timeout = 30;
+	if (const auto it = o.values.find("--timeout"); it != o.values.end() &&
+			!parse_seconds(it->second, timeout)) {
+		return usage_error(c, "--timeout needs a number of seconds");
+	}
+	int code = kExitOk;
+	const auto inst = instance_arg(c, o, "usage: vb server restart <name> [--timeout <seconds>] [--kill]", code);
+	if (!inst) {
+		return code;
+	}
+	if (const Status s = stop_instance(*inst, timeout, o.flags.count("--kill") != 0, c.out); !s) {
+		return failure(c, s.error);
+	}
+	const StartResult r = start_instance(c.layout, *inst, {}, false, c.out);
+	return r.status ? kExitOk : failure(c, r.status.error);
+}
+
+int server_status(const Ctx &c, const std::vector<std::string> &args) {
+	const Opts o = parse_opts(args, {}, {});
+	if (!o.error.empty() || o.positional.size() > 1) {
+		return usage_error(c, o.error.empty() ? "usage: vb server status [<name>]" : o.error);
+	}
+	if (o.positional.empty()) {
+		return server_list(c, {});
+	}
+	std::string why;
+	const auto inst = load_instance(c.layout, o.positional[0], &why);
+	if (!inst) {
+		return failure(c, why);
+	}
+	const auto rec = running_record(*inst);
+	const std::int64_t now = std::chrono::duration_cast<std::chrono::seconds>(
+			std::chrono::system_clock::now().time_since_epoch())
+									 .count();
+	c.out << "name:    " << inst->name << "\n"
+		  << "state:   ";
+	if (rec) {
+		c.out << "running (pid " << rec->pid << ", up " << format_uptime(now - rec->started_unix)
+			  << ")\n";
+	} else {
+		c.out << "stopped\n";
+	}
+	c.out << "version: " << inst->version << (rec ? " (running " + rec->version + ")" : "") << "\n"
+		  << "pack:    " << inst->pack << "\n"
+		  << "port:    " << configured_port(*inst) << "\n"
+		  << "dir:     " << inst->dir.string() << "\n"
+		  << "log:     " << instance_log_file(*inst).string() << "\n";
+	if (const std::string tail = tail_log(*inst, 5); !tail.empty()) {
+		c.out << "recent log:\n"
+			  << tail;
+	}
+	return kExitOk;
+}
+
+int server_logs(const Ctx &c, const std::vector<std::string> &args) {
+	const Opts o = parse_opts(args, { "-n", "--lines" }, { "-f", "--follow" });
+	int code = kExitOk;
+	const auto inst = instance_arg(c, o, "usage: vb server logs <name> [-f] [-n <lines>]", code);
+	if (!inst) {
+		return code;
+	}
+	int lines = 50;
+	for (const char *key : { "-n", "--lines" }) {
+		if (const auto it = o.values.find(key); it != o.values.end() &&
+				!parse_seconds(it->second, lines)) {
+			return usage_error(c, "-n needs a number of lines");
+		}
+	}
+	c.out << tail_log(*inst, lines) << std::flush;
+	if (o.flags.count("-f") == 0 && o.flags.count("--follow") == 0) {
+		return kExitOk;
+	}
+	// Follow until interrupted (Ctrl+C). Re-opened each round so a log that is
+	// rotated or truncated underneath us is picked up from its start.
+	std::error_code ec;
+	std::uintmax_t pos = std::filesystem::exists(instance_log_file(*inst), ec)
+			? std::filesystem::file_size(instance_log_file(*inst), ec)
+			: 0;
+	while (true) {
+		std::this_thread::sleep_for(std::chrono::milliseconds(250));
+		const std::uintmax_t size = std::filesystem::exists(instance_log_file(*inst), ec)
+				? std::filesystem::file_size(instance_log_file(*inst), ec)
+				: 0;
+		if (size < pos) {
+			pos = 0;
+		}
+		if (size > pos) {
+			std::ifstream f(instance_log_file(*inst), std::ios::binary);
+			f.seekg(static_cast<std::streamoff>(pos));
+			c.out << f.rdbuf() << std::flush;
+			pos = size;
+		}
+	}
+}
+
+int server_rm(const Ctx &c, const std::vector<std::string> &args) {
+	const Opts o = parse_opts(args, {}, { "--keep-world", "--yes" });
+	int code = kExitOk;
+	const auto inst = instance_arg(c, o, "usage: vb server rm <name> [--keep-world] [--yes]", code);
+	if (!inst) {
+		return code;
+	}
+	const bool keep_world = o.flags.count("--keep-world") != 0;
+	std::error_code ec;
+	if (!keep_world && !o.flags.count("--yes") &&
+			std::filesystem::exists(instance_world_dir(*inst), ec)) {
+		return failure(c, "'" + inst->name + "' has a saved world (" + instance_world_dir(*inst).string() + "); pass --yes to delete it too, or --keep-world to keep it");
+	}
+	if (const Status s = remove_instance(c.layout, inst->name, keep_world); !s) {
+		return failure(c, s.error);
+	}
+	c.out << "removed server '" << inst->name << "'" << (keep_world ? " (world kept)" : "") << "\n";
+	return kExitOk;
+}
+
+int cmd_server(const Ctx &c, const std::vector<std::string> &args) {
+	static const std::map<std::string, std::function<int(const Ctx &, const std::vector<std::string> &)>>
+			sub = {
+				{ "new", server_new },
+				{ "list", server_list },
+				{ "start", server_start },
+				{ "stop", server_stop },
+				{ "restart", server_restart },
+				{ "status", server_status },
+				{ "logs", server_logs },
+				{ "rm", server_rm },
+			};
+	if (args.empty()) {
+		return usage_error(c, "usage: vb server <new|list|start|stop|restart|status|logs|rm> ...");
+	}
+	const auto it = sub.find(args[0]);
+	if (it == sub.end()) {
+		return usage_error(c, "unknown server command '" + args[0] + "'");
+	}
+	return it->second(c, std::vector<std::string>(args.begin() + 1, args.end()));
 }
 
 const std::map<std::string, Command> &commands() {
@@ -457,15 +929,27 @@ const std::map<std::string, Command> &commands() {
 							return cmd_which(c, a);
 						} } },
 		{ "uninstall",
-				{ "uninstall <version>", "remove an installed version (or a link)",
-						cmd_uninstall } },
+				{ "uninstall <version> [--force]", "remove an installed version (or a link)",
+						[](const Ctx &c, const std::vector<std::string> &a) {
+							return cmd_uninstall(c, a);
+						} } },
 		{ "link",
 				{ "link <name> <build-dir>", "register a local build as a pseudo-version",
 						cmd_link } },
-		{ "unlink", { "unlink <name>", "remove a link", cmd_unlink } },
+		{ "unlink",
+				{ "unlink <name> [--force]", "remove a link",
+						[](const Ctx &c, const std::vector<std::string> &a) {
+							return cmd_unlink(c, a);
+						} } },
 		{ "launch",
 				{ "launch [--version <v>] [-- client args...]", "start the client",
 						cmd_launch } },
+		{ "host",
+				{ "host [--version v] [--port n] [--pack dir] [-- server args...]",
+						"run a server in the foreground (Ctrl+C stops it)", cmd_host } },
+		{ "server",
+				{ "server <new|list|start|stop|restart|status|logs|rm> ...",
+						"manage named, background server instances", cmd_server } },
 		{ "paths", { "paths", "print the data/config/cache directories", cmd_paths } },
 	};
 	return table;

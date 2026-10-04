@@ -1,8 +1,9 @@
 #pragma once
 
+#include <set>
 #include <string>
-#include <vector>
 #include <string_view>
+#include <vector>
 
 #include "vb/cli/layout.hpp"
 #include "vb/cli/release_manifest.hpp"
@@ -32,8 +33,11 @@ struct InstallResult {
 InstallResult install_release(const Layout &layout, Source &source,
 		std::string_view version_or_latest, const InstallOptions &opts);
 
-// Removes all but the `keep` newest installed releases, never the default.
-// Returns the removed tags.
-Status prune_releases(const Layout &layout, int keep, std::vector<std::string> &removed);
+// Removes all but the `keep` newest installed releases, never the default and
+// never a tag in `protected_versions` (in use by a server instance). Returns the
+// removed tags; tags spared only because they are protected go to `skipped`.
+Status prune_releases(const Layout &layout, int keep, std::vector<std::string> &removed,
+		const std::set<std::string> &protected_versions = {},
+		std::vector<std::string> *skipped = nullptr);
 
 } // namespace vb::cli

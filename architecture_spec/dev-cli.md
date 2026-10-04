@@ -259,9 +259,10 @@ up to `--timeout` (default 30 s) for exit before offering `--kill`.
 
 ### 6.4 Process tracking
 
-`run/server.pid` holds `pid` + process start time + executable path. A pid
-is "ours" only if all three still match (guards against pid reuse after a
-reboot). Stale `run/` dirs are cleaned on the next `status`/`start`.
+`run/server.pid` holds `pid` + a platform start token (process start time) +
+the resolved version. A pid is "ours" only if the token still matches (guards
+against pid reuse after a reboot). Stale `run/` files are cleaned on the next
+`status`/`start`/`stop`.
 
 ### 6.5 Status (later)
 
@@ -414,19 +415,43 @@ Nothing can be downloaded reliably until this lands.
 
 ### 8.4 — Hosting (L)
 
-- [ ] Engine: server `--stop-file` (§6.3), with a unit/integration test that
-      the world is saved on file-triggered stop.
-- [ ] Engine: client `--content-pack` / `--world-dir` for `--singleplayer`
+- [x] Engine: server `--stop-file` (§6.3), with an integration test that a
+      detached server stops cleanly on the file alone (no signal) and runs its
+      shutdown/save path.
+- [x] Engine: client `--content-pack` / `--world-dir` for `--singleplayer`
       and exe-relative fallback (§6.2); `vb launch` passes
-      `<data>/worlds/singleplayer`.
-- [ ] `process.hpp` POSIX + Win32: spawn foreground, spawn detached with log
+      `<data>/worlds/singleplayer` and the version's own `content/base`.
+- [x] `process.hpp` POSIX + Win32: spawn foreground, spawn detached with log
       redirect, graceful stop, liveness with pid-reuse guard.
-- [ ] `instance.toml`; `vb server new/list/start/stop/restart/rm/logs`
+- [x] `instance.toml`; `vb server new/list/start/stop/restart/status/logs/rm`
       (`-f` follow), `vb host`.
-- [ ] Pre-launch checks: config validation via `load_server_config`, UDP
-      port free, pinned version installed (offer `vb install <v>`).
-- [ ] Uninstall/prune respect pinned + running instances.
-- [ ] Integration tests per §10 on all three OSes.
+- [x] Pre-launch checks: config validation via `load_server_config`, UDP
+      port free, pinned version installed (suggests `vb install <v>`).
+- [x] Uninstall/prune respect pinned + running instances (`--force` on
+      `uninstall`/`unlink` overrides).
+- [x] Integration tests per §10 (Linux verified locally).
+- Notes / deviations from the design above:
+  - The run record (`run/server.pid`) stores pid + **start token** + start
+    time + resolved version, not the executable path: the start token (Linux
+    `/proc/<pid>/stat` starttime, macOS `kp_proc.p_starttime`, Windows process
+    creation time) is what actually defeats pid reuse.
+  - `vb server stop` writes the stop file *and* sends SIGTERM on POSIX, so a
+    server built before `--stop-file` existed still stops gracefully there; on
+    Windows such an old server only stops via `--kill`.
+  - `vb` forwards SIGINT/SIGTERM/SIGHUP to a foreground server while it waits,
+    so `kill <vb>` or a closing terminal still saves the world.
+  - Detached servers are started with a double fork + `setsid`; a per-instance
+    `run/start.lock` serialises concurrent `start`s.
+  - `builtin:<name>` packs resolve to `<version>/content/<name>`, then
+    `<version>/../content/<name>` so a linked in-tree `build/` finds the source
+    tree's `content/`.
+  - `vb server rm` refuses to delete a saved world without `--yes`
+    (`--keep-world` keeps `world/` and everything else goes).
+  - The server now flushes stdout after every write (`std::unitbuf`);
+    otherwise a detached server's log only filled at exit.
+  - Only Linux was exercised locally. The Windows (`CreateProcessW`
+    DETACHED_PROCESS, `GetProcessTimes`, Winsock port probe) and macOS
+    (`sysctl` start time) code is compiled by CI only.
 - **Exit:** `vb host` is a one-command server; `vb server start foo` survives
   the terminal closing; `vb server stop foo` produces a saved world on
   Linux, macOS and Windows.

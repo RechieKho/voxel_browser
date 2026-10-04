@@ -218,7 +218,8 @@ InstallResult install_release(const Layout &layout, Source &source,
 	return res;
 }
 
-Status prune_releases(const Layout &layout, int keep, std::vector<std::string> &removed) {
+Status prune_releases(const Layout &layout, int keep, std::vector<std::string> &removed,
+		const std::set<std::string> &protected_versions, std::vector<std::string> *skipped) {
 	if (keep < 0) {
 		return { "--keep must be >= 0" };
 	}
@@ -232,6 +233,12 @@ Status prune_releases(const Layout &layout, int keep, std::vector<std::string> &
 			continue;
 		}
 		if (++seen <= keep || e.is_default) {
+			continue;
+		}
+		if (protected_versions.count(e.name) != 0) {
+			if (skipped != nullptr) {
+				skipped->push_back(e.name);
+			}
 			continue;
 		}
 		std::error_code ec;

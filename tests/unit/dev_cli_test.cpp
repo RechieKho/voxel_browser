@@ -219,14 +219,15 @@ TEST_CASE("launch runs the client with the shared client.toml and passthrough ar
 	std::ifstream in(record);
 	std::stringstream got;
 	got << in.rdbuf();
-	CHECK(got.str() == "--config\n" + l.client_toml().string() + "\n--headless\n--frames\n2\n");
+	// (the linked build dir has no content/ beside it, so no --content-pack here)
+	CHECK(got.str() == "--config\n" + l.client_toml().string() + "\n--world-dir\n" + l.singleplayer_world_dir().string() + "\n--headless\n--frames\n2\n");
 
 	// Explicit --config wins; a missing binary is a clean failure.
 	CHECK(run_vb(l, { "launch", "--", "--config", "mine.toml" }).code == 7);
 	std::ifstream in2(record);
 	std::stringstream got2;
 	got2 << in2.rdbuf();
-	CHECK(got2.str() == "--config\nmine.toml\n");
+	CHECK(got2.str() == "--world-dir\n" + l.singleplayer_world_dir().string() + "\n--config\nmine.toml\n");
 	CHECK(run_vb(l, { "launch", "stray" }).code == vb::cli::kExitUsage);
 }
 #endif

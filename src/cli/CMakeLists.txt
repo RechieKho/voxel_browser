@@ -4,8 +4,10 @@
 add_library(vb_cli_lib STATIC
   commands.cpp
   installer.cpp
+  instance.cpp
   layout.cpp
   lock.cpp
+  portcheck.cpp
   process.cpp
   release_manifest.cpp
   source.cpp
@@ -30,6 +32,10 @@ target_link_libraries(vb_cli_lib
 add_executable(vb main.cpp)
 target_link_libraries(vb PRIVATE vb_cli_lib vb_warnings vb_sanitizers)
 set_target_properties(vb PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+
+if(WIN32)
+  target_link_libraries(vb_cli_lib PRIVATE ws2_32) # portcheck.cpp
+endif()
 
 # miniz's own include dir is not SYSTEM; keep -Werror away from third-party code.
 get_target_property(_vb_miniz_inc miniz INTERFACE_INCLUDE_DIRECTORIES)

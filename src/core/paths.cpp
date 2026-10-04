@@ -1,6 +1,7 @@
 #include "vb/core/paths.hpp"
 
 #include <cstdlib>
+#include <system_error>
 
 namespace vb::core {
 
@@ -89,6 +90,20 @@ std::filesystem::path user_cache_dir() {
 	std::filesystem::path home = env_path("HOME");
 	return home / ".cache" / "voxel_browser";
 #endif
+}
+
+std::filesystem::path resolve_beside_program(const std::filesystem::path &relative,
+		const std::filesystem::path &program) {
+	std::error_code ec;
+	if (std::filesystem::exists(relative, ec) || program.empty()) {
+		return relative;
+	}
+	const std::filesystem::path beside =
+			std::filesystem::absolute(program, ec).parent_path() / relative;
+	if (!ec && std::filesystem::exists(beside, ec)) {
+		return beside;
+	}
+	return relative;
 }
 
 } // namespace vb::core

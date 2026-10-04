@@ -74,6 +74,9 @@ void print_usage() {
 				 "  --render-distance <n>  view distance override (chunks)\n"
 				 "  --asset-cache-dir <path>  asset cache directory override\n"
 				 "  --singleplayer    run an in-process server and join it\n"
+				 "  --content-pack <dir>  singleplayer: content pack to load (default content/base,\n"
+				 "                        else <exe dir>/content/base)\n"
+				 "  --world-dir <dir>     singleplayer: where the world is saved (default world_singleplayer)\n"
 				 "  --headless        run without a window (no rendering, skips the menu)\n"
 				 "  --frames <n>      headless: run n frames then exit (default 3)\n"
 				 "  --version        print build info and exit\n"
@@ -133,7 +136,12 @@ vb::net::HandshakeServerHost sp_server_host(std::uint64_t seed) {
 
 // Default content pack --singleplayer loads (matches server.toml.example's
 // own default) -- there's no client-side config for this yet, so it's fixed.
-constexpr const char *kSingleplayerContentPack = "content/base";
+//
+// `--content-pack <dir>` overrides it, and when the default isn't found
+// relative to the working directory it falls back to `<exe dir>/content/base`
+// (set once at the top of main(), before anything reads it) so an installed
+// client works from any directory -- `vb launch` relies on that.
+std::string g_singleplayer_content_pack = "content/base";
 
 // Phase 7.6 landed world persistence for the dedicated server only
 // (RegionStore wired into src/server/main.cpp) -- --singleplayer's
@@ -142,7 +150,7 @@ constexpr const char *kSingleplayerContentPack = "content/base";
 // regenerated from scratch, including any placed/broken blocks, on the next
 // launch). Fixed the same way the dedicated server's own persist_world
 // default works: a fixed relative directory (no client.toml surface for this
-// yet, same "hardcoded, not configurable" posture kSingleplayerContentPack
+// yet, same "hardcoded, not configurable" posture g_singleplayer_content_pack
 // already has above), distinct from a dedicated server's own default "world"
 // dir so running both from the same working directory never collide.
 // Deliberately not scoped per-seed: a dedicated server's own world_dir isn't
@@ -151,15 +159,18 @@ constexpr const char *kSingleplayerContentPack = "content/base";
 // this same directory for any chunk already edited, regenerating the rest
 // with the new seed -- identical in spirit to how a dedicated server behaves
 // if its own world_seed config changes with saved chunks already on disk.
-constexpr const char *kSingleplayerWorldDir = "world_singleplayer";
+//
+// `--world-dir <dir>` overrides it (`vb launch` points it at a per-user
+// directory so worlds outlive the installed version that created them).
+std::string g_singleplayer_world_dir = "world_singleplayer";
 
 vb::script::PackRuntime make_singleplayer_pack_runtime(
 		vb::net::Transport &transport, vb::world::BlockRegistry &registry) {
 	vb::script::PackRuntime rt(transport, registry,
-			std::filesystem::path(kSingleplayerContentPack) / "storage.json");
-	if (!vb::script::load_content_pack(rt, kSingleplayerContentPack)) {
+			std::filesystem::path(g_singleplayer_content_pack) / "storage.json");
+	if (!vb::script::load_content_pack(rt, g_singleplayer_content_pack)) {
 		std::cerr << "client: singleplayer content pack '"
-				  << kSingleplayerContentPack << "' failed to load -- "
+				  << g_singleplayer_content_pack << "' failed to load -- "
 				  << "running with the hardcoded base block set only\n";
 	}
 	rt.freeze();
@@ -352,9 +363,9 @@ struct Singleplayer {
 		// Phase 7.6 follow-up: mirrors src/server/main.cpp's own
 		// region_store construction -- unlike the dedicated server there's no
 		// persist_world config toggle to check here yet (no client.toml
-		// surface for it, same fixed-default posture kSingleplayerWorldDir's
+		// surface for it, same fixed-default posture g_singleplayer_world_dir's
 		// own comment already has).
-		region_store = std::make_unique<vb::world::RegionStore>(kSingleplayerWorldDir);
+		region_store = std::make_unique<vb::world::RegionStore>(g_singleplayer_world_dir);
 
 		auto replicator = std::make_unique<vb::net::WorldReplicator>(
 				world, pool, registry, view_distance, 3);
@@ -435,7 +446,7 @@ struct Singleplayer {
 	// only ever reach disk in the final save_all_dirty() the destructor
 	// above does, e.g. never for a session that crashes instead of exiting
 	// cleanly. No client.toml surface to configure this yet, same
-	// hardcoded-default posture as kSingleplayerWorldDir itself.
+	// hardcoded-default posture as g_singleplayer_world_dir itself.
 	static constexpr double kAutosaveIntervalSeconds = 60.0;
 	double autosave_accum_ = 0.0;
 
@@ -855,6 +866,16 @@ int main(int argc, char **argv) {
 		return EXIT_SUCCESS;
 	}
 
+	// An explicit --content-pack is taken literally; the default also looks
+	// beside the executable (see g_singleplayer_content_pack's comment).
+	if (const auto pack = args.value("content-pack"); pack && !pack->empty()) {
+		g_singleplayer_content_pack = *pack;
+	} else {
+		g_singleplayer_content_pack =
+				vb::core::resolve_beside_program(g_singleplayer_content_pack, args.program()).string();
+	}
+	g_singleplayer_world_dir = args.value_or("world-dir", g_singleplayer_world_dir);
+
 	const std::string config_path = args.value_or("config", "client.toml");
 	auto loaded = vb::core::load_client_config(config_path);
 	if (!loaded) {
@@ -1072,7 +1093,7 @@ int main(int argc, char **argv) {
 		// multiplayer connection; `--singleplayer` never asset-syncs (no
 		// PackRuntime/manifest on that in-process path, REMAINING_TASKS.md
 		// 4.3), so it instead reads `ui/*.lua` directly off disk from the
-		// same `kSingleplayerContentPack` the integrated server's PackRuntime
+		// same `g_singleplayer_content_pack` the integrated server's PackRuntime
 		// already loads (client and server share one machine/filesystem
 		// there, so there's nothing to "sync") -- otherwise the HUD below
 		// (and every other Lua-defined screen) would silently never load in
@@ -1082,7 +1103,7 @@ int main(int argc, char **argv) {
 		std::vector<std::pair<std::string, std::string>> ui_sources;
 		if (connecting_singleplayer) {
 			const std::filesystem::path ui_dir =
-					std::filesystem::path(kSingleplayerContentPack) / "ui";
+					std::filesystem::path(g_singleplayer_content_pack) / "ui";
 			std::error_code ec;
 			if (std::filesystem::is_directory(ui_dir, ec)) {
 				for (const auto &entry : std::filesystem::directory_iterator(ui_dir, ec)) {
@@ -1143,12 +1164,12 @@ int main(int argc, char **argv) {
 		// its already-synced Asset Sync virtual FS; `sp` (--singleplayer)
 		// has no asset sync at all (client + server share one in-process
 		// registry/content pack), so it reads the same
-		// `kSingleplayerContentPack` the integrated server's PackRuntime
+		// `g_singleplayer_content_pack` the integrated server's PackRuntime
 		// loaded from, straight off disk instead.
 		{
 			const vb::render::VirtualFs vfs = remote ? remote->asset_cache.virtual_fs()
 													 : load_textures_from_disk(client->chunk_store().registry(),
-															   kSingleplayerContentPack);
+															   g_singleplayer_content_pack);
 			vb::render::TextureAtlas atlas =
 					vb::render::TextureAtlas::build(client->chunk_store().registry(), vfs);
 			std::vector<vb::render::AtlasRect> rects;
@@ -1179,7 +1200,7 @@ int main(int argc, char **argv) {
 		{
 			vb::render::VirtualFs entity_vfs = remote
 					? remote->asset_cache.virtual_fs()
-					: load_entity_textures_from_disk(client->entity_kind_registry(), kSingleplayerContentPack);
+					: load_entity_textures_from_disk(client->entity_kind_registry(), g_singleplayer_content_pack);
 			const auto &entity_kinds = client->entity_kind_registry();
 			for (std::size_t i = 0; i < entity_kinds.size(); ++i) {
 				const auto &rec = entity_kinds[i];
