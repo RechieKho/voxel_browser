@@ -40,6 +40,7 @@
 #include "vb/cli/watch.hpp"
 #include "vb/core/build_info.hpp"
 #include "vb/core/config.hpp"
+#include "vb/core/paths.hpp"
 #include "vb/core/version.hpp"
 
 namespace vb::cli {
@@ -1171,8 +1172,8 @@ std::filesystem::path find_executable(const std::string &name) {
 	if (name.find('/') != std::string::npos || name.find('\\') != std::string::npos) {
 		return name;
 	}
-	const char *path_env = std::getenv("PATH");
-	if (path_env == nullptr) {
+	const auto path_env = vb::core::get_env("PATH");
+	if (!path_env) {
 		return {};
 	}
 #if defined(_WIN32)
@@ -1182,7 +1183,7 @@ std::filesystem::path find_executable(const std::string &name) {
 	const char sep = ':';
 	const std::vector<std::string> suffixes = { "" };
 #endif
-	std::string rest = path_env;
+	std::string rest = *path_env;
 	std::size_t pos = 0;
 	while (pos <= rest.size()) {
 		std::size_t end = rest.find(sep, pos);
@@ -1205,9 +1206,9 @@ std::filesystem::path find_executable(const std::string &name) {
 // $VISUAL / $EDITOR (which may carry arguments: "code --wait"), else a default.
 std::vector<std::string> editor_command() {
 	for (const char *var : { "VISUAL", "EDITOR" }) {
-		if (const char *v = std::getenv(var); v != nullptr && *v != '\0') {
+		if (const auto v = vb::core::get_env(var); v && !v->empty()) {
 			std::vector<std::string> parts;
-			std::istringstream in(v);
+			std::istringstream in(*v);
 			for (std::string w; in >> w;) {
 				parts.push_back(w);
 			}
@@ -1341,8 +1342,8 @@ int server_service(const Ctx &c, const std::vector<std::string> &args) {
 	}
 	spec.instance_dir = inst->dir;
 	spec.log_file = instance_log_file(*inst);
-	if (const char *home = std::getenv("VB_HOME"); home != nullptr && *home != '\0') {
-		spec.vb_home = home; // the service must see the same data directory vb does
+	if (const auto home = vb::core::get_env("VB_HOME"); home && !home->empty()) {
+		spec.vb_home = *home; // the service must see the same data directory vb does
 	}
 	c.out << render_service(kind, spec);
 	c.err << service_install_hint(kind, spec);
@@ -1443,8 +1444,8 @@ int cmd_self(const Ctx &c, std::vector<std::string> args) {
 }
 
 bool dir_on_path(const std::filesystem::path &dir) {
-	const char *path_env = std::getenv("PATH");
-	if (path_env == nullptr) {
+	const auto path_env = vb::core::get_env("PATH");
+	if (!path_env) {
 		return false;
 	}
 #if defined(_WIN32)
@@ -1452,7 +1453,7 @@ bool dir_on_path(const std::filesystem::path &dir) {
 #else
 	const char sep = ':';
 #endif
-	std::string rest = path_env;
+	std::string rest = *path_env;
 	std::size_t pos = 0;
 	while (pos <= rest.size()) {
 		std::size_t end = rest.find(sep, pos);

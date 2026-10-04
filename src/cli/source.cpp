@@ -13,6 +13,7 @@
 #include <toml++/toml.hpp>
 
 #include "vb/cli/version.hpp"
+#include "vb/core/paths.hpp"
 
 namespace vb::cli {
 
@@ -443,8 +444,8 @@ std::unique_ptr<Source> make_source(std::string_view spec, std::string *error) {
 }
 
 std::string configured_source_spec(const Layout &layout) {
-	if (const char *env = std::getenv("VB_SOURCE"); env != nullptr && *env != '\0') {
-		return env;
+	if (const auto env = vb::core::get_env("VB_SOURCE"); env && !env->empty()) {
+		return *env;
 	}
 	try {
 		const toml::table tbl = toml::parse_file(layout.cli_toml().string());

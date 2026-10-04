@@ -1,6 +1,8 @@
 #pragma once
 
 #include <filesystem>
+#include <optional>
+#include <string>
 
 // OS-appropriate user directories. Small and dependency-free -- lives in
 // vb_core proper rather than any single subsystem.
@@ -29,6 +31,12 @@ std::filesystem::path user_config_dir();
 //   macOS:   ~/Library/Caches/voxel_browser
 //   other:   $XDG_CACHE_HOME/voxel_browser or ~/.cache/voxel_browser
 std::filesystem::path user_cache_dir();
+
+// Value of the environment variable `name`; nullopt when unset. Empty strings
+// are returned as such (callers that treat "" as unset check for it). Uses
+// _dupenv_s on Windows, where plain getenv draws warning C4996 (an error
+// under /WX).
+std::optional<std::string> get_env(const char *name);
 
 // `relative` unchanged when it exists relative to the working directory;
 // otherwise `<directory of program>/<relative>` when that exists; otherwise

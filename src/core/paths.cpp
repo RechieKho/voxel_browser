@@ -5,22 +5,27 @@
 
 namespace vb::core {
 
-namespace {
-
-std::filesystem::path env_path(const char *name) {
+std::optional<std::string> get_env(const char *name) {
 #if defined(_WIN32)
 	std::size_t len = 0;
 	char *buf = nullptr;
 	if (_dupenv_s(&buf, &len, name) == 0 && buf != nullptr) {
-		std::filesystem::path p(buf);
+		std::string value(buf);
 		std::free(buf);
-		return p;
+		return value;
 	}
-	return {};
+	return std::nullopt;
 #else
 	const char *v = std::getenv(name);
-	return v != nullptr ? std::filesystem::path(v) : std::filesystem::path{};
+	return v != nullptr ? std::optional<std::string>(v) : std::nullopt;
 #endif
+}
+
+namespace {
+
+std::filesystem::path env_path(const char *name) {
+	const auto v = get_env(name);
+	return v ? std::filesystem::path(*v) : std::filesystem::path{};
 }
 
 std::filesystem::path vb_home() { return env_path("VB_HOME"); }
