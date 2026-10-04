@@ -16,6 +16,7 @@ extern "C" {
 
 #if !defined(_WIN32)
 #include <sys/stat.h>
+#include <unistd.h> // getpid (not pulled in transitively on macOS)
 #endif
 
 #include "vb/cli/commands.hpp"
