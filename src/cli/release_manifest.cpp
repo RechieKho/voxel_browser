@@ -40,7 +40,7 @@ Status parse_manifest(std::string_view text, ReleaseManifest &out) {
 	m.schema = tbl["schema"].value_or(0);
 	if (m.schema != 1) {
 		return { "release.toml: unsupported schema " + std::to_string(m.schema) +
-				" (this vb understands 1; update vb)" };
+			" (this vb understands 1; update vb)" };
 	}
 	m.version = tbl["version"].value_or(std::string());
 	const auto v = parse_version(m.version);

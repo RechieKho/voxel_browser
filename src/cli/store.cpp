@@ -17,12 +17,24 @@ std::string toml_quote(const std::string &s) {
 	std::string out = "\"";
 	for (const char c : s) {
 		switch (c) {
-		case '\\': out += "\\\\"; break;
-		case '"': out += "\\\""; break;
-		case '\n': out += "\\n"; break;
-		case '\r': out += "\\r"; break;
-		case '\t': out += "\\t"; break;
-		default: out += c; break;
+			case '\\':
+				out += "\\\\";
+				break;
+			case '"':
+				out += "\\\"";
+				break;
+			case '\n':
+				out += "\\n";
+				break;
+			case '\r':
+				out += "\\r";
+				break;
+			case '\t':
+				out += "\\t";
+				break;
+			default:
+				out += c;
+				break;
 		}
 	}
 	return out + "\"";
@@ -200,8 +212,8 @@ std::optional<fs::path> find_binary(const Entry &entry, Binary which) {
 Status add_link(const Layout &layout, std::string_view name, const fs::path &build_dir) {
 	if (!is_valid_link_name(name)) {
 		return { "invalid link name '" + std::string(name) +
-				"' (use lowercase letters, digits, '_' or '-'; it must start with a letter "
-				"and must not look like a version)" };
+			"' (use lowercase letters, digits, '_' or '-'; it must start with a letter "
+			"and must not look like a version)" };
 	}
 	std::error_code ec;
 	const fs::path abs = fs::weakly_canonical(fs::absolute(build_dir, ec), ec);

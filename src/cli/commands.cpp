@@ -249,8 +249,7 @@ int cmd_which(const Ctx &c, std::vector<std::string> args) {
 	}
 	const auto bin = find_binary(*e, which);
 	if (!bin) {
-		return failure(c, e->name + " has no " + binary_file_name(which) + " in " +
-				e->root.string());
+		return failure(c, e->name + " has no " + binary_file_name(which) + " in " + e->root.string());
 	}
 	if (as_json) {
 		print_json(c, { { "version", e->name }, { "kind", which == Binary::Server ? "server" : "client" }, { "path", bin->string() } });
@@ -551,8 +550,7 @@ int cmd_doctor(const Ctx &c, const std::vector<std::string> &args) {
 		}
 		const bool client = find_binary(e, Binary::Client).has_value();
 		const bool server = find_binary(e, Binary::Server).has_value();
-		report(client || server, e.name + ": " + (client ? "client " : "") + (server ? "server" : "") +
-				(client || server ? "" : "no binaries found"));
+		report(client || server, e.name + ": " + (client ? "client " : "") + (server ? "server" : "") + (client || server ? "" : "no binaries found"));
 	}
 	if (const auto def = read_default_version(c.layout)) {
 		std::string w;
@@ -602,8 +600,7 @@ int cmd_launch(const Ctx &c, const std::vector<std::string> &raw) {
 		return usage_error(c, "--connect needs host[:port]");
 	}
 	if (!opts.empty()) {
-		return usage_error(c, "unexpected argument '" + opts[0] +
-				"' (pass client arguments after `--`)");
+		return usage_error(c, "unexpected argument '" + opts[0] + "' (pass client arguments after `--`)");
 	}
 	std::string why;
 	const auto e = resolve_entry(c.layout, version, &why);
@@ -629,8 +626,7 @@ int cmd_launch(const Ctx &c, const std::vector<std::string> &raw) {
 	}
 	const auto bin = find_binary(*e, Binary::Client);
 	if (!bin) {
-		return failure(c, e->name + " has no " + binary_file_name(Binary::Client) + " in " +
-				e->root.string());
+		return failure(c, e->name + " has no " + binary_file_name(Binary::Client) + " in " + e->root.string());
 	}
 	// Settings live in the user config dir so every installed version shares
 	// them; an explicit --config from the user wins.

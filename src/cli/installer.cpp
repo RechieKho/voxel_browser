@@ -38,7 +38,7 @@ Status verify_archive(const fs::path &file, const ArtifactInfo &a) {
 	const auto size = fs::file_size(file, ec);
 	if (ec || size != a.size) {
 		return { "size mismatch for " + a.file + " (expected " + std::to_string(a.size) +
-				" bytes, got " + (ec ? std::string("?") : std::to_string(size)) + ")" };
+			" bytes, got " + (ec ? std::string("?") : std::to_string(size)) + ")" };
 	}
 	std::string bytes;
 	if (!read_all(file, bytes)) {

@@ -87,8 +87,7 @@ RunResult run_foreground(const std::filesystem::path &exe,
 	const std::wstring wcwd = cwd.wstring();
 	if (!CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, TRUE, 0, nullptr,
 				wcwd.empty() ? nullptr : wcwd.c_str(), &si, &pi)) {
-		return { -1, "cannot start " + exe.string() + " (error " +
-				std::to_string(GetLastError()) + ")" };
+		return { -1, "cannot start " + exe.string() + " (error " + std::to_string(GetLastError()) + ")" };
 	}
 	if (on_start) {
 		on_start(pi.dwProcessId);
@@ -311,8 +310,7 @@ RunResult run_foreground(const std::filesystem::path &exe,
 	// us, so forward those to the child (the server saves the world on them) and
 	// keep waiting rather than dying and orphaning it. A doubled SIGINT is harmless.
 	g_forward_to = pid;
-	struct sigaction forward {
-	}, old_int{}, old_term{}, old_hup{}, old_quit{}, ignore{};
+	struct sigaction forward{}, old_int{}, old_term{}, old_hup{}, old_quit{}, ignore{};
 	forward.sa_handler = forward_signal;
 	sigemptyset(&forward.sa_mask);
 	ignore.sa_handler = SIG_IGN;
@@ -551,7 +549,7 @@ std::optional<std::uint64_t> process_start_token(Pid pid) {
 	return std::nullopt;
 #elif defined(__APPLE__)
 	int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PID, static_cast<int>(pid) };
-	struct kinfo_proc info {};
+	struct kinfo_proc info{};
 	std::size_t size = sizeof(info);
 	if (sysctl(mib, 4, &info, &size, nullptr, 0) != 0 || size == 0 ||
 			info.kp_proc.p_pid != static_cast<pid_t>(pid) || info.kp_proc.p_stat == SZOMB) {

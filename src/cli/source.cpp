@@ -48,7 +48,7 @@ public:
 			const auto have = t["version"].value_or(std::string());
 			if (have != version) {
 				return { "version " + std::string(version) + " is not available from " +
-						describe() + " (it has " + have + ")" };
+					describe() + " (it has " + have + ")" };
 			}
 		}
 		return {};
@@ -277,8 +277,8 @@ public:
 		}
 		if (rc != CURLE_OK) {
 			return { "download of " + url + " failed: " +
-					(err[0] != 0 ? err : curl_easy_strerror(rc)) +
-					" (re-run to resume)" };
+				(err[0] != 0 ? err : curl_easy_strerror(rc)) +
+				" (re-run to resume)" };
 		}
 		return {};
 	}
