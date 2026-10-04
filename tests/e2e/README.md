@@ -86,6 +86,19 @@ saw it". The path is printed with the failure; rebuild a page with
   frame isn't blank (a flat UI has few colours: don't expect photo-like numbers).
 - `client.type("text")` fills the chat box like keystrokes; `key_press("enter")` sends it.
 
+### Attaching over TCP, and recording
+
+`clients(1, tcp=True)` starts the client with `--automation tcp` and attaches over loopback with a
+token; `client.detach()` drops the connection while the game keeps running and `client.reattach()`
+reconnects (see `test_attach.py`). `Client("name", None, artifact_dir, attach={"host":..., "port":...,
+"token":...})` attaches to any running game, e.g. one a human is playing.
+
+`voxel_browser --automation-record session.py` writes what a player does as a vbtest script
+(`walk_to`, `break_block`, `place_block`, `chat`, `ui(...).click()`, plus `expect(...)` after results
+it could see). It is a starting point: add scene setup with `server`, run it with
+`pytest session.py` (put it in `tests/e2e`). `test_recorder.py` records a session and replays the
+generated script on a fresh server. Details: `docs/automation-protocol.md`.
+
 ### Bad networks
 
 `@pytest.mark.net_sim(lag_ms=100, jitter_ms=20, loss_pct=3)` starts the server and every client
@@ -103,6 +116,7 @@ vbtest/expect.py  expect(...).to_see_block(...) etc.
 vbtest/net.py     free UDP port, "never aim bots at a real server" guard
 vbtest/scene.py   build-a-scene helpers (block_under_feet, clear_corridor, step_aside)
 vbtest/png.py     tiny PNG reader for screenshot assertions
+vbtest/stack.py   start_server / ClientFactory: what the fixtures use, also usable outside them
 vbtest/traceview.py  failed-test trace.html generator
-test_*.py         the tests (basics, bad network, windowed, trace viewer)
+test_*.py         the tests (basics, bad network, windowed, trace viewer, attach, recorder)
 ```

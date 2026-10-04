@@ -79,10 +79,33 @@ public:
 	// Enter handling are shared, so this works headless too.
 	bool type_chat(std::string_view text);
 
+	// What a human (or a script) does, reported as meaning rather than as raw input, for the
+	// recorder (docs/e2e-automation.md §8, E6). Called from the real frame logic, so a
+	// player's clicks, typing and menu choices are seen exactly as the game acted on them.
+	class Observer {
+	public:
+		virtual ~Observer() = default;
+		virtual void on_chat_sent(std::string_view /*text*/) {}
+		virtual void on_ui_click(const std::string & /*id*/, bool /*hud*/) {}
+		virtual void on_ui_change(const std::string & /*id*/, const std::string & /*text*/, bool /*hud*/) {}
+		virtual void on_ui_list(const std::string & /*id*/, int /*index*/, bool /*hud*/) {}
+		virtual void on_menu_connect(const std::string & /*host*/, int /*port*/, const std::string & /*name*/) {}
+		virtual void on_menu_singleplayer(const std::string & /*name*/) {}
+	};
+	void set_observer(Observer *o) { observer = o; }
+	// The UI entry points the frame loop uses, exposed so automation commands take the
+	// same path (and are observed the same way).
+	void ui_click(const std::string &id, bool hud);
+	void ui_change(const std::string &id, const std::string &text, bool hud);
+	void ui_list(const std::string &id, int index, bool hud);
+
 	// --- main-menu injection (windowed clients; raygui can't be clicked by script) ---
 	// The menu is drawn by raygui from raylib's real input state, so these set the same
 	// fields a player would type into and hand kMenu the same result a click would.
 	bool menu_active() const { return state == AppState::kMenu; }
+	// The name this connection used (what the menu holds), not config.player_name, which only
+	// follows it after a menu-driven connect.
+	const std::string &player_name() const { return menu.player_name(); }
 	void menu_set_name(std::string_view name) {
 		const std::string address = menu.address(); // prefill() reassigns it: pass a copy
 		menu.prefill(address, menu.port(), name);
@@ -225,6 +248,7 @@ private:
 	bool headless_ui_eval = false;
 	std::vector<vb::script::Widget> hud_widget_cache;
 	std::optional<vb::render::MainMenu::MainResult> pending_menu;
+	Observer *observer = nullptr;
 	std::string screenshot_path_;
 	Screenshot screenshot_state_ = Screenshot::kNone;
 	int screenshot_w_ = 0, screenshot_h_ = 0;

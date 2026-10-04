@@ -6,6 +6,7 @@ add_library(vb_automation STATIC
   host.cpp
   predicate.cpp
   protocol.cpp
+  tcp.cpp
 )
 add_library(vb::automation ALIAS vb_automation)
 
@@ -18,3 +19,6 @@ target_link_libraries(vb_automation
     vb_sanitizers
 )
 target_compile_definitions(vb_automation PUBLIC VB_WITH_AUTOMATION=1)
+if(WIN32)
+  target_link_libraries(vb_automation PRIVATE ws2_32)
+endif()

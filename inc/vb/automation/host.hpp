@@ -49,6 +49,27 @@ public:
 	// frames. nullptr if the descriptors couldn't be duplicated.
 	static std::unique_ptr<Host> open_stdio();
 
+	// `--automation tcp[:PORT]` (docs/e2e-automation.md §3.1): a listener on 127.0.0.1 ONLY
+	// (no option to bind anywhere else), port 0 = pick one. The first line of every
+	// connection must be {"cmd":"auth","args":{"token":"..."}} with the right token
+	// (generated unless `token` is given; compared in constant time). One connection at a
+	// time; when it drops the process keeps running and waits for the next attach, which is
+	// the point: attaching to a client a human is already playing. Game output stays on
+	// stdout/stderr (nothing is redirected). `info_path` (optional) receives
+	// {"host","port","token","pid"} with owner-only permissions; otherwise the endpoint is
+	// printed to stderr. nullptr + `error` on failure.
+	struct TcpOptions {
+		int port = 0;
+		std::string token;
+		std::string info_path;
+	};
+	static std::unique_ptr<Host> open_tcp(const TcpOptions &options, std::string &error);
+
+	// Parses the value of `--automation`: "stdio", "tcp" or "tcp:PORT". On a bad spec returns
+	// nullptr with `error` set.
+	static std::unique_ptr<Host> open_spec(const std::string &spec, const std::string &token,
+			const std::string &info_path, std::string &error);
+
 	// `--automation-clock manual`: frames only advance via `step{frames}`.
 	void set_manual_clock(bool manual) { manual_clock_ = manual; }
 	bool manual_clock() const { return manual_clock_; }

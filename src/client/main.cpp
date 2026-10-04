@@ -66,6 +66,7 @@
 
 #if defined(VB_WITH_AUTOMATION)
 #include "automation_endpoint.hpp"
+#include "recorder.hpp"
 #include "vb/automation/host.hpp"
 #endif
 
@@ -87,9 +88,13 @@ void print_usage() {
 				 "  --headless        run without a window (no rendering, skips the menu)\n"
 				 "  --frames <n>      headless: run n frames then exit (default 3)\n"
 #if defined(VB_WITH_AUTOMATION)
-				 "  --automation stdio     drive via JSON lines on stdin/stdout (dev builds; windowed needs a display, e.g. xvfb-run)\n"
+				 "  --automation stdio|tcp[:PORT]  drive via JSON lines on stdin/stdout, or on a token-protected\n"
+				 "                    127.0.0.1-only socket (dev builds; windowed needs a display, e.g. xvfb-run)\n"
+				 "  --automation-token <t>    fixed token for tcp (default: random)\n"
+				 "  --automation-info <file>  write {host,port,token,pid} here for tcp (default: print to stderr)\n"
 				 "  --automation-clock <real|manual>  manual: frames advance only on `step`\n"
 				 "  --net-sim <spec>  fake lag/jitter/loss on sent packets, e.g. lag_ms=100,loss_pct=2 (dev builds only)\n"
+				 "  --automation-record <file.py>  write what you do as a vbtest script (dev builds only)\n"
 #endif
 				 "  --version        print build info and exit\n"
 				 "  --help           show this help\n"
@@ -105,7 +110,8 @@ void print_usage() {
 #if defined(VB_WITH_AUTOMATION)
 // Development-only: same ClientApp, but driven by the automation channel
 // instead of a fixed frame count. Runs until `quit` or the harness closes stdin.
-int run_automated(ClientApp &app, vb::automation::Host &host, vb::render::Window *window = nullptr) {
+int run_automated(ClientApp &app, vb::automation::Host &host, vb::render::Window *window = nullptr,
+		vb::client::Recorder *recorder = nullptr) {
 	ClientAutomationEndpoint endpoint(app, host);
 	using Clock = std::chrono::steady_clock;
 	constexpr auto kFrame = std::chrono::microseconds(16667);
@@ -118,7 +124,11 @@ int run_automated(ClientApp &app, vb::automation::Host &host, vb::render::Window
 		// Actions queue this frame's synthetic input, the real ClientApp frame
 		// consumes it, then finished actions answer their requests.
 		endpoint.begin_frame();
-		const bool keep_running = app.frame(endpoint.input().poll(), 1.0 / 60.0);
+		const vb::render::InputFrame input = endpoint.input().poll();
+		const bool keep_running = app.frame(input, 1.0 / 60.0);
+		if (recorder != nullptr) {
+			recorder->observe_frame(app, input);
+		}
 		endpoint.end_frame();
 		if (!keep_running) {
 			break;
@@ -129,6 +139,9 @@ int run_automated(ClientApp &app, vb::automation::Host &host, vb::render::Window
 			std::this_thread::sleep_until(next);
 		}
 	}
+	if (recorder != nullptr) {
+		recorder->write();
+	}
 	std::cout << "client: automation session ended\n";
 	return EXIT_SUCCESS;
 }
@@ -138,7 +151,7 @@ int run_headless(const vb::core::ClientConfig &config, const vb::core::Args &arg
 		const std::string &server, int port, bool singleplayer, int view_distance
 #if defined(VB_WITH_AUTOMATION)
 		,
-		vb::automation::Host *automation
+		vb::automation::Host *automation, vb::client::Recorder *recorder
 #endif
 ) {
 	vb::render::WindowConfig wcfg;
@@ -157,7 +170,8 @@ int run_headless(const vb::core::ClientConfig &config, const vb::core::Args &arg
 	}
 #if defined(VB_WITH_AUTOMATION)
 	if (automation != nullptr) {
-		return run_automated(app, *automation);
+		app.set_observer(recorder);
+		return run_automated(app, *automation, nullptr, recorder);
 	}
 #endif
 	while (!window.should_close()) {
@@ -184,18 +198,16 @@ int main(int argc, char **argv) {
 #if defined(VB_WITH_AUTOMATION)
 	std::unique_ptr<vb::automation::Host> automation;
 	if (args.has("automation")) {
-		if (args.value_or("automation", "") != "stdio") {
-			std::cerr << "client: --automation requires the value 'stdio'\n";
-			return EXIT_FAILURE;
-		}
 		const std::string clock = args.value_or("automation-clock", "real");
 		if (clock != "real" && clock != "manual") {
 			std::cerr << "client: --automation-clock must be 'real' or 'manual'\n";
 			return EXIT_FAILURE;
 		}
-		automation = vb::automation::Host::open_stdio();
+		std::string automation_error;
+		automation = vb::automation::Host::open_spec(args.value_or("automation", ""),
+				args.value_or("automation-token", ""), args.value_or("automation-info", ""), automation_error);
 		if (!automation) {
-			std::cerr << "client: could not set up the automation channel\n";
+			std::cerr << "client: " << automation_error << '\n';
 			return EXIT_FAILURE;
 		}
 		automation->set_manual_clock(clock == "manual");
@@ -216,8 +228,25 @@ int main(int argc, char **argv) {
 			return EXIT_FAILURE;
 		}
 	}
+	std::unique_ptr<vb::client::Recorder> recorder;
+	if (args.has("automation-record")) {
+		const std::string path = args.value_or("automation-record", "");
+		if (path.empty()) {
+			std::cerr << "client: --automation-record needs an output path\n";
+			return EXIT_FAILURE;
+		}
+		if (args.has("headless") && !automation) {
+			std::cerr << "client: --automation-record needs a window (or --automation): there is nothing to watch\n";
+			return EXIT_FAILURE;
+		}
+		recorder = std::make_unique<vb::client::Recorder>(path);
+		if (!recorder->write()) {
+			std::cerr << "client: cannot write '" << path << "'\n";
+			return EXIT_FAILURE;
+		}
+	}
 #else
-	if (args.has("automation") || args.has("net-sim")) {
+	if (args.has("automation") || args.has("net-sim") || args.has("automation-record")) {
 		// Never silently ignored: a misconfigured test setup must fail loudly.
 		std::cerr << "client: built without VB_WITH_AUTOMATION\n";
 		return EXIT_FAILURE;
@@ -254,7 +283,7 @@ int main(int argc, char **argv) {
 		return run_headless(config, args, cli_server, cli_port, singleplayer, configured_view_distance
 #if defined(VB_WITH_AUTOMATION)
 				,
-				automation.get()
+				automation.get(), recorder.get()
 #endif
 		);
 	}
@@ -281,16 +310,32 @@ int main(int argc, char **argv) {
 	if (automation) {
 		// A windowed client driven over the channel: starts on the menu (or connects
 		// straight away with --server/--singleplayer) and takes synthetic input.
-		return run_automated(app, *automation, &window);
+		app.set_observer(recorder.get());
+		return run_automated(app, *automation, &window, recorder.get());
 	}
+	app.set_observer(recorder.get());
 #endif
 	while (!window.should_close()) {
 		const vb::render::InputFrame input = raylib_input.poll();
 		const double dt = static_cast<double>(GetFrameTime());
-		if (!app.frame(input, dt)) {
-			return EXIT_SUCCESS;
+		const bool keep_running = app.frame(input, dt);
+#if defined(VB_WITH_AUTOMATION)
+		if (recorder) {
+			recorder->observe_frame(app, input);
+		}
+#endif
+		if (!keep_running) {
+			break;
 		}
 	}
+#if defined(VB_WITH_AUTOMATION)
+	if (recorder) {
+		recorder->write();
+		std::cout << "client: recorded " << recorder->steps().size() << " steps to "
+				  << args.value_or("automation-record", "") << '\n';
+		return EXIT_SUCCESS;
+	}
+#endif
 
 	std::cout << "client: exited after " << window.frame_count() << " frames\n";
 	return EXIT_SUCCESS;

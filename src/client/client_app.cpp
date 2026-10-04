@@ -7,6 +7,18 @@
 #include <rlgl.h>
 #endif
 
+// Notifies the recorder (automation builds only); a no-op in production builds.
+#if defined(VB_WITH_AUTOMATION)
+#define VB_OBSERVE(call)           \
+	do {                           \
+		if (observer != nullptr) { \
+			observer->call;        \
+		}                          \
+	} while (0)
+#else
+#define VB_OBSERVE(call) ((void)0)
+#endif
+
 namespace vb::client {
 
 ClientApp::ClientApp(vb::core::ClientConfig config_in, std::string config_path_in,
@@ -310,8 +322,10 @@ bool ClientApp::frame(const vb::render::InputFrame &input, double dt) {
 			}
 #endif
 			if (result.connect) {
+				VB_OBSERVE(on_menu_connect(menu.address(), menu.port(), menu.player_name()));
 				begin_connect(false);
 			} else if (result.singleplayer) {
+				VB_OBSERVE(on_menu_singleplayer(menu.player_name()));
 				begin_connect(true);
 			} else if (result.open_settings) {
 				menu.open_settings(config);
@@ -486,6 +500,7 @@ bool ClientApp::frame(const vb::render::InputFrame &input, double dt) {
 					chat_buf.clear();
 				} else if (input.key_pressed(KEY_ENTER) || input.key_pressed(KEY_KP_ENTER)) {
 					if (!chat_buf.empty()) {
+						VB_OBSERVE(on_chat_sent(chat_buf));
 						client->send_chat(chat_buf);
 					}
 					chat_buf.clear();
@@ -794,12 +809,15 @@ bool ClientApp::frame(const vb::render::InputFrame &input, double dt) {
 			const auto hud_result =
 					hud_renderer.draw("hud", ui_runtime.render_hud(), chunk_renderer.get());
 			for (const auto &id : hud_result.clicked) {
+				VB_OBSERVE(on_ui_click(id, true));
 				ui_runtime.report_hud_click(id);
 			}
 			for (const auto &[id, text] : hud_result.changed_text) {
+				VB_OBSERVE(on_ui_change(id, text, true));
 				ui_runtime.report_hud_change(id, text);
 			}
 			for (const auto &[id, idx] : hud_result.changed_list) {
+				VB_OBSERVE(on_ui_list(id, idx, true));
 				ui_runtime.report_hud_list_change(id, idx);
 			}
 
@@ -825,12 +843,15 @@ bool ClientApp::frame(const vb::render::InputFrame &input, double dt) {
 				const auto ui_result = ui_renderer.draw(
 						ui_runtime.current_name(), widgets, chunk_renderer.get());
 				for (const auto &id : ui_result.clicked) {
+					VB_OBSERVE(on_ui_click(id, false));
 					ui_runtime.report_click(id);
 				}
 				for (const auto &[id, text] : ui_result.changed_text) {
+					VB_OBSERVE(on_ui_change(id, text, false));
 					ui_runtime.report_change(id, text);
 				}
 				for (const auto &[id, idx] : ui_result.changed_list) {
+					VB_OBSERVE(on_ui_list(id, idx, false));
 					ui_runtime.report_list_change(id, idx);
 				}
 			}
@@ -864,8 +885,24 @@ bool ClientApp::frame(const vb::render::InputFrame &input, double dt) {
 #if defined(VB_WITH_AUTOMATION)
 void vb::client::ClientApp::submit_chat(std::string_view text) {
 	if (client != nullptr && !text.empty()) {
+		VB_OBSERVE(on_chat_sent(text));
 		client->send_chat(text);
 	}
+}
+
+void vb::client::ClientApp::ui_click(const std::string &id, bool hud) {
+	VB_OBSERVE(on_ui_click(id, hud));
+	hud ? ui_runtime.report_hud_click(id) : ui_runtime.report_click(id);
+}
+
+void vb::client::ClientApp::ui_change(const std::string &id, const std::string &text, bool hud) {
+	VB_OBSERVE(on_ui_change(id, text, hud));
+	hud ? ui_runtime.report_hud_change(id, text) : ui_runtime.report_change(id, text);
+}
+
+void vb::client::ClientApp::ui_list(const std::string &id, int index, bool hud) {
+	VB_OBSERVE(on_ui_list(id, index, hud));
+	hud ? ui_runtime.report_hud_list_change(id, index) : ui_runtime.report_list_change(id, index);
 }
 
 bool vb::client::ClientApp::type_chat(std::string_view text) {

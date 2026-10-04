@@ -24,7 +24,9 @@
       (landed 2026-10-04: 10 tests, `ctest -L e2e` 10/10 locally x5; CI job not yet
       run on a runner; also fixed a real `ui.close()` segfault found by it), E5
       `--net-sim`/windowed clients/screenshots/trace viewer (landed 2026-10-04: 18 e2e
-      tests, 3x under Xvfb green; CI job not yet run on a runner), E6 recorder. Constraint: automation
+      tests, 3x under Xvfb green; CI job not yet run on a runner), E6 TCP attach + session
+      recorder (landed 2026-10-04: 24 e2e tests; a recorded session replays green on a fresh
+      server; Windows Winsock path unbuilt). Constraint: automation
       code must never ship — see §7 of that doc. Each phase's doc updates:
       §11 of that doc.
 

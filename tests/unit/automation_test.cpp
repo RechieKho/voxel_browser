@@ -2,6 +2,8 @@
 #include <doctest/doctest.h>
 
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <map>
 #include <sstream>
 #include <thread>
@@ -336,4 +338,26 @@ TEST_CASE("net-sim: spec parsing") {
 		CHECK_FALSE(vb::net::parse_net_sim(bad, err));
 		CHECK_FALSE(err.empty());
 	}
+}
+
+TEST_CASE("automation: --automation spec parsing (open_spec)") {
+	std::string err;
+	for (const char *bad : { "", "bogus", "tcp:", "tcp:abc", "tcp:12x", "tcp:-1", "tcp:70000", "stdio:1", "TCP" }) {
+		err.clear();
+		CHECK_FALSE(Host::open_spec(bad, "", "", err));
+		CHECK_FALSE(err.empty());
+	}
+}
+
+TEST_CASE("automation: tcp listener is loopback-only and reports its port and token") {
+	const std::string info = (std::filesystem::temp_directory_path() / "vb_automation_test_info.json").string();
+	std::string err;
+	auto host = Host::open_spec("tcp:0", "fixed-test-token", info, err);
+	REQUIRE(host);
+	std::ifstream f(info);
+	const json j = json::parse(f);
+	CHECK(j["host"] == "127.0.0.1");
+	CHECK(j["port"].get<int>() > 0);
+	CHECK(j["token"] == "fixed-test-token");
+	std::filesystem::remove(info);
 }

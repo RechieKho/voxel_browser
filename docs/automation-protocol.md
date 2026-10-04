@@ -6,7 +6,7 @@ rules: `docs/e2e-automation.md` (§5 protocol, §7 keeping it out of production)
 Production binaries contain none of this and exit non-zero on `--automation`.
 
 **Protocol version: 1** (`kAutomationProtocolVersion`, `inc/vb/automation/protocol.hpp`).
-Implemented so far (through phase E5): phase E2 (host, `hello/state/step/quit/wait_for`, predicate
+Implemented so far (through phase E6): phase E2 (host, `hello/state/step/quit/wait_for`, predicate
 engine, read-only state) and phase E3 (client input / UI / chat / multi-frame
 actions, server admin commands, deferred replies). Windowed-only commands
 (`menu.*`, `screenshot`, typing into the raygui chat box) are not implemented;
@@ -26,8 +26,9 @@ windowed clients are driven the same way (see "Windowed clients" below).
   (default) runs frames at 60 Hz wall clock; `manual` only advances on `step`.
 - `--net-sim <spec>` (both binaries, E5): fake network conditions, see "Network
   simulation" below.
-- Any `--automation` value other than `stdio` is an error; a build without the
-  flag prints `built without VB_WITH_AUTOMATION` and exits 1.
+- `--automation tcp[:PORT]` is the other transport (E6), see "TCP attach" below. Any other
+  `--automation` value is an error; a build without the flag prints `built without
+  VB_WITH_AUTOMATION` and exits 1 (also for `--automation-record`, `--net-sim`).
 
 All commands run on the main thread between frames/ticks; a reader thread only
 enqueues parsed requests.
@@ -150,6 +151,54 @@ it uses an in-process loopback), and a build without `VB_WITH_AUTOMATION` refuse
 like `--automation`. The client snapshot's `rtt_ms` (and the `rtt_ms` predicate) is the
 measured round-trip time, so a test can prove the simulation took effect.
 
+## TCP attach (`--automation tcp[:PORT]`, E6)
+
+For attaching to a game that is *already running*, typically a client a human is playing, and
+for tools that outlive a process's stdin.
+
+- **Loopback only, by construction.** The listener binds `127.0.0.1` and there is no option to
+  bind anything else. `PORT` 0 (the default) picks a free one (unlike the game's UDP port, TCP can).
+- **Token.** The first line of every connection must be
+  `{"cmd":"auth","args":{"token":"..."}}`. The token is random (128 bits) unless
+  `--automation-token <t>` is given, and is compared in constant time. Reply `{"ok":true,
+  "result":{"authenticated":true}}`, or `{"ok":false,"error":{"code":"unauthorized",...}}` and the
+  connection is closed. A connection that sends no auth line within 5 s is dropped.
+- **Finding the endpoint.** `--automation-info <file>` writes `{"host","port","token","pid"}`
+  there (permissions `0600`, set before the token is written); without it the endpoint is printed
+  to stderr as `automation: listening on 127.0.0.1:PORT token=...`.
+- **One connection at a time.** A second one waits in the listen backlog until the first drops.
+  When a client disconnects the **game keeps running** and waits for the next attach (stdio
+  mode, by contrast, exits when stdin closes). `quit` still shuts the process down. Replies owed
+  to a client that left are dropped.
+- After authentication the protocol is exactly the stdio protocol (same commands, frames,
+  deferred replies). Game output stays on stdout/stderr (nothing is redirected).
+- Windows uses Winsock; that code path is written but has never been compiled or run.
+
+## Recording a session (`--automation-record FILE.py`, E6)
+
+`voxel_browser --automation-record session.py` (windowed, or any `--automation` client) watches
+the same input and game state a player produces and writes what they *meant* as a vbtest script,
+rewritten after every step so a crash loses nothing. Dev builds only, like all of this.
+
+| What happened | What is written |
+|---|---|
+| movement keys, then stopping | `p.walk_to((x, None, z), tolerance=0.7)` to where you stopped (shuffling < 0.5 blocks is dropped) |
+| left click with the crosshair on a block | `p.break_block((x, y, z))` (several clicks on one block within 1.5 s are one break), then `expect(p).to_see_block(pos, "<name now>")` once the block changed |
+| right click with the crosshair on a block | `p.place_block((x, y, z), face=(nx, ny, nz))`, then `expect(...).to_see_block(dest, ...)` |
+| number keys 1-9 | `p.select_slot(n)` |
+| jump, E, Esc | `p.key_press("jump" / "inventory" / "pause")` |
+| a chat line sent | `p.chat("...")` and `expect(p).to_have_chat("Name: ...")` |
+| a pack screen opens / closes | `expect(p).to_have_ui_open("name")` / `.not_.to_have_ui_open("name")` |
+| pack UI clicks / edits | `p.ui("id").click()` / `.fill("text")` / `.select(i)` (`hud(...)` for the HUD) |
+| main-menu choices | a comment line (the script itself connects through `clients()`) |
+
+It is a **starting point**: scene setup (`set_block`, `give`, `teleport`) isn't recorded, coordinates
+are absolute so it replays against the same world (same seed), looking around isn't recorded, and
+a click at the sky is ignored. Steps whose result it couldn't see get no assertion. The
+generated file is runnable as is (`def test_recorded_session(server, clients)`); `tests/e2e/
+test_recorder.py` records a session and replays the script on a fresh server.
+`--automation-record` with `--headless` and no `--automation` is refused (nothing to watch).
+
 ## Not implemented
 
 - Clicking raygui widgets by pixel (menu *results* are injected instead), settings and
@@ -157,6 +206,8 @@ measured round-trip time, so a test can prove the simulation took effect.
 - The `health` predicate on a client: health isn't replicated to clients. Read
   `players[].health` from the server's `state` instead.
 - `--net-sim` for `--singleplayer` (loopback transport has no delay/drop queue).
+- Recording: mouse look, scene setup, multi-client sessions, and replaying menu-driven starts.
+- TCP: more than one simultaneous connection, non-loopback binding (deliberately).
 
 ### State snapshots
 

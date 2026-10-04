@@ -90,7 +90,10 @@ void print_usage() {
 				 "  --motd <text>          message of the day override\n"
 				 "  --ticks <n>            run n ticks then exit (0 = forever)\n"
 #if defined(VB_WITH_AUTOMATION)
-				 "  --automation stdio    drive via JSON lines on stdin/stdout (dev builds only)\n"
+				 "  --automation stdio|tcp[:PORT]  drive via JSON lines on stdin/stdout, or on a token-protected\n"
+				 "                        127.0.0.1-only socket (dev builds only)\n"
+				 "  --automation-token <t>   fixed token for tcp (default: random)\n"
+				 "  --automation-info <file> write {host,port,token,pid} here for tcp (default: print to stderr)\n"
 				 "  --net-sim <spec>      fake lag/jitter/loss on sent packets, e.g. lag_ms=100,loss_pct=2 (dev builds only)\n"
 #endif
 				 "  --version             print build info and exit\n"
@@ -119,13 +122,11 @@ int main(int argc, char **argv) {
 #if defined(VB_WITH_AUTOMATION)
 	std::unique_ptr<vb::automation::Host> automation;
 	if (args.has("automation")) {
-		if (args.value_or("automation", "") != "stdio") {
-			std::cerr << "server: --automation requires the value 'stdio'\n";
-			return EXIT_FAILURE;
-		}
-		automation = vb::automation::Host::open_stdio();
+		std::string automation_error;
+		automation = vb::automation::Host::open_spec(args.value_or("automation", ""),
+				args.value_or("automation-token", ""), args.value_or("automation-info", ""), automation_error);
 		if (!automation) {
-			std::cerr << "server: could not set up the automation channel\n";
+			std::cerr << "server: " << automation_error << '\n';
 			return EXIT_FAILURE;
 		}
 	}

@@ -5,8 +5,9 @@
 > (handshake `client_flags`, protocol v27) and E3 (client actions, server
 > admin commands) and E4 (pytest `vbtest` harness, `e2e` CTest label, CI job)
 > and E5 (`--net-sim`, windowed clients with menu commands and screenshots, typed
-> chat, trace viewer) are implemented (contract: `docs/automation-protocol.md`; how to
-> write tests: `tests/e2e/README.md`); only E6 (recorder, TCP attach) is not. Covers a
+> chat, trace viewer) and E6 (TCP attach, session recorder) are implemented
+> (contract: `docs/automation-protocol.md`; how to write tests: `tests/e2e/README.md`).
+> Everything is landed; the CI job and Windows/macOS have never been run. Covers a
 > Playwright-style harness that drives real `voxel_browser` clients against a
 > real `voxel_browser_server` in multiplayer, so gameplay can be tested by
 > scripts instead of by hand. Complements spec §17 (Testing Strategy); the
@@ -110,9 +111,10 @@ same reasons apply here:
   process exits. CI never leaves orphaned servers behind.
 
 Game logs move to **stderr** when `--automation stdio` is active (stdout is
-reserved for protocol frames). A TCP mode (`--automation tcp:127.0.0.1:0`)
-can come later for attaching to a client a human is already running. It
-would bind loopback only and need a token.
+reserved for protocol frames). A TCP mode (`--automation tcp[:PORT]`, **implemented in E6**) attaches to a client a
+human is already running: it binds `127.0.0.1` only (no option for anything else), requires a
+random token as the first line, serves one connection at a time and keeps the game running when
+it drops. Details and the auth handshake: `docs/automation-protocol.md`.
 
 ## 4. Piece A — make the client drivable
 
@@ -512,7 +514,7 @@ whatever the client claims:
 | **E3** (landed 2026-10-04) | Action commands (input, high-level, ui, chat) + server admin commands. `menu.*`, `screenshot` and typing into the chat box are windowed-only and moved to E5 | M | two real clients + a dedicated server driven by a throwaway script: break/place replicate, give/teleport/chat/walk/kick; unit test for deferred replies |
 | **E4** (landed 2026-10-04) | `tests/e2e/vbtest` + fixtures + 10 tests (join + cold-cache asset sync, chat, break and place replicate, craft via chat, inventory screen, server teleport/health, walking, kick + reconnect, loopback-only guard); CTest `e2e` label; a Linux `e2e` CI job. New: `chunk_loaded`/`on_ground` predicates | M | 10/10, five runs in a row, locally; **CI itself not run** |
 | **E5** (landed 2026-10-04) | `--net-sim`; windowed automation (`menu.*`, `screenshot`, `type`) under Xvfb; trace viewer (`trace.html`); `rtt_ms`; CI job runs under `xvfb-run` | M | 18 e2e tests (3 new bad-network/windowed files), 3 runs under Xvfb all green; **CI itself not run** |
-| **E6** (optional) | Recorder ("codegen"): `--automation-record out.py` logs a human session's *semantic* actions (connect, look, hold, ui.click id) as a vbtest script skeleton; TCP attach mode; HTML trace viewer | M | |
+| **E6** (landed 2026-10-04) | `--automation tcp[:PORT]` (loopback-only, token, survives disconnects) with `--automation-token/-info`; `vbtest` TCP attach (`clients(tcp=True)`, `detach`/`reattach`); `--automation-record out.py` recorder writing a runnable vbtest script, with assertions after observable results; `vbtest.stack` (server/client startup outside fixtures). The trace viewer shipped in E5 | M | 24 e2e tests; a recorded session replays green on a fresh server (3 runs); **CI itself not run** |
 
 E0–E1 are worth doing on their own: they make the client loop testable
 without any automation and remove the duplicated headless loop.
@@ -587,6 +589,23 @@ without any automation and remove the duplicated headless loop.
 23. **A flat UI has few colours.** The menu screenshot has 6 distinct colours; "not blank"
     assertions use the mean colour and a low colour-count floor, not photo-like thresholds.
 
+24. **TCP changes what "the harness died" means (found in E6).** Over stdio a closed stdin
+    ends the process; a TCP client dropping must *not* (that is the point of attaching to a
+    human's game), so the reader thread waits for the next connection and a detached
+    script's pending replies are discarded. `quit` is the only way to end the process remotely.
+25. **One connection at a time means a second one gets silence, not an error.** It sits in the
+    listen backlog unauthenticated and unanswered until the first drops (so a wrong-token test
+    must detach the real session first). A squatter that never authenticates is cut off after 5 s.
+26. **A recorder needs waits too (found in E6).** A first recording clicked "close" the instant the
+    inventory key was pressed, which a human never does; it now asserts that a screen opened
+    (`to_have_ui_open`) the way it asserts that a block broke. It also needs the connection's
+    name from the menu (`menu.player_name()`), not `config.player_name`, and rewrites its file
+    when that becomes known, since it may be killed before any step is recorded.
+27. **Replay needs a deterministic scene.** Breaking natural shoreline sand then "placing" back
+    failed because the ground there is water; a server-built stone block (set up in both the
+    recording and, as a user would add it, the replay) is stable. Seed 7 gives the same
+    spawn and terrain, so absolute coordinates replay.
+
 ## 11. Documentation upkeep (for agents implementing this design)
 
 This doc and several others describe the automation work as **planned**.
@@ -622,7 +641,7 @@ checklist below is. Don't write history for work you didn't do or verify.
 | **E3** actions + admin cmds (done) | Done: `docs/automation-protocol.md` tables, `STATE.md`, backlog. `lua-api.md` untouched (`run_lua` adds no pack API). Gating confirmed: every server admin primitive (`ServerSession::{player_health,set_player_health,teleport_player,set_time_of_day,kick_player}`, `PackRuntime::admin_give`) and every endpoint is under `#if defined(VB_WITH_AUTOMATION)`; the automation-off server binary has none of the command strings. |
 | **E4** harness + CI (done) | Done: `tests/e2e/README.md`, `CONTRIBUTING.md`, `ARCHITECTURE_SPEC.md` §17, `automation-protocol.md` (new predicates/state), `STATE.md`, backlog, `.gitignore`. The CI job is `e2e` in `build_linux.yml`; its failure-log artifact is named `e2e-failure-logs` on purpose (bundle.yml merges `<project>-*`). |
 | **E5** net-sim, traces, screenshots (done) | Done: `automation-protocol.md` (net-sim, windowed commands, `rtt_ms`), `tests/e2e/README.md` (markers, Xvfb, `trace.html`), `CONTRIBUTING.md`, `STATE.md`, backlog, CI (`xvfb-run`, `--net-sim` refusal checks in all three release legs, `*_rejects_net_sim` CTests). |
-| **E6** recorder / TCP attach | New section in `docs/automation-protocol.md`; **re-check §7** — any listener (TCP) must still be compiled out of production, loopback-only, and token-protected. |
+| **E6** recorder / TCP attach (done) | Done: `automation-protocol.md` (TCP attach, recording), `tests/e2e/README.md`, `CONTRIBUTING.md`, `STATE.md`, backlog, CI (`--automation tcp`/`--automation-record` refusal in all three release legs; 3 more `*_rejects_*` CTests). **§7 re-checked**: the listener is behind `VB_WITH_AUTOMATION`, binds only `127.0.0.1` (verified from `/proc/net/tcp` by a test), is token-protected, and a production binary refuses the flags. |
 
 ### 11.3 Invariants to re-verify and re-document whenever automation code changes
 

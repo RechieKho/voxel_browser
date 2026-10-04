@@ -438,7 +438,8 @@ servers to the extent practical (no code exec, no arbitrary FS writes).
 - **End-to-end (dev-only)**: real `voxel_browser` and
   `voxel_browser_server` processes driven over a stdio JSON-lines channel by
   a pytest harness (`tests/e2e/`: Playwright-style locators and auto-waiting;
-  `ctest -L e2e`; its own Linux CI job). Compiled in only with
+  `ctest -L e2e`; its own Linux CI job; a loopback+token TCP attach mode and a session recorder
+  that writes a vbtest script). Compiled in only with
   `VB_WITH_AUTOMATION=ON` (default `OFF`, rejected in `VB_DISTRIBUTION`
   builds), so shipped binaries never contain it. Design:
   `docs/e2e-automation.md`; usage: `tests/e2e/README.md`.

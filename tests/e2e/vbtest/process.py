@@ -7,6 +7,7 @@ failed test leaves a timeline of what each process was asked and answered.
 """
 import json
 import os
+import socket
 import subprocess
 import threading
 import time
@@ -39,8 +40,45 @@ class ProcessDied(Exception):
     pass
 
 
+def _connect(host, port, token, timeout=10.0):
+    """Connect to an `--automation tcp` endpoint and authenticate. Returns (socket, reader, writer)."""
+    sock = socket.create_connection((host, port), timeout=timeout)
+    reader, writer = sock.makefile("r", newline="\n"), sock.makefile("w", newline="\n")
+    writer.write(json.dumps({"cmd": "auth", "args": {"token": token}}) + "\n")
+    writer.flush()
+    reply = reader.readline()
+    if not reply:
+        sock.close()
+        raise AutomationError("auth", {"code": "unauthorized", "message": "connection closed during auth"})
+    reply = json.loads(reply)
+    if not reply.get("ok"):
+        sock.close()
+        raise AutomationError("auth", reply.get("error", {}))
+    sock.settimeout(None)
+    return sock, reader, writer
+
+
+def read_info(path, timeout=30.0):
+    """The {host, port, token, pid} file a game writes with `--automation-info`."""
+    deadline = time.time() + timeout * timeout_scale()
+    while time.time() < deadline:
+        try:
+            with open(path) as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            time.sleep(0.05)
+    raise TimeoutError("no automation info appeared at %s" % path)
+
+
 class Process:
-    def __init__(self, name, argv, log_dir, env=None, cwd=None):
+    """A game process spoken to over its stdio (default), or over `--automation tcp`.
+
+    tcp=True: argv should contain `--automation tcp`; this adds `--automation-info`, starts the
+    process and attaches. attach={host, port, token}: no process is started, we just connect to
+    a game that is already running (the process, if any, is then not ours to quit).
+    """
+
+    def __init__(self, name, argv, log_dir, env=None, cwd=None, tcp=False, attach=None):
         self.name = name
         self.argv = argv
         os.makedirs(log_dir, exist_ok=True)
@@ -55,10 +93,27 @@ class Process:
         self._next_id = 0
         self._eof = False
         self.events = []
-        self._proc = subprocess.Popen(
-            argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self._stderr,
-            text=True, bufsize=1, env=env, cwd=cwd)
-        self._reader = threading.Thread(target=self._read, daemon=True)
+        self._proc = None
+        self._sock = None
+        self.endpoint = None  # {host, port, token} when attached over TCP
+        if attach is None:
+            if tcp:
+                info_path = os.path.join(log_dir, name + ".automation.json")
+                self._proc = subprocess.Popen(
+                    argv + ["--automation-info", info_path], stdin=subprocess.DEVNULL,
+                    stdout=open(os.path.join(log_dir, name + ".stdout.log"), "w"), stderr=self._stderr,
+                    env=env, cwd=cwd)
+                attach = read_info(info_path)
+            else:
+                self._proc = subprocess.Popen(
+                    argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self._stderr,
+                    text=True, bufsize=1, env=env, cwd=cwd)
+        if attach is not None:
+            self.endpoint = dict(attach)
+            self._sock, self._out, self._in = _connect(attach["host"], attach["port"], attach["token"])
+        else:
+            self._out, self._in = self._proc.stdout, self._proc.stdin
+        self._reader = threading.Thread(target=self._read, args=(self._out,), daemon=True)
         self._reader.start()
 
     # -- plumbing ----------------------------------------------------------
@@ -70,8 +125,17 @@ class Process:
                                           "msg": obj}) + "\n")
             self._trace.flush()
 
-    def _read(self):
-        for line in self._proc.stdout:
+    def _read(self, stream):
+        try:
+            self._read_lines(stream)
+        except (OSError, ValueError):
+            pass  # the socket/pipe went away
+        with self._cond:
+            self._eof = True
+            self._cond.notify_all()
+
+    def _read_lines(self, stream):
+        for line in stream:
             line = line.strip()
             if not line:
                 continue
@@ -87,13 +151,12 @@ class Process:
                 else:
                     self.events.append(frame)
                 self._cond.notify_all()
-        with self._cond:
-            self._eof = True
-            self._cond.notify_all()
 
     @property
     def alive(self):
-        return self._proc.poll() is None
+        if self._proc is not None:
+            return self._proc.poll() is None
+        return not self._eof  # attached to someone else's process: as alive as our connection
 
     def stderr_tail(self, lines=40):
         try:
@@ -111,9 +174,9 @@ class Process:
         frame = {"id": rid, "cmd": cmd, "args": args}
         self._log("out", frame)
         try:
-            self._proc.stdin.write(json.dumps(frame) + "\n")
-            self._proc.stdin.flush()
-        except (BrokenPipeError, ValueError):
+            self._in.write(json.dumps(frame) + "\n")
+            self._in.flush()
+        except (BrokenPipeError, ValueError, OSError):
             raise ProcessDied("%s: process is gone (cannot send %s)\n%s" % (self.name, cmd, self.stderr_tail()))
         return rid
 
@@ -147,18 +210,50 @@ class Process:
     def state(self):
         return self.call("state")
 
-    def close(self):
-        """quit -> wait -> kill. Never raises."""
+    def detach(self):
+        """Drop our connection but leave the game running (TCP only). `reattach()` reconnects."""
+        if self._sock is None:
+            raise RuntimeError("%s is not attached over TCP" % self.name)
         try:
+            self._sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        self._sock.close()
+        self._sock = None
+        self._reader.join(5)
+
+    def reattach(self):
+        """Connect again to the same endpoint (after `detach()`, or after the connection dropped)."""
+        if self.endpoint is None:
+            raise RuntimeError("%s was not started in TCP mode" % self.name)
+        if self._sock is not None:
+            self.detach()
+        e = self.endpoint
+        self._sock, self._out, self._in = _connect(e["host"], e["port"], e["token"])
+        with self._cond:
+            self._eof = False
+            self._replies.clear()
+        self._reader = threading.Thread(target=self._read, args=(self._out,), daemon=True)
+        self._reader.start()
+
+    def close(self):
+        """quit -> wait -> kill. Never raises. For an attached-only handle (no process of ours) this
+        just disconnects."""
+        try:
+            if self._proc is None:
+                if self._sock is not None:
+                    self.detach()
+                return
             if self.alive:
                 try:
                     self.call_raw("quit", 5.0)
                 except Exception:
                     pass
-            try:
-                self._proc.stdin.close()
-            except Exception:
-                pass
+            for closer in (lambda: self._in.close(), lambda: self._sock and self._sock.close()):
+                try:
+                    closer()
+                except Exception:
+                    pass
             try:
                 self._proc.wait(10 * timeout_scale())
             except subprocess.TimeoutExpired:

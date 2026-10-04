@@ -810,7 +810,7 @@ std::optional<Reply> ClientAutomationEndpoint::command(const Request &req) {
 			if (w->type != T::kButton) {
 				return Reply::error("bad_widget", "widget '" + id + "' is not a button");
 			}
-			hud ? app_.ui().report_hud_click(id) : app_.ui().report_click(id);
+			app_.ui_click(id, hud);
 		} else if (verb == "fill") {
 			if (w->type != T::kTextBox) {
 				return Reply::error("bad_widget", "widget '" + id + "' is not a textbox");
@@ -819,7 +819,7 @@ std::optional<Reply> ClientAutomationEndpoint::command(const Request &req) {
 				return bad(req.cmd + ": needs string 'text'");
 			}
 			const std::string text = a["text"].get<std::string>();
-			hud ? app_.ui().report_hud_change(id, text) : app_.ui().report_change(id, text);
+			app_.ui_change(id, text, hud);
 		} else {
 			if (w->type != T::kList) {
 				return Reply::error("bad_widget", "widget '" + id + "' is not a list");
@@ -828,8 +828,7 @@ std::optional<Reply> ClientAutomationEndpoint::command(const Request &req) {
 			if (idx < 0 || idx >= static_cast<long long>(w->items.size())) {
 				return bad(req.cmd + ": 'index' out of range 0.." + std::to_string(w->items.size()));
 			}
-			hud ? app_.ui().report_hud_list_change(id, static_cast<int>(idx))
-				: app_.ui().report_list_change(id, static_cast<int>(idx));
+			app_.ui_list(id, static_cast<int>(idx), hud);
 		}
 		return Reply::success();
 	}

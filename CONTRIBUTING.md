@@ -89,7 +89,7 @@ A few things worth knowing that aren't obvious from a single build tree:
   multiplayer run also needs `-DVB_WITH_NET=ON -DVB_WITH_LUA=ON
   -DVB_WITH_COMPRESSION=ON`, protobuf, and `pip install -r
   tests/e2e/requirements.txt` -- the `e2e` CTest entry is only registered when
-  all of that is present, and the windowed tests additionally want `xvfb-run` (they skip without a display); a build without automation refuses `--net-sim` as well as `--automation`; `-DVB_WITH_WORLDGEN=ON` +
+  all of that is present, and the windowed tests additionally want `xvfb-run` (they skip without a display); a build without automation refuses `--net-sim`, `--automation-record` and `--automation tcp` as well as `--automation`; the TCP listener binds `127.0.0.1` only and needs a token; `-DVB_WITH_WORLDGEN=ON` +
   `-Werror` trips a FastNoise2 warning on newer GCC) and **never** enable that
   flag in a build you intend to ship; the release/`debug` CI legs set
   `VB_DISTRIBUTION=ON`, which makes the combination a configure error, and a
