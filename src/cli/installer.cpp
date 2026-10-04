@@ -118,6 +118,17 @@ InstallResult install_release(const Layout &layout, Source &source,
 	if (const Status s = source.fetch_manifest(wanted, manifest_text); !s) {
 		return fail(s.error);
 	}
+	// Authenticate before trusting anything the manifest says (its archive
+	// hashes are what the rest of the install relies on).
+	if (!opts.trust.keys.empty()) {
+		std::string signature;
+		if (const Status s = source.fetch_signature(wanted, signature); !s) {
+			return fail(s.error);
+		}
+		if (const Status s = verify_manifest_signature(manifest_text, signature, opts.trust); !s) {
+			return fail(s.error);
+		}
+	}
 	ReleaseManifest manifest;
 	if (const Status s = parse_manifest(manifest_text, manifest); !s) {
 		return fail(s.error);
@@ -193,6 +204,7 @@ InstallResult install_release(const Layout &layout, Source &source,
 		std::ofstream receipt(staging / ".install.toml", std::ios::binary);
 		receipt << "version = \"" << manifest.version << "\"\n"
 				<< "commit = \"" << manifest.commit << "\"\n"
+				<< "engine_protocol_version = " << manifest.engine_protocol_version << "\n"
 				<< "build = \"" << opts.build << "\"\n"
 				<< "platform = \"" << platform << "\"\n"
 				<< "source = \"" << source.describe() << "\"\n"

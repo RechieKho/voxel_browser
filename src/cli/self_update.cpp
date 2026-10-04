@@ -83,6 +83,15 @@ SelfUpdateResult self_update(const Layout &layout, Source &source, const SelfUpd
 	if (const Status s = source.fetch_manifest("latest", text); !s) {
 		return fail(s.error);
 	}
+	if (!opts.trust.keys.empty()) {
+		std::string signature;
+		if (const Status s = source.fetch_signature("latest", signature); !s) {
+			return fail(s.error);
+		}
+		if (const Status s = verify_manifest_signature(text, signature, opts.trust); !s) {
+			return fail(s.error);
+		}
+	}
 	ReleaseManifest manifest;
 	if (const Status s = parse_manifest(text, manifest); !s) {
 		return fail(s.error);

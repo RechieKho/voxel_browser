@@ -4,6 +4,7 @@
 #include <string>
 
 #include "vb/cli/layout.hpp"
+#include "vb/cli/signature.hpp"
 #include "vb/cli/source.hpp"
 #include "vb/cli/store.hpp"
 
@@ -19,6 +20,7 @@ struct SelfUpdateOptions {
 	bool force = false; // reinstall the same version / replace a development build
 	bool check_only = false; // report, change nothing
 	bool run_version_check = true; // run `<new vb> --version` before swapping it in
+	TrustPolicy trust; // release.toml signature policy
 	ProgressFn progress;
 };
 

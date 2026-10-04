@@ -30,6 +30,10 @@ public:
 	virtual Status fetch_file(std::string_view version, const std::string &file,
 			const std::filesystem::path &dest, const ProgressFn &progress) = 0;
 
+	// release.toml.sig for `version`: the file's text, or empty when the release
+	// has none (a missing signature is not an error here; policy decides).
+	virtual Status fetch_signature(std::string_view version, std::string &out) = 0;
+
 	// Release tags this source offers, newest first (`vb list --remote`).
 	virtual Status list_versions(std::vector<std::string> &out) = 0;
 

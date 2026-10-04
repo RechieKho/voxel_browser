@@ -33,15 +33,21 @@ endif()
 #   FetchContent at a nested CMakeLists.txt (used for the Lua wrapper).
 # ---------------------------------------------------------------------------
 function(vb_fetch NAME)
-  cmake_parse_arguments(ARG "" "TAG;REPO;SUBDIR" "" ${ARGN})
+  cmake_parse_arguments(ARG "FULL_CLONE" "TAG;REPO;SUBDIR" "" ${ARGN})
   set(_extra "")
   if(ARG_SUBDIR)
     set(_extra SOURCE_SUBDIR ${ARG_SUBDIR})
   endif()
+  # A commit hash (for a dependency that publishes no tags) cannot be
+  # shallow-cloned by name, so FULL_CLONE turns shallow off.
+  set(_shallow TRUE)
+  if(ARG_FULL_CLONE)
+    set(_shallow FALSE)
+  endif()
   FetchContent_Declare(${NAME}
     GIT_REPOSITORY ${ARG_REPO}
     GIT_TAG ${ARG_TAG}
-    GIT_SHALLOW TRUE
+    GIT_SHALLOW ${_shallow}
     GIT_PROGRESS TRUE
     ${_extra}
   )
@@ -159,6 +165,30 @@ if(VB_BUILD_CLI)
     set(AMALGAMATE_SOURCES OFF CACHE INTERNAL "")
     vb_fetch(miniz TAG 3.0.2 REPO https://github.com/richgel999/miniz.git)
   endif()
+endif()
+
+# ---------------------------------------------------------------------------
+# Ed25519 for release.toml signature checks (vb CLI, dev-cli.md section 3.3).
+#   orlp/ed25519: public domain / zlib, five small C files, RFC 8032 compatible
+#   (verified against OpenSSL-produced signatures -- see tests/unit/
+#   dev_cli_signing_test.cpp). It publishes no tags, so a commit is pinned.
+#   Built as its own target so the project's -Werror flags never see it.
+#   Keys are in release_keys.txt at the repo root (compiled into vb).
+# ---------------------------------------------------------------------------
+if(VB_BUILD_CLI)
+  vb_fetch(ed25519 TAG b1f19fab4aebe607805620d25a5e42566ce46a0e
+    REPO https://github.com/orlp/ed25519.git FULL_CLONE)
+  FetchContent_GetProperties(ed25519 SOURCE_DIR ed25519_SOURCE_DIR)
+  add_library(vb_ed25519 STATIC
+    "${ed25519_SOURCE_DIR}/src/fe.c" "${ed25519_SOURCE_DIR}/src/ge.c"
+    "${ed25519_SOURCE_DIR}/src/sc.c" "${ed25519_SOURCE_DIR}/src/sha512.c"
+    "${ed25519_SOURCE_DIR}/src/verify.c")
+  target_include_directories(vb_ed25519 SYSTEM PUBLIC "${ed25519_SOURCE_DIR}/src")
+  set_target_properties(vb_ed25519 PROPERTIES POSITION_INDEPENDENT_CODE ON)
+  # Signing is only needed by tests (they sign fixtures at run time).
+  add_library(vb_ed25519_signing STATIC
+    "${ed25519_SOURCE_DIR}/src/keypair.c" "${ed25519_SOURCE_DIR}/src/sign.c")
+  target_link_libraries(vb_ed25519_signing PUBLIC vb_ed25519)
 endif()
 
 # ===========================================================================

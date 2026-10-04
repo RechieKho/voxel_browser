@@ -455,8 +455,13 @@ surface and per-phase task lists: `architecture_spec/dev-cli.md` §11.
       `vb host`, `vb server new/start/stop/status/logs/rm`.
 - [x] **8.5 — Polish**: `list --remote`, `--json`, `self update`, bootstrap
       scripts, server `--status-file`, completions, `vb host --watch`.
-- [ ] **8.6 — Hardening**: signed manifests, service-unit printing,
-      protocol-mismatch warnings, arm64 artifacts.
+- [x] **8.6 — Hardening**: Ed25519-signed `release.toml` (verified by `vb` and
+      `install.sh`; **inactive until the maintainer adds a key to
+      `release_keys.txt` and the `RELEASE_SIGNING_KEY` secret** — steps in
+      `architecture_spec/dev-cli.md`), `vb server service print`,
+      `vb launch --connect` protocol warning. arm64: `vb`/scripts understand
+      `linux-arm64`/`windows-arm64`, but the **CI legs are not added yet**
+      (how-to in the design doc).
 
 ---
 

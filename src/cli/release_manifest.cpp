@@ -83,6 +83,8 @@ std::string current_platform() {
 #if defined(_WIN32)
 #if defined(_M_X64) || defined(__x86_64__)
 	return "windows-x86_64";
+#elif defined(_M_ARM64) || defined(__aarch64__)
+	return "windows-arm64";
 #else
 	return {};
 #endif
@@ -91,6 +93,8 @@ std::string current_platform() {
 #elif defined(__linux__)
 #if defined(__x86_64__)
 	return "linux-x86_64";
+#elif defined(__aarch64__)
+	return "linux-arm64";
 #else
 	return {};
 #endif

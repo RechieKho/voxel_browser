@@ -62,6 +62,7 @@ struct RunRecord {
 	Pid pid = 0;
 	std::uint64_t start_token = 0;
 	std::int64_t started_unix = 0;
+	std::uint16_t port = 0; // UDP port it was started on (0 = unknown, older record)
 	std::string version; // resolved entry name the server runs from
 };
 

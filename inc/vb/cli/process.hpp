@@ -26,6 +26,17 @@ RunResult run_foreground(const std::filesystem::path &exe,
 		const std::vector<std::string> &args, const std::filesystem::path &cwd = {},
 		const std::function<void(Pid)> &on_start = {});
 
+struct CaptureResult {
+	int exit_code = -1; // -1 when it could not be started
+	std::string output; // stdout + stderr, truncated to `max_bytes`
+	std::string error; // set when the child could not be started
+};
+
+// Runs `exe args...`, waits, and returns what it printed (stdin is closed).
+// For short helper invocations such as `<server> --version`.
+CaptureResult run_capture(const std::filesystem::path &exe, const std::vector<std::string> &args,
+		const std::filesystem::path &cwd = {}, std::size_t max_bytes = 64 * 1024);
+
 struct SpawnResult {
 	Pid pid = 0;
 	std::string error; // set when the child could not be started

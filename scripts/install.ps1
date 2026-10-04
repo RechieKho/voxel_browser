@@ -26,8 +26,11 @@ $baseUrl = Get-Setting 'VB_BASE_URL' 'https://github.com'
 $relDir  = Get-Setting 'VB_RELEASE_DIR' ''
 
 $arch = $env:PROCESSOR_ARCHITECTURE
-if ($arch -ne 'AMD64') { throw "no published builds for Windows on $arch" }
-$platform = 'windows-x86_64'
+switch ($arch) {
+  'AMD64' { $platform = 'windows-x86_64' }
+  'ARM64' { $platform = 'windows-arm64' }
+  default { throw "no published builds for Windows on $arch" }
+}
 
 $data = Get-Setting 'VB_HOME' (Join-Path $env:LOCALAPPDATA 'voxel_browser')
 $bin  = Join-Path $data 'bin'

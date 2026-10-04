@@ -1,5 +1,6 @@
 #include "vb/cli/process.hpp"
 
+#include <algorithm>
 #include <system_error>
 
 #if defined(_WIN32)
@@ -101,6 +102,58 @@ RunResult run_foreground(const std::filesystem::path &exe,
 	CloseHandle(pi.hThread);
 	SetConsoleCtrlHandler(nullptr, FALSE);
 	return { static_cast<int>(code), {} };
+}
+
+CaptureResult run_capture(const std::filesystem::path &exe, const std::vector<std::string> &args,
+		const std::filesystem::path &cwd, std::size_t max_bytes) {
+	SECURITY_ATTRIBUTES inheritable{};
+	inheritable.nLength = sizeof(inheritable);
+	inheritable.bInheritHandle = TRUE;
+	HANDLE read_end = nullptr;
+	HANDLE write_end = nullptr;
+	if (!CreatePipe(&read_end, &write_end, &inheritable, 0)) {
+		return { -1, {}, "cannot create a pipe" };
+	}
+	SetHandleInformation(read_end, HANDLE_FLAG_INHERIT, 0); // the child must not inherit our end
+	HANDLE nul = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+			&inheritable, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+
+	STARTUPINFOW si{};
+	si.cb = sizeof(si);
+	si.dwFlags = STARTF_USESTDHANDLES;
+	si.hStdInput = nul;
+	si.hStdOutput = write_end;
+	si.hStdError = write_end;
+	PROCESS_INFORMATION pi{};
+	std::wstring cmd = build_command_line(exe, args);
+	const std::wstring wcwd = cwd.wstring();
+	const BOOL ok = CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
+			nullptr, wcwd.empty() ? nullptr : wcwd.c_str(), &si, &pi);
+	const DWORD err = GetLastError();
+	CloseHandle(write_end); // so ReadFile sees EOF when the child exits
+	if (nul != INVALID_HANDLE_VALUE) {
+		CloseHandle(nul);
+	}
+	if (!ok) {
+		CloseHandle(read_end);
+		return { -1, {}, "cannot start " + exe.string() + " (error " + std::to_string(err) + ")" };
+	}
+	CaptureResult result;
+	char buf[4096];
+	DWORD got = 0;
+	while (ReadFile(read_end, buf, sizeof(buf), &got, nullptr) && got > 0) {
+		if (result.output.size() < max_bytes) {
+			result.output.append(buf, std::min<std::size_t>(got, max_bytes - result.output.size()));
+		}
+	}
+	CloseHandle(read_end);
+	WaitForSingleObject(pi.hProcess, INFINITE);
+	DWORD code = 1;
+	GetExitCodeProcess(pi.hProcess, &code);
+	CloseHandle(pi.hProcess);
+	CloseHandle(pi.hThread);
+	result.exit_code = static_cast<int>(code);
+	return result;
 }
 
 SpawnResult spawn_detached(const std::filesystem::path &exe,
@@ -283,6 +336,84 @@ RunResult run_foreground(const std::filesystem::path &exe,
 		return { WEXITSTATUS(status), {} };
 	}
 	return { 128 + (WIFSIGNALED(status) ? WTERMSIG(status) : 0), {} };
+}
+
+CaptureResult run_capture(const std::filesystem::path &exe, const std::vector<std::string> &args,
+		const std::filesystem::path &cwd, std::size_t max_bytes) {
+	std::vector<std::string> storage;
+	storage.push_back(exe.string());
+	storage.insert(storage.end(), args.begin(), args.end());
+	std::vector<char *> argv;
+	for (std::string &a : storage) {
+		argv.push_back(a.data());
+	}
+	argv.push_back(nullptr);
+
+	int out_pipe[2];
+	int err_pipe[2]; // exec / chdir failure, close-on-exec
+	if (pipe(out_pipe) != 0) {
+		return { -1, {}, std::string("pipe: ") + std::strerror(errno) };
+	}
+	if (pipe(err_pipe) != 0) {
+		close(out_pipe[0]);
+		close(out_pipe[1]);
+		return { -1, {}, std::string("pipe: ") + std::strerror(errno) };
+	}
+	fcntl(err_pipe[0], F_SETFD, FD_CLOEXEC);
+	fcntl(err_pipe[1], F_SETFD, FD_CLOEXEC);
+	const pid_t pid = fork();
+	if (pid < 0) {
+		for (const int fd : { out_pipe[0], out_pipe[1], err_pipe[0], err_pipe[1] }) {
+			close(fd);
+		}
+		return { -1, {}, std::string("fork: ") + std::strerror(errno) };
+	}
+	if (pid == 0) {
+		const int null_fd = open("/dev/null", O_RDONLY);
+		if (null_fd >= 0) {
+			dup2(null_fd, STDIN_FILENO);
+		}
+		dup2(out_pipe[1], STDOUT_FILENO);
+		dup2(out_pipe[1], STDERR_FILENO);
+		close(out_pipe[0]);
+		close(out_pipe[1]);
+		if (!cwd.empty() && chdir(cwd.c_str()) != 0) {
+			const int e = errno;
+			(void)!write(err_pipe[1], &e, sizeof(e));
+			_exit(127);
+		}
+		execv(argv[0], argv.data());
+		const int e = errno;
+		(void)!write(err_pipe[1], &e, sizeof(e));
+		_exit(127);
+	}
+	close(out_pipe[1]);
+	close(err_pipe[1]);
+	CaptureResult result;
+	char buf[4096];
+	ssize_t n = 0;
+	while ((n = read(out_pipe[0], buf, sizeof(buf))) != 0) {
+		if (n < 0) {
+			if (errno == EINTR) {
+				continue;
+			}
+			break;
+		}
+		const std::size_t room = result.output.size() < max_bytes ? max_bytes - result.output.size() : 0;
+		result.output.append(buf, std::min<std::size_t>(static_cast<std::size_t>(n), room));
+	}
+	close(out_pipe[0]);
+	int child_errno = 0;
+	const ssize_t got_err = read(err_pipe[0], &child_errno, sizeof(child_errno));
+	close(err_pipe[0]);
+	int status = 0;
+	while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {
+	}
+	if (got_err == static_cast<ssize_t>(sizeof(child_errno))) {
+		return { -1, {}, "cannot start " + exe.string() + ": " + std::strerror(child_errno) };
+	}
+	result.exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + (WIFSIGNALED(status) ? WTERMSIG(status) : 0);
+	return result;
 }
 
 SpawnResult spawn_detached(const std::filesystem::path &exe,

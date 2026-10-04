@@ -74,9 +74,10 @@ on a user's PATH the binary can be renamed without touching anything else
 - Every release publishes `release.toml` listing each archive's filename,
   size and **SHA-256**. `vb` refuses to extract anything whose hash doesn't
   match (hashing via the existing `vb::core::sha256`).
-- Transport trust = HTTPS to `github.com`. Detached signatures (minisign /
-  Sigstore) are 8.6 — the manifest format reserves a `signature` field so
-  adding them later is not a breaking change.
+- Transport trust = HTTPS to `github.com`, plus a **signed manifest**: each
+  release carries `release.toml.sig`, a base64 Ed25519 signature over the exact
+  bytes of `release.toml` (see "Release signing" below). The manifest names every
+  archive's SHA-256, so authenticating it authenticates the whole release.
 - Zip extraction rejects absolute paths, `..` components and symlinks
   (zip-slip).
 
@@ -124,7 +125,7 @@ build     = "release"                # "release" | "debug"
 file      = "voxel_browser-v0.2.0-linux-x86_64.zip"
 size      = 18734512
 sha256    = "…"
-# signature = "…"                    # reserved, 8.6
+# the signature is a separate file, release.toml.sig (see "Release signing")
 ```
 
 Resolution without the GitHub API (no JSON, no rate limit):
@@ -518,12 +519,89 @@ Nothing can be downloaded reliably until this lands.
 
 ### 8.6 — Hardening (S–M, as needed)
 
-- [ ] Signed `release.toml` (minisign or Sigstore), verification in `vb`.
-- [ ] `vb server service print <name>` → a systemd user unit / launchd agent /
+- [x] Signed `release.toml` (Ed25519), verification in `vb` and `install.sh`.
+- [x] `vb server service print <name>` → a systemd user unit / launchd agent /
       Task Scheduler XML the user can install themselves (still no elevation).
-- [ ] Protocol-mismatch warning: `vb launch --connect host:port` compares the
-      installed client's `engine_protocol_version` with the server's.
-- [ ] Linux arm64 / Windows arm64 artifacts once CI builds them.
+- [x] Protocol-mismatch warning: `vb launch --connect host:port` compares the
+      client's protocol with a locally managed server's.
+- [~] Linux arm64 / Windows arm64 artifacts: `vb`, both install scripts and the
+      packaging scripts understand `linux-arm64` / `windows-arm64`; the CI legs
+      that build them are **not added** (see below).
+
+#### Release signing
+
+- **Scheme.** Ed25519 (RFC 8032, pure mode) over the raw bytes of `release.toml`;
+  `release.toml.sig` is the base64 of the 64-byte signature. It is made with
+  plain `openssl pkeyutl -sign -rawin` (`scripts/sign_release.sh`), so a
+  maintainer needs nothing but OpenSSL. `vb` verifies with
+  [orlp/ed25519](https://github.com/orlp/ed25519) (public domain / zlib, pinned
+  by commit in `cmake/Dependencies.cmake`, built as its own target outside the
+  project's `-Werror` flags). OpenSSL-made signatures verifying under it is
+  pinned by a test vector (`dev_cli_hardening_test.cpp`).
+  Minisign/Sigstore were not used: minisign pre-hashes with BLAKE2b (more code
+  to ship) and Sigstore needs network services at install time.
+- **Trust anchors.** Public keys compiled into `vb` from `release_keys.txt`, plus
+  `trusted_keys = ["<hex>", ...]` in `cli.toml`. With no key at all nothing is
+  enforced (so existing setups keep working). With any key, a missing signature
+  is refused (`require_signature = false` in `cli.toml` relaxes that); a
+  present-but-wrong signature is always refused. Applies to `install`, `update`
+  and `self update`; `vb doctor` shows the policy.
+- **Turning it on (maintainer, once).**
+  1. `scripts/gen_release_key.sh private.pem` — creates the key pair and prints
+     the public key in the two encodings below.
+  2. Add the hex line to `release_keys.txt` and set `DEFAULT_PUBLIC_KEY_B64` in
+     `scripts/install.sh`.
+  3. Store the private key as the repository secret `RELEASE_SIGNING_KEY`.
+  From then on `publish.yml` signs every release, and **fails** if a key is
+  listed but the secret is missing (otherwise every `vb` would refuse that
+  release). Until step 2 the workflow only warns.
+- **Rotation.** Add the new hex line *next to* the old one, ship a `vb` release
+  signed by the old key, then sign later releases with the new key; remove the
+  old line once nothing signed by it needs installing.
+- **`install.sh`** verifies the manifest itself with the user's `openssl` before
+  trusting anything it says (the `vb` it installs cannot vouch for itself). It
+  fails closed when `openssl` cannot verify raw Ed25519 (macOS's stock LibreSSL
+  cannot: `brew install openssl`), unless `VB_ALLOW_UNSIGNED=1`.
+- **`install.ps1` does not verify signatures.** Windows PowerShell has no
+  Ed25519 primitive, and shelling out to the downloaded `vb` would be circular.
+  Its trust is HTTPS + the manifest's SHA-256. Every later download (the game,
+  `vb self update`) is signature-checked by `vb` itself.
+- Not covered: a compromised signing key, and rollback to an older (validly
+  signed) release. Neither is something `vb` can detect today.
+
+#### Service definitions
+
+`vb server service print <name> [--platform systemd|launchd|task]` writes the
+definition to stdout (instructions go to stderr, so `> file` is clean). All three
+run `vb server start <name> --foreground`, so `status`, `stop` and `logs` keep
+working. systemd: a *user* unit (`KillMode=mixed`, `TimeoutStopSec=60`, restart on
+failure, logs appended to the instance log). launchd: a login agent
+(`KeepAlive/SuccessfulExit=false` — restart after a crash, not after
+`vb server stop`). Windows: a per-user logon task at `LeastPrivilege`; ending the
+task from Task Scheduler terminates the server **without saving**, so stop it with
+`vb server stop`. `VB_HOME` is passed through when set. Generated XML is checked
+to be well-formed (no `--` in comments, names escaped).
+
+#### Protocol warning
+
+`vb launch --connect host:port` passes `--server/--port` to the client and, when
+the target is this machine and a server vb manages is running on that port,
+compares the two protocol numbers (from the install receipt, else `<binary>
+--version`) and prints a warning with the fix. It only warns: the client's own
+handshake stays the authority. A server on another machine is invisible to
+`vb`, so nothing is claimed about it.
+
+#### arm64
+
+Platform strings are `linux-arm64` and `windows-arm64` (macOS stays
+`macos-universal`). Everything that reads them is ready; the CI legs are not
+added because they cannot be verified from here and a hosted-runner label that
+does not exist for this repository would block `bundle`/`publish` for every
+release. To add them: in `build_linux.yml` set `arch: [x86_64, arm64]`, give the
+x86_64 leg `os: ubuntu-latest` and the arm64 leg `os: ubuntu-24.04-arm`, and
+`exclude` arm64 + asan/tsan; in `build_windows.yml` add an arm64 leg on
+`windows-11-arm` with the matching vcpkg triplet (`arm64-windows`) and
+`vcvarsall` arch. Then tag a release and check `vb install` on such a machine.
 
 ## 12. Open questions
 

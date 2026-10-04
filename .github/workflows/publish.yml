@@ -25,6 +25,28 @@ jobs:
           workflow: runner.yml
           name: ${{ needs.setup_metadata.outputs.project_name }} 
 
+      # release.toml.sig: Ed25519 signature over release.toml (dev-cli.md "Release
+      # signing"). Until release_keys.txt lists a key there is nothing to enforce,
+      # so a missing secret only warns; once a key is listed, a release without a
+      # valid signature would be refused by every vb, so it must fail here instead.
+      - name: Sign release manifest
+        shell: bash
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          if [ -z "$RELEASE_SIGNING_KEY" ]; then
+            if grep -Eq '^[0-9a-fA-F]{64}$' release_keys.txt; then
+              echo "::error::release_keys.txt lists a trusted key but the RELEASE_SIGNING_KEY secret is not set"
+              exit 1
+            fi
+            echo "::warning::RELEASE_SIGNING_KEY is not set; publishing an unsigned release"
+            exit 0
+          fi
+          key="$RUNNER_TEMP/release_key.pem"
+          (umask 077; printf '%s\n' "$RELEASE_SIGNING_KEY" > "$key")
+          sh scripts/sign_release.sh release.toml "$key"
+          rm -f "$key"
+
       - name: Release
         uses: softprops/action-gh-release@v1
         with:
@@ -35,3 +57,4 @@ jobs:
             ${{ github.workspace }}/release.toml
             ${{ github.workspace }}/scripts/install.sh
             ${{ github.workspace }}/scripts/install.ps1
+            ${{ github.workspace }}/release.toml.sig

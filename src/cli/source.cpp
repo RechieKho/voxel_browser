@@ -83,6 +83,18 @@ public:
 		return {};
 	}
 
+	Status fetch_signature(std::string_view, std::string &out) override {
+		out.clear();
+		std::ifstream in(dir_ / "release.toml.sig", std::ios::binary);
+		if (!in) {
+			return {};
+		}
+		std::stringstream ss;
+		ss << in.rdbuf();
+		out = ss.str();
+		return {};
+	}
+
 	Status list_versions(std::vector<std::string> &out) override {
 		std::string text;
 		if (const Status s = fetch_manifest("latest", text); !s) {
@@ -268,6 +280,35 @@ public:
 					(err[0] != 0 ? err : curl_easy_strerror(rc)) +
 					" (re-run to resume)" };
 		}
+		return {};
+	}
+
+	Status fetch_signature(std::string_view version, std::string &out) override {
+		out.clear();
+		CurlHandle c;
+		if (c.h == nullptr) {
+			return { "curl init failed" };
+		}
+		MemSink sink;
+		sink.limit = 4096; // a base64 Ed25519 signature is 88 bytes
+		const std::string url = release_url(version, "release.toml.sig");
+		common_options(c.h, allow_http());
+		curl_easy_setopt(c.h, CURLOPT_URL, url.c_str());
+		curl_easy_setopt(c.h, CURLOPT_WRITEFUNCTION, mem_write);
+		curl_easy_setopt(c.h, CURLOPT_WRITEDATA, &sink);
+		char err[CURL_ERROR_SIZE] = {};
+		curl_easy_setopt(c.h, CURLOPT_ERRORBUFFER, err);
+		const CURLcode rc = curl_easy_perform(c.h);
+		if (rc != CURLE_OK) {
+			long code = 0;
+			curl_easy_getinfo(c.h, CURLINFO_RESPONSE_CODE, &code);
+			if (code == 404) {
+				return {}; // an unsigned release
+			}
+			return { "cannot fetch " + url + ": " +
+				(sink.overflow ? "signature too large" : (err[0] != 0 ? err : curl_easy_strerror(rc))) };
+		}
+		out = std::move(sink.data);
 		return {};
 	}
 

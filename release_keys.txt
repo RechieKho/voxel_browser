@@ -1,0 +1,11 @@
+# Public keys (Ed25519, 64 hex characters, one per line) that `vb` trusts to
+# sign release.toml. They are compiled into vb at build time.
+#
+# While this list is empty, release signatures are not enforced. To turn
+# enforcement on, see "Release signing" in architecture_spec/dev-cli.md:
+#   1. scripts/gen_release_key.sh <private.pem>     (creates a key pair)
+#   2. put the printed hex public key on a line below, and the printed base64
+#      in scripts/install.sh (DEFAULT_PUBLIC_KEY_B64)
+#   3. store the private key as the repository secret RELEASE_SIGNING_KEY
+# Keep an old key listed until releases signed with it are no longer installed
+# (that is how a key is rotated).

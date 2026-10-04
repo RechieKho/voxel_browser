@@ -116,12 +116,18 @@ vb server logs survival -f
 vb server config survival set motd "Welcome!"
 vb server stop survival
 
+vb server service print survival     # a systemd / launchd / Task Scheduler definition to install yourself
+vb launch --connect localhost:27016  # join a server (warns if its version can't talk to this client)
+
 vb list --remote             # releases available to install
 vb install v0.3.0            # several versions can live side by side
 vb use v0.3.0                # pick the default
 vb update                    # install the newest release
 vb self update               # update vb itself
 ```
+
+Releases can be signed (`release.toml.sig`, Ed25519); once a trusted key is configured
+`vb` refuses unsigned or wrongly signed releases (`vb doctor` shows the policy).
 
 Server worlds live in `<data>/servers/<name>/`, singleplayer worlds in
 `<data>/worlds/`, so uninstalling or updating a version never touches them.

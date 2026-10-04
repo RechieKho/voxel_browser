@@ -57,6 +57,7 @@ Status write_run_record(const Instance &inst, const RunRecord &r) {
 	os << "pid = " << r.pid << "\n"
 	   << "start_token = " << r.start_token << "\n"
 	   << "started = " << r.started_unix << "\n"
+	   << "port = " << r.port << "\n"
 	   << "version = " << toml_quote(r.version) << "\n";
 	return write_text_atomic(run_file(inst), os.str());
 }
@@ -73,6 +74,7 @@ std::optional<RunRecord> read_run_record(const Instance &inst) {
 		r.pid = static_cast<Pid>(*pid);
 		r.start_token = static_cast<std::uint64_t>(*token);
 		r.started_unix = t["started"].value_or<std::int64_t>(0);
+		r.port = static_cast<std::uint16_t>(t["port"].value_or<std::int64_t>(0));
 		r.version = t["version"].value_or<std::string>("");
 		return r;
 	} catch (const toml::parse_error &) {
@@ -388,6 +390,7 @@ StartResult start_instance(const Layout &layout, const Instance &inst, const Ove
 		r.start_token = process_start_token(pid).value_or(0);
 		r.started_unix = now_unix();
 		r.version = plan.version_name;
+		r.port = plan.port;
 		return r;
 	};
 

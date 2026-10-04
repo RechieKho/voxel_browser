@@ -7,6 +7,7 @@
 
 #include "vb/cli/layout.hpp"
 #include "vb/cli/release_manifest.hpp"
+#include "vb/cli/signature.hpp"
 #include "vb/cli/source.hpp"
 
 namespace vb::cli {
@@ -18,6 +19,7 @@ struct InstallOptions {
 	bool keep_download = false;
 	bool wait_for_lock = true;
 	bool run_version_check = true; // run `<server> --version` before committing
+	TrustPolicy trust; // release.toml signature policy (empty keys = not enforced)
 	ProgressFn progress;
 };
 

@@ -23,6 +23,7 @@
 #define VB_STDOUT_FD STDOUT_FILENO
 #endif
 
+#include "vb/cli/compat.hpp"
 #include "vb/cli/completions.hpp"
 #include "vb/cli/installer.hpp"
 #include "vb/cli/instance.hpp"
@@ -30,7 +31,9 @@
 #include "vb/cli/release_manifest.hpp"
 #include "vb/cli/self_update.hpp"
 #include "vb/cli/server_config.hpp"
+#include "vb/cli/service.hpp"
 #include "vb/cli/shim.hpp"
+#include "vb/cli/signature.hpp"
 #include "vb/cli/source.hpp"
 #include "vb/cli/store.hpp"
 #include "vb/cli/version.hpp"
@@ -381,6 +384,11 @@ InstallResult do_install(const Ctx &c, const std::string &version, InstallOption
 		return r;
 	}
 	opts.progress = make_progress(c);
+	std::string trust_warning;
+	opts.trust = load_trust_policy(c.layout, &trust_warning);
+	if (!trust_warning.empty()) {
+		c.err << "vb: warning: " << trust_warning << "\n";
+	}
 	c.out << "installing " << version << " from " << source->describe() << "\n";
 	InstallResult r = install_release(c.layout, *source, version, opts);
 	if (opts.progress) {
@@ -505,6 +513,20 @@ int cmd_doctor(const Ctx &c, const std::vector<std::string> &args) {
 	c.out << "[info] data: " << c.layout.data().string() << "\n"
 		  << "[info] config: " << c.layout.config().string() << "\n"
 		  << "[info] source: " << configured_source_spec(c.layout) << "\n";
+	{
+		std::string warning;
+		const TrustPolicy policy = load_trust_policy(c.layout, &warning);
+		if (policy.keys.empty()) {
+			c.out << "[info] release signatures: not enforced (no trusted key; see release_keys.txt "
+					 "and `trusted_keys` in cli.toml)\n";
+		} else {
+			c.out << "[info] release signatures: " << (policy.require ? "required" : "checked when present")
+				  << ", " << policy.keys.size() << " trusted key(s)\n";
+		}
+		if (!warning.empty()) {
+			c.out << "[warn] " << warning << "\n";
+		}
+	}
 	std::string why;
 	report(make_source(configured_source_spec(c.layout), &why) != nullptr,
 			why.empty() ? "source spec is valid" : why);
@@ -556,6 +578,29 @@ int cmd_launch(const Ctx &c, const std::vector<std::string> &raw) {
 	if (!take_version_flag(opts, version)) {
 		return usage_error(c, "--version needs a value");
 	}
+	std::optional<ConnectTarget> connect;
+	for (std::size_t i = 0; i < opts.size(); ++i) {
+		std::string value;
+		if (opts[i] == "--connect" && i + 1 < opts.size()) {
+			value = opts[i + 1];
+			opts.erase(opts.begin() + static_cast<std::ptrdiff_t>(i),
+					opts.begin() + static_cast<std::ptrdiff_t>(i) + 2);
+		} else if (opts[i].rfind("--connect=", 0) == 0) {
+			value = opts[i].substr(10);
+			opts.erase(opts.begin() + static_cast<std::ptrdiff_t>(i));
+		} else {
+			continue;
+		}
+		ConnectTarget target;
+		if (const Status st = parse_connect_target(value, target); !st) {
+			return usage_error(c, st.error);
+		}
+		connect = target;
+		break;
+	}
+	if (std::find(opts.begin(), opts.end(), "--connect") != opts.end()) {
+		return usage_error(c, "--connect needs host[:port]");
+	}
 	if (!opts.empty()) {
 		return usage_error(c, "unexpected argument '" + opts[0] +
 				"' (pass client arguments after `--`)");
@@ -564,6 +609,23 @@ int cmd_launch(const Ctx &c, const std::vector<std::string> &raw) {
 	const auto e = resolve_entry(c.layout, version, &why);
 	if (!e) {
 		return failure(c, why);
+	}
+	if (connect) {
+		// Only a warning: the launch goes ahead (the client's own handshake is
+		// the authority), but a mismatch with a server we manage is worth a line.
+		if (const std::string warning = protocol_warning(c.layout, *e, *connect); !warning.empty()) {
+			c.err << "vb: warning: " << warning << "\n";
+		}
+		const auto has = [&](const char *name) {
+			return std::any_of(passthrough.begin(), passthrough.end(), [&](const std::string &a) {
+				return a == name || a.rfind(std::string(name) + "=", 0) == 0;
+			});
+		};
+		if (has("--server") || has("--port")) {
+			return usage_error(c, "--connect cannot be combined with --server / --port");
+		}
+		passthrough.insert(passthrough.begin(),
+				{ "--server", connect->host, "--port", std::to_string(connect->port) });
 	}
 	const auto bin = find_binary(*e, Binary::Client);
 	if (!bin) {
@@ -1255,6 +1317,42 @@ int server_config(const Ctx &c, const std::vector<std::string> &args) {
 	return usage_error(c, kUsage);
 }
 
+int server_service(const Ctx &c, const std::vector<std::string> &args) {
+	constexpr const char *kUsage =
+			"usage: vb server service print <name> [--platform systemd|launchd|task]";
+	if (args.empty() || args[0] != "print") {
+		return usage_error(c, kUsage);
+	}
+	const Opts o = parse_opts(std::vector<std::string>(args.begin() + 1, args.end()), { "--platform" }, {});
+	if (!o.error.empty() || o.positional.size() != 1) {
+		return usage_error(c, o.error.empty() ? kUsage : o.error);
+	}
+	ServiceKind kind = host_service_kind();
+	if (const auto it = o.values.find("--platform"); it != o.values.end() &&
+			!parse_service_kind(it->second, kind)) {
+		return usage_error(c, "--platform must be systemd, launchd or task");
+	}
+	std::string why;
+	const auto inst = load_instance(c.layout, o.positional[0], &why);
+	if (!inst) {
+		return failure(c, why);
+	}
+	ServiceSpec spec;
+	spec.name = inst->name;
+	spec.vb_exe = current_executable_path();
+	if (spec.vb_exe.empty() || !spec.vb_exe.is_absolute()) {
+		return failure(c, "cannot determine vb's own path for the service definition");
+	}
+	spec.instance_dir = inst->dir;
+	spec.log_file = instance_log_file(*inst);
+	if (const char *home = std::getenv("VB_HOME"); home != nullptr && *home != '\0') {
+		spec.vb_home = home; // the service must see the same data directory vb does
+	}
+	c.out << render_service(kind, spec);
+	c.err << service_install_hint(kind, spec);
+	return kExitOk;
+}
+
 int server_rm(const Ctx &c, const std::vector<std::string> &args) {
 	const Opts o = parse_opts(args, {}, { "--keep-world", "--yes" });
 	int code = kExitOk;
@@ -1277,7 +1375,7 @@ int server_rm(const Ctx &c, const std::vector<std::string> &args) {
 
 const std::vector<std::string> &server_subcommand_names() {
 	static const std::vector<std::string> names = { "new", "list", "start", "stop", "restart",
-		"status", "logs", "config", "rm" };
+		"status", "logs", "config", "service", "rm" };
 	return names;
 }
 
@@ -1285,6 +1383,7 @@ int cmd_server(const Ctx &c, const std::vector<std::string> &args) {
 	static const std::map<std::string, std::function<int(const Ctx &, const std::vector<std::string> &)>>
 			sub = {
 				{ "config", server_config },
+				{ "service", server_service },
 				{ "new", server_new },
 				{ "list", [](const Ctx &ctx, const std::vector<std::string> &a) { return server_list(ctx, a); } },
 				{ "start", server_start },
@@ -1295,7 +1394,7 @@ int cmd_server(const Ctx &c, const std::vector<std::string> &args) {
 				{ "rm", server_rm },
 			};
 	if (args.empty()) {
-		return usage_error(c, "usage: vb server <new|list|start|stop|restart|status|logs|config|rm> ...");
+		return usage_error(c, "usage: vb server <new|list|start|stop|restart|status|logs|config|service|rm> ...");
 	}
 	const auto it = sub.find(args[0]);
 	if (it == sub.end()) {
@@ -1319,6 +1418,11 @@ int cmd_self(const Ctx &c, std::vector<std::string> args) {
 	}
 	opts.current_version = vb::kVersionString;
 	opts.progress = make_progress(c);
+	std::string trust_warning;
+	opts.trust = load_trust_policy(c.layout, &trust_warning);
+	if (!trust_warning.empty()) {
+		c.err << "vb: warning: " << trust_warning << "\n";
+	}
 	std::string why;
 	const auto source = make_source(configured_source_spec(c.layout), &why);
 	if (!source) {
@@ -1463,14 +1567,14 @@ const std::map<std::string, Command> &commands() {
 							return cmd_unlink(c, a);
 						} } },
 		{ "launch",
-				{ "launch [--version <v>] [-- client args...]", "start the client",
+				{ "launch [--version <v>] [--connect host[:port]] [-- client args...]", "start the client",
 						cmd_launch } },
 		{ "host",
 				{ "host [--version v] [--port n] [--pack dir] [--watch] [-- server args...]",
 						"run a server in the foreground (Ctrl+C stops it)",
 						[](const Ctx &c, const std::vector<std::string> &a) { return cmd_host(c, a); } } },
 		{ "server",
-				{ "server <new|list|start|stop|restart|status|logs|config|rm> ...",
+				{ "server <new|list|start|stop|restart|status|logs|config|service|rm> ...",
 						"manage named, background server instances", cmd_server } },
 		{ "self",
 				{ "self update [--check] [--force]", "update vb itself to the latest release",

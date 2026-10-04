@@ -3,6 +3,7 @@
 
 add_library(vb_cli_lib STATIC
   commands.cpp
+  compat.cpp
   completions.cpp
   installer.cpp
   instance.cpp
@@ -13,7 +14,9 @@ add_library(vb_cli_lib STATIC
   release_manifest.cpp
   self_update.cpp
   server_config.cpp
+  service.cpp
   shim.cpp
+  signature.cpp
   source.cpp
   store.cpp
   version.cpp
@@ -30,10 +33,17 @@ target_link_libraries(vb_cli_lib
     tomlplusplus::tomlplusplus
     CURL::libcurl
     nlohmann_json::nlohmann_json
+    vb_ed25519
     miniz
     vb_warnings
     vb_sanitizers
 )
+
+# Release signing keys (release_keys.txt) are compiled into vb.
+file(STRINGS "${CMAKE_SOURCE_DIR}/release_keys.txt" _vb_release_keys REGEX "^[0-9a-fA-F]+$")
+list(JOIN _vb_release_keys "," _vb_release_keys_joined)
+target_compile_definitions(vb_cli_lib PRIVATE VB_RELEASE_PUBLIC_KEYS="${_vb_release_keys_joined}")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/release_keys.txt")
 
 add_executable(vb main.cpp)
 target_link_libraries(vb PRIVATE vb_cli_lib vb_warnings vb_sanitizers)
