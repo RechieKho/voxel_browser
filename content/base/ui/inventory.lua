@@ -1,10 +1,11 @@
 -- base:inventory -- a Lua-defined inventory screen (spec §16/§10.4/§6.2).
 --
--- Reads `state.slots` (a list of `{item, count}`), the exact shape
--- `entity:get_inventory()` (src/script/pack_runtime.cpp's `PlayerHandle::
--- get_inventory`) already returns server-side -- a script opening this with
--- `player:open_ui("base:inventory", { slots = player:get_inventory() })`
--- shows real, if snapshot-only (not live-updating), inventory contents.
+-- Shows the player's *live* inventory (`client.inventory()`, kept in sync by
+-- S2C_Inventory), so the grid updates while the screen is open. Only when the
+-- client has no inventory snapshot yet does it fall back to `state.slots` (a
+-- list of `{item, count}`, the shape `PlayerHandle::get_inventory` returns
+-- server-side), which `player:open_ui("base:inventory", { slots = ... })` can
+-- still supply -- so a pack opening this screen with its own slots works.
 --
 -- `render(state)` is called once per UI frame while this screen stays open.
 -- The panel, backdrop and grid are all positioned from `client.screen_size()`
@@ -40,7 +41,10 @@ local kButtonW = 140
 local kButtonH = 32
 
 ui.define("base:inventory", function(state)
-	local slots = state and state.slots or {}
+	local slots = client.inventory()
+	if #slots == 0 then
+		slots = state and state.slots or {}
+	end
 	local screen = client.screen_size()
 	local selected = client.selected_slot()
 
@@ -118,7 +122,7 @@ ui.define("base:inventory", function(state)
 				type = "text",
 				x = x + kSlotSize - 4,
 				y = y + kSlotSize - 14,
-				text = tostring(slot.count),
+				text = string.format("%d", slot.count),
 				font_size = 12,
 				align = "right",
 				color = { 255, 255, 255, 255 },

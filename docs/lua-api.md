@@ -504,6 +504,10 @@ back which widgets fired an interaction — no sol2 in the render half.
   nothing here draws a pixel, callers decide whether/how to show it:
   - `client.break_progress()` — `nil`, or `0..1` while the player is holding
     to break a targeted block.
+  - `client.inventory()` — list of `{name=.., count=.., item=..}` (`item` is
+    the raw block/item id, `0` = empty slot; what an `icon` widget's `item`
+    takes). Live: follows `S2C_Inventory`. `client.selected_slot()` is the
+    1-based selected hotbar slot.
   - `client.health()` / `client.hunger()` — `{current=.., max=..}` for the
     local player (`S2C_PlayerStatus`), or `nil` before the server's first
     status arrives. Updated whenever the value changes server-side.

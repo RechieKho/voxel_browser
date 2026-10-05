@@ -297,6 +297,19 @@ TEST_CASE("the HUD's state table persists across render_hud() calls, "
 	CHECK(ui.render_hud()[0].text == "3");
 }
 
+TEST_CASE("client.inventory() entries carry name, count and raw item id") {
+	UiRuntime ui;
+	REQUIRE(ui.load_pack_file(R"(
+		ui.define_hud(function(state)
+			local s = client.inventory()[1]
+			return { widgets = { { id = "s", type = "label", x=0,y=0,w=1,h=1,
+				text = s.name .. ":" .. s.count .. ":" .. s.item } } }
+		end)
+	)"));
+	ui.set_inventory({ { "base:stone", 5, 2 } }, 1);
+	CHECK(ui.render_hud()[0].text == "base:stone:5:2");
+}
+
 TEST_CASE("client.health()/client.hunger() are nil until a status is set, "
 		"then report current/max") {
 	UiRuntime ui;
