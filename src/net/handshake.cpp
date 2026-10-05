@@ -100,6 +100,15 @@ ServerHandshakeStep ServerHandshake::pump_assets(int max_chunks) {
 			++asset_stream_.pending_idx;
 			asset_stream_.current_bytes.clear();
 			asset_stream_.current_loaded = false;
+			// Leave kStreamingAssets the moment the last chunk is queued, not
+			// on the next call: if this chunk used up the tick's budget, the
+			// client's Ready (sent as soon as it has every asset) could
+			// otherwise arrive while we're still "streaming" and be rejected
+			// as an unexpected message.
+			if (asset_stream_.pending_idx >= asset_stream_.pending.size()) {
+				state_ = ServerHandshakeState::kAwaitingReady;
+				return step;
+			}
 		}
 	}
 	return step;

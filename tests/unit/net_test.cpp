@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "vb/core/version.hpp"
 #include "vb/net/handshake.hpp"
 #include "vb/net/integrated.hpp"
 #include "vb/net/loopback.hpp"
@@ -310,6 +311,51 @@ TEST_CASE("client rejects a protocol version mismatch") {
 	auto step = client.on_frame(*parsed);
 	CHECK(step.failed);
 	CHECK(client.status() == ClientHandshakeStatus::kFailed);
+}
+
+TEST_CASE("server accepts Ready right after the last asset chunk, even when that "
+		"chunk used up the tick's pump_assets budget") {
+	// Regression: pump_assets() only left kStreamingAssets at the start of its
+	// *next* call, so a client that replied Ready as soon as it had the final
+	// chunk could hit a server still "streaming" and be dropped with
+	// "unexpected message while streaming assets" (seen intermittently in e2e
+	// once the pack's chunk count landed on the per-tick budget boundary).
+	const vb::core::AssetHash hash{ 1, 2 };
+	auto manifest = std::make_shared<vb::assetsync::Manifest>();
+	manifest->entries.push_back({ "ui/a.lua", hash, 4, vb::assetsync::AssetKind::kUi });
+	manifest->total_bytes = 4;
+
+	HandshakeServerHost host;
+	host.asset_manifest = [manifest] { return manifest; };
+	host.asset_file_bytes = [](vb::core::AssetHash) {
+		return std::optional<std::vector<std::byte>>(std::vector<std::byte>(4));
+	};
+	ServerHandshake fsm(HandshakeServerConfig{}, host);
+
+	auto feed = [&](auto msg) {
+		std::vector<std::byte> payload;
+		msg.encode(payload);
+		std::vector<std::byte> frame;
+		proto::write_frame(frame, decltype(msg)::kType, payload);
+		std::size_t consumed = 0;
+		auto parsed = proto::read_frame(span_of(frame), consumed);
+		REQUIRE(parsed);
+		return fsm.on_frame(*parsed);
+	};
+
+	REQUIRE_FALSE(feed(proto::C2SHello{ vb::kEngineProtocolVersion, 1, "t" }).disconnect);
+	REQUIRE_FALSE(feed(proto::C2SAuth{ "P", "" }).disconnect);
+	REQUIRE_FALSE(feed(proto::C2SAssetManifestRequest{}).disconnect);
+	REQUIRE_FALSE(feed(proto::C2SAssetRequest{ { hash } }).disconnect);
+	REQUIRE(fsm.state() == ServerHandshakeState::kStreamingAssets);
+
+	// Budget of exactly one chunk == the whole (single-chunk) asset.
+	const auto step = fsm.pump_assets(1);
+	CHECK(step.send.size() == 1);
+	CHECK(fsm.state() == ServerHandshakeState::kAwaitingReady);
+
+	CHECK_FALSE(feed(proto::C2SReady{}).disconnect);
+	CHECK(fsm.state() == ServerHandshakeState::kPlaying);
 }
 
 TEST_CASE("server handshake times out") {
