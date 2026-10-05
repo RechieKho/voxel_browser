@@ -40,6 +40,13 @@ local kSectionGap = 8
 local kButtonW = 140
 local kButtonH = 32
 
+-- "base:planks" -> "Planks". Only the live inventory carries names; the
+-- open-time snapshot (`state.slots`) has just ids, so it gets no tooltip.
+local function pretty_name(name)
+	local bare = (name:match("([^:]+)$") or name):gsub("_", " ")
+	return bare:sub(1, 1):upper() .. bare:sub(2)
+end
+
 ui.define("base:inventory", function(state)
 	local slots = client.inventory()
 	if #slots == 0 then
@@ -66,7 +73,7 @@ ui.define("base:inventory", function(state)
 			y = 0,
 			w = screen.width,
 			h = screen.height,
-			color = { 0, 0, 0, 120 },
+			color = base_ui.backdrop,
 		},
 		{
 			id = "panel",
@@ -75,8 +82,8 @@ ui.define("base:inventory", function(state)
 			y = panel_y,
 			w = panel_w,
 			h = panel_h,
-			color = { 24, 24, 30, 240 },
-			border = { 110, 110, 125, 255 },
+			color = base_ui.panel_bg,
+			border = base_ui.panel_border,
 		},
 		{
 			id = "title",
@@ -86,9 +93,12 @@ ui.define("base:inventory", function(state)
 			align = "center",
 			text = "Inventory",
 			font_size = 20,
-			color = { 235, 235, 245, 255 },
+			color = base_ui.title,
 		},
 	}
+
+	local mouse = client.mouse_position()
+	local hovered -- { label = ... } for the slot under the cursor, if any
 
 	for i, slot in ipairs(slots) do
 		local col = (i - 1) % kCols
@@ -103,11 +113,15 @@ ui.define("base:inventory", function(state)
 			y = y,
 			w = kSlotSize,
 			h = kSlotSize,
-			color = { 40, 40, 46, 220 },
-			border = i == selected and { 255, 220, 80, 255 } or { 90, 90, 100, 230 },
+			color = base_ui.slot_bg,
+			border = i == selected and base_ui.slot_selected or base_ui.slot_border,
 		})
 
 		if slot.item and slot.item ~= 0 then
+			if slot.name and mouse.x >= x and mouse.x < x + kSlotSize
+					and mouse.y >= y and mouse.y < y + kSlotSize then
+				hovered = pretty_name(slot.name)
+			end
 			table.insert(widgets, {
 				id = "slot_icon_" .. i,
 				type = "icon",
@@ -125,7 +139,7 @@ ui.define("base:inventory", function(state)
 				text = string.format("%d", slot.count),
 				font_size = 12,
 				align = "right",
-				color = { 255, 255, 255, 255 },
+				color = base_ui.text_bright,
 			})
 		end
 	end
@@ -138,7 +152,7 @@ ui.define("base:inventory", function(state)
 			y = grid_y,
 			align = "center",
 			text = "(empty)",
-			color = { 170, 170, 180, 255 },
+			color = base_ui.text_muted,
 		})
 	end
 
@@ -154,6 +168,29 @@ ui.define("base:inventory", function(state)
 			ui.close()
 		end,
 	})
+
+	-- Last, so it draws over the grid and the Close button. The font has no
+	-- measure call in Lua, so the box width is an estimate of ~7px/char.
+	if hovered then
+		local w, h = #hovered * 7 + 12, 22
+		local tx = math.min(mouse.x + 14, screen.width - w - 4)
+		local ty = math.min(mouse.y + 14, screen.height - h - 4)
+		table.insert(widgets, {
+			id = "tooltip_bg",
+			type = "rect",
+			x = tx, y = ty, w = w, h = h,
+			color = base_ui.tooltip_bg,
+			border = base_ui.panel_border,
+		})
+		table.insert(widgets, {
+			id = "tooltip_text",
+			type = "text",
+			x = tx + 6, y = ty + 4,
+			font_size = 14,
+			text = hovered,
+			color = base_ui.title,
+		})
+	end
 
 	return { widgets = widgets }
 end)

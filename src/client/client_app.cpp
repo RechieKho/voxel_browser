@@ -3,6 +3,8 @@
 
 #include "client_app.hpp"
 
+#include <algorithm>
+#include <chrono>
 #include <cstdlib>
 
 #if defined(VB_WITH_AUTOMATION)
@@ -166,6 +168,9 @@ void ClientApp::enter_playing() {
 							bytes.size()));
 		}
 	}
+	// Directory/map iteration order isn't guaranteed; sort so a file like
+	// `ui/_style.lua` always loads before the screens that use it.
+	std::sort(ui_sources.begin(), ui_sources.end());
 	for (const auto &[path, source] : ui_sources) {
 		const vb::script::ScriptResult result =
 				ui_runtime.load_pack_file(source, path);
@@ -642,8 +647,12 @@ bool ClientApp::frame(const vb::render::InputFrame &input, double dt) {
 				}
 			}
 			ui_runtime.set_break_progress(break_progress);
+			ui_runtime.set_clock(std::chrono::duration<double>(
+					std::chrono::steady_clock::now().time_since_epoch()).count());
 			if (render) {
 				ui_runtime.set_screen_size(GetScreenWidth(), GetScreenHeight());
+				const Vector2 mouse = GetMousePosition();
+				ui_runtime.set_mouse_position(mouse.x, mouse.y);
 			}
 
 			// Same posture, for the 3 pieces of always-on HUD content

@@ -1,6 +1,6 @@
 # `content/base` UI/UX — investigation and phased plan
 
-> Status: **U0 (first item), U1, U2, U3 and U4 implemented; U5 not started.** (`PlayerHandle:get_health()`, automation health state and the e2e check are still open.) Covers the three reported
+> Status: **U0 (first item), U1, U2, U3, U4 and U5 implemented** (except the fading item-name label in U4). (`PlayerHandle:get_health()`, automation health state and the e2e check are still open.) Covers the three reported
 > problems (no health bar, inventory not centered, inventory has no
 > container background) and the related gaps found while looking into them.
 > Same layout as `docs/content-base-testing.md`: findings first, then phases
@@ -168,18 +168,26 @@ U2 is the engine prerequisite for U3.
 
 ### U5 — Extra polish (each item independent, optional)
 
-- [ ] Crosshair: two small `rect`s at screen center in `hud.lua`.
-- [ ] Shared style table (colors, padding, slot size) defined once in a
+- [x] Crosshair: two small `rect`s at screen center in `hud.lua`.
+- [x] Shared style table (colors, padding, slot size) defined once in a
       file that loads before `ui/*.lua`, or documented as duplicated until
       `require` exists. Verify client-side load order first.
-- [ ] Damage feedback: a brief red full-screen `rect` flash when
+- [x] Damage feedback: a brief red full-screen `rect` flash when
       `client.health().current` drops, with the timer kept in HUD-local
       state. Needs U2.
-- [ ] Death screen: a `base:death` modal with a centered panel and a
+- [x] Death screen: a `base:death` modal with a centered panel and a
       Respawn button. Depends on how respawn is triggered today; investigate
       `RespawnDecision` and kitchen_sink's `death.lua` first.
-- [ ] Hover tooltip with the item name in the inventory grid. Needs mouse
+- [x] Hover tooltip with the item name in the inventory grid. Needs mouse
       position exposed to Lua, which isn't available today. Engine change.
+
+> Notes from implementing U5: the engine respawns a player on the same tick
+> they die, so there is no dead state to build a respawn prompt around;
+> `base:death` is a notice with a Continue button, opened from a
+> `player_death` handler that returns nothing (default respawn unchanged).
+> Tooltips needed two small engine reads, `client.mouse_position()` and
+> `client.time()` (also drives the damage-flash fade). The client now sorts
+> `ui/*.lua` by path before loading, so `ui/_style.lua` loads first.
 
 ## Suggested order
 

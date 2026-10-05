@@ -508,6 +508,10 @@ back which widgets fired an interaction — no sol2 in the render half.
     the raw block/item id, `0` = empty slot; what an `icon` widget's `item`
     takes). Live: follows `S2C_Inventory`. `client.selected_slot()` is the
     1-based selected hotbar slot.
+  - `client.time()` — monotonic seconds, for presentation timing (fades).
+    `client.mouse_position()` — `{x=.., y=..}` in window pixels, the same
+    space as widget x/y (meaningful while the cursor is free, i.e. a modal
+    screen is open).
   - `client.health()` / `client.hunger()` — `{current=.., max=..}` for the
     local player (`S2C_PlayerStatus`), or `nil` before the server's first
     status arrives. Updated whenever the value changes server-side.
@@ -559,6 +563,8 @@ than as a black box — every file is commented explaining *why*, not just
 | `entities/dropped_item.lua`           | `vb.register_entity` — real dispatch since Phase 6.1 (`vb.world.spawn`/`on_spawn`/`on_tick`/`on_hit`/`on_death` all fire, no EnTT registry involved), but nothing in `content/base` itself ever calls `vb.world.spawn("base:dropped_item", ...)` — real block drops still go through the separate, already-working `vb.world.spawn_item_drop` hardcoded path above instead. `content/examples/kitchen_sink/entities/sentry.lua` (Phase 6.15) is the worked example of a pack actually spawning/hitting/killing one of these |
 | `biomes/plains.lua`, `forest.lua`     | `vb.register_biome`: has a real consumer as of Phase 6.14 (`vb.worldgen.set_pipeline`), but `content/base` itself still never calls `set_pipeline` — these stay declarative-only *in this pack*, kept minimal/production-shaped per spec §5.1; a worked pipeline example belongs to 6.15's separate demo pack |
 | `ui/inventory.lua`, `ui/pause.lua`    | `ui.define`, real screens loaded by every connecting client |
+| `ui/_style.lua`                       | A shared `base_ui` style table; the client sorts `ui/*.lua` before loading so `_style.lua` is always first |
+| `ui/death.lua`, `death.lua`           | A `player_death` handler (returns nothing, so default respawn stands) that opens a "you died" notice via `player:open_ui` |
 | `ui/hud.lua`                          | `ui.define_hud` + the `client.*` raw-state table (Phase 6.16) — the always-on hold-to-break progress bar |
 | `init.lua`                            | Pack-wide setup that isn't a single registration — `vb.storage` persisting a boot counter across restarts |
 

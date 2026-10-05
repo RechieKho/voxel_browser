@@ -28,7 +28,7 @@ ui.define("base:pause", function(state)
 				y = 0,
 				w = screen.width,
 				h = screen.height,
-				color = { 0, 0, 0, 120 },
+				color = base_ui.backdrop,
 			},
 			{
 				id = "panel",
@@ -37,8 +37,8 @@ ui.define("base:pause", function(state)
 				y = panel_y,
 				w = kPanelW,
 				h = kPanelH,
-				color = { 24, 24, 30, 240 },
-				border = { 110, 110, 125, 255 },
+				color = base_ui.panel_bg,
+				border = base_ui.panel_border,
 			},
 			{
 				id = "title",
@@ -48,7 +48,7 @@ ui.define("base:pause", function(state)
 				align = "center",
 				text = "Paused",
 				font_size = 20,
-				color = { 235, 235, 245, 255 },
+				color = base_ui.title,
 			},
 			{
 				id = "resume",

@@ -93,7 +93,7 @@ local function push_chat_log(widgets, screen)
 			x = 12,
 			y = y,
 			text = line,
-			color = { 220, 220, 220, 230 },
+			color = base_ui.text,
 		})
 		y = y + line_h
 	end
@@ -127,8 +127,8 @@ local function push_bar(widgets, id, x, y, w, h, current, max, fill)
 		id = id .. "_bg",
 		type = "rect",
 		x = x, y = y, w = w, h = h,
-		color = { 30, 30, 34, 200 },
-		border = { 90, 90, 100, 230 },
+		color = base_ui.bar_bg,
+		border = base_ui.bar_border,
 	})
 	if frac > 0 then
 		table.insert(widgets, {
@@ -147,7 +147,7 @@ local function push_bar(widgets, id, x, y, w, h, current, max, fill)
 		align = "center",
 		font_size = 12,
 		text = string.format("%d / %d", math.ceil(current), math.ceil(max)),
-		color = { 255, 255, 255, 240 },
+		color = base_ui.text_bright,
 	})
 end
 
@@ -192,8 +192,8 @@ local function push_hotbar(widgets, screen)
 		y = layout.y - kHotbarPad,
 		w = layout.w + 2 * kHotbarPad,
 		h = kSlotSize + 2 * kHotbarPad,
-		color = { 20, 20, 26, 190 },
-		border = { 110, 110, 125, 230 },
+		color = base_ui.container_bg,
+		border = base_ui.container_border,
 	})
 
 	for i = 1, n do
@@ -204,8 +204,8 @@ local function push_hotbar(widgets, screen)
 			id = "hotbar_bg_" .. i,
 			type = "rect",
 			x = x, y = y, w = kSlotSize, h = kSlotSize,
-			color = { 40, 40, 46, 220 },
-			border = (i == selected) and { 230, 220, 120, 255 } or { 90, 90, 100, 230 },
+			color = base_ui.slot_bg,
+			border = (i == selected) and base_ui.slot_selected or base_ui.slot_border,
 		})
 		if slot.item ~= 0 and slot.count > 0 then
 			table.insert(widgets, {
@@ -222,15 +222,66 @@ local function push_hotbar(widgets, screen)
 				align = "right",
 				font_size = 12,
 				text = tostring(slot.count),
-				color = { 255, 255, 255, 255 },
+				color = base_ui.text_bright,
 			})
 		end
+	end
+end
+
+-- A small "+" at screen center; the block-highlight outline alone isn't
+-- enough to aim by.
+local function push_crosshair(widgets, screen)
+	local cx, cy = math.floor(screen.width / 2), math.floor(screen.height / 2)
+	local arm, thick = 6, 2
+	local color = { 255, 255, 255, 200 }
+	table.insert(widgets, {
+		id = "crosshair_h",
+		type = "rect",
+		x = cx - arm, y = cy - thick / 2, w = arm * 2, h = thick,
+		color = color,
+	})
+	table.insert(widgets, {
+		id = "crosshair_v",
+		type = "rect",
+		x = cx - thick / 2, y = cy - arm, w = thick, h = arm * 2,
+		color = color,
+	})
+end
+
+-- Brief red full-screen tint when health drops. `state` is the HUD's own
+-- persistent table, so the previous health and the flash deadline live there;
+-- `client.time()` drives the fade. A heal never flashes, and neither does the
+-- first status after joining (there's no previous value yet).
+local kFlashSeconds = 0.35
+local kFlashMaxAlpha = 110
+
+local function push_damage_flash(widgets, screen, state)
+	local health = client.health()
+	local now = client.time()
+	if health then
+		if state.last_health and health.current < state.last_health - 0.001 then
+			state.flash_until = now + kFlashSeconds
+		end
+		state.last_health = health.current
+	end
+	if state.flash_until and now < state.flash_until then
+		local alpha = math.floor(kFlashMaxAlpha * (state.flash_until - now) / kFlashSeconds)
+		table.insert(widgets, {
+			id = "damage_flash",
+			type = "rect",
+			x = 0, y = 0, w = screen.width, h = screen.height,
+			color = { 200, 30, 30, alpha },
+		})
 	end
 end
 
 ui.define_hud(function(state)
 	local widgets = {}
 	local screen = client.screen_size()
+
+	-- First, so everything else draws over the tint.
+	push_damage_flash(widgets, screen, state)
+	push_crosshair(widgets, screen)
 
 	push_player_list(widgets, screen)
 	push_chat_log(widgets, screen)
@@ -253,8 +304,8 @@ ui.define_hud(function(state)
 			y = y,
 			w = bar_w,
 			h = bar_h,
-			color = { 30, 30, 34, 200 },
-			border = { 90, 90, 100, 230 },
+			color = base_ui.bar_bg,
+			border = base_ui.bar_border,
 		})
 		-- Fill, sized by the raw fraction -- this is the only place the
 		-- 0..1 value from the engine actually turns into a pixel width.
@@ -265,7 +316,7 @@ ui.define_hud(function(state)
 			y = y,
 			w = bar_w * progress,
 			h = bar_h,
-			color = { 220, 220, 220, 230 },
+			color = base_ui.text,
 		})
 	end
 

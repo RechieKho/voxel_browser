@@ -345,4 +345,118 @@ TEST_CASE("content/base/ui: base:inventory shows the live inventory, falling "
 	CHECK(find(w, "slot_icon_2")->item == vb::core::BlockId{ 3 });
 }
 
+TEST_CASE("content/base/ui: base_ui style table is defined and used by the screens") {
+	UiRuntime ui = load_base_ui();
+	ui.set_screen_size(1280, 720);
+	// A restyle of one shared color reaches every screen: change it from
+	// Lua and the pause panel follows.
+	REQUIRE(ui.load_pack_file("base_ui.panel_bg = { 1, 2, 3, 4 }", "test"));
+	ui.open("base:pause", "{}");
+	const auto &w = ui.render_frame();
+	const Widget *panel = find(w, "panel");
+	REQUIRE(panel != nullptr);
+	CHECK(panel->fill_r == 1);
+	CHECK(panel->fill_a == 4);
+}
+
+TEST_CASE("content/base/ui: the HUD has a centered crosshair") {
+	UiRuntime ui = load_base_ui();
+	ui.set_screen_size(1280, 720);
+	const auto &w = ui.render_hud();
+	const Widget *h = find(w, "crosshair_h");
+	const Widget *v = find(w, "crosshair_v");
+	REQUIRE(h != nullptr);
+	REQUIRE(v != nullptr);
+	CHECK(h->x + h->w / 2 == doctest::Approx(640.0f));
+	CHECK(h->y + h->h / 2 == doctest::Approx(360.0f));
+	CHECK(v->x + v->w / 2 == doctest::Approx(640.0f));
+	CHECK(v->y + v->h / 2 == doctest::Approx(360.0f));
+}
+
+TEST_CASE("content/base/ui: a health drop flashes the screen red and fades out; "
+		"heals, the first status and no change do not") {
+	UiRuntime ui = load_base_ui();
+	ui.set_screen_size(1280, 720);
+	ui.set_clock(100.0);
+
+	// First status after joining: no previous value, no flash.
+	ui.set_player_status(UiRuntime::StatusView{ 20.0f, 20.0f, 100.0f, 100.0f });
+	CHECK(find(ui.render_hud(), "damage_flash") == nullptr);
+
+	// Damage -> flash, drawn before everything else.
+	ui.set_player_status(UiRuntime::StatusView{ 15.0f, 20.0f, 100.0f, 100.0f });
+	const auto hit = ui.render_hud();
+	const Widget *flash = find(hit, "damage_flash");
+	REQUIRE(flash != nullptr);
+	CHECK(hit.front().id == "damage_flash");
+	CHECK(flash->w == 1280);
+	CHECK(flash->h == 720);
+	const int a0 = flash->fill_a;
+	CHECK(a0 > 0);
+
+	// Fades with the clock...
+	ui.set_clock(100.2);
+	const Widget *later = find(ui.render_hud(), "damage_flash");
+	REQUIRE(later != nullptr);
+	CHECK(later->fill_a < a0);
+	// ...and is gone after the deadline, with health unchanged.
+	ui.set_clock(101.0);
+	CHECK(find(ui.render_hud(), "damage_flash") == nullptr);
+
+	// A heal doesn't flash.
+	ui.set_player_status(UiRuntime::StatusView{ 20.0f, 20.0f, 100.0f, 100.0f });
+	CHECK(find(ui.render_hud(), "damage_flash") == nullptr);
+}
+
+TEST_CASE("content/base/ui: base:inventory shows an item-name tooltip under the cursor") {
+	UiRuntime ui = load_base_ui();
+	ui.set_screen_size(1280, 720);
+	ui.set_inventory({ { "base:oak_planks", 3, 3 }, { "air", 0, 0 } }, 1);
+	ui.open("base:inventory", R"({"slots":[]})");
+	REQUIRE(ui.is_open());
+
+	// Cursor away from any slot: no tooltip.
+	ui.set_mouse_position(1.0f, 1.0f);
+	CHECK(find(ui.render_frame(), "tooltip_bg") == nullptr);
+
+	// Cursor on slot 1: tooltip with the prettified name, drawn last.
+	const auto slots = ui.render_frame();
+	const Widget *slot1 = find(slots, "slot_bg_1");
+	REQUIRE(slot1 != nullptr);
+	ui.set_mouse_position(slot1->x + 5, slot1->y + 5);
+	const auto hover = ui.render_frame();
+	const Widget *tip = find(hover, "tooltip_text");
+	REQUIRE(tip != nullptr);
+	CHECK(tip->text == "Oak planks");
+	CHECK(hover.back().id == "tooltip_text");
+	CHECK(find(hover, "tooltip_bg") != nullptr);
+
+	// Empty slot 2: nothing to show.
+	const Widget *slot2 = find(hover, "slot_bg_2");
+	REQUIRE(slot2 != nullptr);
+	ui.set_mouse_position(slot2->x + 5, slot2->y + 5);
+	CHECK(find(ui.render_frame(), "tooltip_bg") == nullptr);
+}
+
+TEST_CASE("content/base/ui: base:death shows a cause-specific message and a "
+		"working Continue button") {
+	UiRuntime ui = load_base_ui();
+	ui.set_screen_size(1280, 720);
+
+	ui.open("base:death", R"({"cause":"fall"})");
+	REQUIRE(ui.is_open());
+	const auto &w = ui.render_frame();
+	CHECK(find(w, "title")->text == "You died");
+	CHECK(find(w, "reason")->text == "You fell from a high place.");
+	const Widget *panel = find(w, "panel");
+	REQUIRE(panel != nullptr);
+	CHECK(panel->x + panel->w / 2 == doctest::Approx(640.0f));
+	ui.report_click("continue");
+	CHECK_FALSE(ui.is_open());
+
+	// Unknown cause falls back to a generic line.
+	ui.open("base:death", R"({"cause":"lava"})");
+	CHECK(find(ui.render_frame(), "reason")->text == "You died.");
+}
+
 #endif // VB_WITH_LUA
