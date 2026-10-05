@@ -488,13 +488,16 @@ protocol changes, security notes and per-step task lists:
 - [ ] **9.3 — Server token verification**: Mbed TLS + curl, JWT/JWKS,
       discovery, RS256/ES256 allowlist, iss/aud/exp/nonce checks, fuzzers.
 - [ ] **9.4 — Lua exposure**: `player:get_login()`, `player_join(name,
-      login)`, `vb.auth.required()`, name from `name_claim`, identity by
-      `(issuer, subject)`.
+      login)` (user data only — no tokens), `vb.auth.required()`, name
+      from `name_claim`, identity by `(issuer, subject)`, duplicate login
+      kicks the older session.
 - [ ] **9.5 — Client sign-in**: engine-drawn `kSigningIn` screen, OIDC
       PKCE loopback redirect (RFC 8252) in the system browser, Firebase
       password form, `--auth-token-file` for headless.
-- [ ] **9.6 — Sessions & UX**: refresh-token cache, silent re-login, sign
-      out, first-use trust prompt.
+- [ ] **9.6 — Sessions, re-auth & revocation**: refresh-token cache,
+      silent re-login, sign out, first-use trust prompt; periodic live
+      re-auth (default 15 min + 2 min grace) so IdP-side revocation kicks
+      the player; `login_changed` event on claim changes.
 - [ ] **9.7 — Singleplayer, `vb`, e2e**: real sign-in in singleplayer,
       mock IdP e2e tests.
 - [ ] **9.8 — Hardening**: rate limits, operator guide (`docs/auth.md`).

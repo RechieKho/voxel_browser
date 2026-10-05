@@ -94,6 +94,8 @@ return {
 	name_claim   = "preferred_username",       -- becomes the in-game player name
 	claims       = { "email", "email_verified", "groups" }, -- exposed to Lua
 	max_token_age_seconds = 300,               -- optional, default 300
+	reauth_interval_seconds = 900,             -- optional, revocation check (§5.6)
+	reauth_grace_seconds    = 120,             -- optional
 }
 ```
 
@@ -213,7 +215,9 @@ Pure function over (config, key set, token, expected nonce, now). The rules:
 
 Output `LoginInfo{provider, issuer, subject, name, claims (allowlisted,
 JSON), issued_at, expires_at}`. The raw token is dropped immediately and
-never logged or exposed to Lua.
+never logged or exposed to Lua. `issuer`/`issued_at`/`expires_at` are
+engine-internal (identity keying, re-auth scheduling); Lua sees only the
+user data (§6).
 
 ### 5.4 Dependencies (`VB_WITH_AUTH`, default ON for client+server)
 
@@ -231,24 +235,87 @@ never logged or exposed to Lua.
 ### 5.5 Identity & names
 
 - Engine keys identity by `(issuer, subject)`, never by name.
-- Duplicate login: a second connection with a `(issuer, subject)` already in
-  game kicks the older session ("signed in elsewhere"). Configurable later.
+- Duplicate login (**decided 2026-10-05**): a second connection with an
+  `(issuer, subject)` already in game **kicks the older session** ("signed
+  in elsewhere") once the newcomer's verification succeeds. The newcomer is
+  never refused, so a ghost session after a crash or network drop can't
+  lock its owner out.
 - Name collision between *different* subjects (two people called `alex`):
   the later one is shown as `alex#2`. Scripts must persist by
   `login.subject`, never by name (documented loudly).
+
+### 5.6 Revocation: periodic live re-authentication
+
+ID tokens are self-contained and can't be revoked after they're issued. The
+IdP-side session behind them can be: a Keycloak admin logout, a disabled user,
+a Firebase `revokeRefreshTokens` or a disabled account. The engine therefore
+re-proves the login on a live connection on a timer, and a revoked
+session fails at the next check.
+
+```
+Server                                         Client
+  │ S2C_ReauthRequest{nonce, deadline_s}         │  every reauth_interval_seconds
+  │ ───────────────────────────────────────────▶ │  (per-player jitter ±10%)
+  │                                              │  silent: refresh-token grant
+  │                                              │  at the IdP (no UI)
+  │ C2S_Reauth{token}                            │
+  │ ◀─────────────────────────────────────────── │
+  │ verify (§5.3) + same (issuer, subject)       │
+  │ + iat ≥ request_sent − skew                  │
+```
+
+- `auth.lua` keys: `reauth_interval_seconds` (default **900**, minimum 60;
+  `0` disables, so a session is trusted until disconnect) and
+  `reauth_grace_seconds` (default **120**).
+- The refresh grant is the actual revocation check. A revoked session or
+  disabled account makes the IdP refuse the refresh token, so no new ID
+  token can be produced.
+- If the silent refresh fails, the player keeps playing and sees a
+  non-blocking in-game prompt: "Your sign-in expired. Sign in again". It
+  opens the same browser or form flow, with the request's `nonce` applied.
+  If no valid `C2S_Reauth` arrives before `deadline_s`, which is the grace
+  period, the server kicks with `kAuthFailed` ("sign-in expired or
+  revoked").
+- Binding: refresh-derived ID tokens can't carry the nonce, so the server
+  requires `iat` to be newer than the moment it sent the request (minus
+  skew). An old token can't answer a new request. An interactive re-sign-in
+  must also match the nonce.
+- Subject change (a different account answering) ⇒ immediate kick.
+- On success the session's `LoginInfo` is replaced. If any **allowlisted
+  claim** changed (e.g. a group removed), the frozen table `get_login()`
+  returns is swapped and `vb.on("login_changed", function(player, login))`
+  fires, so packs can react, e.g. drop a moderator's powers. The in-game
+  name stays fixed for the session; a changed `name_claim` takes effect on
+  the next join.
+- **Worst-case revocation latency = interval + grace** (default ≈ 17 min).
+  Operators who need tighter revocation lower the interval. Instant push
+  revocation (Keycloak back-channel logout, OAuth token introspection) needs
+  an inbound HTTP endpoint or a confidential client on the game server. It is
+  out of scope for this phase and listed in §13.
+- Pack-side bans don't need this mechanism: a `player_join` veto keyed by
+  `login.subject` keeps a banned account out at the next join.
+- `--auth-token-file` (headless/automation) is re-read for each re-auth, so
+  tests can rotate or withhold the token.
 
 ## 6. Lua surface (server pack VM)
 
 | API | Returns |
 | --- | --- |
-| `player:get_login()` | `nil` when the server isn't authenticating, else a **frozen** table: `{ provider, issuer, subject, name, claims = {…allowlisted…}, issued_at, expires_at }` |
+| `player:get_login()` | `nil` when the server isn't authenticating, else a **frozen** table of user data only: `{ provider, subject, name, claims = {…allowlisted…} }` |
 | `vb.on("player_join", function(name, login) … end)` | `login` same table or `nil`; `return false` still vetoes, *after* verification (e.g. allowlist by `login.claims.email_verified` or a group) |
+| `vb.on("login_changed", function(player, login) … end)` | fires after a successful re-auth (§5.6) changed an allowlisted claim; notification only |
 | `vb.auth.required()` | `true` iff `auth.lua` is active. Convenience; `get_login() ~= nil` gives the same answer per player |
 
 Guarantee written into `docs/lua-api.md`: **when `auth.lua` is active,
 `get_login()` is non-nil for every `Player` a script can ever obtain**.
 No connection reaches `player_join_completed` without a verified login, so
 scripts never need a "half-authenticated" branch.
+
+**Lua stays high-level (decided 2026-10-05):** scripts see *who the player
+is*, never how that was proven. Tokens, signatures, issuer URLs, expiry
+times and the re-auth schedule are engine-internal and never reach any VM.
+A pack that needs a field asks for it by adding the claim to `auth.lua`'s
+`claims` list.
 
 Client UI VM (`ui/*.lua`) gets `state.login = { name, subject }` (read-only,
 own player only) for "Signed in as …" labels. No claims, no tokens.
@@ -299,6 +366,8 @@ own player only) for "Signed in as …" labels. No claims, no tokens.
 - GNS encrypts the transport, but with no server certificates it doesn't
   authenticate the server. Same root cause as the item above, and the same
   out-of-scope status.
+- Revocation is periodic, not instant: worst case `reauth_interval_seconds
+  + reauth_grace_seconds` (§5.6).
 - Tokens never logged (log redaction test), never stored server-side, never
   exposed to Lua.
 - Rate limit: auth attempts per IP (reuse `max_connections_per_ip` plumbing)
@@ -375,7 +444,8 @@ day, M ≈ 2–3 days, L ≈ a week.
 
 ### 9.2 — Protocol v28 + handshake plumbing, stub verifier (M)
 - [ ] `AuthMode::kExternal`; `S2C_AuthChallenge`; `S2C_AuthResult.resolved_name`;
-      `C2S_Auth.token` 16 KiB cap; bump `kEngineProtocolVersion`;
+      `C2S_Auth.token` 16 KiB cap; `S2C_ReauthRequest` / `C2S_Reauth`
+      (wire format only here, used in 9.6); bump `kEngineProtocolVersion`;
       `docs/protocol.md` in lockstep.
 - [ ] Server FSM `kVerifyingAuth` + `begin_authenticate`/ticket; per-state
       `auth_timeout_seconds`; client FSM handles the challenge
@@ -414,12 +484,20 @@ day, M ≈ 2–3 days, L ≈ a week.
 - **Exit:** manual sign-in against Keycloak and Firebase on Linux, macOS,
   Windows; headless join with a token file in CI.
 
-### 9.6 — Sessions & UX polish (M)
+### 9.6 — Sessions, re-auth & revocation (M/L)
 - [ ] Refresh-token cache (0600), silent re-login, "Signed in as … / Sign
       out" in the main menu, first-use trust prompt.
-- [ ] Policy for token expiry mid-session (default: no kick; optional
-      `session_max_age_seconds` in `auth.lua`).
-- **Exit:** second join within the refresh window opens no browser.
+- [ ] Periodic re-auth (§5.6): server scheduler with jitter,
+      `reauth_interval_seconds`/`reauth_grace_seconds`, `iat` freshness +
+      same-subject checks, kick on deadline; client silent refresh +
+      non-blocking re-sign-in prompt.
+- [ ] `LoginInfo` swap + `login_changed` event when allowlisted claims change.
+- [ ] Tests: revoked refresh token (fake IdP refuses) ⇒ kick after grace;
+      stale `iat` rejected; different subject ⇒ immediate kick; claim
+      change fires `login_changed` once.
+- **Exit:** second join within the refresh window opens no browser; a
+  Keycloak admin logout kicks the player within interval + grace in a
+  manual run.
 
 ### 9.7 — Singleplayer, `vb`, e2e (M)
 - [ ] Singleplayer with an auth pack runs the real flow; `vb host` passes
@@ -436,13 +514,18 @@ day, M ≈ 2–3 days, L ≈ a week.
 - **Exit:** fuzzers run clean for a CI-length budget; operator guide lets a
   new operator stand up Keycloak auth from scratch.
 
-## 13. Open questions
+## 13. Decisions & open questions
 
-1. **Kick on duplicate subject vs. refuse the newcomer?** Recommend kick the
-   older session (matches most games; recovers from ghost sessions).
-2. **Expose the raw ID token to Lua for pack-side API calls?** Recommend no.
-   Packs have no network API anyway, and tokens in Lua tables leak into
-   `vb.db`/logs.
-3. **Should the server re-verify periodically (revocation)?** ID tokens
-   can't be revoked without introspection; recommend a later optional
-   `session_max_age_seconds` re-auth over the live connection, not polling.
+Decided 2026-10-05:
+
+1. **Duplicate subject → kick the older session** (§5.5).
+2. **Lua is high-level:** user data only (`provider`, `subject`, `name`,
+   allowlisted `claims`). No tokens, issuer or expiry (§6).
+3. **Revocation: yes**, via periodic live re-auth on by default
+   (15 min + 2 min grace), with `login_changed` for claim updates (§5.6).
+
+Still open:
+
+4. **Instant revocation** (Keycloak back-channel logout or token
+   introspection). It needs an inbound HTTP endpoint or a confidential client
+   secret on the server. Revisit if operators find interval + grace too slow.
