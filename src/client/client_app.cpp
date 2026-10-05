@@ -647,8 +647,8 @@ bool ClientApp::frame(const vb::render::InputFrame &input, double dt) {
 				}
 			}
 			ui_runtime.set_break_progress(break_progress);
-			ui_runtime.set_clock(std::chrono::duration<double>(
-					std::chrono::steady_clock::now().time_since_epoch()).count());
+			const auto since_epoch = std::chrono::steady_clock::now().time_since_epoch();
+			ui_runtime.set_clock(std::chrono::duration<double>(since_epoch).count());
 			if (render) {
 				ui_runtime.set_screen_size(GetScreenWidth(), GetScreenHeight());
 				const Vector2 mouse = GetMousePosition();
