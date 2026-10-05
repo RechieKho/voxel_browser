@@ -28,6 +28,7 @@ void PackRuntime::freeze() {}
 void PackRuntime::install_join_veto(net::HandshakeServerHost &) {}
 void PackRuntime::set_auth_required(bool) {}
 void PackRuntime::install_keybind_registry(net::HandshakeServerHost &) {}
+void PackRuntime::install_entity_kind_registry(net::HandshakeServerHost &) {}
 void PackRuntime::attach_world(net::WorldReplicator &) {}
 void PackRuntime::attach_session(net::ServerSession &) {}
 void PackRuntime::set_server_config(const core::ServerConfig &) {}

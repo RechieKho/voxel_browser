@@ -98,6 +98,7 @@ void print_usage() {
 				 "  --automation-clock <real|manual>  manual: frames advance only on `step`\n"
 				 "  --net-sim <spec>  fake lag/jitter/loss on sent packets, e.g. lag_ms=100,loss_pct=2 (dev builds only)\n"
 				 "  --automation-record <file.py>  write what you do as a vbtest script (dev builds only)\n"
+				 "  --auth-token-file <file>  sign in with the ID token in this file instead of the UI (dev builds only)\n"
 #endif
 				 "  --version        print build info and exit\n"
 				 "  --help           show this help\n"
@@ -150,7 +151,8 @@ int run_automated(ClientApp &app, vb::automation::Host &host, vb::render::Window
 #endif
 
 int run_headless(const vb::core::ClientConfig &config, const vb::core::Args &args,
-		const std::string &server, int port, bool singleplayer, int view_distance
+		const std::string &server, int port, bool singleplayer, int view_distance,
+		const std::optional<std::filesystem::path> &auth_token_file
 #if defined(VB_WITH_AUTOMATION)
 		,
 		vb::automation::Host *automation, vb::client::Recorder *recorder
@@ -166,7 +168,7 @@ int run_headless(const vb::core::ClientConfig &config, const vb::core::Args &arg
 	vb::render::Window window(wcfg);
 
 	ClientApp app(config, "", window, server, port, view_distance, singleplayer,
-			/*render*/ false);
+			/*render*/ false, auth_token_file);
 	if (!app.connect_blocking()) {
 		return EXIT_FAILURE;
 	}
@@ -207,6 +209,7 @@ int main(int argc, char **argv) {
 	}
 	kSingleplayerWorldDir = args.value_or("world-dir", kSingleplayerWorldDir);
 
+	std::optional<std::filesystem::path> auth_token_file; // set below, automation builds only
 #if defined(VB_WITH_AUTOMATION)
 	std::unique_ptr<vb::automation::Host> automation;
 	if (args.has("automation")) {
@@ -240,6 +243,17 @@ int main(int argc, char **argv) {
 			return EXIT_FAILURE;
 		}
 	}
+	// Headless/automation sign-in (auth.md §7): supply the ID token directly,
+	// re-read for every sign-in. Dev/CI only, so it is compiled out with the
+	// rest of the automation surface.
+	if (args.has("auth-token-file")) {
+		const std::string path = args.value_or("auth-token-file", "");
+		if (path.empty()) {
+			std::cerr << "client: --auth-token-file needs a path\n";
+			return EXIT_FAILURE;
+		}
+		auth_token_file = std::filesystem::path(path);
+	}
 	std::unique_ptr<vb::client::Recorder> recorder;
 	if (args.has("automation-record")) {
 		const std::string path = args.value_or("automation-record", "");
@@ -258,7 +272,8 @@ int main(int argc, char **argv) {
 		}
 	}
 #else
-	if (args.has("automation") || args.has("net-sim") || args.has("automation-record")) {
+	if (args.has("automation") || args.has("net-sim") || args.has("automation-record") ||
+			args.has("auth-token-file")) {
 		// Never silently ignored: a misconfigured test setup must fail loudly.
 		std::cerr << "client: built without VB_WITH_AUTOMATION\n";
 		return EXIT_FAILURE;
@@ -292,7 +307,8 @@ int main(int argc, char **argv) {
 			  << "client: " << (headless ? "headless" : "windowed") << " mode\n";
 
 	if (headless) {
-		return run_headless(config, args, cli_server, cli_port, singleplayer, configured_view_distance
+		return run_headless(config, args, cli_server, cli_port, singleplayer, configured_view_distance,
+				auth_token_file
 #if defined(VB_WITH_AUTOMATION)
 				,
 				automation.get(), recorder.get()
@@ -315,7 +331,7 @@ int main(int argc, char **argv) {
 		auto_connect = singleplayer;
 	}
 	ClientApp app(config, config_path, window, cli_server, cli_port,
-			configured_view_distance, auto_connect);
+			configured_view_distance, auto_connect, /*render*/ true, auth_token_file);
 	vb::render::RaylibInput raylib_input;
 
 #if defined(VB_WITH_AUTOMATION)

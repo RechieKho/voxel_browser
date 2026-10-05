@@ -19,6 +19,18 @@ public:
 	virtual ~HttpFetcher() = default;
 	// Blocking GET. Must bound its own time and response size.
 	virtual HttpResult get(const std::string &url) = 0;
+	// Blocking POST (client sign-in: token endpoint, Identity Toolkit). No
+	// redirects are followed. The default fails, so read-only fakes need not
+	// implement it.
+	virtual HttpResult post(const std::string &url, const std::string &content_type,
+			const std::string &body) {
+		(void)url;
+		(void)content_type;
+		(void)body;
+		HttpResult r;
+		r.error = "POST not supported";
+		return r;
+	}
 };
 
 // libcurl-backed fetcher (system TLS stack). https only, plus http to
