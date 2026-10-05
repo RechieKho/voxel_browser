@@ -57,6 +57,9 @@ struct SessionPlayerJoined {
 	ConnId conn = ConnId::kInvalid;
 	core::NetId net_id = core::NetId::kInvalid;
 	std::string name;
+	// External auth: the verified identity (null when the server isn't
+	// authenticating). User data only; the token never reaches here.
+	std::shared_ptr<const LoginData> login;
 };
 
 struct SessionPlayerLeft {
@@ -156,6 +159,9 @@ public:
 
 	// Display name of a playing net id ("" if not found/not playing).
 	std::string_view player_name(core::NetId id) const;
+	// Verified identity of a playing player; null when the server isn't
+	// authenticating (or the player is gone).
+	std::shared_ptr<const LoginData> player_login(core::NetId id) const;
 
 	// Optional: attach world replication (chunk streaming). Without it the
 	// session only replicates entities.
@@ -601,6 +607,7 @@ private:
 	void build_systems();
 	void system_network_io(double dt_seconds);
 	void system_handshake_timeouts(double dt_seconds);
+	void kick_duplicate_login(ConnId newcomer);
 	void system_advance_time_of_day(double dt_seconds);
 	void system_sync_interest();
 

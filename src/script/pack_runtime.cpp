@@ -26,6 +26,7 @@ ScriptResult PackRuntime::load_pack_file(std::string_view, std::string_view) {
 }
 void PackRuntime::freeze() {}
 void PackRuntime::install_join_veto(net::HandshakeServerHost &) {}
+void PackRuntime::set_auth_required(bool) {}
 void PackRuntime::install_keybind_registry(net::HandshakeServerHost &) {}
 void PackRuntime::attach_world(net::WorldReplicator &) {}
 void PackRuntime::attach_session(net::ServerSession &) {}
@@ -136,6 +137,46 @@ sol::object json_to_lua(sol::state_view lua, const nlohmann::json &j) {
 		default:
 			return sol::make_object(lua, sol::lua_nil);
 	}
+}
+
+// Deep, read-only view of `o` for data handed to pack scripts (auth.md §6:
+// "frozen table"). Tables are copied and wrapped in a proxy whose metatable
+// rejects writes and hides itself, so a pack can neither mutate nor swap out
+// the login it was given.
+sol::object freeze_deep(sol::state_view lua, const sol::object &o) {
+	if (o.get_type() != sol::type::table) {
+		return o;
+	}
+	const sol::table src = o.as<sol::table>();
+	sol::table data = lua.create_table();
+	for (const auto &kv : src) {
+		data[kv.first] = freeze_deep(lua, kv.second);
+	}
+	sol::table proxy = lua.create_table();
+	sol::table mt = lua.create_table();
+	mt["__index"] = data;
+	mt["__newindex"] = [](sol::this_state) { throw sol::error("login data is read-only"); };
+	mt["__len"] = [data]() { return data.size(); };
+	mt["__pairs"] = [data](sol::this_state ts) {
+		sol::state_view l(ts);
+		return std::make_tuple(l["next"].get<sol::object>(), data, sol::object(sol::lua_nil));
+	};
+	mt["__metatable"] = false;
+	proxy[sol::metatable_key] = mt;
+	return proxy;
+}
+
+// { provider, subject, name, claims = {...allowlisted...} } -- user data only;
+// the issuer, timestamps and token never reach a script VM.
+sol::object login_to_lua(sol::state_view lua, const net::LoginData &login) {
+	sol::table t = lua.create_table();
+	t["provider"] = login.provider;
+	t["subject"] = login.subject;
+	t["name"] = login.name;
+	const nlohmann::json claims = nlohmann::json::parse(login.claims_json, nullptr, false);
+	t["claims"] = claims.is_object() ? json_to_lua(lua, claims)
+									 : sol::object(lua.create_table());
+	return freeze_deep(lua, t);
 }
 
 nlohmann::json lua_to_json(const sol::object &obj) {
@@ -648,6 +689,31 @@ struct PackRuntime::Impl {
 
 	std::unordered_map<core::NetId, ecs::Inventory> inventories;
 	std::unordered_map<core::NetId, std::string> player_names;
+	// External auth (auth.md §6). `logins` is filled at join and kept until
+	// after player_leave fires, so every callback that gets a Player can read
+	// its login even once the session has dropped the connection.
+	bool auth_required = false;
+	std::unordered_map<core::NetId, std::shared_ptr<const net::LoginData>> logins;
+	std::unordered_map<core::NetId, sol::object> login_tables;
+
+	std::shared_ptr<const net::LoginData> login_for(core::NetId id) const {
+		if (auto it = logins.find(id); it != logins.end()) {
+			return it->second;
+		}
+		return session != nullptr ? session->player_login(id) : nullptr;
+	}
+	sol::object login_object(core::NetId id, sol::state_view lua) {
+		const auto login = login_for(id);
+		if (!login) {
+			return sol::make_object(lua, sol::lua_nil);
+		}
+		if (auto it = login_tables.find(id); it != login_tables.end()) {
+			return it->second;
+		}
+		sol::object o = login_to_lua(lua, *login);
+		login_tables[id] = o;
+		return o;
+	}
 
 	Impl(net::Transport &t, world::BlockRegistry &reg,
 			std::filesystem::path path, VmLimits limits);
@@ -947,6 +1013,12 @@ struct PlayerHandle {
 		return true;
 	}
 
+	// nil when the server isn't authenticating; otherwise a frozen table of
+	// user data (auth.md §6). Never nil on an authenticating server.
+	sol::object get_login(sol::this_state ts) const {
+		return rt->login_object(net_id, sol::state_view(ts));
+	}
+
 	std::string get_name() const {
 		if (rt->session == nullptr) {
 			return {};
@@ -1142,7 +1214,8 @@ void PackRuntime::Impl::install_bindings() {
 			&PlayerHandle::remove, "get_inventory", &PlayerHandle::get_inventory,
 			"send_message", &PlayerHandle::send_message, "open_ui",
 			&PlayerHandle::open_ui, "give", &PlayerHandle::give, "take",
-			&PlayerHandle::take, "get_name", &PlayerHandle::get_name, "damage",
+			&PlayerHandle::take, "get_name", &PlayerHandle::get_name, "get_login",
+			&PlayerHandle::get_login, "damage",
 			&PlayerHandle::damage, "break_block", &PlayerHandle::break_block,
 			"place_block", &PlayerHandle::place_block, "punch",
 			&PlayerHandle::punch, "get_selected_slot",
@@ -1152,6 +1225,13 @@ void PackRuntime::Impl::install_bindings() {
 			&PlayerHandle::get_health);
 
 	sol::table vb = lua.create_named_table("vb");
+
+	// vb.auth.required(): true iff auth.lua is active on this server.
+	{
+		sol::table auth = lua.create_table();
+		auth["required"] = [this]() { return auth_required; };
+		vb["auth"] = auth;
+	}
 
 	vb["register_block"] = [this](sol::table def) -> std::uint16_t {
 		if (frozen) {
@@ -2502,8 +2582,11 @@ void PackRuntime::freeze() {
 	}
 }
 
+void PackRuntime::set_auth_required(bool required) { impl_->auth_required = required; }
+
 void PackRuntime::install_join_veto(net::HandshakeServerHost &host) {
 	Impl *self = impl_.get();
+	// auth_mode none: no login exists, the handler gets (name, nil).
 	auto user_auth = host.authenticate;
 	host.authenticate = [self, user_auth](std::string_view name,
 								std::string_view token) -> net::AuthOutcome {
@@ -2511,10 +2594,19 @@ void PackRuntime::install_join_veto(net::HandshakeServerHost &host) {
 		if (!outcome.ok) {
 			return outcome;
 		}
-		if (!self->run_veto("player_join", std::string(name))) {
-			return { false, "denied by pack", {} };
+		if (!self->run_veto("player_join", std::string(name),
+					sol::make_object(self->lua_state(), sol::lua_nil))) {
+			return { false, "denied by pack", {}, {} };
 		}
 		return outcome;
+	};
+	// External auth: the FSM calls this after verification, with the final
+	// in-game name and the frozen login (auth.md §6).
+	host.join_veto = [self](std::string_view name, const net::LoginData *login) {
+		sol::state_view lua(self->lua_state());
+		const sol::object l = login != nullptr ? login_to_lua(lua, *login)
+											   : sol::make_object(lua, sol::lua_nil);
+		return self->run_veto("player_join", std::string(name), l);
 	};
 }
 
@@ -3023,12 +3115,17 @@ void PackRuntime::attach_session(net::ServerSession &session) {
 void PackRuntime::dispatch_player_join_completed(
 		const net::SessionPlayerJoined &j) {
 	impl_->player_names[j.net_id] = j.name;
+	if (j.login) {
+		impl_->logins[j.net_id] = j.login;
+	}
 }
 
 void PackRuntime::dispatch_player_leave(const net::SessionPlayerLeft &l) {
 	PlayerHandle p{ l.net_id, impl_.get() };
 	impl_->fire("player_leave", p);
 	impl_->player_names.erase(l.net_id);
+	impl_->logins.erase(l.net_id);
+	impl_->login_tables.erase(l.net_id);
 	impl_->inventories.erase(l.net_id);
 }
 

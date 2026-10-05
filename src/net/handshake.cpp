@@ -71,7 +71,29 @@ ServerHandshakeStep ServerHandshake::poll_auth() {
 		return {};
 	}
 	auth_ticket_ = nullptr;
-	return finish_auth(*outcome);
+	return finish_external_auth(*outcome);
+}
+
+ServerHandshakeStep ServerHandshake::finish_external_auth(AuthOutcome outcome) {
+	if (outcome.ok) {
+		if (!outcome.login) {
+			// A verifier that says "ok" without an identity is a bug; never
+			// admit an anonymous player on an authenticating server.
+			return finish_auth({ false, "authentication failed", {}, {} });
+		}
+		std::string name = host_.resolve_name(
+				outcome.resolved_name.empty() ? outcome.login->name : outcome.resolved_name,
+				*outcome.login);
+		// The pack sees the final in-game name in both `name` and `login.name`.
+		auto login = std::make_shared<LoginData>(*outcome.login);
+		login->name = name;
+		if (!host_.join_veto(name, login.get())) {
+			return finish_auth({ false, "denied by pack", {}, {} });
+		}
+		login_ = std::move(login);
+		outcome.resolved_name = std::move(name);
+	}
+	return finish_auth(outcome);
 }
 
 ServerHandshakeStep ServerHandshake::finish_auth(const AuthOutcome &outcome) {

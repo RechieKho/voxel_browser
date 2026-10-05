@@ -11,6 +11,7 @@
 #include "vb/assetsync/manifest.hpp" // assetsync::Manifest
 #include "vb/core/ids.hpp"
 #include "vb/core/math.hpp"
+#include "vb/net/login.hpp"
 #include "vb/protocol/assetsync.hpp" // AssetEntryRecord, S2CAssetData
 #include "vb/protocol/compression.hpp"
 #include "vb/protocol/handshake.hpp"
@@ -85,6 +86,9 @@ struct AuthOutcome {
 	// player_name (auth_mode none/token); external auth sets it from the
 	// verified name_claim.
 	std::string resolved_name;
+	// External auth only: the verified identity (user data, no token). Set by
+	// the verifier host on success; the FSM keeps it for the session.
+	std::shared_ptr<const LoginData> login;
 };
 
 // A pending token verification (external auth). Polled once per server tick;
@@ -105,9 +109,9 @@ struct HandshakeServerHost {
 			authenticate =
 					[](std::string_view name, std::string_view) -> AuthOutcome {
 		if (name.empty() || name.size() > 32) {
-			return { false, "invalid player name", {} };
+			return { false, "invalid player name", {}, {} };
 		}
-		return { true, {}, {} };
+		return { true, {}, {}, {} };
 	};
 	// auth_mode == kExternal only. `auth_challenge` builds the S2C_AuthChallenge
 	// for a new connection (including a fresh random nonce); `nullopt` means
@@ -120,6 +124,16 @@ struct HandshakeServerHost {
 			[] { return std::optional<protocol::S2CAuthChallenge>{}; };
 	std::function<AuthTicket(std::string_view token, std::string_view nonce)>
 			begin_authenticate;
+	// External auth only, called by the FSM once the token verified, before the
+	// player is admitted: `resolve_name` picks the final in-game name (the
+	// session suffixes collisions: alex -> alex#2); `join_veto` is the pack's
+	// `player_join(name, login)` veto. Defaults admit under the verified name.
+	std::function<std::string(std::string_view name, const LoginData &login)>
+			resolve_name = [](std::string_view name, const LoginData &) {
+		return std::string(name);
+	};
+	std::function<bool(std::string_view name, const LoginData *login)> join_veto =
+			[](std::string_view, const LoginData *) { return true; };
 	std::function<JoinGrant(std::string_view name)> on_ready =
 			[](std::string_view) { return JoinGrant{}; };
 
@@ -215,6 +229,9 @@ public:
 
 	ServerHandshakeState state() const { return state_; }
 	const std::string &player_name() const { return player_name_; }
+	// External auth: the verified identity once the token was accepted (null
+	// under auth_mode none/token, and before verification completes).
+	const std::shared_ptr<const LoginData> &login() const { return login_; }
 	// Valid once state() == kPlaying: the grant sent in S2C_JoinAccept.
 	const JoinGrant &grant() const { return grant_; }
 
@@ -243,6 +260,7 @@ private:
 	ServerHandshakeStep fail(protocol::DisconnectReason reason,
 			const std::string &human_message);
 	ServerHandshakeStep finish_auth(const AuthOutcome &outcome);
+	ServerHandshakeStep finish_external_auth(AuthOutcome outcome);
 
 	HandshakeServerConfig config_;
 	HandshakeServerHost host_;
@@ -251,6 +269,7 @@ private:
 	std::string requested_name_; // C2SAuth::player_name, used when resolved_name is empty
 	std::string auth_nonce_; // external auth: nonce sent in S2C_AuthChallenge
 	AuthTicket auth_ticket_;
+	std::shared_ptr<const LoginData> login_;
 	JoinGrant grant_;
 
 	std::shared_ptr<const assetsync::Manifest> manifest_;

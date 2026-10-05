@@ -264,7 +264,9 @@ rt.dispatch_tick(dt);
   `player_join` fires from `install_join_veto`'s `authenticate` wrapper (a
   real pre-join veto — note it hands the handler a plain player *name*
   string, not a `Player` handle, since no session/connection exists yet at
-  that point). `block_break`/`block_place` fire from `WorldReplicator::
+  that point) and, since Phase 9.4, a second argument `login`: `function(name,
+  login)` where `login` is the frozen login table below, or `nil` when the
+  server isn't authenticating (see "Authentication" below). `block_break`/`block_place` fire from `WorldReplicator::
   apply_block_edit`'s `BlockEditHooks` seam with a real `Player` handle +
   position, and a block's own `on_break`/`on_place` callback (from
   `register_block`) fires separately, after the edit is applied. `chat`
@@ -446,6 +448,40 @@ rt.dispatch_tick(dt);
   what the operator running the server configured. `--singleplayer`'s
   in-process `PackRuntime` has no `ServerConfig`/`server.toml`, so every key
   returns `nil` there.
+
+### Authentication (Phase 9.4; `architecture_spec/auth.md` §6)
+
+When the pack ships `auth.lua`, the engine verifies an external ID token during
+the handshake, before any asset or chunk is sent. Scripts only ever see *who
+the player is*:
+
+- `player:get_login()` → `nil` when the server isn't authenticating, else a
+  **frozen** table `{ provider, subject, name, claims = { ...allowlisted... } }`.
+  `provider` is `"oidc"|"keycloak"|"firebase"`; `claims` holds only the claims
+  listed in `auth.lua`'s `claims`. Writes raise an error and the metatable is
+  locked. No token, issuer or expiry is ever exposed.
+- `vb.on("player_join", function(name, login) ... end)` — `login` is the same
+  table (or `nil`); `return false` vetoes, *after* verification (e.g. an
+  allowlist on `login.claims.email_verified` or a group).
+- `vb.auth.required()` → `true` iff `auth.lua` is active.
+
+**Guarantee:** when `auth.lua` is active, `get_login()` is non-nil for every
+`Player` a script can obtain (including in `player_leave`); no connection
+reaches the game without a verified login. When it is not active, it is `nil`
+for everyone, so a `nil` always means "no auth".
+
+Rules to persist by: identity is `(issuer, subject)`, so **key your data on
+`login.subject`, never on the name**. Two different accounts that want the
+same name get `alex` and `alex#2`. A second sign-in of the same account kicks
+the older session ("signed in elsewhere"); the newcomer is never refused.
+
+```lua
+vb.on("player_join", function(name, login)
+	if login and login.claims.email_verified == false then
+		return false -- unverified e-mail: keep them out
+	end
+end)
+```
 
 ## Client UI API — `vb::script::UiRuntime` (`inc/vb/script/ui_runtime.hpp`, implemented, `VB_WITH_LUA`)
 

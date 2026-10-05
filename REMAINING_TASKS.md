@@ -526,10 +526,22 @@ protocol changes, security notes and per-step task lists:
       run); libFuzzer targets (a deterministic mutation test stands in).
       **Known gap until 9.4:** the verified `LoginInfo` is not yet kept on the
       session, so `get_login()` and duplicate-subject handling don't exist yet.
-- [ ] **9.4 — Lua exposure**: `player:get_login()`, `player_join(name,
-      login)` (user data only — no tokens), `vb.auth.required()`, name
-      from `name_claim`, identity by `(issuer, subject)`, duplicate login
-      kicks the older session.
+- [x] **9.4 — Lua exposure** — done 2026-10-05: `net::LoginData` (user data
+      only), `AuthOutcome::login`, FSM `finish_external_auth` →
+      `HandshakeServerHost::resolve_name` (session suffixes collisions:
+      `alex`/`alex#2`) → `join_veto` (the pack's `player_join(name, login)`,
+      frozen login table or `nil`). `ServerSession::player_login`,
+      duplicate `(issuer, subject)` kicks the older session right after the
+      newcomer verifies, `SessionPlayerJoined::login`. `PackRuntime`:
+      `player:get_login()` (frozen proxy, locked metatable, cached per
+      player, kept until after `player_leave` so every `Player` has a login),
+      `vb.auth.required()`, `set_auth_required()`. `docs/lua-api.md`
+      "Authentication". Tests: `tests/unit/auth_login_test.cpp` (loopback
+      server+clients with a fake verifier: frozen/non-nil login, plain pack ⇒
+      nil, rejected token ⇒ never joins, veto on claims, name suffixing,
+      duplicate kick). **Moved to 9.5:** `state.login` in the client UI VM
+      (the client only learns its own subject once it holds the token), and
+      a base-pack example script (the `lua-api.md` snippet covers it).
 - [ ] **9.5 — Client sign-in**: engine-drawn `kSigningIn` screen, OIDC
       PKCE loopback redirect (RFC 8252) in the system browser, Firebase
       password form, `--auth-token-file` for headless.

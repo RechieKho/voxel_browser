@@ -5,6 +5,7 @@ add_executable(vb_tests
   main.cpp
   unit/auth_config_test.cpp
   unit/auth_verifier_test.cpp
+  unit/auth_login_test.cpp
   unit/assetsync_cache_test.cpp
   unit/assetsync_manifest_test.cpp
   unit/biome_selector_test.cpp
