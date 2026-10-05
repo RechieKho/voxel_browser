@@ -26,3 +26,10 @@ base_ui = {
 	text_muted = { 170, 170, 180, 255 },
 	tooltip_bg = { 16, 16, 22, 245 },
 }
+
+-- "base:oak_planks" -> "Oak planks". Shared by the inventory tooltip and the
+-- hotbar's selected-item label.
+function base_ui.pretty_name(name)
+	local bare = (name:match("([^:]+)$") or name):gsub("_", " ")
+	return bare:sub(1, 1):upper() .. bare:sub(2)
+end

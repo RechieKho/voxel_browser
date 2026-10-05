@@ -1404,6 +1404,51 @@ TEST_CASE("player:get_hunger()/add_hunger() read and spend hunger, and "
 	REQUIRE(rt.load_pack_file(R"(assert(death_cause == "hunger"))"));
 }
 
+TEST_CASE("player:get_health() reports {current, max} and drops after damage()") {
+	LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("get_health"));
+	REQUIRE(rt.load_pack_file(R"(
+		before, after = nil, nil
+		vb.on("chat", function(player, text)
+			if text == "hurt" then
+				before = player:get_health()
+				player:damage(6, "test")
+				after = player:get_health()
+			end
+			return true
+		end)
+	)"));
+	rt.freeze();
+
+	HandshakeServerConfig cfg;
+	cfg.world_seed = 7;
+	ServerSession server(net.server(), cfg);
+	rt.attach_session(server);
+	REQUIRE(net.server().listen(0));
+
+	Transport &ta = net.create_client();
+	auto ida = ta.connect("x", 0);
+	REQUIRE(ida);
+	ClientSession client(ta, *ida, HandshakeClientConfig{ "A", "", "v", 1 });
+	auto pump = [&](int n) {
+		for (int i = 0; i < n; ++i) {
+			server.tick(0.05);
+			client.tick(0.05);
+		}
+	};
+	pump(16);
+	REQUIRE(client.joined());
+
+	client.send_chat("hurt");
+	pump(2);
+	REQUIRE(rt.load_pack_file(R"(
+		assert(before.current == 20 and before.max == 20)
+		assert(after.current == 14 and after.max == 20)
+	)"));
+}
+
 TEST_CASE("vb.register_entity + vb.world.spawn: self persists across on_tick, "
 		  "on_hit/on_death fire, and the instance replicates to a client") {
 	LoopbackNetwork net;

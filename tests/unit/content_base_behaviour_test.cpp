@@ -204,14 +204,6 @@ TEST_CASE("content/base mechanics.lua: placing respects the engine's effective r
 }
 
 TEST_CASE("content/base fall_damage.lua: the SAFE_SPEED curve") {
-	// ServerSession::player_health() is a VB_WITH_AUTOMATION-only primitive
-	// (docs/e2e-automation.md) -- there's no other way to read a player's
-	// current HP from outside Lua (PlayerHandle has no get_health(), unlike
-	// script entities' entity:get_health()). CI's dedicated Lua+automation
-	// leg (.github/workflows/build_linux.yml) exercises this; a plain
-	// VB_WITH_LUA build without automation skips it, same posture as
-	// net_test.cpp's own VB_WITH_AUTOMATION-gated cases.
-#if defined(VB_WITH_AUTOMATION)
 	{
 		BasePackFixture fx("c2_fall_safe_79");
 		fx.with_world();
@@ -232,7 +224,6 @@ TEST_CASE("content/base fall_damage.lua: the SAFE_SPEED curve") {
 		// 1 HP per m/s above SAFE_SPEED (8.0): 12.0 - 8.0 == 4 HP.
 		CHECK(fx.server().player_health(fx.player_id())->first == doctest::Approx(16.0f));
 	}
-#endif
 }
 
 TEST_CASE("content/base keybinds.lua: both keybinds open on the rising edge only") {

@@ -19,11 +19,10 @@
 >   around it by spying on `vb.register_biome` via a prelude loaded before
 >   `load_content_pack`, which only works because `blocks/*.lua` share one
 >   Lua global namespace with `biomes/*.lua`.
-> - `PlayerHandle` has no `get_health()` (unlike script entities'
->   `entity:get_health()`) — the fall-damage HP-curve assertions in
->   `content_base_behaviour_test.cpp` only run in a `VB_WITH_AUTOMATION`
->   build (`ServerSession::player_health()`), same as CI's dedicated
->   Lua+automation leg.
+> - ~~`PlayerHandle` has no `get_health()`~~ — resolved: `player:get_health()`
+>   now exists (returns `{current, max}`), and `ServerSession::player_health()`
+>   is available in every build, so the fall-damage HP-curve assertions in
+>   `content_base_behaviour_test.cpp` no longer need a `VB_WITH_AUTOMATION` build.
 > - `tests/e2e/vbtest/stack.py` never pinned `asset_cache_dir` in the
 >   generated `client.toml`, so on macOS (where `user_cache_dir()` hardcodes
 >   `~/Library/Caches`, ignoring `XDG_CACHE_HOME`) the harness's own

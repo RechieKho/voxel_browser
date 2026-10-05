@@ -40,13 +40,6 @@ local kSectionGap = 8
 local kButtonW = 140
 local kButtonH = 32
 
--- "base:planks" -> "Planks". Only the live inventory carries names; the
--- open-time snapshot (`state.slots`) has just ids, so it gets no tooltip.
-local function pretty_name(name)
-	local bare = (name:match("([^:]+)$") or name):gsub("_", " ")
-	return bare:sub(1, 1):upper() .. bare:sub(2)
-end
-
 ui.define("base:inventory", function(state)
 	local slots = client.inventory()
 	if #slots == 0 then
@@ -120,7 +113,7 @@ ui.define("base:inventory", function(state)
 		if slot.item and slot.item ~= 0 then
 			if slot.name and mouse.x >= x and mouse.x < x + kSlotSize
 					and mouse.y >= y and mouse.y < y + kSlotSize then
-				hovered = pretty_name(slot.name)
+				hovered = base_ui.pretty_name(slot.name)
 			end
 			table.insert(widgets, {
 				id = "slot_icon_" .. i,

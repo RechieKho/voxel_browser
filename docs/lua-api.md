@@ -239,7 +239,8 @@ rt.dispatch_tick(dt);
   `:open_ui(name, ctx?)`, `:get_name()`, `:damage(amount, cause?)` (Phase
   6.6 — the one way to reduce a player's health from Lua; `cause` is an
   opaque string, e.g. `"fall"`/`"pvp"`, threaded through unchanged to a
-  `player_death` handler below).
+  `player_death` handler below), `:get_health()` (`{current=, max=}`, or `nil`
+  if the player is gone — read-only; lower it with `:damage()`).
   `send_message`/`open_ui` are real, framed messages (`S2C_Chat`/`S2C_OpenUi`,
   see `docs/protocol.md`) that a real client actually handles: `send_message`
   lands in the HUD chat log (`src/client/main.cpp`, Phase 5.4) exactly like a

@@ -1,6 +1,6 @@
 # `content/base` UI/UX — investigation and phased plan
 
-> Status: **U0 (first item), U1, U2, U3, U4 and U5 implemented** (except the fading item-name label in U4). (Only `PlayerHandle:get_health()` and the fading item-name label are still open.) Covers the three reported
+> Status: **All phases (U0–U5) implemented.** Covers the three reported
 > problems (no health bar, inventory not centered, inventory has no
 > container background) and the related gaps found while looking into them.
 > Same layout as `docs/content-base-testing.md`: findings first, then phases
@@ -127,7 +127,7 @@ U2 is the engine prerequisite for U3.
 - [x] `UiRuntime`: add `client.health()` returning `{current, max}` and
       `client.hunger()` returning `{current, max}`, or nil before the first
       status arrives.
-- [ ] Optional: add `PlayerHandle:get_health()` for server Lua, which closes
+- [x] Optional: add `PlayerHandle:get_health()` for server Lua, which closes
       the `content-base-testing.md` finding and lets the fall-damage tests
       run without `VB_WITH_AUTOMATION`.
 - [x] Tests: protocol round-trip unit test, session test that damage
@@ -165,7 +165,7 @@ U2 is the engine prerequisite for U3.
       instead of the open-time `state.slots` snapshot, so the screen updates
       while open. Keep `state.slots` as a fallback for packs that pass their
       own.
-- [ ] Optionally show the selected item's name as a fading `text` above the
+- [x] Optionally show the selected item's name as a fading `text` above the
       hotbar when the selection changes.
 
 ### U5 — Extra polish (each item independent, optional)
