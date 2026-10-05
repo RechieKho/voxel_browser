@@ -90,10 +90,22 @@ U2 is the engine prerequisite for U3.
 - [x] Confirm `client.*` is callable from a `ui.define` modal render, not
       just from `ui.define_hud`. They share one Lua state, so it should work,
       but add a test. U1 depends on `client.screen_size()` there.
-- [ ] Confirm what an empty inventory slot looks like on the wire and in
+- [x] Confirm what an empty inventory slot looks like on the wire and in
       `client.inventory()` (item 0 / name `"air"` / count 0?).
-- [ ] Confirm the inventory size (fixed? grows on `give`?) so the grid and
+- [x] Confirm the inventory size (fixed? grows on `give`?) so the grid and
       hotbar can be sized deliberately.
+
+> Answers (checked in `src/script/pack_runtime.cpp`'s `give_item`/`take`):
+> the inventory is **dynamic, not a fixed grid**. It starts empty, `give`
+> appends one slot per new stack (topping up existing stacks first, up to
+> the block's `max_stack`), and `take` erases a slot once it's empty. So an
+> empty slot (item 0 / `"air"`) never appears in `S2C_Inventory` or
+> `client.inventory()`, the length varies, and slot indices shift when a
+> stack is used up (the selected hotbar index then points at whatever stack
+> moved into it). Consequences: the hotbar draws only occupied slots (up to
+> 9) rather than a fixed 9-slot frame, and the inventory grid grows by rows.
+> A fixed-size hotbar frame with empty placeholders would be a design
+> change, not just a UI one.
 
 ### U1 — Inventory screen layout (Lua only, fixes 2 of the 3 reported issues)
 
