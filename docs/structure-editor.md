@@ -1,6 +1,6 @@
 # Structure editor — design and phased plan
 
-> Status: **In progress: S0–S1 done, S2–S7 planned.** Plans the "dedicated external structure
+> Status: **In progress: S0–S2 done, S3–S7 planned.** Plans the "dedicated external structure
 > tool" that `architecture_spec/worldgen.md` §6 stage 6 and
 > `remaining_tasks/deferred.md` ("Rule-based decorative structure
 > placement") left for after the Lua worldgen pipeline. Phase 6.14 shipped
@@ -502,25 +502,25 @@ integrates and documents.
 
 ### S2 — Rule-based, cross-chunk placement (engine)
 
-- [ ] `structure_placement.cpp`: per-column anchor enumeration (jittered
+- [x] `structure_placement.cpp`: per-column anchor enumeration (jittered
       grid, spawn-rate thinning, cluster noise) and per-anchor biome lookup.
-- [ ] Anchor validity from pure terrain functions: `on`, `max_slope`, y
+- [x] Anchor validity from pure terrain functions: `on`, `max_slope`, y
       range, and not underwater. Factor out the carver/surface check
       `generate()` already does into a reusable `block_at_pregen(x, y, z)`.
-- [ ] Pull stamping across neighbor columns in the canonical order. Rotation
+- [x] Pull stamping across neighbor columns in the canonical order. Rotation
       and mirror applied to variant cells. `replace` policy, using the
       `replaceable` flag from S0.
-- [ ] Replace the decoration block in `WorldGenerator::generate` with the
+- [x] Replace the decoration block in `WorldGenerator::generate` with the
       above.
-- [ ] Tests (`worldgen_test.cpp`): a structure that straddles a chunk border
+- [x] Tests (`worldgen_test.cpp`): a structure that straddles a chunk border
       is identical whichever chunk is generated first, and when chunks are
       generated on different threads; all vertical chunks agree; same seed
       gives the same result; rotation and mirror are correct on an
       asymmetric fixture; `on` and slope rejection; new decoration golden
       hash. The existing pack-driven golden must stay unchanged because its
       decoration list is empty.
-- [ ] `perf_budget_test`: a decoration-heavy chunk stays within budget.
-- [ ] Content: a hand-written `structures/acacia_tree.lua` in
+- [x] `perf_budget_test`: a decoration-heavy chunk stays within budget.
+- [x] Content: a hand-written `structures/acacia_tree.lua` in
       `content/examples/kitchen_sink`, registered from its `worldgen.lua`
       with `vb.register_structure(require("structures.acacia_tree"))` and
       used by `biomes/savanna.lua`.

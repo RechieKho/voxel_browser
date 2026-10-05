@@ -231,13 +231,30 @@ rt.dispatch_tick(dt);
   be `{structure = "name", spawn_rate = n, <any placement field>}`; the
   inline `{blocks = ...}` form still works and becomes an anonymous
   one-variant structure (`replace = "all"`, no rotation).
-  **Decoration is schematic-only, not procedural** (explicit scope
-  narrowing, same threading reasoning as above): a per-site Lua callback
-  can't run on a worker thread either, so `vb.register_biome`'s `decoration`
-  table is a pure-data offset list, not a callback — see that entry above
-  and `REMAINING_TASKS.md`'s Deferred section for what's intentionally not
-  attempted here (cross-chunk decoration, procedural/callback schematics,
-  Voronoi cell resolution result caching).
+  **Decoration is data, not callbacks** (same threading reasoning as above):
+  a per-site Lua callback can't run on a worker thread either, so decoration
+  is a list of structures (`vb.register_structure`, above) plus declarative
+  placement rules, not a function. Placement is rule-based and crosses chunk
+  borders (structure editor S2): for each rule, anchors come from a global
+  jittered grid keyed by `(world seed, grid cell, rule)` — `spawn_rate` is the
+  expected number of placements per 32×32 column, `min_spacing` the minimum
+  gap between anchors on some axis, `cluster` (0..1) gates them with
+  low-frequency noise without changing the mean. An anchor is kept only when
+  the biome *at the anchor* is the rule's biome, the ground block is in `on`
+  (any solid block when empty), the anchor is not underwater, the ground
+  height is inside `y_min..y_max`, and the terrain under the (rotated)
+  footprint varies by at most `max_slope`. All of that reads only
+  pre-decoration terrain (`WorldGenerator::block_at_pregen`, the height
+  field), so it never depends on a neighbor chunk. Each chunk pulls the
+  placements whose footprint reaches it and stamps its own cells in a fixed
+  order (anchor x, z, then rule), so a tree on a border is identical from
+  either side and from every vertical chunk. `replace` decides what a
+  structure may overwrite — `"air"` (default), `"air_and_plants"` (air or a
+  block registered with `replaceable = true`) or `"all"`; an explicit
+  `base:air` palette cell always carves. The anchor cell sits one block above
+  the ground block. Still not attempted: runtime/callback decoration that
+  reacts to its surroundings (`REMAINING_TASKS.md`'s Deferred section) and
+  Voronoi cell resolution result caching.
   A pack registering blocks beyond the Phase 2 `base()` set logs an info
   line; those ids reach the client if (and only if) the host wires
   `HandshakeServerHost::block_registry` from this same registry

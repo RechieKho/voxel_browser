@@ -10,6 +10,11 @@
 -- `vb.noise.*` (Phase 6.14) builds the node-graph description `height`/each
 -- carver's `noise` field expects -- plain tagged tables, not opaque handles;
 -- see `docs/lua-api.md` for the full node type list.
+-- Structure editor S2: a structure is a data file that returns one table (see
+-- structures/acacia_tree.lua); biomes/savanna.lua places it by name. Block
+-- names inside it are resolved after the whole pack has loaded.
+vb.register_structure(require("structures.acacia_tree"))
+
 local base_terrain = vb.noise.fbm({
 	source = vb.noise.value({ frequency = 1 / 96 }),
 	octaves = 5,

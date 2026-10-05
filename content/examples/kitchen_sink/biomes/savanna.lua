@@ -21,4 +21,11 @@ vb.register_biome({
 	stone = "base:stone",
 	probability = 2.0,
 	adjacency = { ["kitchen_sink:tundra"] = 0.05 },
+	-- Structure editor S2: scattered acacia trees. `spawn_rate` is the expected
+	-- number of trees per 32x32 column; any placement field of the structure
+	-- (min_spacing, on, ...) could be overridden here too. Registered in
+	-- worldgen.lua.
+	decoration = {
+		{ structure = "kitchen_sink:acacia_tree", spawn_rate = 0.5 },
+	},
 })

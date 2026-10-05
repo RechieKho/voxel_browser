@@ -114,6 +114,50 @@ TEST_CASE("content/examples/kitchen_sink's Phase 6 overrides all take effect") {
 	CHECK(any_block_differs);
 }
 
+TEST_CASE("content/examples/kitchen_sink's acacia trees are placed by its savanna biome") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("acacia"));
+	REQUIRE(vb::script::load_content_pack(rt, kitchen_sink_pack_dir()));
+	rt.freeze();
+	const auto valid = rt.validate_worldgen();
+	REQUIRE_MESSAGE(valid, valid.message);
+
+	vb::worldgen::WorldGenParams base;
+	base.seed = 0xC0FFEEULL;
+	const auto pipeline = rt.build_worldgen_pipeline(base);
+	REQUIRE(pipeline != nullptr);
+	REQUIRE(pipeline->structures.size() == 1);
+	CHECK(pipeline->structures[0].name == "kitchen_sink:acacia_tree");
+	CHECK(pipeline->structures[0].variants.size() == 2);
+
+	// Savanna is the first registered biome; tundra has no decoration.
+	REQUIRE(pipeline->decoration.size() == 2);
+	REQUIRE(pipeline->decoration[0].size() == 1);
+	CHECK(pipeline->decoration[1].empty());
+	const auto &rule = pipeline->decoration[0][0];
+	CHECK(rule.spawn_rate == doctest::Approx(0.5));
+	CHECK(rule.replace == vb::worldgen::ReplacePolicy::kAirAndPlants);
+	CHECK(rule.min_spacing == 6);
+	CHECK(rule.max_slope == 24);
+	REQUIRE(rule.on.size() == 1);
+	CHECK(rule.on[0] == registry.find("base:grass"));
+
+	// Trees really appear in the generated world: every placement's trunk
+	// block is wood.
+	const vb::worldgen::WorldGenerator gen(base, registry, pipeline);
+	const auto placements = gen.structure_placements(-512, -512, 511, 511);
+	REQUIRE_FALSE(placements.empty());
+	const auto &p = placements.front();
+	vb::world::Chunk chunk({ p.x >= 0 ? p.x / 32 : (p.x - 31) / 32, (p.ground_y + 1) / 32,
+		p.z >= 0 ? p.z / 32 : (p.z - 31) / 32 });
+	gen.generate(chunk);
+	const int lx = p.x - chunk.coord().x * 32;
+	const int ly = p.ground_y + 1 - chunk.coord().y * 32;
+	const int lz = p.z - chunk.coord().z * 32;
+	CHECK(chunk.blocks().get(vb::world::index_of(lx, ly, lz)) == registry.find("base:wood"));
+}
+
 TEST_CASE("content/examples/kitchen_sink: /sentry spawns, hits, and kills a "
 		"real dispatched entity (Phase 6.1 + 6.15)") {
 	using namespace vb::net;

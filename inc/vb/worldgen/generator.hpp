@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 #include "vb/core/ids.hpp"
 #include "vb/core/math.hpp"
@@ -22,6 +23,22 @@
 // vb/worldgen/biome_selector.hpp), then runs carver/vein/decoration passes.
 
 namespace vb::worldgen {
+
+// One structure placement chosen by the pull-stamping pass
+// (docs/structure-editor.md §E). Pure function of (seed, pipeline, anchor
+// column), so every chunk that overlaps it reaches the same answer.
+struct StructurePlacement {
+	int x = 0; // anchor world column
+	int z = 0;
+	int ground_y = 0; // surface height; the anchor cell sits at ground_y + 1
+	std::uint32_t biome = 0;
+	std::uint32_t rule = 0; // PlacementRule index within the biome's list
+	std::uint32_t variant = 0;
+	int rotation = 0; // quarter turns about +y
+	bool mirror = false;
+
+	bool operator==(const StructurePlacement &) const = default;
+};
 
 struct WorldGenParams {
 	std::uint64_t seed = 0;
@@ -58,10 +75,36 @@ public:
 	// only governs the fixed default path), otherwise `params_.sea_level`.
 	int sea_level() const;
 
+	// The block this generator would put at a world voxel *before* the
+	// vein and structure passes run: terrain, carvers and water only. A pure
+	// function of (seed, pipeline, position); structure anchors are validated
+	// against it so they never depend on a neighboring chunk's voxels.
+	core::BlockId block_at_pregen(int world_x, int world_y, int world_z) const;
+
+	// Every structure placement whose anchor column lies in the inclusive
+	// range [x0, x1] x [z0, z1], in the canonical stamp order (anchor x, then
+	// z, then rule). Empty without a pack pipeline. Used by generate() and by
+	// the structure editor's preview counters.
+	std::vector<StructurePlacement> structure_placements(
+			int x0, int z0, int x1, int z1) const;
+
 	const WorldGenParams &params() const { return params_; }
 	const PackWorldGenPipeline *pipeline() const { return pipeline_.get(); }
 
 private:
+	// One world column's terrain recipe (pipeline path).
+	struct Column {
+		int height = 0;
+		std::size_t biome = 0; // index into the pipeline's BiomeSelector
+		core::BlockId surface = core::BlockId::kAir;
+		core::BlockId filler = core::BlockId::kAir;
+		core::BlockId stone = core::BlockId::kAir;
+	};
+	Column column_at(int world_x, int world_z) const;
+	core::BlockId pregen_block(const Column &col, int world_x, int world_y, int world_z) const;
+	// Stamps every placement overlapping `chunk` (pipeline path only).
+	void stamp_structures(world::Chunk &chunk) const;
+
 	WorldGenParams params_;
 	core::BlockId air_;
 	core::BlockId stone_;

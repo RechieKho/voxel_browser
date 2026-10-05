@@ -5,33 +5,11 @@
 
 #include "vb/core/math.hpp"
 #include "vb/world/paletted_chunk_store.hpp"
+#include "vb/worldgen/det_rng.hpp"
 
 namespace vb::worldgen {
 
 using world::kChunkDim;
-
-namespace {
-
-// Small deterministic counter-based PRNG for vein/decoration scatter -- built
-// on the same dependency-free integer hashing as vb/core/noise.hpp (no
-// <random>, so results stay bit-identical across platforms/compilers, same
-// determinism requirement that file documents).
-struct DetRng {
-	std::uint64_t state;
-
-	double next01() {
-		state = core::noise::mix64(state);
-		return core::noise::to_unit(state);
-	}
-
-	// Uniform in [0, n). `n` must be > 0.
-	std::int64_t next_index(std::int64_t n) {
-		state = core::noise::mix64(state);
-		return static_cast<std::int64_t>(state % static_cast<std::uint64_t>(n));
-	}
-};
-
-} // namespace
 
 WorldGenerator::WorldGenerator(WorldGenParams params,
 		const world::BlockRegistry &registry,
@@ -56,6 +34,73 @@ int WorldGenerator::surface_height(int world_x, int world_z) const {
 	// n in [0,1) -> centred [-1,1) -> scaled around base_height.
 	const double h = params_.base_height + (n * 2.0 - 1.0) * params_.amplitude;
 	return static_cast<int>(std::floor(h));
+}
+
+WorldGenerator::Column WorldGenerator::column_at(int world_x, int world_z) const {
+	const PackWorldGenPipeline &pipe = *pipeline_;
+	Column col;
+	col.height = static_cast<int>(std::floor(pipe.height_field(world_x, world_z)));
+	col.surface = grass_;
+	col.filler = dirt_;
+	col.stone = stone_;
+	if (!pipe.biomes.empty()) {
+		col.biome = pipe.biomes.resolve(world_x, world_z);
+		const auto &biome = pipe.biomes.biome(col.biome);
+		col.surface = biome.surface != core::BlockId::kAir ? biome.surface : col.surface;
+		col.filler = biome.filler != core::BlockId::kAir ? biome.filler : col.filler;
+		col.stone = biome.stone != core::BlockId::kAir ? biome.stone : col.stone;
+	}
+	return col;
+}
+
+core::BlockId WorldGenerator::pregen_block(
+		const Column &col, int world_x, int world_y, int world_z) const {
+	const PackWorldGenPipeline &pipe = *pipeline_;
+	core::BlockId block = air_;
+	if (world_y > col.height) {
+		block = (world_y <= pipe.sea_level) ? water_ : air_;
+	} else if (world_y == col.height) {
+		block = col.surface;
+	} else if (world_y >= col.height - pipe.soil_depth) {
+		block = col.filler;
+	} else {
+		block = col.stone;
+	}
+
+	// Carvers: any carver's density at/above its threshold in this voxel's
+	// y-range carves solid, non-water rock/soil back to air (caves never carve
+	// through the water table or the biome's own surface crust look).
+	if (block != air_ && block != water_) {
+		for (const CarverDef &carver : pipe.carvers) {
+			if (world_y < carver.y_min || world_y > carver.y_max) {
+				continue;
+			}
+			if (carver.density(static_cast<double>(world_x), static_cast<double>(world_y),
+						static_cast<double>(world_z)) >= carver.threshold) {
+				block = air_;
+				break;
+			}
+		}
+	}
+	return block;
+}
+
+core::BlockId WorldGenerator::block_at_pregen(int world_x, int world_y, int world_z) const {
+	if (pipeline_) {
+		return pregen_block(column_at(world_x, world_z), world_x, world_y, world_z);
+	}
+	const int height = surface_height(world_x, world_z);
+	const bool beach = height <= params_.sea_level + 1;
+	if (world_y > height) {
+		return (world_y <= params_.sea_level) ? water_ : air_;
+	}
+	if (world_y == height) {
+		return beach ? sand_ : grass_;
+	}
+	if (world_y >= height - params_.soil_depth) {
+		return beach ? sand_ : dirt_;
+	}
+	return stone_;
 }
 
 void WorldGenerator::generate(world::Chunk &chunk) const {
@@ -95,58 +140,15 @@ void WorldGenerator::generate(world::Chunk &chunk) const {
 		}
 	} else {
 		const PackWorldGenPipeline &pipe = *pipeline_;
-		const int sea_level = pipe.sea_level;
-		const int soil_depth = pipe.soil_depth;
 
 		for (int lz = 0; lz < kChunkDim; ++lz) {
 			for (int lx = 0; lx < kChunkDim; ++lx) {
 				const int wx = origin.x + lx;
 				const int wz = origin.z + lz;
-				const int height = static_cast<int>(
-						std::floor(pipe.height_field(wx, wz)));
-
-				core::BlockId surface = grass_;
-				core::BlockId filler = dirt_;
-				core::BlockId stone = stone_;
-				if (!pipe.biomes.empty()) {
-					const auto &biome = pipe.biomes.biome(pipe.biomes.resolve(wx, wz));
-					surface = biome.surface != core::BlockId::kAir ? biome.surface : surface;
-					filler = biome.filler != core::BlockId::kAir ? biome.filler : filler;
-					stone = biome.stone != core::BlockId::kAir ? biome.stone : stone;
-				}
+				const Column col = column_at(wx, wz);
 
 				for (int ly = 0; ly < kChunkDim; ++ly) {
-					const int wy = origin.y + ly;
-					core::BlockId block = air_;
-
-					if (wy > height) {
-						block = (wy <= sea_level) ? water_ : air_;
-					} else if (wy == height) {
-						block = surface;
-					} else if (wy >= height - soil_depth) {
-						block = filler;
-					} else {
-						block = stone;
-					}
-
-					// Carvers: any carver's density at/above its threshold in
-					// this voxel's y-range carves solid, non-water rock/soil
-					// back to air (caves never carve through the water table
-					// or the biome's own surface crust look).
-					if (block != air_ && block != water_) {
-						for (const CarverDef &carver : pipe.carvers) {
-							if (wy < carver.y_min || wy > carver.y_max) {
-								continue;
-							}
-							if (carver.density(static_cast<double>(wx),
-										static_cast<double>(wy), static_cast<double>(wz)) >=
-									carver.threshold) {
-								block = air_;
-								break;
-							}
-						}
-					}
-
+					const core::BlockId block = pregen_block(col, wx, origin.y + ly, wz);
 					if (block != air_) {
 						blocks.set(world::index_of(lx, ly, lz), block);
 					}
@@ -191,6 +193,9 @@ void WorldGenerator::generate(world::Chunk &chunk) const {
 			}
 		}
 
+		// Decoration pass (spec §6 stage 6): pull every structure placement
+		// that reaches this chunk (structure_placement.cpp).
+		stamp_structures(chunk);
 	}
 
 	chunk.dirty().terrain = true;
