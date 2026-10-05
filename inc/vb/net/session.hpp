@@ -103,13 +103,15 @@ public:
 	// connection.
 	std::optional<physics::MoveState> player_move_state(core::NetId id) const;
 
+	// Current / max health of a playing connection; nullopt if `id` isn't one.
+	// Always available: `player:get_health()` (Lua) reads it.
+	std::optional<std::pair<float, float>> player_health(core::NetId id) const;
+
 #if defined(VB_WITH_AUTOMATION)
 	// --- development-only automation primitives (docs/e2e-automation.md §5.3) ---
 	// Compiled out of production builds with the rest of the automation code;
 	// nothing in the engine itself calls them.
 
-	// Current / max health of a playing connection.
-	std::optional<std::pair<float, float>> player_health(core::NetId id) const;
 	// Sets health exactly. Lowering goes through damage_player (so reaching 0
 	// kills + respawns as usual, cause "automation"); raising just heals.
 	// False if `id` isn't a playing connection.

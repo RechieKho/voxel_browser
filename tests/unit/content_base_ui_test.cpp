@@ -459,4 +459,51 @@ TEST_CASE("content/base/ui: base:death shows a cause-specific message and a "
 	CHECK(find(ui.render_frame(), "reason")->text == "You died.");
 }
 
+TEST_CASE("content/base/ui: the selected item's name shows above the bars when "
+		"the selection changes, fades out, and does not show on join") {
+	UiRuntime ui = load_base_ui();
+	ui.set_screen_size(1280, 720);
+	ui.set_clock(10.0);
+	ui.set_player_status(UiRuntime::StatusView{ 20.0f, 20.0f, 100.0f, 100.0f });
+	const std::vector<UiRuntime::InventorySlotView> inv = {
+		{ "base:stone", 5, 2 }, { "base:oak_planks", 2, 3 }, { "air", 0, 0 }
+	};
+
+	// First frame only records the selection: no label on join.
+	ui.set_inventory(inv, 1);
+	CHECK(find(ui.render_hud(), "item_name") == nullptr);
+
+	// Switching to slot 2 shows it, fully opaque, centered, above the status bars.
+	ui.set_inventory(inv, 2);
+	const auto shown = ui.render_hud();
+	const Widget *label = find(shown, "item_name");
+	REQUIRE(label != nullptr);
+	CHECK(label->text == "Oak planks");
+	CHECK(label->fill_a == 255);
+	CHECK(label->x == doctest::Approx(640.0f));
+	CHECK(label->y < find(shown, "health_bg")->y);
+
+	// Still there mid-way, then fading in the last half second, then gone.
+	ui.set_clock(11.0);
+	CHECK(find(ui.render_hud(), "item_name")->fill_a == 255);
+	ui.set_clock(11.8);
+	const Widget *fading = find(ui.render_hud(), "item_name");
+	REQUIRE(fading != nullptr);
+	CHECK(fading->fill_a < 255);
+	CHECK(fading->fill_a > 0);
+	ui.set_clock(12.1);
+	CHECK(find(ui.render_hud(), "item_name") == nullptr);
+
+	// Re-rendering without changing the selection doesn't bring it back...
+	CHECK(find(ui.render_hud(), "item_name") == nullptr);
+	// ...selecting an empty slot shows nothing...
+	ui.set_inventory(inv, 3);
+	CHECK(find(ui.render_hud(), "item_name") == nullptr);
+	// ...and changing the item in the selected slot does show the new name.
+	ui.set_inventory({ inv[0], inv[1], { "base:stone", 1, 2 } }, 3);
+	const Widget *relabel = find(ui.render_hud(), "item_name");
+	REQUIRE(relabel != nullptr);
+	CHECK(relabel->text == "Stone");
+}
+
 #endif // VB_WITH_LUA

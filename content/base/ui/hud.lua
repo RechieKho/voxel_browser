@@ -228,6 +228,49 @@ local function push_hotbar(widgets, screen)
 	end
 end
 
+-- The selected item's name, shown above the status bars for a moment when the
+-- selection (or the item in the selected slot) changes, fading over the last
+-- part. `state` is the HUD's persistent table. The first frame only records
+-- what's selected, so joining doesn't flash a label.
+local kNameSeconds = 2.0
+local kNameFadeSeconds = 0.5
+
+local function push_item_name(widgets, screen, state)
+	local inv = client.inventory()
+	local selected = client.selected_slot()
+	local slot = inv[selected]
+	local item = slot and slot.item or 0
+	local key = selected .. ":" .. item
+	local now = client.time()
+
+	if state.name_key ~= nil and state.name_key ~= key then
+		state.name_until = (item ~= 0) and (now + kNameSeconds) or nil
+	end
+	state.name_key = key
+
+	if item == 0 or not state.name_until or now >= state.name_until then
+		return
+	end
+	local remaining = state.name_until - now
+	local alpha = 255
+	if remaining < kNameFadeSeconds then
+		alpha = math.floor(255 * remaining / kNameFadeSeconds)
+	end
+	local bar = hotbar_layout(screen)
+	-- Above the status bars (14px tall, 6px gap, over the container padding).
+	local y = bar.y - kHotbarPad - 14 - 6 - 24
+	table.insert(widgets, {
+		id = "item_name",
+		type = "text",
+		x = math.floor(screen.width / 2),
+		y = y,
+		align = "center",
+		font_size = 16,
+		text = base_ui.pretty_name(slot.name),
+		color = { 255, 255, 255, alpha },
+	})
+end
+
 -- A small "+" at screen center; the block-highlight outline alone isn't
 -- enough to aim by.
 local function push_crosshair(widgets, screen)
@@ -287,6 +330,7 @@ ui.define_hud(function(state)
 	push_chat_log(widgets, screen)
 	push_hotbar(widgets, screen)
 	push_status_bars(widgets, screen)
+	push_item_name(widgets, screen, state)
 
 	local progress = client.break_progress()
 	if progress then

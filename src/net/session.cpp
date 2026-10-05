@@ -639,7 +639,6 @@ std::optional<physics::MoveState> ServerSession::player_move_state(core::NetId i
 	return std::nullopt;
 }
 
-#if defined(VB_WITH_AUTOMATION)
 std::optional<std::pair<float, float>> ServerSession::player_health(core::NetId id) const {
 	for (const auto &[conn, state] : conns_) {
 		(void)conn;
@@ -651,6 +650,7 @@ std::optional<std::pair<float, float>> ServerSession::player_health(core::NetId 
 	return std::nullopt;
 }
 
+#if defined(VB_WITH_AUTOMATION)
 bool ServerSession::set_player_health(core::NetId id, float value) {
 	for (auto &[conn, state] : conns_) {
 		(void)conn;

@@ -982,6 +982,24 @@ struct PlayerHandle {
 		return sol::make_object(lua, *h);
 	}
 
+	// `{current=, max=}`, the same shape entity:get_health() returns for a
+	// script entity, or nil if the player is already gone. Read-only: lowering
+	// goes through damage() (so death/respawn hooks fire), there is no setter.
+	sol::object get_health(sol::this_state ts) const {
+		sol::state_view lua(ts);
+		if (rt->session == nullptr) {
+			throw sol::error("entity:get_health(): session not attached yet");
+		}
+		const auto h = rt->session->player_health(net_id);
+		if (!h) {
+			return sol::lua_nil;
+		}
+		sol::table t = lua.create_table();
+		t["current"] = h->first;
+		t["max"] = h->second;
+		return t;
+	}
+
 	// A pack-facing way to spend or restore hunger directly (eating food,
 	// a sprint cost, ...) without waiting on decay_per_second -- clamped to
 	// [0, max] by ServerSession::add_player_hunger(), a negative `amount`
@@ -1130,7 +1148,8 @@ void PackRuntime::Impl::install_bindings() {
 			&PlayerHandle::punch, "get_selected_slot",
 			&PlayerHandle::get_selected_slot, "get_held_item",
 			&PlayerHandle::get_held_item, "get_hunger", &PlayerHandle::get_hunger,
-			"add_hunger", &PlayerHandle::add_hunger);
+			"add_hunger", &PlayerHandle::add_hunger, "get_health",
+			&PlayerHandle::get_health);
 
 	sol::table vb = lua.create_named_table("vb");
 
