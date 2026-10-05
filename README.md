@@ -79,11 +79,16 @@ substitute for it.
 | 4 — The "Browser" engine (Lua scripting, Asset Sync, client UI VM) | ✅ Done (mechanism); a real Lua-driven worldgen pipeline is the main open item |
 | 5 — Minimum playable base (content pack, block editing, main menu, chat/day-night/respawn, crafting) | ✅ Substantially done — see `REMAINING_TASKS.md` 5.5 for remaining docs/polish |
 
+Also landed since the phase list was written: world persistence (flat
+per-region files; dedicated servers and `--singleplayer` both save, the latter
+under `--world-dir`, default `world_singleplayer`), the `vb` developer CLI,
+the `content/base` HUD (health/hunger bars, hotbar, live inventory screen,
+crosshair), and a dev-only end-to-end automation harness (see below).
+
 Known gaps worth knowing about before diving in (full detail in
-`REMAINING_TASKS.md` and `STATE.md`): no world persistence (everything is
-regenerated from the seed on restart), held items and placeable blocks still
-share one id space, and macOS CI doesn't build the real networking backend
-yet (works locally, just not wired into that platform's workflow).
+`REMAINING_TASKS.md` and `STATE.md`): macOS CI wires in the real networking
+backend but that leg has not been verified on a real Actions run yet, and the
+automation/e2e CI job has likewise not run on GitHub yet.
 
 ---
 
@@ -198,9 +203,10 @@ cmake --build build
 ```
 
 Once in, WASD + mouse to move, left-click (held) to break a block,
-right-click to place one, Enter to open the chat box — type `/craft
-base:planks` after mining some wood to see the base pack's example crafting
-system in action.
+right-click to place one, `E` for the inventory, `Esc` for the pause screen,
+Enter to open the chat box — type `/craft base:planks` after mining some wood
+to see the base pack's example crafting system in action. Singleplayer worlds
+are saved on exit; pass `--world-dir <dir>` to choose where.
 
 #### Build options
 
@@ -208,11 +214,13 @@ system in action.
 | ----------------------- | ------- | -------------------------------------------------- |
 | `VB_BUILD_CLIENT`       | `ON`    | build `voxel_browser` + `vb_render` (needs raylib)  |
 | `VB_BUILD_SERVER`       | `ON`    | build `voxel_browser_server`                        |
+| `VB_BUILD_CLI`          | `ON`    | build the developer CLI `vb`                        |
 | `VB_BUILD_TESTS`        | `ON`    | build `vb_tests` and register CTest tests           |
 | `VB_HEADLESS`           | `OFF`   | client build that never touches the GPU (CI/tests)  |
 | `VB_WARNINGS_AS_ERRORS` | `OFF`   | `-Werror` / `/WX` (CI turns this on)                |
 | `VB_ENABLE_ASAN` / `_UBSAN` / `_TSAN` | `OFF` | sanitizer builds                       |
-| `VB_WITH_NET` / `_REPLICATION` / `_WORLDGEN` / `_COMPRESSION` / `_LUA` / `_MESHING` | `OFF` | pull in the heavy dependency owned by each later phase |
+| `VB_WITH_NET` / `_WORLDGEN` / `_COMPRESSION` / `_LUA` | `OFF` | pull in the heavy dependency owned by each later phase |
+| `VB_WITH_REPLICATION` | `ON` | librg interest culling; `OFF` falls back to the hand-rolled linear scan |
 | `VB_WITH_AUTOMATION` | `OFF` | dev/test-only automation driver (`--automation stdio`, `--version` shows `+automation`); never enable for shipped builds — see `docs/e2e-automation.md`, `docs/automation-protocol.md` |
 | `VB_DISTRIBUTION` | `OFF` | set by every build whose binaries get uploaded; combining it with `VB_WITH_AUTOMATION` is a configure error |
 
@@ -225,6 +233,19 @@ comment in `cmake/Dependencies.cmake`):
   `-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake` to the
   configure command. GitHub's `windows-latest` runners ship vcpkg pre-installed.
 - **Linux:** `apt-get install protobuf-compiler libprotobuf-dev libssl-dev`
-- **macOS:** `brew install protobuf openssl` (not yet wired into CI's universal
-  build — see `STATE.md`)
+- **macOS:** `brew install protobuf openssl` (CI builds universal protobuf/OpenSSL
+  itself; see `.github/workflows/build_macos.yml` and `STATE.md`)
 
+### End-to-end tests
+
+`-DVB_WITH_AUTOMATION=ON` adds a dev-only JSON-lines automation driver
+(`--automation stdio|tcp`) used by the pytest `vbtest` harness in `tests/e2e/`
+(`ctest -L e2e`). Never enable it for shipped builds. See
+`docs/e2e-automation.md`, `docs/automation-protocol.md` and
+`tests/e2e/README.md`.
+
+## 📚 More docs
+
+`ARCHITECTURE_SPEC.md` (design) · `REMAINING_TASKS.md` (backlog) · `STATE.md`
+(gotchas) · `CONTRIBUTING.md` · `docs/lua-api.md` (scripting API) ·
+`docs/protocol.md` · `architecture_spec/content-pack-format.md`.
