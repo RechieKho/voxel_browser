@@ -267,7 +267,51 @@ main-thread apply pass, stays deferred. Its entry in `deferred.md` is
 narrowed to cases bakes can't cover, such as structures that react to their
 surroundings.
 
-### G. Editor UX
+### G. The content pack directory is the workspace
+
+The editor doesn't keep its own block list. Blocks, textures, biomes, and the
+worldgen pipeline all come from the pack, so the unit the editor opens is a
+**whole content pack directory**: `vb_structure_editor <pack-dir>`, or File →
+Open Pack. One open pack is one session.
+
+- **Loading uses the engine's real path.** The editor calls
+  `vb::script::load_content_pack` on a `PackRuntime`, which runs
+  `blocks/`, `entities/`, `structures/`, `biomes/`, root modules, and then
+  `init.lua`, in the same order the server uses. Whatever the server would
+  see, the editor sees: blocks added by any file, `texture` overrides, and
+  `vb.register_biome` / `set_pipeline` data.
+- **What comes from the pack:**
+  - the block palette, from the frozen `BlockRegistry` (the `base()` set
+    plus every `vb.register_block`). Structure files store block **names**,
+    which are resolved against this registry.
+  - block icons and in-viewport textures, from `TextureAtlas` built from the
+    registry's texture paths, relative to the pack's `textures/`. Blocks
+    without a texture get the atlas's flat placeholder color, the same as
+    in the client.
+  - the structure list, from every `vb.register_structure` the pack made
+    (`structures/*.lua`). The Open dialog lists these, not files picked
+    from disk.
+  - the biomes and pipeline for the placement panel and preview (S5).
+- **Saves go back into the pack**, to `<pack>/structures/<local-name>.lua`.
+  The `name` prefix (`base:` and so on) defaults to the pack's `pack.toml`
+  name.
+- **Reload Pack** (`F5`) re-runs the load in a fresh `PackRuntime`, so
+  blocks or textures edited elsewhere show up without restarting. The open
+  structure is kept in memory and its block names are resolved again. Names
+  that no longer exist turn into a visible "missing block" marker instead of
+  being dropped.
+- **No side effects on the pack.** Loading runs the pack's Lua, including
+  `init.lua`. For example, `content/base/init.lua` increments
+  `vb.storage.boot_count`. The editor gives `PackRuntime` a throwaway
+  storage path in a temp directory and never calls `flush_storage()`, so
+  opening a pack never writes anything except the structure files the user
+  saves. Server-only functions (`vb.world.*`, `player:*`) aren't attached and
+  behave as they do at pack load on the server.
+- **Load errors are shown, not fatal.** A Lua error or invalid structure
+  file is listed with its file name in an errors panel. If the pack can't
+  load at all, the editor stays on the Open Pack screen.
+
+### H. Editor UX
 
 - **Viewport:** orbit, pan, and zoom camera around the structure bounds.
   Ground-grid plane at the anchor. Bounding box drawn as a wireframe, anchor
@@ -290,11 +334,12 @@ surroundings.
   and switches to fly-camera view. Re-roll seed. Toggle "only this
   structure" or "all decorations". It reuses `WorldGenerator` and
   `ChunkRenderer` as they are.
-- **Files:** open a pack (`--pack content/base`), open or create
-  `structures/<name>.lua`, save, and save-as. A dirty marker in the title
+- **Files:** open a pack directory (see G), then open one of its
+  structures or create a new one, save, and save-as (both into the pack's
+  `structures/`). A dirty marker in the title
   and a confirm prompt before closing unsaved work.
 
-### H. Code layout
+### I. Code layout
 
 ```
 inc/vb/worldgen/structure.hpp          StructureDef, PlacementRule (engine)
@@ -366,10 +411,17 @@ and documents.
       `vb_structure_editor` executable, CI build in the existing matrix.
 - [ ] `Volume` model with a conversion to and from a private
       `ClientChunkStore`, so `ChunkRenderer` meshes it unchanged.
-- [ ] Load a pack with `--pack <dir>` through `load_content_pack`. Build the
-      `TextureAtlas` from the pack's registry.
-- [ ] Open a structure (`--open structures/x.lua`, or a list of structures
-      from the loaded pack). Orbit camera, ground grid, bounds box, anchor
+- [ ] Open a pack directory (`vb_structure_editor <pack-dir>`, or an Open
+      Pack screen) through `load_content_pack`, as described in G: throwaway
+      `vb.storage` path that is never flushed, an errors panel, and Reload
+      Pack (`F5`). Build the `TextureAtlas` from the pack's registry and
+      `textures/`.
+- [ ] Test: opening `content/base` and `content/examples/kitchen_sink`
+      leaves the pack directory byte-identical (no `storage.json` or other
+      writes), and the palette matches the registry the server builds from
+      the same pack.
+- [ ] Open a structure from the list of the pack's `vb.register_structure`
+      entries (optionally preselected with `--open <name>`). Orbit camera, ground grid, bounds box, anchor
       marker, variant switcher.
 - [ ] `StructureWriter` producing canonical Lua with stable key order, so a
       save of an unchanged file is byte-identical. Test: write, then load
