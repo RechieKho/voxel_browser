@@ -661,6 +661,12 @@ bool ClientApp::frame(const vb::render::InputFrame &input, double dt) {
 				ui_runtime.set_player_list(config.player_name, std::move(other_names));
 			}
 			ui_runtime.set_chat({ chat_log.begin(), chat_log.end() }, chat_open);
+			if (const auto &st = client->player_status()) {
+				ui_runtime.set_player_status(vb::script::UiRuntime::StatusView{
+						st->health, st->max_health, st->hunger, st->max_hunger });
+			} else {
+				ui_runtime.set_player_status(std::nullopt);
+			}
 			{
 				const auto &inv = client->inventory();
 				const auto &registry = client->chunk_store().registry();

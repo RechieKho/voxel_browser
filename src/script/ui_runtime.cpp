@@ -42,6 +42,7 @@ void UiRuntime::set_screen_size(int, int) {}
 void UiRuntime::set_player_list(std::string, std::vector<std::string>) {}
 void UiRuntime::set_chat(std::vector<std::string>, bool) {}
 void UiRuntime::set_inventory(std::vector<InventorySlotView>, int) {}
+void UiRuntime::set_player_status(std::optional<StatusView>) {}
 const std::vector<Widget> &UiRuntime::render_hud() {
 	static const std::vector<Widget> kEmpty;
 	return kEmpty;
@@ -280,6 +281,7 @@ struct UiRuntime::Impl {
 	bool chat_open = false;
 	std::vector<UiRuntime::InventorySlotView> inventory;
 	int selected_slot = 1;
+	std::optional<UiRuntime::StatusView> player_status;
 
 	explicit Impl(VmLimits limits);
 
@@ -378,6 +380,25 @@ void UiRuntime::Impl::install_bindings() {
 		return t;
 	};
 	client_tbl["selected_slot"] = [this]() -> int { return selected_slot; };
+	// {current=, max=} each, or nil before the server's first status arrives.
+	client_tbl["health"] = [this]() -> sol::object {
+		if (!player_status) {
+			return sol::make_object(lua_state(), sol::lua_nil);
+		}
+		sol::table t = lua_state().create_table();
+		t["current"] = player_status->health;
+		t["max"] = player_status->max_health;
+		return t;
+	};
+	client_tbl["hunger"] = [this]() -> sol::object {
+		if (!player_status) {
+			return sol::make_object(lua_state(), sol::lua_nil);
+		}
+		sol::table t = lua_state().create_table();
+		t["current"] = player_status->hunger;
+		t["max"] = player_status->max_hunger;
+		return t;
+	};
 }
 
 void UiRuntime::Impl::evaluate_frame() {
@@ -616,6 +637,10 @@ void UiRuntime::set_player_list(std::string own_name, std::vector<std::string> o
 void UiRuntime::set_chat(std::vector<std::string> log, bool chat_open) {
 	impl_->chat_log = std::move(log);
 	impl_->chat_open = chat_open;
+}
+
+void UiRuntime::set_player_status(std::optional<StatusView> status) {
+	impl_->player_status = status;
 }
 
 void UiRuntime::set_inventory(std::vector<InventorySlotView> slots, int selected_slot) {

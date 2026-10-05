@@ -504,6 +504,9 @@ back which widgets fired an interaction — no sol2 in the render half.
   nothing here draws a pixel, callers decide whether/how to show it:
   - `client.break_progress()` — `nil`, or `0..1` while the player is holding
     to break a targeted block.
+  - `client.health()` / `client.hunger()` — `{current=.., max=..}` for the
+    local player (`S2C_PlayerStatus`), or `nil` before the server's first
+    status arrives. Updated whenever the value changes server-side.
   - `client.screen_size()` — `{width=.., height=..}`; widgets take absolute
     pixel positions like everywhere else in this API, so centering something
     in a HUD needs the real window size rather than a hardcoded guess.

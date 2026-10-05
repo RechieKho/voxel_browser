@@ -201,6 +201,16 @@ public:
 	// slot index in this codebase (`PlayerHandle::get_selected_slot()`).
 	void set_inventory(std::vector<InventorySlotView> slots, int selected_slot);
 
+	// Sets the state `client.health()`/`client.hunger()` read back. Pass
+	// nullopt before the server's first status arrives (both then return nil).
+	struct StatusView {
+		float health = 0.0f;
+		float max_health = 0.0f;
+		float hunger = 0.0f;
+		float max_hunger = 0.0f;
+	};
+	void set_player_status(std::optional<StatusView> status);
+
 	// Evaluates the registered HUD render_fn (no-op, returning the last --
 	// likely empty -- list if none was ever registered via
 	// ui.define_hud) and returns the fresh widget list. Call once per UI

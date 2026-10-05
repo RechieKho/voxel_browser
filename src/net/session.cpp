@@ -1060,6 +1060,9 @@ void ServerSession::build_systems() {
 			[this](entt::registry &, const ecs::TickContext &) {
 				update_region_occupancy();
 			});
+	systems_.add("sync_player_status", [this](entt::registry &, const ecs::TickContext &) {
+		sync_player_status();
+	});
 	systems_.add("sync_interest", [this](entt::registry &, const ecs::TickContext &) {
 		system_sync_interest();
 	});
@@ -1268,6 +1271,28 @@ void ServerSession::check_respawns() {
 		}
 		state.death_cause.clear();
 		state.death_health_before = 0.0f;
+	}
+}
+
+void ServerSession::sync_player_status() {
+	for (auto &[conn, state] : conns_) {
+		if (!state.playing) {
+			continue;
+		}
+		const auto &health = registry_.get<ecs::Health>(state.entity);
+		const auto &hunger = registry_.get<ecs::Hunger>(state.entity);
+		protocol::S2CPlayerStatus msg;
+		msg.health = health.current;
+		msg.max_health = health.max;
+		msg.hunger = hunger.current;
+		msg.max_hunger = hunger.max;
+		const auto &last = state.last_status;
+		if (last && last->health == msg.health && last->max_health == msg.max_health &&
+				last->hunger == msg.hunger && last->max_hunger == msg.max_hunger) {
+			continue;
+		}
+		send_message(transport_, conn, msg);
+		state.last_status = msg;
 	}
 }
 
@@ -1778,6 +1803,15 @@ bool ClientSession::apply_gameplay_frame(const protocol::Frame &frame) {
 				inventory_ = std::move(m->slots);
 			} else {
 				VB_ERROR("net", "malformed S2C_Inventory: ",
+						core::message(m.error()));
+			}
+			return true;
+		}
+		case MessageType::kS2CPlayerStatus: {
+			if (auto m = protocol::S2CPlayerStatus::decode(frame.payload)) {
+				player_status_ = *m;
+			} else {
+				VB_ERROR("net", "malformed S2C_PlayerStatus: ",
 						core::message(m.error()));
 			}
 			return true;

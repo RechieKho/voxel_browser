@@ -256,6 +256,24 @@ TEST_CASE("inventory round-trips, including an empty snapshot") {
 	CHECK(inv2.slots[1].count == 64);
 }
 
+TEST_CASE("player status round-trips, and rejects a truncated payload") {
+	S2CPlayerStatus st;
+	st.health = 13.5f;
+	st.max_health = 20.0f;
+	st.hunger = 42.0f;
+	st.max_hunger = 100.0f;
+	auto st2 = round_trip(st);
+	CHECK(st2.health == 13.5f);
+	CHECK(st2.max_health == 20.0f);
+	CHECK(st2.hunger == 42.0f);
+	CHECK(st2.max_hunger == 100.0f);
+
+	std::vector<std::byte> bytes;
+	st.encode(bytes);
+	bytes.pop_back();
+	CHECK_FALSE(S2CPlayerStatus::decode(bytes));
+}
+
 TEST_CASE("block registry round-trips, including an empty list") {
 	auto empty = round_trip(S2CBlockRegistry{});
 	CHECK(empty.blocks.empty());
