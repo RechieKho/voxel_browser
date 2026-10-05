@@ -80,6 +80,15 @@ public:
 			std::string_view chunk_name = "pack");
 	void freeze();
 
+	// Structure editor S1: call after freeze() (every block is registered by
+	// then). Resolves each registered structure's palette and every biome's
+	// decoration entries, so an unknown block or structure name is reported
+	// as a pack load error naming the offender instead of surfacing later,
+	// when the pipeline is built. build_worldgen_pipeline() runs the same
+	// checks; on failure it logs the message and builds the pipeline with no
+	// decoration.
+	ScriptResult validate_worldgen() const;
+
 	// Phase 4.1: installs (or replaces) the pack's virtual module filesystem
 	// for a sandboxed `require` inside pack Lua code -- see
 	// vb::script::Vm::install_require for the exact resolution/caching rules.

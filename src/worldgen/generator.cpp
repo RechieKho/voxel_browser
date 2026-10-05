@@ -191,40 +191,6 @@ void WorldGenerator::generate(world::Chunk &chunk) const {
 			}
 		}
 
-		// Decoration pass (spec §6 stage 6) -- schematic-only, see
-		// vb/worldgen/pipeline.hpp's DecorationEntry comment for the scope
-		// note (no cross-chunk placement yet: offsets landing outside this
-		// chunk are simply skipped).
-		if (!pipe.biomes.empty()) {
-			constexpr int kHalfChunk = kChunkDim / 2;
-			const auto biome_index = pipe.biomes.resolve(
-					static_cast<double>(origin.x + kHalfChunk),
-					static_cast<double>(origin.z + kHalfChunk));
-			const auto &entries = pipe.decoration_for(biome_index);
-			for (std::size_t ei = 0; ei < entries.size(); ++ei) {
-				const DecorationEntry &entry = entries[ei];
-				DetRng rng{ chunk_seed ^ (0xDEC0000000000000ULL + ei) };
-				int count = static_cast<int>(entry.spawn_rate);
-				if (rng.next01() < entry.spawn_rate - static_cast<double>(count)) {
-					++count;
-				}
-				for (int n = 0; n < count; ++n) {
-					const int ax = static_cast<int>(rng.next_index(kChunkDim));
-					const int az = static_cast<int>(rng.next_index(kChunkDim));
-					const int surface_wy = surface_height(origin.x + ax, origin.z + az);
-					const int ay = surface_wy + 1 - origin.y;
-					for (const auto &bo : entry.blocks) {
-						const int lx = ax + bo.offset.x;
-						const int ly = ay + bo.offset.y;
-						const int lz = az + bo.offset.z;
-						if (lx >= 0 && lx < kChunkDim && ly >= 0 && ly < kChunkDim &&
-								lz >= 0 && lz < kChunkDim) {
-							blocks.set(world::index_of(lx, ly, lz), bo.block);
-						}
-					}
-				}
-			}
-		}
 	}
 
 	chunk.dirty().terrain = true;

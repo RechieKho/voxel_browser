@@ -267,6 +267,11 @@ int main(int argc, char **argv) {
 		return EXIT_FAILURE;
 	}
 	pack_runtime.freeze();
+	if (const auto worldgen_check = pack_runtime.validate_worldgen(); !worldgen_check) {
+		std::cerr << "server: content pack '" << config.content_pack
+				  << "' has invalid worldgen data: " << worldgen_check.message << "\n";
+		return EXIT_FAILURE;
+	}
 	// Flush any vb.storage write load_content_pack's init.lua made (e.g.
 	// content/base's own boot_count demo) to disk *before* the manifest
 	// below hashes storage.json's on-disk bytes -- otherwise storage_dirty

@@ -4,6 +4,7 @@
 
 target_sources(vb_core PRIVATE
   block_def.cpp
+  structure_def.cpp
   data_script.cpp
   db.cpp
   pack_loader.cpp

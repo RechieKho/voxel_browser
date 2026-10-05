@@ -213,6 +213,24 @@ rt.dispatch_tick(dt);
   lacunarity=, gain=, frequency=}`, `vb.noise.remap{source=, in_min=,
   in_max=, out_min=, out_max=}`, `vb.noise.combine{a=, b=,
   op="add"|"multiply"|"min"|"max"}`.
+  `vb.register_structure(def)` (structure editor S1, pack-load-time only,
+  not idempotent: a repeated `name` is an error) registers a decorative
+  structure: `name`, `size = {x=,y=,z=}` (each 1..64), optional `anchor`
+  (default `{0,0,0}`; the cell that sits on the ground block), `palette`
+  (single character -> block *name*, or `false` for "keep the terrain
+  there"), `variants = {{weight=, layers={...}}, ...}` (`layers[y][z]` is one
+  row of `size.x` palette characters, bottom layer first) and an optional
+  `placement = {on=, replace=, rotate=, mirror=, min_spacing=, max_slope=,
+  y_min=, y_max=, cluster=}` of defaults. Unknown keys are errors. The table
+  is plain data, so the usual home is `structures/<name>.lua` returning it,
+  registered with `vb.register_structure(require("structures.oak_tree"))`
+  (the loader does not walk `structures/`). Block names are resolved after
+  the whole pack has loaded: `PackRuntime::validate_worldgen()` (called by
+  the server and `--singleplayer` right after `freeze()`) reports an unknown
+  block or structure name, naming it. A biome's `decoration` entry can now
+  be `{structure = "name", spawn_rate = n, <any placement field>}`; the
+  inline `{blocks = ...}` form still works and becomes an anonymous
+  one-variant structure (`replace = "all"`, no rotation).
   **Decoration is schematic-only, not procedural** (explicit scope
   narrowing, same threading reasoning as above): a per-site Lua callback
   can't run on a worker thread either, so `vb.register_biome`'s `decoration`

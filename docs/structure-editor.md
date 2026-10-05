@@ -1,6 +1,6 @@
 # Structure editor — design and phased plan
 
-> Status: **In progress: S0 done, S1–S7 planned.** Plans the "dedicated external structure
+> Status: **In progress: S0–S1 done, S2–S7 planned.** Plans the "dedicated external structure
 > tool" that `architecture_spec/worldgen.md` §6 stage 6 and
 > `remaining_tasks/deferred.md` ("Rule-based decorative structure
 > placement") left for after the Lua worldgen pipeline. Phase 6.14 shipped
@@ -480,20 +480,20 @@ integrates and documents.
 
 ### S1 — Structure format and loading (engine)
 
-- [ ] `inc/vb/worldgen/structure.hpp`: `StructureDef`, `StructureVariant`,
+- [x] `inc/vb/worldgen/structure.hpp`: `StructureDef`, `StructureVariant`,
       `PlacementRule`, `kMaxStructureDim`, and the keep sentinel.
-- [ ] `vb::script::parse_structure(sol::table)`, shared by the engine and
+- [x] `vb::script::parse_structure(sol::table)`, shared by the engine and
       the editor: check that size, layers, row lengths, and palette keys are
       valid, and report errors that name the structure.
-- [ ] `vb.register_structure(def)` in `PackRuntime`, built on
+- [x] `vb.register_structure(def)` in `PackRuntime`, built on
       `parse_structure`. Structure files are data scripts that the pack
       `require`s. The loader walk doesn't change.
-- [ ] `build_worldgen_pipeline`: resolve palette names to ids, build
+- [x] `build_worldgen_pipeline`: resolve palette names to ids, build
       `structures`, and parse biome `decoration` entries of the form
       `{structure=..., ...overrides}`. Migrate the inline `{blocks=...}` form
       to an anonymous one-variant structure (no rotation, `replace="all"`;
       the shape is kept, positions follow S2's anchor scheme).
-- [ ] Tests (`pack_runtime_test.cpp`): parse round trip; the same
+- [x] Tests (`pack_runtime_test.cpp`): parse round trip; the same
       structure file gives an equal `StructureDef` through
       `vb.register_structure(require(...))` and through `eval_data_script`;
       malformed files (bad row length, unknown key, unknown block, size over
