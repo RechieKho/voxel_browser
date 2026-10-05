@@ -199,7 +199,7 @@ TEST_CASE("full handshake, auth_mode=none") {
 TEST_CASE("handshake rejects a bad player name") {
 	Harness h;
 	h.server_host.authenticate = [](std::string_view, std::string_view) {
-		return AuthOutcome{ false, "name taken", {} };
+		return AuthOutcome{ false, "name taken", {}, {} };
 	};
 	h.start();
 	h.run();
@@ -466,6 +466,16 @@ TEST_CASE("frame_message leaves a small payload uncompressed") {
 
 namespace {
 
+vb::net::AuthOutcome ok_outcome(const std::string &name, const std::string &subject = "sub-1") {
+	auto login = std::make_shared<vb::net::LoginData>();
+	login->provider = "oidc";
+	login->issuer = "https://idp.example";
+	login->subject = subject;
+	login->name = name;
+	login->claims_json = "{}";
+	return vb::net::AuthOutcome{ true, {}, name, login };
+}
+
 struct ExternalAuthFsm {
 	HandshakeServerConfig config;
 	HandshakeServerHost host;
@@ -561,7 +571,7 @@ TEST_CASE("external auth: pending ticket resolves on poll_auth, accepted name wi
 	CHECK(t.fsm->poll_auth().send.empty());
 	CHECK(t.fsm->state() == ServerHandshakeState::kVerifyingAuth);
 
-	t.verdict = vb::net::AuthOutcome{ true, {}, "alice" };
+	t.verdict = ok_outcome("alice");
 	auto done = t.fsm->poll_auth();
 	REQUIRE(done.send.size() == 1);
 	CHECK(first_type(done.send[0]) == proto::MessageType::kS2CAuthResult);
@@ -573,7 +583,7 @@ TEST_CASE("external auth: pending ticket resolves on poll_auth, accepted name wi
 
 TEST_CASE("external auth: fast-path ticket resolves inside on_frame") {
 	ExternalAuthFsm t;
-	t.verdict = vb::net::AuthOutcome{ true, {}, "bob" };
+	t.verdict = ok_outcome("bob");
 	t.build();
 	t.feed(proto::C2SHello{ vb::kEngineProtocolVersion, 1, "t" });
 	auto step = t.feed(proto::C2SAuth{ "x", "jwt" });
@@ -584,7 +594,7 @@ TEST_CASE("external auth: fast-path ticket resolves inside on_frame") {
 
 TEST_CASE("external auth: rejected token disconnects and never reaches the asset manifest") {
 	ExternalAuthFsm t;
-	t.verdict = vb::net::AuthOutcome{ false, "not accepted by this server", {} };
+	t.verdict = vb::net::AuthOutcome{ false, "not accepted by this server", {}, {} };
 	t.build();
 	t.feed(proto::C2SHello{ vb::kEngineProtocolVersion, 1, "t" });
 	auto step = t.feed(proto::C2SAuth{ "x", "bad" });

@@ -93,6 +93,12 @@ public:
 	// ServerSession that will own `host`.
 	void install_join_veto(net::HandshakeServerHost &host);
 
+	// Whether this server authenticates players (the pack ships auth.lua and
+	// it is active). Backs `vb.auth.required()`. Call before the pack loads so
+	// module-scope code sees the right answer. When false, every
+	// `player:get_login()` is nil.
+	void set_auth_required(bool required);
+
 	// Wraps host.keybind_registry so every vb.register_keybind name reaches
 	// joining clients as S2C_KeybindRegistry (Phase 6.3). Same calling
 	// convention as install_join_veto: call after freeze(), before

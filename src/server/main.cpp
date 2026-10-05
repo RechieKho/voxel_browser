@@ -316,6 +316,7 @@ int main(int argc, char **argv) {
 	// Phase 6.13: read-only vb.config.get(key) -- set before load_content_pack
 	// so it's already visible to registration-time (module-scope) pack code.
 	pack_runtime.set_server_config(config);
+	pack_runtime.set_auth_required(active_auth.has_value());
 	if (!vb::script::load_content_pack(pack_runtime, config.content_pack)) {
 		std::cerr << "server: content pack '" << config.content_pack
 				  << "' failed to load, aborting\n";
@@ -500,6 +501,7 @@ int main(int argc, char **argv) {
 	// login still passes through the pack's join veto (`host.authenticate`,
 	// installed just above) with the resolved name.
 	std::shared_ptr<vb::auth::AuthService> auth_service;
+	
 	if (active_auth) {
 		auth_service = std::make_shared<vb::auth::AuthService>(
 				*active_auth, std::shared_ptr<vb::auth::HttpFetcher>(vb::auth::make_curl_fetcher()));
@@ -528,22 +530,27 @@ int main(int argc, char **argv) {
 			}
 			return c;
 		};
-		auto vetoed = host.authenticate;
-		host.begin_authenticate = [auth_service, vetoed](std::string_view token,
+		host.begin_authenticate = [auth_service](std::string_view token,
 										  std::string_view nonce) -> vb::net::AuthTicket {
 			auto pending = auth_service->begin(std::string(token), std::string(nonce));
-			return [pending, vetoed]() -> std::optional<vb::net::AuthOutcome> {
+			return [pending]() -> std::optional<vb::net::AuthOutcome> {
 				const auto verdict = pending->poll();
 				if (!verdict) {
 					return std::nullopt;
 				}
 				if (!verdict->ok) {
 					VB_WARN("auth", "sign-in rejected: ", verdict->detail);
-					return vb::net::AuthOutcome{ false, verdict->reason, {} };
+					return vb::net::AuthOutcome{ false, verdict->reason, {}, {} };
 				}
-				vb::net::AuthOutcome outcome = vetoed(verdict->login.name, {});
-				outcome.resolved_name = verdict->login.name;
-				return outcome;
+				// Name collisions and the pack's join veto run in the handshake
+				// FSM (resolve_name / join_veto), with this login attached.
+				auto login = std::make_shared<vb::net::LoginData>();
+				login->provider = std::string(vb::auth::provider_name(verdict->login.provider));
+				login->issuer = verdict->login.issuer;
+				login->subject = verdict->login.subject;
+				login->name = verdict->login.name;
+				login->claims_json = verdict->login.claims_json;
+				return vb::net::AuthOutcome{ true, {}, verdict->login.name, login };
 			};
 		};
 	}

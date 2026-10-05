@@ -111,6 +111,43 @@ ServerSession::ServerSession(Transport &transport, HandshakeServerConfig config,
 	host_.current_player_count = [this] {
 		return static_cast<std::uint32_t>(playing_);
 	};
+	// External auth: two different people may both be "alex"; the later one
+	// becomes "alex#2" (auth.md §5.5). Same-subject sessions are skipped, since
+	// the older one is about to be kicked (kick_duplicate_login).
+	auto user_resolve = host_.resolve_name;
+	host_.resolve_name = [this, user_resolve](std::string_view name,
+								 const LoginData &login) {
+		const std::string base = user_resolve ? user_resolve(name, login) : std::string(name);
+		auto taken = [&](const std::string &candidate) {
+			for (const auto &[c, other] : conns_) {
+				(void)c;
+				const auto &ol = other.handshake.login();
+				if (ol && ol->issuer == login.issuer && ol->subject == login.subject) {
+					continue;
+				}
+				if (!other.handshake.player_name().empty() &&
+						other.handshake.player_name() == candidate) {
+					return true;
+				}
+			}
+			return false;
+		};
+		if (!taken(base)) {
+			return base;
+		}
+		for (int n = 2; n < 10000; ++n) {
+			const std::string suffix = "#" + std::to_string(n);
+			std::string stem = base;
+			if (stem.size() + suffix.size() > 32) {
+				stem.resize(32 - suffix.size());
+			}
+			std::string candidate = stem + suffix;
+			if (!taken(candidate)) {
+				return candidate;
+			}
+		}
+		return base;
+	};
 	// Keep the caller's grant logic, then fill in a net id / seed if it didn't.
 	auto user_on_ready = host_.on_ready;
 	host_.on_ready = [this, user_on_ready](std::string_view name) {
@@ -725,6 +762,16 @@ ConnId ServerSession::conn_for_player(core::NetId id) const {
 	return ConnId::kInvalid;
 }
 
+std::shared_ptr<const LoginData> ServerSession::player_login(core::NetId id) const {
+	for (const auto &[conn, state] : conns_) {
+		(void)conn;
+		if (state.playing && state.net_id == id) {
+			return state.handshake.login();
+		}
+	}
+	return nullptr;
+}
+
 std::string_view ServerSession::player_name(core::NetId id) const {
 	for (const auto &[conn, state] : conns_) {
 		(void)conn;
@@ -857,6 +904,7 @@ void ServerSession::system_network_io(double dt_seconds) {
 						it->second.handshake.state() ==
 								ServerHandshakeState::kAwaitingAssetManifestRequest) {
 					it->second.age = 0.0;
+					kick_duplicate_login(ev.conn);
 				}
 				if (step.completed) {
 					it->second.playing = true;
@@ -884,7 +932,8 @@ void ServerSession::system_network_io(double dt_seconds) {
 							g.net_id,
 							player_visual_kind_.value_or(core::EntityKindId::kInvalid),
 							g.spawn_pos, {}, {} });
-					joins_.push_back({ ev.conn, g.net_id, step.player_name });
+					joins_.push_back({ ev.conn, g.net_id, step.player_name,
+							it->second.handshake.login() });
 					VB_INFO("net", "player '", step.player_name, "' joined as net id ",
 							static_cast<std::uint32_t>(g.net_id));
 
@@ -943,6 +992,7 @@ void ServerSession::system_network_io(double dt_seconds) {
 void ServerSession::system_handshake_timeouts(double dt_seconds) {
 	// Handshake timeouts + asset-stream pacing.
 	std::vector<std::pair<ConnId, std::string>> to_drop;
+	std::vector<ConnId> verified; // external auth just succeeded (async path)
 	for (auto &[conn, state] : conns_) {
 		if (state.playing) {
 			continue;
@@ -965,6 +1015,7 @@ void ServerSession::system_handshake_timeouts(double dt_seconds) {
 			if (state.handshake.state() ==
 					ServerHandshakeState::kAwaitingAssetManifestRequest) {
 				state.age = 0.0;
+				verified.push_back(conn);
 			}
 		}
 		state.age += dt_seconds;
@@ -974,8 +1025,32 @@ void ServerSession::system_handshake_timeouts(double dt_seconds) {
 			to_drop.emplace_back(conn, "handshake timeout");
 		}
 	}
+	for (const ConnId conn : verified) {
+		kick_duplicate_login(conn);
+	}
 	for (const auto &[conn, reason] : to_drop) {
 		drop(conn, reason);
+	}
+}
+
+void ServerSession::kick_duplicate_login(ConnId newcomer) {
+	const auto nit = conns_.find(newcomer);
+	if (nit == conns_.end() || !nit->second.handshake.login()) {
+		return;
+	}
+	const auto &login = nit->second.handshake.login();
+	// The newcomer is never refused: a ghost session left by a crash or a
+	// dropped link must not lock its owner out (auth.md §5.5).
+	for (auto &[conn, other] : conns_) {
+		if (conn == newcomer) {
+			continue;
+		}
+		const auto &ol = other.handshake.login();
+		if (ol && ol->issuer == login->issuer && ol->subject == login->subject) {
+			VB_INFO("auth", "kicking older session of '", other.handshake.player_name(),
+					"': signed in elsewhere");
+			drop(conn, "signed in elsewhere");
+		}
 	}
 }
 
