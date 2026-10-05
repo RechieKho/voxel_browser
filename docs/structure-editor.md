@@ -455,17 +455,19 @@ integrates and documents.
       (`inc/vb/script/block_def.hpp`). `vb.register_block` calls it, so its
       behavior doesn't change.
 - [ ] `vb::script::eval_data_script(path, pack_root)`: evaluates a Lua file
-      in a bare state (no `vb`, `require` limited to the pack's `.lua`
-      files) and returns its table or an error naming the file. The editor
-      uses it for both block data and structure files.
-- [ ] Optional `replaceable` block field (used by `replace =
-      "air_and_plants"` in E).
+      in a bare state (a stub `vb` whose every field raises "data scripts
+      must only return data", `require` limited to the pack's `.lua` files)
+      and returns its table or an error naming the file. It needs no
+      `PackRuntime`, transport, or storage. The editor uses it for both
+      block data and structure files.
+- [ ] Optional `replaceable` block field in `BlockType`, read by
+      `parse_block_type` (used by `replace = "air_and_plants"` in E).
 - [ ] `content/base`: move the block tables from `blocks/*.lua` into
       `data/blocks.lua` (same order as today's sorted file walk) and
       register them from `blocks/register.lua`. Keep today's `on_break`
       drops, including grass dropping dirt (`drops` field), and keep the
-      `base_*_id` globals that `crafting.lua` and others read.
-      `kitchen_sink` stays as it is, to show the direct style still works.
+      `base_*_id` globals that `crafting.lua` and others read. Mark
+      `base:leaves` `replaceable`. `kitchen_sink` stays as it is, to show the direct style still works.
 - [ ] Docs: `docs/lua-api.md` and `architecture_spec/content-pack-format.md`
       describe data scripts as a recommended convention, with the example
       in G.
@@ -489,11 +491,14 @@ integrates and documents.
 - [ ] `build_worldgen_pipeline`: resolve palette names to ids, build
       `structures`, and parse biome `decoration` entries of the form
       `{structure=..., ...overrides}`. Migrate the inline `{blocks=...}` form
-      to an anonymous structure (same output as today: no rotation,
-      `replace="all"`).
-- [ ] Tests (`pack_runtime_test.cpp`): parse round trip; malformed files
-      (bad row length, unknown key, unknown block, size over the cap) give
-      clear errors; inline-form compatibility.
+      to an anonymous one-variant structure (no rotation, `replace="all"`;
+      the shape is kept, positions follow S2's anchor scheme).
+- [ ] Tests (`pack_runtime_test.cpp`): parse round trip; the same
+      structure file gives an equal `StructureDef` through
+      `vb.register_structure(require(...))` and through `eval_data_script`;
+      malformed files (bad row length, unknown key, unknown block, size over
+      the cap) give clear errors; the inline form converts to the expected
+      anonymous structure.
 
 ### S2 — Rule-based, cross-chunk placement (engine)
 
@@ -503,8 +508,8 @@ integrates and documents.
       range, and not underwater. Factor out the carver/surface check
       `generate()` already does into a reusable `block_at_pregen(x, y, z)`.
 - [ ] Pull stamping across neighbor columns in the canonical order. Rotation
-      and mirror applied to variant cells. `replace` policy. Optional
-      `replaceable` block flag.
+      and mirror applied to variant cells. `replace` policy, using the
+      `replaceable` flag from S0.
 - [ ] Replace the decoration block in `WorldGenerator::generate` with the
       above.
 - [ ] Tests (`worldgen_test.cpp`): a structure that straddles a chunk border
@@ -517,7 +522,8 @@ integrates and documents.
 - [ ] `perf_budget_test`: a decoration-heavy chunk stays within budget.
 - [ ] Content: a hand-written `structures/acacia_tree.lua` in
       `content/examples/kitchen_sink`, registered from its `worldgen.lua`
-      and used by `biomes/savanna.lua`.
+      with `vb.register_structure(require("structures.acacia_tree"))` and
+      used by `biomes/savanna.lua`.
 
 ### S3 — Editor shell (viewing only)
 
@@ -528,12 +534,16 @@ integrates and documents.
 - [ ] `vb_structure_editor <block-data-script>`: load blocks with
       `eval_data_script` and `parse_block_type` (S0), find the pack root,
       build the `TextureAtlas`, show an errors panel, and support Reload
-      (`F5`), as described in H.
+      (`F5`), as described in H. Read the `pack.toml` `name` for the
+      default name prefix.
 - [ ] Test: the editor's palette for `content/base/data/blocks.lua` matches
       the block registry the server builds from the full pack.
-- [ ] Open a structure from `structures/*.lua` (optionally preselected with
-      `--open <name>`). Orbit camera, ground grid, bounds box, anchor
-      marker, variant switcher.
+- [ ] Open a structure from `structures/*.lua`, skipping the reserved
+      `all.lua` (optionally preselected with `--open <name>`). Orbit camera,
+      ground grid, bounds box, anchor marker, variant switcher.
+- [ ] Block names a structure uses that aren't in the block data script
+      show as a "missing block" marker and are kept on save, never dropped.
+      Test: load, then save, a structure with an unknown name keeps it.
 - [ ] `StructureWriter` producing canonical Lua with stable key order, so a
       save of an unchanged file is byte-identical, plus regeneration of
       `structures/all.lua`. Test: write, then read back through
@@ -553,8 +563,9 @@ integrates and documents.
       Live mirror symmetry on X and Z.
 - [ ] Layer-slice slider, keep/air ghost rendering, and a dirty flag with a
       save prompt on exit.
-- [ ] New structure dialog (name, size, anchor). Save and save-as into
-      `<pack>/structures/`.
+- [ ] New structure dialog (name with the pack-name prefix prefilled, size,
+      anchor). Save and save-as into `<pack>/structures/`, which also
+      regenerates `structures/all.lua`.
 
 ### S5 — Generators and variants
 
@@ -591,8 +602,10 @@ integrates and documents.
 - [ ] `vb structure` CLI subcommands (`architecture_spec/dev-cli.md`):
       `new`, `edit [block-data-script]` (launches the editor; the script
       defaults to `data/blocks.lua` in the current pack), and `validate`
-      (headless: evaluate the block data and every structure file, then
-      report).
+      (headless: evaluate the block data and every structure file with
+      `eval_data_script`, then report parse errors, block names missing
+      from the block data, and structure files left out of `all.lua`).
+      `new` writes an empty structure file and updates `all.lua`.
 - [ ] Docs: `docs/lua-api.md` (`vb.register_structure`, the new
       decoration entry form, `replaceable`),
       `architecture_spec/worldgen.md` stage 6 rewritten to describe pull
@@ -600,7 +613,8 @@ integrates and documents.
       `remaining_tasks/deferred.md` updated: this item marked done and the
       runtime-callback item narrowed as in F.
 - [ ] Base content: oak and birch trees, a bush, and a boulder made in the
-      editor, registered from `structures/all.lua`, and used by
+      editor, registered with one `structures.all` loop in
+      `blocks/register.lua` (or a new root module), and used by
       `base:forest` and `base:plains`. **This depends on the
       open question below** about moving `content/base` onto
       `set_pipeline`.
