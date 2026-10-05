@@ -204,25 +204,38 @@ TEST_CASE("content/base mechanics.lua: placing respects the engine's effective r
 }
 
 TEST_CASE("content/base fall_damage.lua: the SAFE_SPEED curve") {
+	// SAFE_SPEED is jump_speed (engine default 8.9 m/s) + 1.5 margin == 10.4,
+	// not a hardcoded constant -- see fall_damage.lua's comment: it must
+	// clear a plain jump's own landing speed, or jumping on flat ground
+	// takes fall damage (the bug this margin fixes).
 	{
-		BasePackFixture fx("c2_fall_safe_79");
+		BasePackFixture fx("c2_fall_safe_103");
 		fx.with_world();
-		fx.land(7.9);
+		fx.land(10.3);
 		CHECK(fx.server().player_health(fx.player_id())->first == doctest::Approx(20.0f));
 	}
 	{
 		// excess > 0 is strict: exactly SAFE_SPEED takes no damage either.
-		BasePackFixture fx("c2_fall_safe_80");
+		BasePackFixture fx("c2_fall_safe_104");
 		fx.with_world();
-		fx.land(8.0);
+		fx.land(10.4);
 		CHECK(fx.server().player_health(fx.player_id())->first == doctest::Approx(20.0f));
 	}
 	{
-		BasePackFixture fx("c2_fall_12");
+		BasePackFixture fx("c2_fall_144");
 		fx.with_world();
-		fx.land(12.0);
-		// 1 HP per m/s above SAFE_SPEED (8.0): 12.0 - 8.0 == 4 HP.
+		fx.land(14.4);
+		// 1 HP per m/s above SAFE_SPEED (10.4): 14.4 - 10.4 == 4 HP.
 		CHECK(fx.server().player_health(fx.player_id())->first == doctest::Approx(16.0f));
+	}
+	{
+		// The actual bug report: a plain jump (launch == jump_speed, 8.9 m/s)
+		// lands at about the same speed under symmetric gravity and must
+		// never take damage.
+		BasePackFixture fx("c2_fall_plain_jump");
+		fx.with_world();
+		fx.land(8.9);
+		CHECK(fx.server().player_health(fx.player_id())->first == doctest::Approx(20.0f));
 	}
 }
 

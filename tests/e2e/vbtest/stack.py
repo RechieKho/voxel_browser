@@ -92,7 +92,13 @@ class ClientFactory:
             conf.write_text(
                     'player_name = "%s"\nrender_distance = %d\nasset_cache_dir = "%s"\n'
                     % (name, render_distance, str(cache)) +
-                    ('window_width = 640\nwindow_height = 360\nvsync = false\n' if windowed else ""))
+                    # 720x360: the engine's own enforced minimum window size
+                    # (kMinWindowWidth/Height, inc/vb/core/config.hpp) -- a
+                    # smaller request gets silently clamped up to this by
+                    # apply_cli_overrides(ClientConfig&, ...), so asking for
+                    # anything smaller here would just be a lie about what
+                    # the client actually opens at.
+                    ('window_width = 720\nwindow_height = 360\nvsync = false\n' if windowed else ""))
             env = dict(os.environ, HOME=str(home), XDG_CACHE_HOME=str(cache), LOCALAPPDATA=str(cache),
                        # the client's own 10 s connect deadline, stretched like every other wait
                        VB_CONNECT_TIMEOUT_SECONDS=str(int(10 * timeout_scale())))

@@ -1,5 +1,6 @@
 #include "vb/render/main_menu.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -316,16 +317,25 @@ MainMenu::ConnectingResult MainMenu::draw_connecting(std::string_view status_tex
 	const bool has_fraction = fraction >= 0.0f;
 	const float panel_w = 420.0f;
 	const float panel_h = has_fraction ? 178.0f : 140.0f;
-	GuiPanel(centered(panel_w, panel_h, 220.0f), "Connecting");
+	// Vertically centered on actual screen height, not a hardcoded y: a
+	// fixed y=220 (its value before this fix) put this panel's bottom edge
+	// at 220+178=398px, past the bottom of the engine's own enforced
+	// minimum window height (360px, kMinWindowHeight) whenever asset-sync
+	// progress grew the panel by its extra row -- the Cancel button sat
+	// clipped off-screen. Clamped so it can never go negative either, same
+	// posture as `centered()`'s x.
+	const float panel_y = std::max(20.0f,
+			(static_cast<float>(GetScreenHeight()) - panel_h) * 0.5f);
+	GuiPanel(centered(panel_w, panel_h, panel_y), "Connecting");
 	const float x = (static_cast<float>(GetScreenWidth()) - panel_w) * 0.5f + 20.0f;
-	GuiLabel(Rectangle{ x, 270.0f, panel_w - 40.0f, 24.0f },
+	GuiLabel(Rectangle{ x, panel_y + 50.0f, panel_w - 40.0f, 24.0f },
 			std::string(status_text).c_str());
-	float button_y = 310.0f;
+	float button_y = panel_y + 90.0f;
 	if (has_fraction) {
 		float value = fraction < 1.0f ? fraction : 1.0f;
-		GuiProgressBar(Rectangle{ x, 304.0f, panel_w - 40.0f, 20.0f }, nullptr, nullptr,
-				&value, 0.0f, 1.0f);
-		button_y = 336.0f;
+		GuiProgressBar(Rectangle{ x, panel_y + 84.0f, panel_w - 40.0f, 20.0f }, nullptr,
+				nullptr, &value, 0.0f, 1.0f);
+		button_y = panel_y + 116.0f;
 	}
 	if (GuiButton(Rectangle{ x, button_y, panel_w - 40.0f, 32.0f }, "Cancel")) {
 		result.cancel = true;
@@ -336,10 +346,17 @@ MainMenu::ConnectingResult MainMenu::draw_connecting(std::string_view status_tex
 MainMenu::ErrorResult MainMenu::draw_error(std::string_view reason) {
 	ErrorResult result;
 	const float panel_w = 460.0f;
-	GuiPanel(centered(panel_w, 160.0f, 220.0f), "Could not connect");
+	const float panel_h = 160.0f;
+	// Same vertical-centering fix as draw_connecting() above, and for the
+	// same reason: a hardcoded y=220 put this panel's bottom (220+160=380)
+	// past the 360px minimum window height too.
+	const float panel_y = std::max(20.0f,
+			(static_cast<float>(GetScreenHeight()) - panel_h) * 0.5f);
+	GuiPanel(centered(panel_w, panel_h, panel_y), "Could not connect");
 	const float x = (static_cast<float>(GetScreenWidth()) - panel_w) * 0.5f + 20.0f;
-	GuiLabel(Rectangle{ x, 270.0f, panel_w - 40.0f, 48.0f }, std::string(reason).c_str());
-	if (GuiButton(Rectangle{ x, 330.0f, panel_w - 40.0f, 32.0f }, "Back to menu")) {
+	GuiLabel(Rectangle{ x, panel_y + 50.0f, panel_w - 40.0f, 48.0f },
+			std::string(reason).c_str());
+	if (GuiButton(Rectangle{ x, panel_y + 110.0f, panel_w - 40.0f, 32.0f }, "Back to menu")) {
 		result.back = true;
 	}
 	return result;

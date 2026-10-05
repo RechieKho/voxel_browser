@@ -281,12 +281,18 @@ TEST_CASE("content/base/ui: base:hud draws health and hunger bars above the "
 	REQUIRE(fill != nullptr);
 	REQUIRE(hotbar != nullptr);
 	CHECK(bg->y + bg->h <= hotbar->y); // sits above the hotbar
-	CHECK(bg->x == hotbar->x);         // left-aligned to it
 	CHECK(fill->w == doctest::Approx(bg->w - 2));
 	CHECK(find(full, "health_text")->text == "20 / 20");
 	const Widget *hunger_bg = find(full, "hunger_bg");
 	REQUIRE(hunger_bg != nullptr);
 	CHECK(hunger_bg->x > bg->x + bg->w); // hunger is to the right
+	// Anchored to the *full* kHotbarSlots-wide row, not today's 1-slot hotbar
+	// -- hud.lua's hotbar_layout().full_x/full_w, so a near-empty inventory
+	// doesn't squeeze the "cur / max" text together (content/base/ui/hud.lua's
+	// push_status_bars() comment). Checked as "centered on screen", since with
+	// only 1 slot the hotbar itself is centered on a much narrower row and so
+	// no longer shares the bars' left edge.
+	CHECK(bg->x == doctest::Approx(1280 - (hunger_bg->x + hunger_bg->w)));
 
 	// Half health: fill is half-width and turns yellow; low turns red.
 	ui.set_player_status(UiRuntime::StatusView{ 10.0f, 20.0f, 100.0f, 100.0f });

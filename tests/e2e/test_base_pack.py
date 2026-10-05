@@ -4,6 +4,7 @@ chain, a real keybind -> server -> UI push round trip, and held-item placing thr
 client. Everything cheaper than this lives in tests/unit/content_base_*_test.cpp instead
 (see CONTRIBUTING.md's "Testing content/base itself").
 """
+import time
 from pathlib import Path
 
 from vbtest import expect
@@ -85,6 +86,34 @@ def test_a_windowed_client_draws_the_hud(server, clients, artifact_dir):
     # world every frame -- a blank/near-blank frame means either the HUD or the world
     # itself failed to render (same ceiling test_windowed.py's own world screenshot uses).
     assert world["distinct_colors"] >= 40, "the HUD/world screenshot looks blank: %r" % world
+
+
+def test_a_plain_jump_takes_no_fall_damage(server, clients):
+    """Regression guard: fall_damage.lua's SAFE_SPEED used to be a hardcoded 8.0 m/s, below
+    the engine's own default jump_speed (8.9 m/s) -- since a jump lands at about the speed
+    it launched at, every ordinary jump on flat ground took fall damage. Drives a real jump
+    through the real input path (not tests/unit/content_base_behaviour_test.cpp's synthetic
+    `land()`, which sets velocity directly) so the actual launch/landing speed round trip is
+    exercised, not just the policy curve. See fall_damage.lua's own comment."""
+    (alice,) = clients(1, names=["Alice"])
+    expect(alice).to_be_on_ground()
+    expect(alice).to_have_health(20)
+
+    # key.press is raw input (docs/automation-protocol.md): unlike walk_to/break_block it
+    # doesn't auto-capture the mouse, so movement/jump keys are silently ignored (same as a
+    # real player who hasn't clicked to capture) until this is called.
+    alice.capture_mouse()
+    alice.key_press("jump")
+    expect(alice).not_.to_be_on_ground(timeout=2.0)  # airborne
+    expect(alice).to_be_on_ground(timeout=5.0)  # landed again
+
+    # player_landed's damage (if any) lands a tick or two after on_ground flips true, not
+    # on the same frame -- this is checking an *absence*, so unlike every other wait in this
+    # suite there's no event to wait_for; a short settle is the only way to not race the
+    # check against the hook (confirmed by hand: health dropped ~0.1-0.2s after landing with
+    # the pre-fix SAFE_SPEED, which an immediate check here missed entirely).
+    time.sleep(0.5)
+    expect(alice).to_have_health(20)  # must be unscathed
 
 
 def test_hud_health_bar_follows_the_players_health(server, clients):

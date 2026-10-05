@@ -68,6 +68,16 @@ struct ServerConfig {
 	std::uint32_t chunk_send_budget_bytes_per_tick = 0;
 };
 
+// Floor enforced by apply_cli_overrides(ClientConfig&, ...): below this,
+// content/base/ui/hud.lua's ui_scale() has no headroom to work with and
+// raylib itself refuses a 0-sized window. Width 688 is the actual
+// requirement -- below it, ui_scale()'s own floor (never go under 1x) means
+// a fully-stocked 9-slot hotbar's container (640px of slots + 16px padding)
+// plus its 16px side margins no longer fits the screen and clips both
+// edges; 720 leaves a little headroom above that line.
+inline constexpr std::uint32_t kMinWindowWidth = 720;
+inline constexpr std::uint32_t kMinWindowHeight = 360;
+
 struct ClientConfig {
 	std::uint32_t window_width = 1280;
 	std::uint32_t window_height = 720;

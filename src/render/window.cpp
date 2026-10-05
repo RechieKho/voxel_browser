@@ -2,6 +2,8 @@
 
 #include <raylib.h>
 
+#include "vb/core/config.hpp"
+
 namespace vb::render {
 
 Window::Window(const WindowConfig &config) : headless_(config.headless),
@@ -21,6 +23,12 @@ Window::Window(const WindowConfig &config) : headless_(config.headless),
 	SetTraceLogLevel(LOG_WARNING);
 	InitWindow(config.width, config.height, config.title.c_str());
 	owns_window_ = true;
+	if (config.resizable) {
+		// Matches the launch-time floor in vb::core::apply_cli_overrides --
+		// without this a resizable window could still be dragged below it.
+		SetWindowMinSize(static_cast<int>(vb::core::kMinWindowWidth),
+				static_cast<int>(vb::core::kMinWindowHeight));
+	}
 	if (!config.vsync) {
 		SetTargetFPS(0);
 	}

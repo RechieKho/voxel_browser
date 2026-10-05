@@ -4,10 +4,12 @@ These need a display; run the suite under `xvfb-run -a` (CI does). Without one t
 raygui reads raylib's real mouse state, which a script can't produce, so the menu commands
 inject the *result* of a click (and fill the same fields a player would type into).
 """
+import time
+
 import pytest
 
 from vbtest import expect
-from vbtest.png import stats
+from vbtest.png import read_png, stats
 from vbtest.scene import block_under_feet
 
 
@@ -16,7 +18,7 @@ def test_main_menu_connect_and_world_screenshots(server, clients, artifact_dir):
     expect(alice).to_be_in_state("menu")
 
     menu_shot = alice.screenshot(artifact_dir / "menu.png")
-    assert (menu_shot["width"], menu_shot["height"]) == (640, 360)
+    assert (menu_shot["width"], menu_shot["height"]) == (720, 360)
     menu = stats(menu_shot["path"])
     assert menu["distinct_colors"] >= 4, "the menu screenshot looks blank: %r" % menu
 
@@ -30,6 +32,39 @@ def test_main_menu_connect_and_world_screenshots(server, clients, artifact_dir):
     world = stats(world_shot["path"])
     assert world["distinct_colors"] >= 40, "the in-game screenshot looks blank: %r" % world
     assert world["mean_rgb"] != menu["mean_rgb"], "the screenshot did not change after joining"
+
+
+def test_connecting_panel_fits_on_screen(server, clients, artifact_dir):
+    """Regression guard: MainMenu::draw_connecting/draw_error used to put the panel at a
+    hardcoded y=220 (src/render/main_menu.cpp) regardless of actual screen height. At the
+    engine's own enforced minimum window height (360px, kMinWindowHeight), the asset-sync
+    variant of this panel is 178px tall -- 220+178=398 -- so its bottom (the Cancel button)
+    rendered clipped off the bottom edge of the window. Now vertically centered instead."""
+    (alice,) = clients(1, names=["Alice"], via_menu=True)
+    expect(alice).to_be_in_state("menu")
+
+    alice.menu_connect("127.0.0.1", server.port, name="Alice")
+    # Race for a screenshot while still connecting (asset sync is fast on loopback with
+    # this tiny pack, so there's no wait_for predicate for "mid-handshake" to use instead).
+    shot = None
+    for _ in range(20):
+        if alice.state().get("app_state") == "connecting":
+            shot = alice.screenshot(artifact_dir / "connecting.png")
+            break
+        if alice.state().get("app_state") not in ("connecting", "menu"):
+            break
+        time.sleep(0.02)
+    if shot is None:
+        pytest.skip("never caught the client mid-connect (handshake finished too fast)")
+
+    width, height, channels, rows = read_png(shot["path"])
+    bg = (18, 18, 22)  # Color{18,18,22,255}, src/render/window.cpp's ClearBackground
+    last_row = rows[-1]
+    non_bg = sum(1 for i in range(0, width * channels, channels)
+                 if tuple(last_row[i:i + 3]) != bg)
+    assert non_bg == 0, (
+        "the connecting panel's bottom row bled into the window's last pixel row "
+        "(clipped off-screen): %d non-background pixels" % non_bg)
 
 
 @pytest.mark.parametrize("windowed", [False, True], ids=["headless", "windowed"])

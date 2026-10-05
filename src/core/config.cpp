@@ -1,5 +1,6 @@
 #include "vb/core/config.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -239,6 +240,15 @@ void apply_cli_overrides(ClientConfig &config, const Args &args) {
 	config.fov = static_cast<double>(as_int(args.value("fov"),
 			static_cast<int>(config.fov)));
 	config.asset_cache_dir = args.value_or("asset-cache-dir", config.asset_cache_dir);
+
+	// Runs after both the TOML value and any --width/--height override, so
+	// both paths are covered by one clamp (see kMinWindowWidth/Height).
+	if (config.window_width < kMinWindowWidth || config.window_height < kMinWindowHeight) {
+		VB_WARN("config", "window size ", config.window_width, "x", config.window_height,
+				" below the ", kMinWindowWidth, "x", kMinWindowHeight, " floor, clamped");
+		config.window_width = std::max(config.window_width, kMinWindowWidth);
+		config.window_height = std::max(config.window_height, kMinWindowHeight);
+	}
 }
 
 } // namespace vb::core

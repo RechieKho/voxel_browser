@@ -39,7 +39,7 @@
 
 local function push_player_list(widgets, screen)
 	local y = 12
-	local line_h = 18
+	local line_h = 22
 	local others = client.players()
 	table.insert(widgets, {
 		id = "player_list_header",
@@ -81,7 +81,7 @@ local function push_player_list(widgets, screen)
 end
 
 local function push_chat_log(widgets, screen)
-	local line_h = 18
+	local line_h = 22
 	local log = client.chat_log()
 	local box_bottom = screen.height - 16
 	local y = box_bottom - (client.chat_open() and (line_h + 8) or 0) -
@@ -109,7 +109,7 @@ local kHotbarSlots = 9
 local kRefWidth, kRefHeight = 1280, 720
 local function ui_scale(screen)
 	local s = math.min(screen.width / kRefWidth, screen.height / kRefHeight)
-	return math.min(math.max(s, 0.75), 3)
+	return math.min(math.max(s, 1), 4)
 end
 
 -- Shared by the hotbar and the status bars that sit on top of it. `x/y/w`
@@ -117,10 +117,18 @@ end
 -- scaled metrics the other HUD pieces size themselves by.
 local function hotbar_layout(screen)
 	local s = ui_scale(screen)
-	local slot, gap = math.floor(44 * s), math.floor(6 * s)
-	local margin, pad = math.floor(16 * s), math.floor(6 * s)
+	local slot, gap = math.floor(64 * s), math.floor(8 * s)
+	local margin, pad = math.floor(20 * s), math.floor(8 * s)
 	local n = math.min(math.max(#client.inventory(), 1), kHotbarSlots)
 	local total_w = n * (slot + gap) - gap
+	-- Full-row width at kHotbarSlots, regardless of how many slots are
+	-- actually filled -- the status bars anchor to this instead of `w` so a
+	-- nearly-empty inventory doesn't squeeze their "cur / max" text together.
+	-- Capped to the screen width minus a side margin so it can't run past
+	-- the edges on a narrow window.
+	local side_margin = math.floor(16 * s)
+	local full_w = math.min(kHotbarSlots * (slot + gap) - gap,
+			screen.width - 2 * side_margin)
 	return {
 		scale = s,
 		slot = slot,
@@ -129,6 +137,8 @@ local function hotbar_layout(screen)
 		x = math.floor((screen.width - total_w) / 2),
 		y = screen.height - slot - margin - pad,
 		w = total_w,
+		full_x = math.floor((screen.width - full_w) / 2),
+		full_w = full_w,
 	}
 end
 
@@ -173,9 +183,11 @@ local function push_status_bars(widgets, screen)
 	end
 	local bar = hotbar_layout(screen)
 	local s = bar.scale
-	local gap, h = math.floor(12 * s), math.floor(20 * s)
-	local font = math.floor(14 * s)
-	local w = (bar.w - gap) / 2 -- bars span the slot row, not the container
+	local gap, h = math.floor(14 * s), math.floor(28 * s)
+	local font = math.floor(18 * s)
+	-- Full hotbar-row width, not the current (possibly few-slot) width, so
+	-- the bars stay wide enough for their text no matter the inventory size.
+	local w = (bar.full_w - gap) / 2
 	local y = bar.y - bar.pad - h - math.floor(6 * s)
 
 	-- Green -> yellow -> red as health drops.
@@ -186,8 +198,8 @@ local function push_status_bars(widgets, screen)
 	elseif frac <= 0.5 then
 		fill = { 230, 190, 60, 240 }
 	end
-	push_bar(widgets, "health", bar.x, y, w, h, font, health.current, health.max, fill)
-	push_bar(widgets, "hunger", bar.x + w + gap, y, w, h, font,
+	push_bar(widgets, "health", bar.full_x, y, w, h, font, health.current, health.max, fill)
+	push_bar(widgets, "hunger", bar.full_x + w + gap, y, w, h, font,
 			hunger.current, hunger.max, { 200, 140, 70, 240 })
 end
 
@@ -200,8 +212,8 @@ local function push_hotbar(widgets, screen)
 	local selected = client.selected_slot()
 	local n = math.min(#inv, kHotbarSlots)
 	local slot_size, pad = layout.slot, layout.pad
-	local inset = math.floor(3 * layout.scale)
-	local font = math.floor(12 * layout.scale)
+	local inset = math.floor(4 * layout.scale)
+	local font = math.floor(16 * layout.scale)
 
 	table.insert(widgets, {
 		id = "hotbar_container",
@@ -275,16 +287,16 @@ local function push_item_name(widgets, screen, state)
 		alpha = math.floor(255 * remaining / kNameFadeSeconds)
 	end
 	local bar = hotbar_layout(screen)
-	-- Above the status bars (20px tall, 6px gap, over the container padding).
+	-- Above the status bars (28px tall, 8px gap, over the container padding).
 	local s = bar.scale
-	local y = bar.y - bar.pad - math.floor((20 + 6 + 24) * s)
+	local y = bar.y - bar.pad - math.floor((28 + 8 + 30) * s)
 	table.insert(widgets, {
 		id = "item_name",
 		type = "text",
 		x = math.floor(screen.width / 2),
 		y = y,
 		align = "center",
-		font_size = math.floor(16 * s),
+		font_size = math.floor(20 * s),
 		text = base_ui.pretty_name(slot.name),
 		color = { 255, 255, 255, alpha },
 	})
@@ -295,7 +307,7 @@ end
 local function push_crosshair(widgets, screen)
 	local cx, cy = math.floor(screen.width / 2), math.floor(screen.height / 2)
 	local s = ui_scale(screen)
-	local arm, thick = math.floor(6 * s), math.max(2, math.floor(2 * s))
+	local arm, thick = math.floor(9 * s), math.max(2, math.floor(3 * s))
 	local color = { 255, 255, 255, 200 }
 	table.insert(widgets, {
 		id = "crosshair_h",
@@ -355,10 +367,10 @@ ui.define_hud(function(state)
 	local progress = client.break_progress()
 	if progress then
 		local s = ui_scale(screen)
-		local bar_w = math.floor(120 * s)
-		local bar_h = math.floor(10 * s)
+		local bar_w = math.floor(160 * s)
+		local bar_h = math.floor(14 * s)
 		local x = (screen.width - bar_w) / 2
-		local y = screen.height / 2 + math.floor(24 * s)
+		local y = screen.height / 2 + math.floor(32 * s)
 
 		-- Background + border, full width.
 		table.insert(widgets, {
