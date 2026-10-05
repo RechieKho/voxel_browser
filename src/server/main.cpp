@@ -394,6 +394,8 @@ int main(int argc, char **argv) {
 	if (active_auth) {
 		// Derived from auth.lua's presence, never configured (auth.md §4).
 		hs_config.auth_mode = vb::protocol::AuthMode::kExternal;
+		hs_config.reauth_interval_seconds = active_auth->reauth_interval_seconds;
+		hs_config.reauth_grace_seconds = active_auth->reauth_grace_seconds;
 	}
 	hs_config.max_players = config.max_players;
 	hs_config.world_seed = seed;
@@ -550,6 +552,8 @@ int main(int argc, char **argv) {
 				login->subject = verdict->login.subject;
 				login->name = verdict->login.name;
 				login->claims_json = verdict->login.claims_json;
+				login->issued_at = verdict->login.issued_at;
+				login->expires_at = verdict->login.expires_at;
 				return vb::net::AuthOutcome{ true, {}, verdict->login.name, login };
 			};
 		};
@@ -759,6 +763,9 @@ int main(int argc, char **argv) {
 			pack_runtime.dispatch_player_join_completed(joined);
 			std::cout << "server: '" << joined.name << "' joined (net id "
 					  << static_cast<std::uint32_t>(joined.net_id) << ")\n";
+		}
+		for (const auto &changed : session.take_login_changes()) {
+			pack_runtime.dispatch_login_changed(changed);
 		}
 		for (const auto &left : session.take_leaves()) {
 			online.erase(static_cast<std::uint32_t>(left.net_id));

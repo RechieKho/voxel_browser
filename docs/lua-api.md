@@ -463,6 +463,12 @@ the player is*:
 - `vb.on("player_join", function(name, login) ... end)` — `login` is the same
   table (or `nil`); `return false` vetoes, *after* verification (e.g. an
   allowlist on `login.claims.email_verified` or a group).
+- `vb.on("login_changed", function(player, login) ... end)` — fires after a
+  periodic re-auth (default every 15 min) found a changed allowlisted claim
+  (e.g. a group was removed); `login` is the new frozen table and
+  `player:get_login()` now returns it. Notification only (no veto); the
+  in-game name never changes mid-session. Players whose IdP session was
+  revoked are kicked by the engine, so no handler is needed for that.
 - `vb.auth.required()` → `true` iff `auth.lua` is active.
 
 **Guarantee:** when `auth.lua` is active, `get_login()` is non-nil for every

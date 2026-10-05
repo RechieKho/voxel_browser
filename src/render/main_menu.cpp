@@ -165,6 +165,15 @@ MainMenu::MainResult MainMenu::draw_main(const std::vector<std::string> &recent_
 		result.quit = true;
 	}
 
+	if (!signed_in_label_.empty()) {
+		const float w = 260.0f;
+		const float sx = std::max(8.0f, static_cast<float>(GetScreenWidth()) - w - 12.0f);
+		GuiLabel(Rectangle{ sx, 10.0f, w, 20.0f }, ("Signed in as " + signed_in_label_).c_str());
+		if (GuiButton(Rectangle{ sx, 32.0f, 100.0f, 24.0f }, "Sign out")) {
+			result.sign_out = true;
+		}
+	}
+
 	return result;
 }
 
@@ -405,6 +414,9 @@ MainMenu::SigningInResult MainMenu::draw_signing_in(const SigningInView &view) {
 	SigningInResult result;
 	const float panel_w = 460.0f;
 	float panel_h = 150.0f;
+	if (view.needs_trust) {
+		panel_h = 190.0f;
+	}
 	if (view.offer_password) {
 		panel_h += 110.0f;
 	}
@@ -426,6 +438,18 @@ MainMenu::SigningInResult MainMenu::draw_signing_in(const SigningInView &view) {
 			std::string(view.provider_host);
 	GuiLabel(Rectangle{ x, y, w, 24.0f }, who.c_str());
 	y += 30.0f;
+
+	if (view.needs_trust) {
+		GuiLabel(Rectangle{ x, y, w, 40.0f },
+				"Only continue if you trust this server with\nyour sign-in. It will be remembered.");
+		if (GuiButton(Rectangle{ x, panel_y + panel_h - 84.0f, w, 32.0f }, "Continue")) {
+			result.trust = true;
+		}
+		if (GuiButton(Rectangle{ x, panel_y + panel_h - 44.0f, w, 32.0f }, "Cancel")) {
+			result.cancel = true;
+		}
+		return result;
+	}
 
 	const bool enabled = !view.working;
 	if (!enabled) {

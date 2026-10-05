@@ -108,11 +108,19 @@ void ClientApp::begin_connect(bool as_singleplayer) {
 #if defined(VB_WITH_AUTH)
 			// Always installed: it only ever runs if the server answers with
 			// an S2C_AuthChallenge (a server without auth.lua never does).
+			if (!auth_store) {
+				auth_store = std::make_shared<vb::auth::SessionStore>(
+						vb::core::user_config_dir() / "auth");
+			}
 			vb::auth::SignInCoordinator::Options opts;
 			opts.http = std::shared_ptr<vb::auth::HttpFetcher>(vb::auth::make_curl_fetcher());
 			opts.token_file = auth_token_file_;
+			opts.store = auth_store;
+			opts.server_id = connecting_target;
 			sign_in = std::make_unique<vb::auth::SignInCoordinator>(std::move(opts));
 			remote->session->set_sign_in_provider(sign_in->provider());
+			remote->session->set_reauth_provider(sign_in->reauth_provider());
+			reauth_panel_open = false;
 #endif
 			state = AppState::kConnecting;
 		}
@@ -140,6 +148,7 @@ void ClientApp::draw_sign_in() {
 	}
 	host = host.substr(0, host.find('/'));
 	view.provider_host = host;
+	view.needs_trust = sign_in->needs_trust();
 	view.offer_browser = sign_in->supports_browser();
 	view.offer_password = sign_in->supports_password();
 	view.working = sign_in->phase() == Phase::kWorking;
@@ -152,12 +161,81 @@ void ClientApp::draw_sign_in() {
 		sign_in.reset();
 		client = nullptr;
 		state = AppState::kMenu;
+	} else if (ui.trust) {
+		sign_in->trust();
 	} else if (ui.browser) {
 		sign_in->start_browser();
 	} else if (ui.submit_password) {
 		sign_in->start_password(ui.email, ui.password);
 		std::fill(ui.password.begin(), ui.password.end(), '\0');
 	}
+}
+// Periodic re-auth (auth.md §5.6): the silent refresh happens without any UI;
+// only when it fails does this non-blocking banner appear over the running
+// game. The player can ignore it, but the server kicks once its grace runs out.
+void ClientApp::draw_reauth_prompt() {
+	if (!render || !sign_in || !sign_in->reauth_prompt_active()) {
+		reauth_panel_open = false;
+		return;
+	}
+	const float w = 420.0f;
+	const float x = (static_cast<float>(GetScreenWidth()) - w) * 0.5f;
+	if (!reauth_panel_open) {
+		GuiPanel(Rectangle{ x, 8.0f, w, 40.0f }, nullptr);
+		GuiLabel(Rectangle{ x + 10.0f, 16.0f, w - 150.0f, 24.0f }, "Your sign-in expired.");
+		if (GuiButton(Rectangle{ x + w - 130.0f, 14.0f, 120.0f, 28.0f }, "Sign in again")) {
+			reauth_panel_open = true;
+			if (mouse_captured) {
+				mouse_captured = false;
+				EnableCursor();
+			}
+		}
+		return;
+	}
+	const auto challenge = sign_in->challenge();
+	vb::render::MainMenu::SigningInView view;
+	view.server = connecting_target;
+	std::string host = challenge ? challenge->issuer : std::string();
+	if (const auto p = host.find("//"); p != std::string::npos) {
+		host = host.substr(p + 2);
+	}
+	host = host.substr(0, host.find('/'));
+	view.provider_host = host;
+	view.offer_browser = sign_in->supports_browser();
+	view.offer_password = sign_in->supports_password();
+	using Phase = vb::auth::SignInCoordinator::Phase;
+	view.working = sign_in->phase() == Phase::kWorking;
+	const std::string last_error = sign_in->last_error();
+	view.error = last_error;
+	auto ui = menu.draw_signing_in(view);
+	if (ui.cancel) {
+		reauth_panel_open = false; // only closes the panel; the request stays open
+	} else if (ui.browser) {
+		sign_in->start_browser();
+	} else if (ui.submit_password) {
+		sign_in->start_password(ui.email, ui.password);
+		std::fill(ui.password.begin(), ui.password.end(), '\0');
+	}
+}
+
+void ClientApp::refresh_signed_in_label() {
+	if (!auth_store) {
+		auth_store = std::make_shared<vb::auth::SessionStore>(
+				vb::core::user_config_dir() / "auth");
+	}
+	const auto sessions = auth_store->list();
+	if (sessions.empty()) {
+		menu.set_signed_in_label({});
+		return;
+	}
+	std::string host = sessions.front().issuer;
+	if (const auto p = host.find("//"); p != std::string::npos) {
+		host = host.substr(p + 2);
+	}
+	host = host.substr(0, host.find('/'));
+	menu.set_signed_in_label((sessions.front().label.empty() ? std::string("account")
+															  : sessions.front().label) +
+			" (" + host + ")");
 }
 #endif
 
@@ -408,11 +486,22 @@ bool ClientApp::frame(const vb::render::InputFrame &input, double dt) {
 
 	switch (state) {
 		case AppState::kMenu: {
+#if defined(VB_WITH_AUTH)
+			if (render && (menu_frames++ % 120) == 0) {
+				refresh_signed_in_label(); // cheap: a handful of tiny files
+			}
+#endif
 			auto result = menu.draw_main(config.recent_servers);
 #if defined(VB_WITH_AUTOMATION)
 			if (pending_menu) { // automation: the click a player would have made
 				result = *pending_menu;
 				pending_menu.reset();
+			}
+#endif
+#if defined(VB_WITH_AUTH)
+			if (result.sign_out && auth_store) {
+				auth_store->clear(); // forget every cached refresh token
+				refresh_signed_in_label();
 			}
 #endif
 			if (result.connect) {
@@ -967,6 +1056,9 @@ bool ClientApp::frame(const vb::render::InputFrame &input, double dt) {
 					ui_runtime.report_list_change(id, idx);
 				}
 			}
+#if defined(VB_WITH_AUTH)
+			draw_reauth_prompt();
+#endif
 			break;
 		}
 	}

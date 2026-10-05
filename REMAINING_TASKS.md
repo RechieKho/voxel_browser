@@ -566,10 +566,34 @@ protocol changes, security notes and per-step task lists:
       only offers `password`); `state.login` in the client UI VM; manual
       sign-in against real Keycloak/Firebase on Linux/macOS/Windows; Windows
       socket/ShellExecute code is written but unbuilt.
-- [ ] **9.6 — Sessions, re-auth & revocation**: refresh-token cache,
-      silent re-login, sign out, first-use trust prompt; periodic live
-      re-auth (default 15 min + 2 min grace) so IdP-side revocation kicks
-      the player; `login_changed` event on claim changes.
+- [x] **9.6 — Sessions, re-auth & revocation** — done 2026-10-05
+      (client UI compile-checked, not run against a real IdP).
+      Server: `ServerSession::system_reauth` — per-player jittered (±10%)
+      `S2C_ReauthRequest{nonce, grace}` every `reauth_interval_seconds`,
+      answer verified through the same verifier (`C2S_Reauth`, only accepted
+      for an outstanding request), same `(issuer, subject)` required (else
+      immediate kick), `iat ≥ request_sent − 60 s` (so a stale token can't
+      answer), kick with `kAuthFailed "sign-in expired or revoked"` when the
+      grace runs out, new `LoginData::issued_at/expires_at`,
+      `HandshakeServerConfig::reauth_*`, `HandshakeServerHost::unix_time`.
+      Changed allowlisted claims swap the login and fire
+      `vb.on("login_changed", function(player, login))` once
+      (`SessionLoginChanged`, `PackRuntime::dispatch_login_changed`). Client:
+      `SessionStore` (refresh tokens per `(issuer, client_id)` in
+      `user_config_dir()/auth/<sha256>.json`, created 0600, atomic write; trust
+      list per `(server, issuer)`), `SignInCoordinator` — first-use trust
+      prompt (nothing, not even a cached refresh token, goes to the IdP before
+      it), silent refresh at join, silent answer to re-auth requests, otherwise
+      a non-blocking "Your sign-in expired — Sign in again" banner + overlay
+      (browser/password, bound to the request nonce), dead refresh tokens are
+      forgotten; `ClientSession::set_reauth_provider`; main-menu "Signed in as
+      … / Sign out" (top-right). Tests: 6 server re-auth cases in
+      `auth_login_test.cpp` (success ×2 rounds, claim change fires once,
+      revoked ⇒ kicked after grace, stale iat, different subject, disabled),
+      store/trust/silent/dead-token/re-auth in `auth_signin_test.cpp`.
+      **Not verified:** a real Keycloak admin logout kicking within
+      interval + grace (manual run); `--auth-token-file` re-auth rotation in
+      e2e (9.7).
 - [ ] **9.7 — Singleplayer, `vb`, e2e**: real sign-in in singleplayer,
       mock IdP e2e tests.
 - [ ] **9.8 — Hardening**: rate limits, operator guide (`docs/auth.md`).

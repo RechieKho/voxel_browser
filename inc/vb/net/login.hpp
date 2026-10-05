@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 
 // The verified identity of a player on an authenticating server (auth.md
@@ -14,6 +15,10 @@ struct LoginData {
 	std::string subject;
 	std::string name; // the in-game name (after collision suffixing)
 	std::string claims_json; // JSON object of the allowlisted claims
+	// Engine-internal (never exposed to Lua): when the ID token was issued and
+	// when it expires. Re-auth uses issued_at to reject a replayed old token.
+	std::int64_t issued_at = 0;
+	std::int64_t expires_at = 0;
 };
 
 } // namespace vb::net

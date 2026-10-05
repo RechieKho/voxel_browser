@@ -62,6 +62,12 @@ struct SessionPlayerJoined {
 	std::shared_ptr<const LoginData> login;
 };
 
+// Periodic re-auth succeeded and an allowlisted claim changed (auth.md §5.6).
+struct SessionLoginChanged {
+	core::NetId net_id = core::NetId::kInvalid;
+	std::shared_ptr<const LoginData> login; // the new login (same name as before)
+};
+
 struct SessionPlayerLeft {
 	ConnId conn = ConnId::kInvalid;
 	core::NetId net_id = core::NetId::kInvalid;
@@ -77,6 +83,7 @@ public:
 
 	std::vector<SessionPlayerJoined> take_joins();
 	std::vector<SessionPlayerLeft> take_leaves();
+	std::vector<SessionLoginChanged> take_login_changes();
 
 	std::size_t player_count() const { return playing_; }
 	std::size_t pending_count() const { return conns_.size() - playing_; }
@@ -567,6 +574,17 @@ private:
 		// Last S2C_PlayerStatus sent to this player; nullopt until the first
 		// one (sent the tick after join), then re-sent only on change.
 		std::optional<protocol::S2CPlayerStatus> last_status;
+		// External auth: the live login (replaced by each successful re-auth)
+		// and the periodic re-auth exchange (auth.md §5.6).
+		std::shared_ptr<const LoginData> login;
+		struct Reauth {
+			double timer = 0.0; // seconds until the next S2C_ReauthRequest
+			bool pending = false; // a request is outstanding
+			double remaining = 0.0; // grace seconds left to answer it
+			std::string nonce;
+			std::int64_t sent_at = 0; // unix seconds when the request went out
+			AuthTicket ticket; // verification of the C2S_Reauth, once received
+		} reauth;
 	};
 
 	void drop(ConnId conn, const std::string &reason);
@@ -608,6 +626,11 @@ private:
 	void system_network_io(double dt_seconds);
 	void system_handshake_timeouts(double dt_seconds);
 	void kick_duplicate_login(ConnId newcomer);
+	void system_reauth(double dt_seconds);
+	void finish_reauth(ConnId conn, Conn &state, const AuthOutcome &outcome);
+	double reauth_interval_for(core::NetId id) const;
+	void kick_with_message(ConnId conn, protocol::DisconnectReason reason,
+			const std::string &message);
 	void system_advance_time_of_day(double dt_seconds);
 	void system_sync_interest();
 
@@ -698,6 +721,7 @@ private:
 	std::vector<TransportEvent> scratch_;
 	std::vector<SessionPlayerJoined> joins_;
 	std::vector<SessionPlayerLeft> leaves_;
+	std::vector<SessionLoginChanged> login_changes_;
 };
 
 // --- client --------------------------------------------------------------
@@ -737,6 +761,15 @@ public:
 	const std::string &resolved_name() const { return handshake_.resolved_name(); }
 	// Abort a pending sign-in; the join fails with "sign-in cancelled".
 	void cancel_sign_in();
+	// Periodic live re-auth (auth.md §5.6): on S2C_ReauthRequest the hook starts
+	// a (usually silent) sign-in and returns a ticket; once it yields a token
+	// it goes to the server as C2S_Reauth. A ticket that ends in an error just
+	// drops the request -- the server kicks when its grace period runs out.
+	void set_reauth_provider(
+			std::function<TokenTicket(const protocol::S2CReauthRequest &)> provider) {
+		reauth_provider_ = std::move(provider);
+	}
+	bool reauth_pending() const { return static_cast<bool>(reauth_ticket_); }
 
 	const std::optional<protocol::S2CServerInfo> &server_info() const {
 		return handshake_.server_info();
@@ -999,6 +1032,8 @@ private:
 	Transport &transport_;
 	ConnId conn_;
 	ClientHandshake handshake_;
+	std::function<TokenTicket(const protocol::S2CReauthRequest &)> reauth_provider_;
+	TokenTicket reauth_ticket_;
 	bool started_ = false;
 	std::string failure_reason_;
 	std::vector<TransportEvent> scratch_;

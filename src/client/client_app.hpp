@@ -205,7 +205,12 @@ private:
 	// destroyed after it: the session's sign-in ticket points back here.
 	std::optional<std::filesystem::path> auth_token_file_;
 	std::unique_ptr<vb::auth::SignInCoordinator> sign_in;
+	std::shared_ptr<vb::auth::SessionStore> auth_store;
+	bool reauth_panel_open = false; // the in-game "sign in again" overlay
+	int menu_frames = 0;
 	void draw_sign_in();
+	void draw_reauth_prompt();
+	void refresh_signed_in_label();
 #endif
 	std::unique_ptr<RemoteConnection> remote;
 	vb::net::ClientSession *client = nullptr;
