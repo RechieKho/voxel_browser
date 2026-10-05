@@ -16,6 +16,7 @@ add_executable(vb_tests
   unit/content_base_data_test.cpp
   unit/content_base_ui_test.cpp
   unit/content_pack_test.cpp
+  unit/data_script_test.cpp
   unit/core_test.cpp
   unit/daynight_test.cpp
   unit/entity_visual_layout_test.cpp

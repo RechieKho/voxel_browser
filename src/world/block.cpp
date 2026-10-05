@@ -44,6 +44,13 @@ void BlockRegistry::set_texture(core::BlockId id, std::string texture) {
 	}
 }
 
+void BlockRegistry::set_replaceable(core::BlockId id, bool replaceable) {
+	const auto idx = static_cast<std::size_t>(id);
+	if (idx < types_.size()) {
+		types_[idx].replaceable = replaceable;
+	}
+}
+
 void BlockRegistry::set_crack_texture(core::BlockId id, std::string crack_texture) {
 	const auto idx = static_cast<std::size_t>(id);
 	if (idx < types_.size()) {

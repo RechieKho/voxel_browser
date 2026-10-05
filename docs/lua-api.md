@@ -57,6 +57,22 @@ for (auto &l : session.take_leaves()) rt.dispatch_player_leave(l);
 rt.dispatch_tick(dt);
 ```
 
+- **Block data scripts (recommended convention).** A pack can keep its block
+  tables in a pure-data Lua file (`data/blocks.lua`) that `return`s a list of
+  the tables `vb.register_block` takes, and register them from pack code
+  (`content/base` does this in `blocks/register.lua`, which the loader runs
+  first so root modules like `crafting.lua` still see `base_*_id` globals at
+  load time). Tools such as the structure editor evaluate the data script alone
+  (`vb::script::eval_data_script`) in a bare Lua state: any `vb.*` access raises
+  "block data scripts must only return data; register blocks from pack code",
+  and `require` only reaches the pack's own `.lua` files. Fields the engine
+  doesn't know (`on_break`, a pack's own `drops`) are ignored. Keep the list in
+  registration order — block ids follow it and saved worlds store ids. A pack
+  that registers some blocks directly still works; the editor just won't see
+  those. See `docs/structure-editor.md` §G.
+- `register_block{replaceable = true}` (default `false`): a structure whose rule
+  says `replace = "air_and_plants"` may overwrite this block (`base:leaves`).
+  Like `texture`, it lands on an already-registered built-in block too.
 - Registration (pack load only, rejected once `freeze()` has run):
   `vb.register_block(def) -> BlockId` (idempotent by `name`; **the real
   texture/atlas system**: `texture` is a pack-relative path (e.g.

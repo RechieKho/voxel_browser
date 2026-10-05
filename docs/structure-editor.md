@@ -1,6 +1,6 @@
 # Structure editor — design and phased plan
 
-> Status: **Planned, not started.** Plans the "dedicated external structure
+> Status: **In progress: S0 done, S1–S7 planned.** Plans the "dedicated external structure
 > tool" that `architecture_spec/worldgen.md` §6 stage 6 and
 > `remaining_tasks/deferred.md` ("Rule-based decorative structure
 > placement") left for after the Lua worldgen pipeline. Phase 6.14 shipped
@@ -450,28 +450,28 @@ integrates and documents.
 
 ### S0 — Block data script (engine + content/base)
 
-- [ ] Factor `vb.register_block`'s table parsing into
+- [x] Factor `vb.register_block`'s table parsing into
       `vb::script::parse_block_type(sol::table)`
       (`inc/vb/script/block_def.hpp`). `vb.register_block` calls it, so its
       behavior doesn't change.
-- [ ] `vb::script::eval_data_script(path, pack_root)`: evaluates a Lua file
+- [x] `vb::script::eval_data_script(path, pack_root)`: evaluates a Lua file
       in a bare state (a stub `vb` whose every field raises "data scripts
       must only return data", `require` limited to the pack's `.lua` files)
       and returns its table or an error naming the file. It needs no
       `PackRuntime`, transport, or storage. The editor uses it for both
       block data and structure files.
-- [ ] Optional `replaceable` block field in `BlockType`, read by
+- [x] Optional `replaceable` block field in `BlockType`, read by
       `parse_block_type` (used by `replace = "air_and_plants"` in E).
-- [ ] `content/base`: move the block tables from `blocks/*.lua` into
+- [x] `content/base`: move the block tables from `blocks/*.lua` into
       `data/blocks.lua` (same order as today's sorted file walk) and
       register them from `blocks/register.lua`. Keep today's `on_break`
       drops, including grass dropping dirt (`drops` field), and keep the
       `base_*_id` globals that `crafting.lua` and others read. Mark
       `base:leaves` `replaceable`. `kitchen_sink` stays as it is, to show the direct style still works.
-- [ ] Docs: `docs/lua-api.md` and `architecture_spec/content-pack-format.md`
+- [x] Docs: `docs/lua-api.md` and `architecture_spec/content-pack-format.md`
       describe data scripts as a recommended convention, with the example
       in G.
-- [ ] Tests: `parse_block_type` gives identical `BlockType`s through
+- [x] Tests: `parse_block_type` gives identical `BlockType`s through
       `vb.register_block` and through `eval_data_script`; `content/base`'s
       block registry (ids, names, textures, drops) is unchanged by the move,
       checked against the existing `content_base_*` suites, and a world
