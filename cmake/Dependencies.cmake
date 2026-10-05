@@ -126,7 +126,7 @@ endif()
 #   using the OS TLS stack on Windows (Schannel — no OpenSSL to ship).
 #   miniz: single-file zip reader; release archives are .zip on every OS.
 # ===========================================================================
-if(VB_BUILD_CLI)
+if(VB_BUILD_CLI OR VB_WITH_AUTH)
   if(NOT WIN32)
     find_package(CURL QUIET)
   endif()
@@ -157,6 +157,9 @@ if(VB_BUILD_CLI)
     set(BUILD_SHARED_LIBS ${_vb_saved_shared})
   endif()
 
+endif()
+
+if(VB_BUILD_CLI)
   if(NOT TARGET miniz)
     set(BUILD_EXAMPLES OFF CACHE INTERNAL "")
     set(BUILD_FUZZERS OFF CACHE INTERNAL "")
@@ -165,6 +168,24 @@ if(VB_BUILD_CLI)
     set(AMALGAMATE_SOURCES OFF CACHE INTERNAL "")
     vb_fetch(miniz TAG 3.0.2 REPO https://github.com/richgel999/miniz.git)
   endif()
+endif()
+
+# ---------------------------------------------------------------------------
+# In-engine authentication (architecture_spec/auth.md §5.4): Mbed TLS 3.6 LTS
+# for RSA PKCS#1 v1.5 / ECDSA P-256 signature verification and SHA-256. HTTPS
+# for discovery/JWKS reuses the libcurl block above.
+# ---------------------------------------------------------------------------
+if(VB_WITH_AUTH)
+  set(ENABLE_PROGRAMS OFF CACHE INTERNAL "")
+  set(ENABLE_TESTING OFF CACHE INTERNAL "")
+  set(MBEDTLS_FATAL_WARNINGS OFF CACHE INTERNAL "")
+  set(GEN_FILES OFF CACHE INTERNAL "")
+  set(USE_SHARED_MBEDTLS_LIBRARY OFF CACHE INTERNAL "")
+  set(USE_STATIC_MBEDTLS_LIBRARY ON CACHE INTERNAL "")
+  set(_vb_saved_shared ${BUILD_SHARED_LIBS})
+  set(BUILD_SHARED_LIBS OFF)
+  vb_fetch(mbedtls TAG mbedtls-3.6.2 REPO https://github.com/Mbed-TLS/mbedtls.git)
+  set(BUILD_SHARED_LIBS ${_vb_saved_shared})
 endif()
 
 # ---------------------------------------------------------------------------
@@ -410,7 +431,7 @@ endif()
 # nlohmann/json — vb.storage persistence + player:open_ui ctx serialization
 # (Phase 4.2), the development-only automation protocol (e2e design), and the
 # vb CLI's --json output / GitHub release listing (8.5). Header-only.
-if(VB_WITH_LUA OR VB_WITH_AUTOMATION OR VB_BUILD_CLI)
+if(VB_WITH_LUA OR VB_WITH_AUTOMATION OR VB_BUILD_CLI OR VB_WITH_AUTH)
   find_package(nlohmann_json QUIET)
   if(NOT nlohmann_json_FOUND AND NOT TARGET nlohmann_json::nlohmann_json)
     vb_fetch(nlohmann_json TAG v3.11.3 REPO https://github.com/nlohmann/json.git)

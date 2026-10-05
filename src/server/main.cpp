@@ -19,6 +19,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <random>
 #include <sstream>
 #include <string>
@@ -27,6 +28,8 @@
 
 #include "vb/assetsync/manifest.hpp"
 #include "vb/auth/config.hpp"
+#include "vb/auth/http.hpp"
+#include "vb/auth/service.hpp"
 #include "vb/core/build_info.hpp"
 #include "vb/core/cli.hpp"
 #include "vb/core/config.hpp"
@@ -232,6 +235,7 @@ int main(int argc, char **argv) {
 	// In-engine authentication (architecture_spec/auth.md §4): a pack-root
 	// auth.lua makes authentication mandatory. Fail closed -- any problem
 	// here ends startup, never a silent downgrade to no-auth.
+	std::optional<vb::auth::AuthConfig> active_auth;
 	{
 		vb::auth::AuthOverrides overrides;
 		overrides.issuer = config.auth.issuer;
@@ -266,16 +270,12 @@ int main(int argc, char **argv) {
 		} else {
 			VB_INFO("auth", "authentication required: ", vb::auth::describe(*auth.config));
 			if (!vb::auth::kVerifierAvailable) {
-				// 9.1 only loads/validates the declaration; the handshake
-				// (9.2) and verifier (9.3) are not in yet. Admitting players
-				// anyway would silently disable the feature the pack asked
-				// for, so refuse instead.
 				std::cerr << "server: content pack '" << config.content_pack
 						  << "' requires authentication, but this build has no token "
-							 "verifier yet (in-engine auth is under construction, see "
-							 "REMAINING_TASKS.md Phase 9); refusing to start\n";
+							 "verifier; refusing to start\n";
 				return EXIT_FAILURE;
 			}
+			active_auth = *auth.config;
 		}
 	}
 
@@ -390,6 +390,10 @@ int main(int argc, char **argv) {
 	hs_config.view_distance = config.view_distance;
 	hs_config.motd = config.motd;
 	hs_config.auth_mode = static_cast<vb::protocol::AuthMode>(config.auth_mode);
+	if (active_auth) {
+		// Derived from auth.lua's presence, never configured (auth.md §4).
+		hs_config.auth_mode = vb::protocol::AuthMode::kExternal;
+	}
 	hs_config.max_players = config.max_players;
 	hs_config.world_seed = seed;
 
@@ -489,6 +493,61 @@ int main(int argc, char **argv) {
 	pack_runtime.install_keybind_registry(host); // before ServerSession copies `host` in
 	pack_runtime.install_entity_kind_registry(host); // before ServerSession copies `host` in
 	pack_runtime.install_join_veto(host); // before ServerSession copies `host` in
+#if defined(VB_WITH_AUTH)
+	// External authentication (auth.md §5): the key set loads in the
+	// background (failure is logged and retried; joins fail closed until a key
+	// set exists); the handshake polls a ticket per connection. A verified
+	// login still passes through the pack's join veto (`host.authenticate`,
+	// installed just above) with the resolved name.
+	std::shared_ptr<vb::auth::AuthService> auth_service;
+	if (active_auth) {
+		auth_service = std::make_shared<vb::auth::AuthService>(
+				*active_auth, std::shared_ptr<vb::auth::HttpFetcher>(vb::auth::make_curl_fetcher()));
+		auth_service->start();
+		const vb::auth::AuthConfig auth_cfg = *active_auth;
+		host.auth_challenge = [auth_service, auth_cfg]() -> std::optional<vb::protocol::S2CAuthChallenge> {
+			vb::protocol::S2CAuthChallenge c;
+			c.nonce = auth_service->new_nonce();
+			if (c.nonce.empty()) {
+				return std::nullopt;
+			}
+			c.provider = std::string(vb::auth::provider_name(auth_cfg.provider));
+			c.display_name = auth_cfg.display_name;
+			c.issuer = auth_cfg.issuer;
+			c.client_id = auth_cfg.client_id;
+			c.scopes = auth_cfg.scopes;
+			if (auth_cfg.provider == vb::auth::Provider::kFirebase) {
+				c.params.emplace_back("project_id", auth_cfg.project_id);
+				c.params.emplace_back("api_key", auth_cfg.api_key);
+				std::string methods;
+				for (const auto m : auth_cfg.sign_in) {
+					methods += (methods.empty() ? "" : ",");
+					methods += m == vb::auth::FirebaseSignIn::kPassword ? "password" : "google";
+				}
+				c.params.emplace_back("sign_in", methods);
+			}
+			return c;
+		};
+		auto vetoed = host.authenticate;
+		host.begin_authenticate = [auth_service, vetoed](std::string_view token,
+										  std::string_view nonce) -> vb::net::AuthTicket {
+			auto pending = auth_service->begin(std::string(token), std::string(nonce));
+			return [pending, vetoed]() -> std::optional<vb::net::AuthOutcome> {
+				const auto verdict = pending->poll();
+				if (!verdict) {
+					return std::nullopt;
+				}
+				if (!verdict->ok) {
+					VB_WARN("auth", "sign-in rejected: ", verdict->detail);
+					return vb::net::AuthOutcome{ false, verdict->reason, {} };
+				}
+				vb::net::AuthOutcome outcome = vetoed(verdict->login.name, {});
+				outcome.resolved_name = verdict->login.name;
+				return outcome;
+			};
+		};
+	}
+#endif
 
 	vb::net::ServerSession session(transport, hs_config, host);
 	auto replicator = std::make_unique<vb::net::WorldReplicator>(world, pool,

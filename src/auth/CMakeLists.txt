@@ -1,9 +1,13 @@
 # vb_auth — in-engine authentication (architecture_spec/auth.md §9).
-# 9.1 ships only the auth.lua loader/validator; later steps add the token
-# verifier (Mbed TLS + curl) behind VB_WITH_AUTH.
+# config.cpp: the auth.lua loader/validator (always built). The rest is the
+# server-side verifier (Mbed TLS signature checks + libcurl HTTPS fetch) behind
+# VB_WITH_AUTH; without it every primitive fails closed.
 
 add_library(vb_auth STATIC
   config.cpp
+  jwt.cpp
+  crypto.cpp
+  http.cpp
 )
 add_library(vb::auth ALIAS vb_auth)
 
@@ -16,5 +20,10 @@ target_link_libraries(vb_auth
 )
 
 if(VB_WITH_AUTH)
+  target_sources(vb_auth PRIVATE jwks.cpp verifier.cpp service.cpp)
   target_compile_definitions(vb_auth PUBLIC VB_WITH_AUTH=1)
+  target_link_libraries(vb_auth PRIVATE
+    MbedTLS::mbedcrypto
+    CURL::libcurl
+    nlohmann_json::nlohmann_json)
 endif()
