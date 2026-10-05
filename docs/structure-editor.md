@@ -114,14 +114,14 @@ These points come from `architecture_spec/worldgen.md` §6 and
 ```
 
 The editor only reads **data scripts**: Lua files that `return` a table and
-call nothing. The pack decides where and how to register that data with its
+make no `vb.*` calls (`require` of other pack files is allowed). The pack decides where and how to register that data with its
 own code. Both sides use the same C++ parsing functions for block and
 structure tables, so the editor can't accept something the server rejects.
 
 ### B. Why a standalone executable rather than an in-game creative mode
 
 - **Offline and instant.** No server, handshake, or replication, and no world
-  to keep clean. Open the pack, edit, save.
+  to keep clean. Point it at a block data script, edit, save.
 - **Easy to iterate on worldgen.** The tool runs `WorldGenerator` itself, so
   re-rolling a seed or tweaking a rule redraws a terrain patch in under a
   second. That would be awkward through a live server.
@@ -142,7 +142,7 @@ blocks in G. The pack loader's directory walk doesn't touch `structures/`,
 so these files only run when something `require`s them. Lua is chosen over a
 binary or JSON file because:
 
-- `require` and asset sync already handle `.lua`
+- `require` already resolves pack `.lua` files
 - diffs read well in git, and small fixes can be made by hand
 - the format is the same kind of data script as the block data in G
 
@@ -189,18 +189,21 @@ Rules:
   unknown name is a pack load error naming the structure.
 - **Registering structures.** The editor also keeps
   `structures/all.lua` up to date on every save. It is a data script that
-  returns every structure in the folder, so the pack needs just one line,
-  wherever it likes:
+  `require`s and returns every structure in the folder, so the pack needs
+  just one line, wherever it likes:
   `for _, s in ipairs(require("structures.all")) do vb.register_structure(s) end`.
   A pack can ignore `all.lua` and `require` individual structures instead.
+  `all.lua` is a reserved name: the editor never lists it as a structure.
 - The size is capped at 64×64×64 (a constant, `kMaxStructureDim`). That keeps
   the cross-chunk search radius in E bounded.
 - Biomes refer to structures by name:
   `decoration = { { structure = "base:oak_tree", spawn_rate = 0.6, on = {...}? }, ... }`.
   Any `placement` field can be overridden per biome entry. The existing
   inline `{blocks = {...}}` form keeps working and becomes an anonymous
-  one-variant structure with `replace = "all"` and no rotation, so its output
-  matches today's.
+  one-variant structure with `replace = "all"` and no rotation. Its block
+  shape is unchanged, but where it lands changes with the new anchor
+  scheme in E (per column instead of per 3D chunk). No pack in this repo
+  uses the inline form, so nothing in-repo moves.
 
 ### D. Engine data model (pure C++, no sol2, safe on worker threads)
 
@@ -296,35 +299,53 @@ the editor just won't show those blocks.
 -- data/blocks.lua: pure data, no vb.* calls
 return {
 	{ name = "base:stone", solid = true, opaque = true, texture = "textures/stone.png" },
-	{ name = "base:wood",  solid = true, opaque = true, texture = "textures/wood.png" },
+	{ name = "base:wood",  solid = true, opaque = true },
+	{ name = "base:grass", solid = true, opaque = true, drops = "base:dirt" },
 	{ name = "base:leaves", solid = true, opaque = false, replaceable = true },
 	-- ...
 }
 ```
 
 ```lua
--- init.lua (or blocks/register.lua, or any other file): the pack's choice
+-- blocks/register.lua: any file works, but see "Where to register" below
+BLOCK_IDS = {}
 for _, def in ipairs(require("data.blocks")) do
-	local id
+	-- The handler looks up the id when a block breaks, after every block is
+	-- registered, so `drops` may name a block later in the list.
 	def.on_break = def.on_break or function(ctx)
 		vb.world.spawn_item_drop(
-			{ x = ctx.pos.x + 0.5, y = ctx.pos.y + 0.5, z = ctx.pos.z + 0.5 }, id, 1)
+			{ x = ctx.pos.x + 0.5, y = ctx.pos.y + 0.5, z = ctx.pos.z + 0.5 },
+			BLOCK_IDS[def.drops or def.name], 1)
 	end
-	id = vb.register_block(def)
+	BLOCK_IDS[def.name] = vb.register_block(def)
 end
 ```
+
+(`drops` is a field this pack's code reads, not an engine field. The engine
+ignores keys it doesn't know.)
 
 - **Behavior stays in pack code.** The data script describes what a block
   is: name, solidity, light, texture, `max_damage`, `max_stack`, and so on.
   The pack attaches handlers when it registers. A data table may contain
   functions too (an `on_break` in the entry); the editor ignores fields it
   doesn't use and never calls them.
-- **Registering from `init.lua` is safe.** Biome and structure block names
-  are only resolved when the worldgen pipeline is built, after the whole
-  pack has loaded (`build_worldgen_pipeline`), so load order doesn't
-  matter.
-- **How the editor evaluates the script.** It uses a bare Lua state: no `vb`
-  global, no config, no storage, no network. `require` is limited to the
+- **Where to register.** For worldgen, any file works: biome and structure
+  block names are only resolved when the pipeline is built, after the whole
+  pack has loaded (`build_worldgen_pipeline`). Other pack code can still
+  need block ids **at load time**. `content/base/crafting.lua`, a root
+  module, reads `base_wood_id`, `base_planks_id`, and `base_sticks_id` when
+  it loads, and root modules run before `init.lua`. So `content/base`
+  registers from `blocks/register.lua`, which the loader runs first. A pack
+  that registers from `init.lua` has to move any load-time id users after
+  that point.
+- **Keep the registration order.** Block ids are assigned in registration
+  order, and saved worlds (region files) store ids. `data/blocks.lua` for
+  `content/base` lists blocks in today's order (the sorted `blocks/*.lua`
+  file order), so existing worlds load unchanged. The built-in
+  `BlockRegistry::base()` blocks keep their fixed ids whatever the order.
+- **How the editor evaluates the script.** It uses a bare Lua state: no
+  config, no storage, no network, and only a stub `vb` table whose fields
+  all raise the error below. `require` is limited to the
   pack's own `.lua` files, so a data script can pull in shared constants.
   Calling `vb.*` from a data script fails with a clear message: "block data
   scripts must only return data; register blocks from pack code". The
@@ -341,8 +362,9 @@ end
   resolved against that root. The `base:` name prefix for new structures
   defaults to the `name` in `pack.toml`.
 - **The convention is recommended, not mandatory.** `content/base` moves to
-  `data/blocks.lua` plus a registration loop (S0), so its blocks are
-  editable. Other packs can adopt it whenever they want editor support.
+  `data/blocks.lua` plus `blocks/register.lua` (S0), so its blocks are
+  editable. Its existing `base_*_id` globals stay defined for
+  `crafting.lua` and the other files that use them. Other packs can adopt it whenever they want editor support.
 
 ### H. Editor inputs and outputs
 
@@ -355,8 +377,9 @@ end
   - `textures/*.png` from the pack root, for icons and the viewport, through
     `TextureAtlas`. Blocks with no texture get the atlas's flat placeholder
     color, the same as in the client;
-  - `structures/*.lua` from the pack root, each evaluated as a data script
-    in the same bare Lua state. These populate the Open dialog.
+  - `structures/*.lua` from the pack root (except `all.lua`), each
+    evaluated as a data script in the same bare Lua state. These populate
+    the Open dialog.
 - **Writes:** only `structures/<local-name>.lua` and `structures/all.lua`,
   on save. Nothing else in the pack is touched, and no pack code runs, so
   there are no side effects to guard against (such as `init.lua` writing
@@ -421,8 +444,8 @@ builds whenever tests do, so CI covers it everywhere.
 
 ## Phases
 
-Each phase can ship on its own. S0–S2 are engine and content work, and S1–S2 give the
-base pack real trees even before any UI exists. S3–S6 build the tool. S7
+Each phase can ship on its own. S0–S2 are engine and content work, and S1–S2 give
+packs real trees even before any UI exists. S3–S6 build the tool. S7
 integrates and documents.
 
 ### S0 — Block data script (engine + content/base)
@@ -438,18 +461,20 @@ integrates and documents.
 - [ ] Optional `replaceable` block field (used by `replace =
       "air_and_plants"` in E).
 - [ ] `content/base`: move the block tables from `blocks/*.lua` into
-      `data/blocks.lua`, and register them with a loop in one file that
-      keeps today's `on_break` drop behavior, including the special cases
-      (blocks that drop a different item). `kitchen_sink` stays as it is,
-      to show the direct style still works.
+      `data/blocks.lua` (same order as today's sorted file walk) and
+      register them from `blocks/register.lua`. Keep today's `on_break`
+      drops, including grass dropping dirt (`drops` field), and keep the
+      `base_*_id` globals that `crafting.lua` and others read.
+      `kitchen_sink` stays as it is, to show the direct style still works.
 - [ ] Docs: `docs/lua-api.md` and `architecture_spec/content-pack-format.md`
       describe data scripts as a recommended convention, with the example
       in G.
 - [ ] Tests: `parse_block_type` gives identical `BlockType`s through
       `vb.register_block` and through `eval_data_script`; `content/base`'s
       block registry (ids, names, textures, drops) is unchanged by the move,
-      checked against the existing `content_base_*` suites; a data script
-      that calls `vb.*` fails with the expected message.
+      checked against the existing `content_base_*` suites, and a world
+      saved before the move loads with the same blocks; a data script that
+      calls `vb.*` fails with the expected message.
 
 ### S1 — Structure format and loading (engine)
 
@@ -490,8 +515,9 @@ integrates and documents.
       hash. The existing pack-driven golden must stay unchanged because its
       decoration list is empty.
 - [ ] `perf_budget_test`: a decoration-heavy chunk stays within budget.
-- [ ] Content: a hand-written `structures/oak_tree.lua` in
-      `content/examples/kitchen_sink`, used by its forest-like biome.
+- [ ] Content: a hand-written `structures/acacia_tree.lua` in
+      `content/examples/kitchen_sink`, registered from its `worldgen.lua`
+      and used by `biomes/savanna.lua`.
 
 ### S3 — Editor shell (viewing only)
 
@@ -563,9 +589,10 @@ integrates and documents.
 ### S7 — Integration, docs, base content
 
 - [ ] `vb structure` CLI subcommands (`architecture_spec/dev-cli.md`):
-      `new`, `edit` (launches the editor on the current pack's block data
-      script), and `validate` (headless: evaluate the block data and every
-      structure file, then report).
+      `new`, `edit [block-data-script]` (launches the editor; the script
+      defaults to `data/blocks.lua` in the current pack), and `validate`
+      (headless: evaluate the block data and every structure file, then
+      report).
 - [ ] Docs: `docs/lua-api.md` (`vb.register_structure`, the new
       decoration entry form, `replaceable`),
       `architecture_spec/worldgen.md` stage 6 rewritten to describe pull
