@@ -92,8 +92,13 @@ def test_missing_token_never_joins(auth_server, make_clients, tmp_path):
     expect(server).to_have_player_count(0)
 
 
-def test_a_player_without_auth_support_is_refused(auth_server, make_clients):
+def test_a_player_without_auth_support_is_refused(auth_server, make_clients, tmp_path, monkeypatch):
     server = auth_server()
+    # Hide any real opener (a CI runner has xdg-open): the browser launch must fail, not sit
+    # waiting for a sign-in nobody will complete.
+    empty = tmp_path / "empty-path"
+    empty.mkdir()
+    monkeypatch.setenv("PATH", str(empty))
     with pytest.raises(ProcessDied):  # no --auth-token-file and no browser: fails closed, never anonymous
         make_clients(server)(1)
     expect(server).to_have_player_count(0)
