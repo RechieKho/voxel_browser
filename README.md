@@ -6,6 +6,10 @@
 
 True to its name, the client acts as a "browser." When a player connects to a server, all custom Lua scripts, textures, and assets are automatically synchronized. The server holds the game logic; the client renders the world.
 
+![A player standing on a beach looking at terrain, with the HUD's hotbar, health/hunger bars and selected-item label visible](docs/images/screenshot.png)
+
+<sub>Captured with the real client through the e2e automation harness (`tests/e2e`, `docs/e2e-automation.md`), not a mockup.</sub>
+
 ---
 
 ## ✨ Key Features
