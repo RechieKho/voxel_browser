@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <map>
 #include <optional>
@@ -220,6 +221,12 @@ public:
 	// effectively a no-op over loopback/singleplayer regardless of the
 	// configured value; it only bites over a real GnsTransport.
 	void set_max_connections_per_ip(int n) { max_connections_per_ip_ = n; }
+	// External auth (auth.md §8): at most `n` sign-in attempts (C2S_Auth) per
+	// peer IP per minute, so a client cannot use the server as a free token-
+	// verification/JWKS-refresh oracle. `0` = unlimited. Like the connection
+	// cap it needs Transport::remote_address(), so it only bites on a real
+	// network transport. Default 30.
+	void set_max_auth_attempts_per_minute_per_ip(int n) { max_auth_attempts_per_minute_ = n; }
 
 	// Per-connection message-rate flood guard (§8.3 hardening, tracked in
 	// REMAINING_TASKS' "per-player rate limit / flood guard" item): defense
@@ -706,6 +713,9 @@ private:
 	double time_of_day_broadcast_accum_ = 0.0;
 	double void_kill_y_ = -64.0;
 	int max_connections_per_ip_ = 0; // 0 = unlimited
+	int max_auth_attempts_per_minute_ = 30; // 0 = unlimited
+	double uptime_seconds_ = 0.0; // advanced by tick(); the rate limiter's clock
+	std::unordered_map<std::string, std::deque<double>> auth_attempts_; // ip -> attempt times
 	double max_messages_per_second_ = 0.0; // 0 = unlimited
 	std::function<RespawnDecision(core::NetId, std::string_view, float)>
 			on_respawn_;

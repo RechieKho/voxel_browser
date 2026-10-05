@@ -208,6 +208,11 @@ private:
 	std::shared_ptr<vb::auth::SessionStore> auth_store;
 	bool reauth_panel_open = false; // the in-game "sign in again" overlay
 	int menu_frames = 0;
+	void install_sign_in(vb::net::ClientSession &session, const std::string &server_id);
+#if defined(VB_WITH_AUTOMATION)
+	bool headless_browser_started_ = false;
+	void headless_sign_in_step();
+#endif
 	void draw_sign_in();
 	void draw_reauth_prompt();
 	void refresh_signed_in_label();

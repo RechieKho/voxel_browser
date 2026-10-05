@@ -259,6 +259,94 @@ TEST_CASE("auth pack: the same account signing in again kicks the older session"
 }
 
 // ---------------------------------------------------------------------------
+// Per-IP sign-in attempt limit (auth.md §8)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Delegates to a LoopbackTransport but reports every peer as one IP, as a real
+// network transport would for several connections from the same host.
+class FixedIpTransport final : public Transport {
+public:
+	explicit FixedIpTransport(Transport &inner) : inner_(inner) {}
+	vb::core::Status<vb::core::NetError> listen(std::uint16_t port) override { return inner_.listen(port); }
+	vb::core::Result<ConnId, vb::core::NetError> connect(std::string_view h, std::uint16_t p) override {
+		return inner_.connect(h, p);
+	}
+	void send(ConnId c, vb::protocol::Lane l, std::span<const std::byte> f) override { inner_.send(c, l, f); }
+	void close(ConnId c, std::string_view r) override { inner_.close(c, r); }
+	void poll(std::vector<TransportEvent> &out) override { inner_.poll(out); }
+	bool is_server() const override { return inner_.is_server(); }
+	std::size_t connection_count() const override { return inner_.connection_count(); }
+	std::optional<std::string> remote_address(ConnId) const override { return "203.0.113.9"; }
+
+private:
+	Transport &inner_;
+};
+
+} // namespace
+
+TEST_CASE("auth pack: a client cannot hammer sign-in attempts from one IP") {
+	LoopbackNetwork net;
+	FixedIpTransport server_side(net.server());
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	HandshakeServerConfig cfg;
+	cfg.world_seed = 7;
+	cfg.auth_mode = vb::protocol::AuthMode::kExternal;
+	HandshakeServerHost host;
+	host.auth_challenge = [] {
+		vb::protocol::S2CAuthChallenge c;
+		c.nonce = "nonce-1";
+		return std::optional<vb::protocol::S2CAuthChallenge>(c);
+	};
+	host.begin_authenticate = fake_verify;
+	ServerSession server(server_side, cfg, host);
+	server.set_max_auth_attempts_per_minute_per_ip(3);
+	REQUIRE(net.server().listen(0));
+
+	std::vector<std::unique_ptr<ClientSession>> clients;
+	std::vector<std::string> reasons;
+	for (int i = 0; i < 5; ++i) {
+		Transport &t = net.create_client();
+		auto id = t.connect("x", 0);
+		REQUIRE(id);
+		HandshakeClientConfig cc;
+		cc.player_name = "x";
+		cc.token = "bad"; // every attempt is rejected, so each one is a failed attempt
+		cc.client_nonce = static_cast<std::uint64_t>(i + 1);
+		clients.push_back(std::make_unique<ClientSession>(t, *id, cc));
+		for (int k = 0; k < 20; ++k) {
+			server.tick(0.05);
+			clients.back()->tick(0.05);
+		}
+		REQUIRE(clients.back()->failed());
+		reasons.push_back(clients.back()->failure_reason());
+	}
+	// The first three were verified (and rejected as bad tokens); the rest were
+	// stopped before any verification work was done.
+	CHECK(reasons[0] == "not accepted by this server");
+	CHECK(reasons[2] == "not accepted by this server");
+	CHECK(reasons[3] == "too many sign-in attempts, try again later");
+	CHECK(reasons[4] == "too many sign-in attempts, try again later");
+
+	// A minute later the window has slid and the IP may try again.
+	for (int k = 0; k < 1300; ++k) { // 65 s of server ticks
+		server.tick(0.05);
+	}
+	Transport &t = net.create_client();
+	auto id = t.connect("x", 0);
+	REQUIRE(id);
+	HandshakeClientConfig cc;
+	cc.token = "later|sub-l|{}";
+	ClientSession later(t, *id, cc);
+	for (int k = 0; k < 40; ++k) {
+		server.tick(0.05);
+		later.tick(0.05);
+	}
+	CHECK(later.joined());
+}
+
+// ---------------------------------------------------------------------------
 // Periodic live re-authentication (auth.md §5.6)
 // ---------------------------------------------------------------------------
 

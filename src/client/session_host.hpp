@@ -26,6 +26,10 @@
 
 #include "vb/assetsync/cache.hpp"
 #include "vb/auth/config.hpp"
+#if defined(VB_WITH_AUTH)
+#include "vb/auth/http.hpp"
+#include "vb/auth/server_glue.hpp"
+#endif
 #include "vb/core/build_info.hpp"
 #include "vb/core/cli.hpp"
 #include "vb/core/config.hpp"
@@ -76,8 +80,16 @@ inline vb::worldgen::WorldGenerator make_generator(std::uint64_t seed) {
 	return make_generator(seed, vb::world::BlockRegistry::base());
 }
 
-inline vb::net::HandshakeServerConfig sp_server_config(std::uint64_t seed, int view_distance) {
+inline vb::net::HandshakeServerConfig sp_server_config(std::uint64_t seed, int view_distance,
+		const std::optional<vb::auth::AuthConfig> &auth = std::nullopt) {
 	vb::net::HandshakeServerConfig c;
+#if defined(VB_WITH_AUTH)
+	if (auth) {
+		vb::auth::apply_external_auth(c, *auth); // the same handshake as a dedicated server
+	}
+#else
+	(void)auth;
+#endif
 	c.pack_name = "base";
 	c.motd = "integrated singleplayer";
 	c.world_seed = seed;
@@ -137,21 +149,41 @@ inline std::string kSingleplayerContentPack = "content/base";
 // directory so worlds outlive the installed version that created them).
 inline std::string kSingleplayerWorldDir = "world_singleplayer";
 
+// Dev only (compiled out under VB_DISTRIBUTION): ignore the pack's auth.lua, so
+// singleplayer admits the local player unverified and get_login() is nil.
+inline bool kSingleplayerSkipAuth = false;
+
+// `auth_out` is set iff the pack declares a valid auth.lua (and auth is not
+// skipped): singleplayer then runs the real sign-in, same as a dedicated server.
 inline vb::script::PackRuntime make_singleplayer_pack_runtime(
-		vb::net::Transport &transport, vb::world::BlockRegistry &registry) {
+		vb::net::Transport &transport, vb::world::BlockRegistry &registry,
+		std::optional<vb::auth::AuthConfig> &auth_out) {
 	vb::script::PackRuntime rt(transport, registry,
 			std::filesystem::path(kSingleplayerContentPack) / "storage.json");
 	// A pack that declares auth.lua makes authentication mandatory
-	// (architecture_spec/auth.md). Singleplayer sign-in is step 9.7; until it
-	// lands the pack's scripts must not run unauthenticated, so fall back to
-	// the hardcoded base set exactly like a pack that failed to load.
-	std::error_code auth_ec;
-	const std::filesystem::path auth_lua = std::filesystem::path(kSingleplayerContentPack) /
-			std::string(vb::auth::kAuthLuaFilename);
-	if (std::filesystem::exists(auth_lua, auth_ec)) {
+	// (architecture_spec/auth.md): fail closed -- a broken declaration, or a
+	// build without the verifier, falls back to the hardcoded base set exactly
+	// like a pack that failed to load, never to an unauthenticated pack.
+	bool pack_blocked = false;
+	const vb::auth::AuthLoad auth = vb::auth::load_auth_lua(kSingleplayerContentPack);
+	if (auth.present && kSingleplayerSkipAuth) {
+		std::cerr << "client: *** --insecure-skip-auth: '" << kSingleplayerContentPack
+				  << "' declares auth.lua but authentication is DISABLED (development only) ***\n";
+	} else if (auth.present && !auth.error.empty()) {
 		std::cerr << "client: singleplayer content pack '" << kSingleplayerContentPack
-				  << "' declares auth.lua (mandatory authentication), which singleplayer "
-				  << "does not support yet -- running with the hardcoded base block set only\n";
+				  << "': " << auth.error << " -- running with the hardcoded base block set only\n";
+		pack_blocked = true;
+	} else if (auth.present && !vb::auth::kBuiltWithAuth) {
+		std::cerr << "client: singleplayer content pack '" << kSingleplayerContentPack
+				  << "' requires authentication (auth.lua); rebuild with VB_WITH_AUTH -- "
+				  << "running with the hardcoded base block set only\n";
+		pack_blocked = true;
+	} else if (auth.present) {
+		auth_out = auth.config;
+		rt.set_auth_required(true); // before the pack loads: vb.auth.required() is visible to init.lua
+	}
+	if (pack_blocked) {
+		// fall through to freeze() with just the base set
 	} else if (!vb::script::load_content_pack(rt, kSingleplayerContentPack)) {
 		std::cerr << "client: singleplayer content pack '"
 				  << kSingleplayerContentPack << "' failed to load -- "
@@ -216,9 +248,24 @@ inline vb::render::VirtualFs load_entity_textures_from_disk(
 inline vb::net::HandshakeServerHost make_singleplayer_host(std::uint64_t seed,
 		vb::script::PackRuntime &pack_runtime,
 		const vb::world::BlockRegistry &registry,
-		const vb::physics::MoveParams &move_params) {
+		const vb::physics::MoveParams &move_params,
+		const std::optional<vb::auth::AuthConfig> &auth = std::nullopt,
+		std::shared_ptr<void> *auth_service_out = nullptr) {
 	vb::net::HandshakeServerHost host = sp_server_host(seed);
 	pack_runtime.install_join_veto(host); // before ServerSession copies `host`
+#if defined(VB_WITH_AUTH)
+	if (auth) {
+		// The same wiring as the dedicated server (src/server/main.cpp).
+		auto svc = vb::auth::install_external_auth(host, *auth,
+				std::shared_ptr<vb::auth::HttpFetcher>(vb::auth::make_curl_fetcher()));
+		if (auth_service_out != nullptr) {
+			*auth_service_out = svc; // keeps the key-refresh worker alive with the session
+		}
+	}
+#else
+	(void)auth;
+	(void)auth_service_out;
+#endif
 	// Entity-management follow-up to Phase 6.1: mirrors src/server/main.cpp's
 	// own install_entity_kind_registry call exactly -- without this,
 	// --singleplayer's script entities would render as the flat placeholder
@@ -296,6 +343,10 @@ inline vb::net::HandshakeServerHost make_singleplayer_host(std::uint64_t seed,
 struct Singleplayer {
 	vb::net::LoopbackNetwork net;
 	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	// Set iff the pack declares auth.lua (see make_singleplayer_pack_runtime);
+	// declared before pack_runtime/server so their initializers can read it.
+	std::optional<vb::auth::AuthConfig> auth_config;
+	std::shared_ptr<void> auth_service; // AuthService, outlives `server`'s use of it
 	vb::script::PackRuntime pack_runtime;
 	// Phase 6.7: no ServerConfig/server.toml on this in-process path, so the
 	// engine default (vb::physics::MoveParams{}) is the base a pack's
@@ -314,7 +365,7 @@ struct Singleplayer {
 	vb::net::ServerSession server;
 	std::optional<vb::net::ClientSession> client_session;
 
-	Singleplayer(std::uint64_t seed, const std::string &name, int view_distance) : pack_runtime(make_singleplayer_pack_runtime(net.server(), registry)),
+	Singleplayer(std::uint64_t seed, const std::string &name, int view_distance) : pack_runtime(make_singleplayer_pack_runtime(net.server(), registry, auth_config)),
 																				   move_params(pack_runtime.effective_move_params(vb::physics::MoveParams{})),
 																				   world(registry),
 																				   // Phase 6.14: mirrors src/server/main.cpp's own
@@ -324,8 +375,9 @@ struct Singleplayer {
 																				   pool(make_generator(seed, registry,
 																						   pack_runtime.build_worldgen_pipeline(
 																								   vb::worldgen::WorldGenParams{ seed }))),
-																				   server(net.server(), sp_server_config(seed, view_distance),
-																						   make_singleplayer_host(seed, pack_runtime, registry, move_params)) {
+																				   server(net.server(), sp_server_config(seed, view_distance, auth_config),
+																						   make_singleplayer_host(seed, pack_runtime, registry, move_params,
+																								   auth_config, &auth_service)) {
 		server.set_move_params(move_params);
 		// Phase 6.18: mirrors src/server/main.cpp's own set_punch_params call.
 		server.set_punch_params(pack_runtime.effective_punch_params(
@@ -458,6 +510,9 @@ struct Singleplayer {
 			server.tick(kFixedDt);
 			for (auto &j : server.take_joins()) {
 				pack_runtime.dispatch_player_join_completed(j);
+			}
+			for (auto &c : server.take_login_changes()) {
+				pack_runtime.dispatch_login_changed(c);
 			}
 			for (auto &l : server.take_leaves()) {
 				pack_runtime.dispatch_player_leave(l);

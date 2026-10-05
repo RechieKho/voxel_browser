@@ -104,6 +104,15 @@ class Expectation:
     def to_have_player_count(self, n, timeout=5.0):
         return self._check("%d players" % n, {"player_count": {"op": "==", "value": n}}, timeout)
 
+    def to_have_player_login(self, subject, name=None, provider=None, timeout=5.0):
+        """The server verified a connected player's sign-in: their login has this `subject`."""
+        args = {"subject": subject}
+        if name is not None:
+            args["name"] = name
+        if provider is not None:
+            args["provider"] = provider
+        return self._check("a player logged in as %r" % subject, {"player_login": args}, timeout)
+
     def to_have_player_near(self, name, pos, radius=1.5, timeout=5.0):
         return self._check("player %r within %.1f of %s" % (name, radius, list(pos)),
                            {"player_near": {"name": name, "pos": list(pos), "radius": radius}}, timeout)

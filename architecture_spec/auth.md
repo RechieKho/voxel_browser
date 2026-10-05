@@ -2,7 +2,7 @@
 
 > Full detail for this topic; the backlog entry is `REMAINING_TASKS.md`
 > Phase 9. Status: **in progress — 9.0 (docs) and 9.1 (`auth.lua` loading, fail-closed
-> startup) landed 2026-10-05; 9.2 (protocol v29 + handshake plumbing) landed; 9.3 (server token verification) landed; 9.4 (Lua exposure) landed; 9.5 (client sign-in) landed; 9.6 (sessions, re-auth, revocation) landed; 9.7+ not started.** Supersedes
+> startup) landed 2026-10-05; 9.2 (protocol v29 + handshake plumbing) landed; 9.3 (server token verification) landed; 9.4 (Lua exposure) landed; 9.5 (client sign-in) landed; 9.6 (sessions, re-auth, revocation) landed; 9.7 (singleplayer, `vb`, e2e) and 9.8 (hardening) landed; remaining items are listed per step in `REMAINING_TASKS.md`.** Supersedes
 > the 2026-09-17 direction on spec §18 Q6 ("engine owns no auth concept") —
 > see §11.
 

@@ -17,6 +17,15 @@ def test_block_break_replicates(server, clients):
     expect(bob).to_see_block((4, 70, 4), "base:air")  # auto-waits, no sleeps
 ```
 
+## Authentication tests
+
+`test_auth.py` runs a server whose pack ships an `auth.lua` pointing at `vbtest/mock_idp.py`, a
+stdlib-only OpenID Connect provider (discovery, JWKS, an authorization endpoint that redirects to
+the client's loopback `redirect_uri`, a PKCE-checking token endpoint). It signs RS256 tokens with
+the **test-only** key in `fixtures/idp_rsa.json`; never use that key for anything real. Clients sign
+in with `--auth-token-file`, or (browser flow) the test sets `VB_AUTH_URL_FILE` and plays the user's
+browser itself. One test waits ~70 s for the periodic re-auth (the engine's minimum interval is 60 s).
+
 ## Running
 
 You need a build with `-DVB_WITH_AUTOMATION=ON -DVB_WITH_NET=ON -DVB_WITH_LUA=ON
