@@ -172,12 +172,14 @@ public:
 		pos_ += n;
 		return out;
 	}
-	std::string string() {
+	// `max_len` tightens the cap for fields with a known bound (e.g. an auth
+	// token); the length is checked before any bytes are copied.
+	std::string string(std::size_t max_len = static_cast<std::size_t>(kMaxDecodedLength)) {
 		const std::uint64_t len = varint();
 		if (failed()) {
 			return {};
 		}
-		if (len > kMaxDecodedLength) {
+		if (len > max_len || len > kMaxDecodedLength) {
 			fail(ProtocolError::kLengthExceeded);
 			return {};
 		}

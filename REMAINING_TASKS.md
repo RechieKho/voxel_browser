@@ -492,9 +492,21 @@ protocol changes, security notes and per-step task lists:
       9.7. Tests: `tests/unit/auth_config_test.cpp` plus manifest/loader/
       config cases. `VB_WITH_AUTH` currently only gates this check (Mbed TLS
       + curl arrive with 9.3).
-- [ ] **9.2 — Protocol v28 + handshake plumbing**: `AuthMode::kExternal`,
-      `S2C_AuthChallenge` (server nonce), async `kVerifyingAuth`, per-state
-      auth timeout; stub verifier.
+- [x] **9.2 — Protocol v29 + handshake plumbing** — done 2026-10-05
+      (v28 was already taken by `S2C_PlayerStatus`, so this is **v29**):
+      `AuthMode::kExternal`, `S2C_AuthChallenge`, `S2C_AuthResult.resolved_name`,
+      `C2S_Auth.token` 16 KiB cap, `S2C_ReauthRequest`/`C2S_Reauth` wire format
+      (used in 9.6), `ByteReader::string(max_len)`. Server FSM `kVerifyingAuth`
+      with `HandshakeServerHost::auth_challenge` / `begin_authenticate` →
+      `AuthTicket` polled each tick (`ServerHandshake::poll_auth`), per-state
+      `timeout_seconds()` (`auth_timeout_seconds`, default 300, age reset once
+      sign-in finishes), fail-closed when no challenge/verifier. Client FSM
+      `kAwaitingChallenge` + `HandshakeClientHost::obtain_token` (synchronous
+      until 9.5). Tests: protocol round-trip/bounds/truncation, FSM cases with
+      a fake verifier in `net_test.cpp`. **Not yet wired:** `server/main.cpp`
+      still never sets `auth_mode = kExternal` (9.3 supplies the real verifier);
+      a full loopback ServerSession join with the fake verifier is not
+      covered, only the FSMs.
 - [ ] **9.3 — Server token verification**: Mbed TLS + curl, JWT/JWKS,
       discovery, RS256/ES256 allowlist, iss/aud/exp/nonce checks, fuzzers.
 - [ ] **9.4 — Lua exposure**: `player:get_login()`, `player_join(name,
