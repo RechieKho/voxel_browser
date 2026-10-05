@@ -152,6 +152,13 @@ core::Result<Manifest, core::AssetSyncError> build_manifest(
 		if (!regular) {
 			continue;
 		}
+		// Pack-root auth.lua is server-only declarative config
+		// (architecture_spec/auth.md §4): no client needs it, so it is never
+		// advertised or served.
+		if (std::filesystem::relative(entry.path(), pack_root, ec).generic_string() ==
+				"auth.lua") {
+			continue;
+		}
 
 		const std::uintmax_t file_size = entry.file_size(ec);
 		if (ec) {

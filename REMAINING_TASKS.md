@@ -477,11 +477,21 @@ Pack scripts read verified login data via `player:get_login()`, which is
 protocol changes, security notes and per-step task lists:
 `architecture_spec/auth.md` §12.
 
-- [ ] **9.0 — Decision & docs** (spec §17/§18, networking diagram).
-- [ ] **9.1 — `auth.lua` loading & fail-closed startup**: sandboxed
-      return-a-table config VM, validation, presets, `server.toml [auth]`
-      overrides, dev-only `--insecure-skip-auth`, refuse to start without
-      `VB_WITH_AUTH`.
+- [x] **9.0 — Decision & docs** (spec §17/§18, networking diagram) — done 2026-10-05.
+- [x] **9.1 — `auth.lua` loading & fail-closed startup** — done 2026-10-05:
+      `vb::auth::load_auth_lua` (`src/auth/`, new `vb_auth` lib; sandboxed
+      return-a-table VM with tight budgets, full validation, oidc/keycloak/
+      firebase presets), `server.toml [auth]` overrides, pack loader +
+      asset manifest skip root `auth.lua`, `VB_WITH_AUTH` option (refuse to
+      start without it), dev-only `--insecure-skip-auth` (compiled out under
+      `VB_DISTRIBUTION`), `content/base/auth.lua.example`. **Interim
+      fail-closed rule:** until the verifier exists
+      (`vb::auth::kVerifierAvailable`, flip it in 9.3) a server whose pack has
+      a valid `auth.lua` logs the redacted config and refuses to start unless
+      `--insecure-skip-auth`; singleplayer likewise skips such a pack until
+      9.7. Tests: `tests/unit/auth_config_test.cpp` plus manifest/loader/
+      config cases. `VB_WITH_AUTH` currently only gates this check (Mbed TLS
+      + curl arrive with 9.3).
 - [ ] **9.2 — Protocol v28 + handshake plumbing**: `AuthMode::kExternal`,
       `S2C_AuthChallenge` (server nonce), async `kVerifyingAuth`, per-state
       auth timeout; stub verifier.

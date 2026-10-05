@@ -19,6 +19,17 @@ class Args; // fwd (vb/core/cli.hpp)
 enum class ConfigAuthMode : std::uint8_t { kNone = 0,
 	kToken = 1 };
 
+// `[auth]` table in server.toml (architecture_spec/auth.md §4): overrides for
+// the deployment-specific values of a pack's auth.lua, so one pack works
+// against staging and production. Empty = not overridden. It can never
+// disable authentication for a pack that ships auth.lua.
+struct ServerAuthOverrides {
+	std::string issuer;
+	std::string client_id;
+	std::string project_id;
+	std::string api_key;
+};
+
 struct ServerConfig {
 	std::string bind_address = "0.0.0.0";
 	std::uint16_t port = 27015;
@@ -48,6 +59,7 @@ struct ServerConfig {
 	// ServerSession::set_max_messages_per_second's own comment.
 	double max_messages_per_second = 0.0;
 	ConfigAuthMode auth_mode = ConfigAuthMode::kNone;
+	ServerAuthOverrides auth;
 	std::string motd;
 	// World persistence (ARCHITECTURE_SPEC.md §18's "region file format",
 	// picked up 2026-09-25). `persist_world = false` keeps every prior

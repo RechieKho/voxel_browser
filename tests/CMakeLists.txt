@@ -3,6 +3,7 @@
 
 add_executable(vb_tests
   main.cpp
+  unit/auth_config_test.cpp
   unit/assetsync_cache_test.cpp
   unit/assetsync_manifest_test.cpp
   unit/biome_selector_test.cpp
@@ -58,6 +59,7 @@ target_compile_definitions(vb_tests PRIVATE
 target_link_libraries(vb_tests
   PRIVATE
     vb_core
+    vb_auth
     doctest::doctest
     vb_warnings
     vb_sanitizers

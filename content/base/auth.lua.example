@@ -1,0 +1,42 @@
+-- Example `auth.lua` (architecture_spec/auth.md). Rename to `auth.lua` to make
+-- authentication MANDATORY for this pack. It is inert under this name.
+--
+-- This file is declarative data, read once at server startup in its own tiny
+-- sandbox: it must `return` a table (no vb.* API, no loops, no I/O). A
+-- malformed file stops the server from starting; it is never silently
+-- ignored. Do not put client secrets here -- public-client (PKCE) flows only.
+--
+-- NOTE: enforcement (handshake + token verification) is still being built
+-- (REMAINING_TASKS.md Phase 9). Until it lands, a server whose pack contains
+-- a valid `auth.lua` refuses to start (use `--insecure-skip-auth` for dev).
+
+return {
+	provider = "keycloak", -- "oidc" | "keycloak" | "firebase"
+	display_name = "Example Realm", -- shown on the sign-in screen
+	issuer = "https://id.example.com/realms/game", -- https (http only for localhost)
+	client_id = "voxel-browser", -- public client, PKCE, no secret
+	scopes = { "openid", "profile", "email" }, -- must include "openid"
+	name_claim = "preferred_username", -- becomes the in-game player name
+	claims = { "email", "email_verified" }, -- claims scripts may read
+
+	-- Optional (defaults shown):
+	-- max_token_age_seconds   = 300,
+	-- reauth_interval_seconds = 900, -- 0 disables periodic re-auth
+	-- reauth_grace_seconds    = 120,
+}
+
+-- Firebase instead:
+-- return {
+-- 	provider   = "firebase",
+-- 	project_id = "my-game-1234",
+-- 	api_key    = "AIza...", -- web API key (public by design)
+-- 	sign_in    = { "password", "google" },
+-- 	name_claim = "name",
+-- 	claims     = { "email", "email_verified" },
+-- }
+--
+-- server.toml can override deployment values without touching the pack:
+--   [auth]
+--   issuer = "https://id.prod.example.com/realms/game"
+--   client_id = "voxel-browser-prod"
+--   (firebase: project_id, api_key)
