@@ -11,10 +11,13 @@
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
+// clang-format off
+// Order matters: winsock2.h, then windows.h, then shellapi.h.
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
 #include <shellapi.h>
+// clang-format on
 #else
 #include <arpa/inet.h>
 #include <netinet/in.h>
