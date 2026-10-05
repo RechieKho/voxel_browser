@@ -1,0 +1,192 @@
+// Phase C3 (docs/content-base-testing.md): Layer 2 coverage of
+// content/base/ui/*.lua -- loaded into a real UiRuntime exactly as
+// src/client/client_app.cpp's singleplayer path does (read straight off
+// disk, sorted by filename, chunk-named "ui/<file>"), closing the "no test
+// loads these files at all" gap the design doc calls out: before this file,
+// a syntax error in hud.lua would pass the entire suite.
+
+#include <doctest/doctest.h>
+
+#include "content_base_fixture.hpp"
+
+#if VB_WITH_LUA
+
+#include <algorithm>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <vector>
+
+#include "vb/script/ui_runtime.hpp"
+
+using vb::script::UiRuntime;
+using vb::script::Widget;
+using vb::script::WidgetType;
+
+namespace {
+
+// Mirrors client_app.cpp's singleplayer ui_sources loop: every *.lua file
+// directly under content/base/ui/, chunk-named "ui/<filename>". Sorted so
+// the test is deterministic regardless of the OS's directory_iterator order
+// (client_app.cpp itself doesn't sort, but load order doesn't matter there
+// either -- each file only ever calls ui.define/ui.define_hud for its own
+// distinct name).
+UiRuntime load_base_ui() {
+	UiRuntime ui;
+	const auto ui_dir = vb::test::content_base_dir() / "ui";
+	std::vector<std::filesystem::path> files;
+	for (const auto &entry : std::filesystem::directory_iterator(ui_dir)) {
+		if (entry.path().extension() == ".lua") {
+			files.push_back(entry.path());
+		}
+	}
+	std::sort(files.begin(), files.end());
+	for (const auto &path : files) {
+		std::ifstream f(path, std::ios::binary);
+		REQUIRE_MESSAGE(f, path.string());
+		std::ostringstream ss;
+		ss << f.rdbuf();
+		const auto result = ui.load_pack_file(ss.str(), "ui/" + path.filename().string());
+		REQUIRE_MESSAGE(result, path.string() << ": " << result.message);
+	}
+	return ui;
+}
+
+const Widget *find(const std::vector<Widget> &widgets, const std::string &id) {
+	for (const auto &w : widgets) {
+		if (w.id == id) {
+			return &w;
+		}
+	}
+	return nullptr;
+}
+
+} // namespace
+
+TEST_CASE("content/base/ui: every file parses and registers its screen/HUD") {
+	// The one test that stops a syntax error in any ui/*.lua file -- a
+	// broken hud.lua, pause.lua, or inventory.lua fails load_base_ui()'s
+	// REQUIRE above before this case's own body even runs.
+	UiRuntime ui = load_base_ui();
+
+	ui.open("base:pause", "{}");
+	CHECK(ui.is_open());
+	ui.close();
+
+	ui.open("base:inventory", R"({"slots":[]})");
+	CHECK(ui.is_open());
+	ui.close();
+
+	// define_hud() has no "is defined" query of its own -- render_hud()
+	// returning a non-empty list (hotbar/player-list/chat content below
+	// always draws at least the player-list header) is the only
+	// observable proof hud.lua's ui.define_hud call actually ran.
+	ui.set_player_list("A", {});
+	CHECK_FALSE(ui.render_hud().empty());
+}
+
+TEST_CASE("content/base/ui: base:pause renders a title and a working Resume button") {
+	UiRuntime ui = load_base_ui();
+	ui.open("base:pause", "{}");
+	REQUIRE(ui.is_open());
+
+	const auto &widgets = ui.render_frame();
+	const Widget *title = find(widgets, "title");
+	REQUIRE(title != nullptr);
+	CHECK(title->type == WidgetType::kLabel);
+	CHECK(title->text == "Paused");
+
+	const Widget *resume = find(widgets, "resume");
+	REQUIRE(resume != nullptr);
+	CHECK(resume->type == WidgetType::kButton);
+	CHECK(resume->text == "Resume");
+
+	ui.report_click("resume");
+	CHECK_FALSE(ui.is_open());
+}
+
+TEST_CASE("content/base/ui: base:inventory renders one row of widgets per slot, "
+		"or an empty-state label with none") {
+	UiRuntime ui = load_base_ui();
+
+	ui.open("base:inventory",
+			R"({"slots":[{"item":2,"count":5},{"item":3,"count":1},{"item":4,"count":9}]})");
+	REQUIRE(ui.is_open());
+	{
+		const auto &widgets = ui.render_frame();
+		for (int i = 1; i <= 3; ++i) {
+			const std::string n = std::to_string(i);
+			REQUIRE_MESSAGE(find(widgets, "slot_bg_" + n) != nullptr, n);
+			REQUIRE_MESSAGE(find(widgets, "slot_icon_" + n) != nullptr, n);
+			REQUIRE_MESSAGE(find(widgets, "slot_count_" + n) != nullptr, n);
+		}
+		// ctx_json's numbers parse as Lua floats (open()'s JSON -> Lua
+		// table conversion), and tostring() on a float prints "5.0", not
+		// "5" -- the real inventory screen has this same quirk whenever a
+		// slot's count round-trips through JSON (same class of thing
+		// init.lua's own boot_count comment calls out).
+		CHECK(find(widgets, "slot_count_1")->text == "5.0");
+		CHECK(find(widgets, "empty") == nullptr);
+		REQUIRE(find(widgets, "close") != nullptr);
+	}
+	ui.report_click("close");
+	CHECK_FALSE(ui.is_open());
+
+	ui.open("base:inventory", R"({"slots":[]})");
+	REQUIRE(ui.is_open());
+	{
+		const auto &widgets = ui.render_frame();
+		CHECK(find(widgets, "slot_bg_1") == nullptr);
+		REQUIRE(find(widgets, "empty") != nullptr);
+		CHECK(find(widgets, "empty")->text == "(empty)");
+	}
+}
+
+TEST_CASE("content/base/ui: the HUD renders the hotbar, chat log, player list, "
+		"and break-progress bar from engine-supplied state") {
+	UiRuntime ui = load_base_ui();
+	ui.set_screen_size(1280, 720);
+
+	ui.set_player_list("Alice", { "Bob", "Carol" });
+	ui.set_chat({ "Alice: hi", "Bob: hey" }, false);
+	ui.set_inventory(
+			{ { "base:stone", 5 }, { "base:planks", 2 } }, /*selected_slot=*/1);
+	ui.set_break_progress(0.25f);
+
+	const auto &widgets = ui.render_hud();
+
+	// Player list: header + self + each other name.
+	REQUIRE(find(widgets, "player_list_header") != nullptr);
+	CHECK(find(widgets, "player_list_header")->text == "players (3)");
+	REQUIRE(find(widgets, "player_list_self") != nullptr);
+	CHECK(find(widgets, "player_list_self")->text == "Alice");
+	CHECK(find(widgets, "player_list_1")->text == "Bob");
+	CHECK(find(widgets, "player_list_2")->text == "Carol");
+
+	// Chat log: one text widget per line.
+	REQUIRE(find(widgets, "chat_log_1") != nullptr);
+	CHECK(find(widgets, "chat_log_1")->text == "Alice: hi");
+	CHECK(find(widgets, "chat_log_2")->text == "Bob: hey");
+
+	// Hotbar: one bg/label pair per inventory slot, selected slot's bg
+	// outlined differently (hud.lua's own border color branch).
+	REQUIRE(find(widgets, "hotbar_bg_1") != nullptr);
+	CHECK(find(widgets, "hotbar_label_1")->text == "base:stone x5");
+	CHECK(find(widgets, "hotbar_label_2")->text == "base:planks x2");
+
+	// Break-progress bar: fill width tracks the fraction.
+	const Widget *bg = find(widgets, "break_progress_bg");
+	const Widget *fill = find(widgets, "break_progress_fill");
+	REQUIRE(bg != nullptr);
+	REQUIRE(fill != nullptr);
+	CHECK(fill->w == doctest::Approx(bg->w * 0.25f));
+
+	// No break in progress -> no bar at all.
+	ui.set_break_progress(std::nullopt);
+	const auto &widgets2 = ui.render_hud();
+	CHECK(find(widgets2, "break_progress_bg") == nullptr);
+	CHECK(find(widgets2, "break_progress_fill") == nullptr);
+}
+
+#endif // VB_WITH_LUA

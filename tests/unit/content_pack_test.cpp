@@ -18,6 +18,10 @@
 #include "vb/script/pack_runtime.hpp"
 #include "vb/world/block.hpp"
 
+#if VB_WITH_LUA
+#include "content_base_fixture.hpp"
+#endif
+
 #if VB_WITH_COMPRESSION
 #include <vector>
 
@@ -26,9 +30,11 @@
 
 namespace {
 
+#if !VB_WITH_LUA
 std::filesystem::path base_pack_dir() {
 	return std::filesystem::path(VB_PROJECT_SOURCE_DIR) / "content" / "base";
 }
+#endif
 
 std::filesystem::path temp_storage(const char *name) {
 	auto p = std::filesystem::temp_directory_path() /
@@ -51,143 +57,59 @@ TEST_CASE("load_content_pack degrades gracefully without VB_WITH_LUA") {
 #else
 
 TEST_CASE("content/base loads cleanly and re-declares the base blocks by name") {
-	vb::net::LoopbackNetwork net;
-	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
-	const std::size_t base_size = registry.size();
-	vb::script::PackRuntime rt(net.server(), registry, temp_storage("ok"));
+	// The base() set's own size, computed before BasePackFixture loads
+	// content/base into its own registry instance.
+	const std::size_t base_size = vb::world::BlockRegistry::base().size();
 
-	REQUIRE(vb::script::load_content_pack(rt, base_pack_dir()));
-	rt.freeze();
+	vb::test::BasePackFixture fixture("loads_cleanly");
 
 	// blocks/*.lua re-declare exactly the Phase 2 base() set by name (no new
 	// ids from those -- add_or_get is idempotent), plus two genuinely new
 	// crafted-only blocks (planks, sticks; see crafting.lua) that don't
 	// exist in BlockRegistry::base() at all.
-	CHECK(registry.size() == base_size + 2);
+	CHECK(fixture.registry().size() == base_size + 2);
 	for (const char *name : { "base:dirt", "base:grass", "base:stone",
 				 "base:sand", "base:wood", "base:leaves", "base:planks",
 				 "base:sticks" }) {
-		const vb::core::BlockId id = registry.find(name);
+		const vb::core::BlockId id = fixture.registry().find(name);
 		CHECK(id != vb::world::base_block::air);
 	}
 }
 
 TEST_CASE("content/base crafting: wood -> planks -> sticks via /craft chat") {
-	using namespace vb::net;
-	using vb::core::NetId;
+	vb::test::BasePackFixture fixture("craft");
 
-	LoopbackNetwork net;
-	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
-	vb::script::PackRuntime rt(net.server(), registry, temp_storage("craft"));
-	REQUIRE(vb::script::load_content_pack(rt, base_pack_dir()));
-
-	// Test-only seam to get wood into the test player's hands: bypasses real
-	// block-breaking/item-drop mechanics (already covered end-to-end by
-	// pack_runtime_integration_test.cpp's own item-drop test) since this
-	// test is specifically about crafting.lua's recipe logic, not
-	// acquisition. Registered after the real pack, so it runs as an
-	// additional "chat" handler alongside crafting.lua's own.
-	REQUIRE(rt.load_pack_file(R"(
-		vb.on("chat", function(player, text)
-			if text == "/testgive-wood" then
-				player:give({ item = base_wood_id, count = 2 })
-				return false
-			end
-			return true
-		end)
-	)"));
-	rt.freeze();
-
-	HandshakeServerConfig cfg;
-	cfg.world_seed = 7;
-	ServerSession server(net.server(), cfg);
-	rt.attach_session(server);
-	REQUIRE(net.server().listen(0));
-
-	Transport &ta = net.create_client();
-	auto ida = ta.connect("x", 0);
-	REQUIRE(ida);
-	ClientSession client(ta, *ida, HandshakeClientConfig{ "A", "", "v", 1 });
-
-	auto pump = [&](int n) {
-		for (int i = 0; i < n; ++i) {
-			server.tick(0.05);
-			client.tick(0.05);
-		}
-	};
-	pump(16);
-	REQUIRE(client.joined());
-
-	const vb::core::BlockId wood_id = registry.find("base:wood");
-	const vb::core::BlockId planks_id = registry.find("base:planks");
-	const vb::core::BlockId sticks_id = registry.find("base:sticks");
-
-	auto count_of = [&](vb::core::BlockId item) -> int {
-		for (const auto &slot : client.inventory()) {
-			if (slot.item == item) {
-				return slot.count;
-			}
-		}
-		return 0;
-	};
-
-	client.send_chat("/testgive-wood");
-	pump(4);
-	REQUIRE(count_of(wood_id) == 2);
+	fixture.give("base:wood", 2);
+	REQUIRE(fixture.count_of("base:wood") == 2);
 
 	// Missing ingredients: crafting sticks needs planks, which we don't have
 	// yet -- should fail cleanly (no inventory change) with a feedback line.
-	client.send_chat("/craft base:sticks");
-	pump(4);
-	CHECK(count_of(planks_id) == 0);
-	CHECK(count_of(sticks_id) == 0);
-	{
-		const auto msgs = client.take_chat_messages();
-		REQUIRE_FALSE(msgs.empty());
-		CHECK(msgs.back() == "Missing ingredients for base:sticks");
-	}
+	fixture.chat("/craft base:sticks");
+	CHECK(fixture.count_of("base:planks") == 0);
+	CHECK(fixture.count_of("base:sticks") == 0);
+	CHECK(fixture.last_message() == "Missing ingredients for base:sticks");
 
 	// Craft planks from wood: 1 wood in, 4 planks out.
-	client.send_chat("/craft base:planks");
-	pump(4);
-	CHECK(count_of(wood_id) == 1);
-	CHECK(count_of(planks_id) == 4);
-	{
-		const auto msgs = client.take_chat_messages();
-		REQUIRE_FALSE(msgs.empty());
-		CHECK(msgs.back() == "Crafted base:planks");
-	}
+	fixture.chat("/craft base:planks");
+	CHECK(fixture.count_of("base:wood") == 1);
+	CHECK(fixture.count_of("base:planks") == 4);
+	CHECK(fixture.last_message() == "Crafted base:planks");
 
 	// Craft sticks from planks: 2 planks in, 4 sticks out.
-	client.send_chat("/craft base:sticks");
-	pump(4);
-	CHECK(count_of(planks_id) == 2);
-	CHECK(count_of(sticks_id) == 4);
-	{
-		const auto msgs = client.take_chat_messages();
-		REQUIRE_FALSE(msgs.empty());
-		CHECK(msgs.back() == "Crafted base:sticks");
-	}
+	fixture.chat("/craft base:sticks");
+	CHECK(fixture.count_of("base:planks") == 2);
+	CHECK(fixture.count_of("base:sticks") == 4);
+	CHECK(fixture.last_message() == "Crafted base:sticks");
 
 	// Unknown recipe name: rejected, no side effects.
-	client.send_chat("/craft base:does-not-exist");
-	pump(4);
-	CHECK(count_of(planks_id) == 2);
-	CHECK(count_of(sticks_id) == 4);
-	{
-		const auto msgs = client.take_chat_messages();
-		REQUIRE_FALSE(msgs.empty());
-		CHECK(msgs.back() == "Unknown recipe: base:does-not-exist");
-	}
+	fixture.chat("/craft base:does-not-exist");
+	CHECK(fixture.count_of("base:planks") == 2);
+	CHECK(fixture.count_of("base:sticks") == 4);
+	CHECK(fixture.last_message() == "Unknown recipe: base:does-not-exist");
 
 	// A normal chat message (not a /craft command) still broadcasts as chat.
-	client.send_chat("hello");
-	pump(4);
-	{
-		const auto msgs = client.take_chat_messages();
-		REQUIRE_FALSE(msgs.empty());
-		CHECK(msgs.back() == "A: hello");
-	}
+	fixture.chat("hello");
+	CHECK(fixture.last_message() == "A: hello");
 }
 
 // REMAINING_TASKS.md's "No mob damage" gap: entities/zombie.lua is the
@@ -213,43 +135,18 @@ TEST_CASE("content/base crafting: wood -> planks -> sticks via /craft chat") {
 // which never touches a PlayerHandle at all) is stored across calls.
 TEST_CASE("content/base zombie: /zombie spawns a hostile mob that chases "
 		"down and kills the caller") {
-	using namespace vb::net;
 	using vb::core::NetId;
 	using vb::core::Vec3d;
 	using vb::protocol::InputCmd;
 
-	LoopbackNetwork net;
-	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
-	vb::script::PackRuntime rt(net.server(), registry, temp_storage("zombie"));
-	REQUIRE(vb::script::load_content_pack(rt, base_pack_dir()));
-	rt.freeze();
-
-	HandshakeServerConfig cfg;
-	cfg.world_seed = 7;
-	ServerSession server(net.server(), cfg);
-	rt.attach_session(server);
+	vb::test::BasePackFixture fixture("zombie");
 
 	std::optional<std::string> death_cause;
-	server.set_respawn_handler([&](NetId id, std::string_view cause, float) {
+	fixture.server().set_respawn_handler([&](NetId id, std::string_view cause, float) {
 		death_cause = std::string(cause);
-		return ServerSession::RespawnDecision{ 20.0f, server.spawn_point(id), "" };
+		return vb::net::ServerSession::RespawnDecision{
+			20.0f, fixture.server().spawn_point(id), "" };
 	});
-	REQUIRE(net.server().listen(0));
-
-	Transport &ta = net.create_client();
-	auto ida = ta.connect("x", 0);
-	REQUIRE(ida);
-	ClientSession client(ta, *ida, HandshakeClientConfig{ "A", "", "v", 1 });
-
-	auto pump = [&](int n) {
-		for (int i = 0; i < n; ++i) {
-			server.tick(0.05);
-			client.tick(0.05);
-		}
-	};
-	pump(16);
-	REQUIRE(client.joined());
-	const NetId a_id = client.join_accept()->your_net_id;
 
 	// Fly mode disables gravity (same reason netcode_test.cpp's own void-kill
 	// test enables it before a long pump window) -- otherwise the player
@@ -257,16 +154,11 @@ TEST_CASE("content/base zombie: /zombie spawns a hostile mob that chases "
 	// zombie's bites add up.
 	vb::physics::MoveParams fly;
 	fly.fly = true;
-	server.set_move_params(fly);
-	server.set_player_state(a_id, Vec3d{ 0, 64, 0 });
-	pump(2);
-	client.send_chat("/zombie");
-	pump(2);
-	{
-		const auto msgs = client.take_chat_messages();
-		REQUIRE_FALSE(msgs.empty());
-		CHECK(msgs.back() == "[base] a zombie is hunting you");
-	}
+	fixture.server().set_move_params(fly);
+	fixture.server().set_player_state(fixture.player_id(), Vec3d{ 0, 64, 0 });
+	fixture.pump(2);
+	fixture.chat("/zombie");
+	CHECK(fixture.last_message() == "[base] a zombie is hunting you");
 
 	// The chase/attack logic only runs on a real InputCmd (vb.on
 	// ("player_input", ...) needs one to fire), so this pushes a real
@@ -282,8 +174,8 @@ TEST_CASE("content/base zombie: /zombie spawns a hostile mob that chases "
 	std::uint32_t seq = 1;
 	for (int i = 0; i < 300; ++i) {
 		idle.seq = seq++;
-		client.push_input(idle);
-		pump(1);
+		fixture.send_input(idle);
+		fixture.pump(1);
 	}
 
 	REQUIRE(death_cause.has_value());

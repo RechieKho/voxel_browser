@@ -82,8 +82,17 @@ class ClientFactory:
             cache = home / "cache"
             cache.mkdir(parents=True)
             conf = home / "client.toml"
-            conf.write_text('player_name = "%s"\nrender_distance = %d\n' % (name, render_distance) +
-                            ('window_width = 640\nwindow_height = 360\nvsync = false\n' if windowed else ""))
+            # asset_cache_dir pinned explicitly (not left to vb::core::user_cache_dir()'s
+            # own default) so this fixture's own `cache_dir` attribute is actually where
+            # the client writes its cache on every platform -- the HOME/XDG_CACHE_HOME/
+            # LOCALAPPDATA overrides below only redirect that default on Linux/Windows;
+            # macOS's user_cache_dir() hardcodes "~/Library/Caches" regardless of
+            # XDG_CACHE_HOME, which silently pointed `cache_dir` at a directory the
+            # client never actually wrote to.
+            conf.write_text(
+                    'player_name = "%s"\nrender_distance = %d\nasset_cache_dir = "%s"\n'
+                    % (name, render_distance, str(cache)) +
+                    ('window_width = 640\nwindow_height = 360\nvsync = false\n' if windowed else ""))
             env = dict(os.environ, HOME=str(home), XDG_CACHE_HOME=str(cache), LOCALAPPDATA=str(cache),
                        # the client's own 10 s connect deadline, stretched like every other wait
                        VB_CONNECT_TIMEOUT_SECONDS=str(int(10 * timeout_scale())))
