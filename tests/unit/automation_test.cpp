@@ -108,6 +108,7 @@ TEST_CASE("automation: leaf predicates") {
 		"entities": [{"name":"B","pos":[4,70,4]}],
 		"players": [{"name":"A","pos":[0,70,0]}],
 		"ui": {"name":"base:inventory","widgets":[{"id":"craft","text":"Craft"}]},
+		"hud": {"widgets":[{"id":"health_text","text":"15 / 20"}]},
 		"inventory": [{"item":"base:planks","count":3},{"item":"base:planks","count":2}]
 	})");
 	CHECK(eval({ { "joined", true } }, st));
@@ -127,6 +128,11 @@ TEST_CASE("automation: leaf predicates") {
 	CHECK(eval({ { "ui_open", "base:inventory" } }, st));
 	CHECK(eval({ { "widget", { { "id", "craft" }, { "text", "Craft" } } } }, st));
 	CHECK_FALSE(eval({ { "widget", { { "id", "craft" }, { "text", "x" } } } }, st));
+	// hud_widget reads the always-on HUD, widget reads only the modal screen.
+	CHECK(eval({ { "hud_widget", { { "id", "health_text" }, { "text", "15 / 20" } } } }, st));
+	CHECK_FALSE(eval({ { "hud_widget", { { "id", "health_text" }, { "text", "20 / 20" } } } }, st));
+	CHECK_FALSE(eval({ { "hud_widget", { { "id", "craft" } } } }, st));
+	CHECK_FALSE(eval({ { "widget", { { "id", "health_text" } } } }, st));
 	CHECK(eval({ { "pos_near", { { "pos", { 1, 70, 3 } }, { "radius", 2.5 } } } }, st));
 	CHECK(eval({ { "inventory_has", { { "item", "base:planks" }, { "count", 5 } } } }, st));
 	CHECK_FALSE(eval({ { "inventory_has", { { "item", "base:planks" }, { "count", 6 } } } }, st));

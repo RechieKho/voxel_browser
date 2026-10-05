@@ -131,6 +131,13 @@ class Client(_Base):
     def hud(self, widget_id):
         return Locator(self, widget_id, hud=True)
 
+    def hud_widget(self, widget_id):
+        """The HUD widget's last-reported `{id, type, text, x, y, w, h}`, or None."""
+        for w in self.state().get("hud", {}).get("widgets", []):
+            if w["id"] == widget_id:
+                return w
+        return None
+
 
 class Locator:
     """A widget found by its stable `id` on the open modal screen (or the HUD)."""

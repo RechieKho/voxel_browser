@@ -1,6 +1,6 @@
 # `content/base` UI/UX — investigation and phased plan
 
-> Status: **U0 (first item), U1, U2, U3, U4 and U5 implemented** (except the fading item-name label in U4). (`PlayerHandle:get_health()`, automation health state and the e2e check are still open.) Covers the three reported
+> Status: **U0 (first item), U1, U2, U3, U4 and U5 implemented** (except the fading item-name label in U4). (Only `PlayerHandle:get_health()` and the fading item-name label are still open.) Covers the three reported
 > problems (no health bar, inventory not centered, inventory has no
 > container background) and the related gaps found while looking into them.
 > Same layout as `docs/content-base-testing.md`: findings first, then phases
@@ -134,7 +134,7 @@ U2 is the engine prerequisite for U3.
       produces a status message, `UiRuntime` test for the new accessors.
 - [x] Docs: `docs/protocol.md` (new message) and `docs/lua-api.md` (new
       `client.*` functions).
-- [ ] Automation (optional): expose health in the automation state, so e2e
+- [x] Automation (optional): expose health in the automation state, so e2e
       tests can assert on it.
 
 ### U3 — Health bar (and hunger) in the HUD (Lua, needs U2)
@@ -147,8 +147,10 @@ U2 is the engine prerequisite for U3.
 - [x] Hide both when `client.health()` returns nil (not joined yet).
 - [x] Tests in `content_base_ui_test.cpp`: the bar exists, the fill width
       scales with the value, and nothing is drawn when status is nil.
-- [ ] E2E (optional): take fall damage, then check the bar shrinks, through
+- [x] E2E (optional): take fall damage, then check the bar shrinks, through
       the automation widget cache.
+      (Implemented with `set_health`, which goes through the server's damage path, in
+      `tests/e2e/test_base_pack.py`; the test was checked to fail when the bar ignores health.)
 
 ### U4 — Hotbar polish (needs a small engine change)
 

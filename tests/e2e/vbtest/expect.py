@@ -79,6 +79,17 @@ class Expectation:
             arg["text"] = text
         return self._check("widget %r" % widget_id, {"widget": arg}, timeout)
 
+    def to_have_hud_widget(self, widget_id, text=None, timeout=5.0):
+        arg = {"id": widget_id}
+        if text is not None:
+            arg["text"] = text
+        return self._check("HUD widget %r" % widget_id, {"hud_widget": arg}, timeout)
+
+    def to_have_health(self, value, op="==", timeout=5.0):
+        """The client's own health (from S2C_PlayerStatus), e.g. to_have_health(10) or
+        to_have_health(15, op="<=")."""
+        return self._check("health %s %s" % (op, value), {"health": {"op": op, "value": value}}, timeout)
+
     def to_be_near(self, pos, radius=1.0, timeout=5.0):
         return self._check("to be within %.1f of %s" % (radius, list(pos)),
                            {"pos_near": {"pos": list(pos), "radius": radius}}, timeout)
