@@ -62,7 +62,7 @@ Pipeline, executed on a pool of **worldgen worker threads**, deterministic from
    tool exporting into the schematic format, plus declarative placement rules
    (neighbor-block constraints, clustering tendency, biome/density weighting)
    evaluated by this pass, instead of every structure needing a hand-written
-   procedural callback.
+   procedural callback. Design and phased plan: `docs/structure-editor.md`.
 7. **Lighting** — initial sky/block light flood fill.
 
 Generated chunks are inserted into the world with `revision = 1` and flagged for
