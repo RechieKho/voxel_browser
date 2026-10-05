@@ -5,6 +5,7 @@ add_executable(voxel_browser main.cpp client_app.cpp)
 target_link_libraries(voxel_browser
   PRIVATE
     vb_core
+    vb_auth
     vb_render
     vb_raygui
     vb_warnings

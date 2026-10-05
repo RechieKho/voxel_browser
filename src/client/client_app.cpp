@@ -47,7 +47,8 @@ std::chrono::seconds connect_timeout() {
 
 ClientApp::ClientApp(vb::core::ClientConfig config_in, std::string config_path_in,
 		vb::render::Window &window_in, const std::string &cli_server, int cli_port,
-		int configured_view_distance_in, std::optional<bool> auto_connect, bool render_in) :
+		int configured_view_distance_in, std::optional<bool> auto_connect, bool render_in,
+		std::optional<std::filesystem::path> auth_token_file) :
 		config(std::move(config_in)),
 		config_path(std::move(config_path_in)),
 		window(window_in),
@@ -58,6 +59,11 @@ ClientApp::ClientApp(vb::core::ClientConfig config_in, std::string config_path_i
 		view_distance(configured_view_distance_in),
 		movement_bindings{ config.key_forward, config.key_back, config.key_left,
 			config.key_right, config.key_jump, config.key_sprint } {
+#if defined(VB_WITH_AUTH)
+	auth_token_file_ = std::move(auth_token_file);
+#else
+	(void)auth_token_file;
+#endif
 	menu.prefill(cli_server, cli_port, config.player_name);
 	if (auto_connect) {
 		begin_connect(*auto_connect);
@@ -69,6 +75,9 @@ void ClientApp::begin_connect(bool as_singleplayer) {
 	connect_ticks = 0;
 	sp.reset();
 	remote.reset();
+#if defined(VB_WITH_AUTH)
+	sign_in.reset(); // after `remote`: the session's ticket points at it
+#endif
 	client = nullptr;
 	// Undo any clamp a previous connection's enter_playing() applied --
 	// a fresh connection (even a retry of the same server) starts back
@@ -96,10 +105,61 @@ void ClientApp::begin_connect(bool as_singleplayer) {
 					  << '\n';
 			state = AppState::kError;
 		} else {
+#if defined(VB_WITH_AUTH)
+			// Always installed: it only ever runs if the server answers with
+			// an S2C_AuthChallenge (a server without auth.lua never does).
+			vb::auth::SignInCoordinator::Options opts;
+			opts.http = std::shared_ptr<vb::auth::HttpFetcher>(vb::auth::make_curl_fetcher());
+			opts.token_file = auth_token_file_;
+			sign_in = std::make_unique<vb::auth::SignInCoordinator>(std::move(opts));
+			remote->session->set_sign_in_provider(sign_in->provider());
+#endif
 			state = AppState::kConnecting;
 		}
 	}
 }
+
+#if defined(VB_WITH_AUTH)
+// The engine-drawn sign-in screen (auth.md §7). The player may take minutes in
+// a browser tab, so the client-side connect deadline is held off while it is
+// up; the server's own auth_timeout_seconds is the real bound.
+void ClientApp::draw_sign_in() {
+	using Phase = vb::auth::SignInCoordinator::Phase;
+	connect_deadline = std::chrono::steady_clock::now() + connect_timeout();
+	if (!render || !sign_in) {
+		return; // headless: a token file (or nothing) drives it
+	}
+	const auto challenge = sign_in->challenge();
+	vb::render::MainMenu::SigningInView view;
+	const std::string title = challenge ? challenge->display_name : std::string();
+	view.title = title;
+	view.server = connecting_target;
+	std::string host = challenge ? challenge->issuer : std::string();
+	if (const auto p = host.find("//"); p != std::string::npos) {
+		host = host.substr(p + 2);
+	}
+	host = host.substr(0, host.find('/'));
+	view.provider_host = host;
+	view.offer_browser = sign_in->supports_browser();
+	view.offer_password = sign_in->supports_password();
+	view.working = sign_in->phase() == Phase::kWorking;
+	const std::string last_error = sign_in->last_error();
+	view.error = last_error;
+	auto ui = menu.draw_signing_in(view);
+	if (ui.cancel) {
+		sign_in->cancel();
+		remote.reset();
+		sign_in.reset();
+		client = nullptr;
+		state = AppState::kMenu;
+	} else if (ui.browser) {
+		sign_in->start_browser();
+	} else if (ui.submit_password) {
+		sign_in->start_password(ui.email, ui.password);
+		std::fill(ui.password.begin(), ui.password.end(), '\0');
+	}
+}
+#endif
 
 void ClientApp::enter_playing() {
 	client = connecting_singleplayer ? &sp->client() : &*remote->session;
@@ -431,6 +491,13 @@ bool ClientApp::frame(const vb::render::InputFrame &input, double dt) {
 				// has no ClientAssetCache -- both accessors default to 0
 				// there, so the total>0 guard alone would suffice, but the
 				// status check documents *why* rather than relying on it).
+#if defined(VB_WITH_AUTH)
+				if (!connecting_singleplayer && sign_in &&
+						client->status() == vb::net::ClientHandshakeStatus::kSigningIn) {
+					draw_sign_in();
+					break;
+				}
+#endif
 				float fraction = -1.0f;
 				if (!connecting_singleplayer &&
 						client->status() == vb::net::ClientHandshakeStatus::kSyncingAssets) {

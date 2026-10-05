@@ -542,9 +542,30 @@ protocol changes, security notes and per-step task lists:
       duplicate kick). **Moved to 9.5:** `state.login` in the client UI VM
       (the client only learns its own subject once it holds the token), and
       a base-pack example script (the `lua-api.md` snippet covers it).
-- [ ] **9.5 — Client sign-in**: engine-drawn `kSigningIn` screen, OIDC
-      PKCE loopback redirect (RFC 8252) in the system browser, Firebase
-      password form, `--auth-token-file` for headless.
+- [x] **9.5 — Client sign-in** — done 2026-10-05 (UI compile-checked, not
+      run against a real IdP): `vb_auth` gains `oidc_client` (discovery with
+      issuer check, PKCE S256 per RFC 7636 incl. its test vector,
+      authorization URL, code exchange/refresh, redirect parsing with `state`
+      check, 127.0.0.1-only one-shot `LoopbackListener`, `oidc_browser_sign_in`,
+      shell-less `open_system_browser` for Linux/macOS/Windows), `firebase`
+      (Identity Toolkit password sign-in + refresh, coarse error mapping),
+      `SignInTask` (worker thread), `SignInCoordinator` (UI-facing state,
+      retryable failures, cancel) and `read_token_file`. `HttpFetcher::post`.
+      Handshake: `ClientHandshakeStatus::kSigningIn`, `TokenTicket` /
+      `HandshakeClientHost::begin_sign_in`, `ClientHandshake::poll()` /
+      `cancel_sign_in()`, `ClientSession::set_sign_in_provider()`.
+      Client: engine-drawn `MainMenu::draw_signing_in` (browser button,
+      firebase e-mail + masked password, provider host shown, Cancel),
+      connect deadline held off while signing in, `--auth-token-file`
+      (automation builds only, re-read per sign-in). Tests:
+      `auth_signin_test.cpp` (PKCE vector, URL, redirect/state, code exchange,
+      full browser flow over a real loopback socket incl. stray requests,
+      denial/timeout/cancel, Firebase, coordinator retry, token file).
+      **Not done / moved:** Firebase `google` sign-in (needs a Google OAuth
+      client id that `auth.lua`'s firebase preset has no key for; the screen
+      only offers `password`); `state.login` in the client UI VM; manual
+      sign-in against real Keycloak/Firebase on Linux/macOS/Windows; Windows
+      socket/ShellExecute code is written but unbuilt.
 - [ ] **9.6 — Sessions, re-auth & revocation**: refresh-token cache,
       silent re-login, sign out, first-use trust prompt; periodic live
       re-auth (default 15 min + 2 min grace) so IdP-side revocation kicks

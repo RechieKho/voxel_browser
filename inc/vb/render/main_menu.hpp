@@ -75,6 +75,28 @@ public:
 	ConnectingResult draw_connecting(std::string_view status_text,
 			float fraction = -1.0f);
 
+	// --- sign-in screen (Phase 9.5, architecture_spec/auth.md §7) ------------
+	// Engine-drawn, never pack content: the server's `auth.lua` only picks the
+	// provider. The password is masked, kept only in this object while typing,
+	// and wiped as soon as it is handed back.
+	struct SigningInView {
+		std::string_view title; // auth.lua display_name (may be empty)
+		std::string_view server; // "host:port"
+		std::string_view provider_host; // host of the issuer, so the player sees who they sign in with
+		bool offer_browser = false; // oidc/keycloak: "Sign in with your browser"
+		bool offer_password = false; // firebase e-mail/password form
+		bool working = false; // a sign-in is in flight; inputs disabled
+		std::string_view error; // previous attempt's failure, empty if none
+	};
+	struct SigningInResult {
+		bool cancel = false;
+		bool browser = false;
+		bool submit_password = false;
+		std::string email;
+		std::string password;
+	};
+	SigningInResult draw_signing_in(const SigningInView &view);
+
 	// --- error screen --------------------------------------------------------
 	struct ErrorResult {
 		bool back = false;
@@ -99,6 +121,11 @@ private:
 	bool address_edit_ = false;
 	bool port_edit_ = false;
 	bool name_edit_ = false;
+	// Sign-in screen form state.
+	std::string si_email_;
+	std::string si_password_;
+	bool si_email_edit_ = false;
+	bool si_password_edit_ = false;
 	int recent_scroll_ = 0;
 	int recent_active_ = -1;
 

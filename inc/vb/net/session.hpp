@@ -723,6 +723,21 @@ public:
 	}
 	const std::string &failure_reason() const { return failure_reason_; }
 
+	// External auth (auth.md §7). The hook is called with the server's
+	// challenge and returns a ticket polled each tick (status() ==
+	// kSigningIn while pending). Set before the first tick().
+	void set_sign_in_provider(
+			std::function<TokenTicket(const protocol::S2CAuthChallenge &)> provider) {
+		handshake_.set_sign_in_provider(std::move(provider));
+	}
+	const std::optional<protocol::S2CAuthChallenge> &auth_challenge() const {
+		return handshake_.auth_challenge();
+	}
+	// Name the server accepted (external auth: the verified name_claim).
+	const std::string &resolved_name() const { return handshake_.resolved_name(); }
+	// Abort a pending sign-in; the join fails with "sign-in cancelled".
+	void cancel_sign_in();
+
 	const std::optional<protocol::S2CServerInfo> &server_info() const {
 		return handshake_.server_info();
 	}

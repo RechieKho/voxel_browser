@@ -343,6 +343,132 @@ MainMenu::ConnectingResult MainMenu::draw_connecting(std::string_view status_tex
 	return result;
 }
 
+namespace {
+
+void append_utf8(std::string &s, int cp) {
+	if (cp < 0x80) {
+		s.push_back(static_cast<char>(cp));
+	} else if (cp < 0x800) {
+		s.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+		s.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+	} else if (cp < 0x10000) {
+		s.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+		s.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+		s.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+	} else {
+		s.push_back(static_cast<char>(0xF0 | (cp >> 18)));
+		s.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+		s.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+		s.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+	}
+}
+
+// Masked single-line field (raygui's GuiTextBox cannot hide its text). Returns
+// true when Enter is pressed while focused.
+bool password_box(Rectangle bounds, std::string &value, bool &focused) {
+	const bool hovered = CheckCollisionPointRec(GetMousePosition(), bounds);
+	if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+		focused = hovered;
+	}
+	bool enter = false;
+	if (focused) {
+		for (int cp = GetCharPressed(); cp > 0; cp = GetCharPressed()) {
+			if (cp >= 32 && cp != 127 && value.size() < 120) {
+				append_utf8(value, cp);
+			}
+		}
+		if (IsKeyPressed(KEY_BACKSPACE) || IsKeyPressedRepeat(KEY_BACKSPACE)) {
+			while (!value.empty() && (static_cast<unsigned char>(value.back()) & 0xC0) == 0x80) {
+				value.pop_back();
+			}
+			if (!value.empty()) {
+				value.pop_back();
+			}
+		}
+		enter = IsKeyPressed(KEY_ENTER);
+	}
+	DrawRectangleRec(bounds, Color{ 30, 30, 36, 255 });
+	DrawRectangleLinesEx(bounds, 1.0f, focused ? Color{ 120, 170, 255, 255 } : Color{ 90, 90, 100, 255 });
+	std::string dots;
+	for (const char ch : value) {
+		if ((static_cast<unsigned char>(ch) & 0xC0) != 0x80) {
+			dots.push_back('*');
+		}
+	}
+	DrawText(dots.c_str(), static_cast<int>(bounds.x) + 8, static_cast<int>(bounds.y) + 6, 18, RAYWHITE);
+	return enter;
+}
+
+} // namespace
+
+MainMenu::SigningInResult MainMenu::draw_signing_in(const SigningInView &view) {
+	SigningInResult result;
+	const float panel_w = 460.0f;
+	float panel_h = 150.0f;
+	if (view.offer_password) {
+		panel_h += 110.0f;
+	}
+	if (view.offer_browser) {
+		panel_h += 44.0f;
+	}
+	if (!view.error.empty()) {
+		panel_h += 26.0f;
+	}
+	const float panel_y = std::max(20.0f,
+			(static_cast<float>(GetScreenHeight()) - panel_h) * 0.5f);
+	const std::string title = view.title.empty() ? std::string("Sign in")
+												 : "Sign in — " + std::string(view.title);
+	GuiPanel(centered(panel_w, panel_h, panel_y), title.c_str());
+	const float x = (static_cast<float>(GetScreenWidth()) - panel_w) * 0.5f + 20.0f;
+	const float w = panel_w - 40.0f;
+	float y = panel_y + 40.0f;
+	const std::string who = std::string(view.server) + " wants you to sign in with " +
+			std::string(view.provider_host);
+	GuiLabel(Rectangle{ x, y, w, 24.0f }, who.c_str());
+	y += 30.0f;
+
+	const bool enabled = !view.working;
+	if (!enabled) {
+		GuiLabel(Rectangle{ x, y, w, 24.0f },
+				view.offer_browser ? "Finish signing in in your web browser..." : "Signing in...");
+		y += 30.0f;
+	} else {
+		if (view.offer_browser) {
+			if (GuiButton(Rectangle{ x, y, w, 32.0f }, "Sign in with your browser")) {
+				result.browser = true;
+			}
+			y += 44.0f;
+		}
+		if (view.offer_password) {
+			GuiLabel(Rectangle{ x, y, w, 20.0f }, "E-mail");
+			text_box(Rectangle{ x, y + 20.0f, w, 28.0f }, si_email_, si_email_edit_);
+			GuiLabel(Rectangle{ x, y + 52.0f, w, 20.0f }, "Password");
+			const bool enter = password_box(Rectangle{ x, y + 72.0f, w, 28.0f }, si_password_,
+					si_password_edit_);
+			y += 110.0f;
+			if (GuiButton(Rectangle{ x, y - 8.0f, w, 32.0f }, "Sign in") || enter) {
+				result.submit_password = true;
+				result.email = si_email_;
+				result.password = si_password_;
+				// The password does not outlive this call.
+				std::fill(si_password_.begin(), si_password_.end(), '\0');
+				si_password_.clear();
+			}
+			y += 36.0f;
+		}
+	}
+	if (!view.error.empty()) {
+		GuiLabel(Rectangle{ x, y, w, 24.0f }, std::string(view.error).c_str());
+		y += 26.0f;
+	}
+	if (GuiButton(Rectangle{ x, panel_y + panel_h - 44.0f, w, 32.0f }, "Cancel")) {
+		result.cancel = true;
+		std::fill(si_password_.begin(), si_password_.end(), '\0');
+		si_password_.clear();
+	}
+	return result;
+}
+
 MainMenu::ErrorResult MainMenu::draw_error(std::string_view reason) {
 	ErrorResult result;
 	const float panel_w = 460.0f;

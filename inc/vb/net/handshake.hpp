@@ -291,6 +291,7 @@ private:
 enum class ClientHandshakeStatus : std::uint8_t {
 	kConnecting, // sent Hello, awaiting ServerInfo
 	kAwaitingChallenge, // external auth: awaiting S2C_AuthChallenge
+	kSigningIn, // external auth: the player is signing in (async; poll())
 	kAuthenticating, // sent Auth, awaiting AuthResult
 	kAwaitingAssetManifest, // sent C2S_AssetManifestRequest, awaiting S2C_AssetManifest
 	kSyncingAssets, // sent C2S_AssetRequest, receiving S2C_AssetData frames
@@ -298,6 +299,16 @@ enum class ClientHandshakeStatus : std::uint8_t {
 	kJoined,
 	kFailed,
 };
+
+// Result of polling an asynchronous sign-in (client, external auth).
+// `done == false` = still in progress. When done, a non-empty `error` (or an
+// empty `token`) means the sign-in failed or was cancelled.
+struct TokenPoll {
+	bool done = false;
+	std::string token;
+	std::string error;
+};
+using TokenTicket = std::function<TokenPoll()>;
 
 // Asset-sync side of the client handshake (parallel to HandshakeServerHost).
 // ClientHandshake has no filesystem access itself -- these hooks push the
@@ -324,6 +335,10 @@ struct HandshakeClientHost {
 	// Synchronous for now; Phase 9.5 adds the interactive sign-in screen.
 	std::function<std::optional<std::string>(const protocol::S2CAuthChallenge &)>
 			obtain_token;
+	// Preferred over obtain_token when set: starts an asynchronous sign-in
+	// (browser round trip, a form, a token file) and returns a ticket the
+	// handshake polls once per tick (ClientHandshakeStatus::kSigningIn).
+	std::function<TokenTicket(const protocol::S2CAuthChallenge &)> begin_sign_in;
 };
 
 struct HandshakeClientConfig {
@@ -356,6 +371,21 @@ public:
 
 	ClientHandshakeStep on_frame(const protocol::Frame &frame);
 
+	// Call once per tick: resolves a pending sign-in (kSigningIn). A no-op in
+	// every other status.
+	ClientHandshakeStep poll();
+	// Aborts a pending sign-in: the join fails with "sign-in cancelled".
+	ClientHandshakeStep cancel_sign_in();
+	// Installs the async sign-in hook after construction (the challenge only
+	// arrives once connected, so any time before connect works).
+	void set_sign_in_provider(
+			std::function<TokenTicket(const protocol::S2CAuthChallenge &)> provider) {
+		host_.begin_sign_in = std::move(provider);
+	}
+	const std::optional<protocol::S2CAuthChallenge> &auth_challenge() const {
+		return challenge_;
+	}
+
 	const std::optional<protocol::S2CServerInfo> &server_info() const {
 		return server_info_;
 	}
@@ -368,6 +398,7 @@ public:
 
 private:
 	ClientHandshakeStep fail(std::string reason);
+	ClientHandshakeStep send_auth(std::string token);
 
 	HandshakeClientConfig config_;
 	HandshakeClientHost host_;
@@ -375,6 +406,8 @@ private:
 	std::optional<protocol::S2CServerInfo> server_info_;
 	std::optional<protocol::S2CJoinAccept> join_accept_;
 	std::string resolved_name_;
+	std::optional<protocol::S2CAuthChallenge> challenge_;
+	TokenTicket sign_in_ticket_;
 };
 
 // Payloads smaller than this never get LZ4-framed even when

@@ -44,7 +44,15 @@ std::size_t write_cb(char *ptr, std::size_t size, std::size_t nmemb, void *user)
 class CurlFetcher final : public HttpFetcher {
 public:
 	CurlFetcher() { curl_global_init(CURL_GLOBAL_DEFAULT); }
-	HttpResult get(const std::string &url) override {
+	HttpResult get(const std::string &url) override { return perform(url, nullptr, {}); }
+	HttpResult post(const std::string &url, const std::string &content_type,
+			const std::string &body) override {
+		return perform(url, &content_type, body);
+	}
+
+private:
+	HttpResult perform(const std::string &url, const std::string *content_type,
+			const std::string &body) {
 		HttpResult out;
 		if (!url_allowed(url)) {
 			out.error = "url not allowed (https required)";
@@ -55,8 +63,16 @@ public:
 			out.error = "curl init failed";
 			return out;
 		}
+		curl_slist *headers = nullptr;
+		if (content_type != nullptr) {
+			headers = curl_slist_append(headers, ("Content-Type: " + *content_type).c_str());
+			curl_easy_setopt(c, CURLOPT_HTTPHEADER, headers);
+			curl_easy_setopt(c, CURLOPT_POST, 1L);
+			curl_easy_setopt(c, CURLOPT_POSTFIELDSIZE, static_cast<long>(body.size()));
+			curl_easy_setopt(c, CURLOPT_COPYPOSTFIELDS, body.c_str());
+		}
 		curl_easy_setopt(c, CURLOPT_URL, url.c_str());
-		curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L);
+		curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, content_type == nullptr ? 1L : 0L);
 		curl_easy_setopt(c, CURLOPT_MAXREDIRS, 3L);
 		curl_easy_setopt(c, CURLOPT_PROTOCOLS_STR, "https,http");
 		curl_easy_setopt(c, CURLOPT_REDIR_PROTOCOLS_STR, "https");
@@ -75,6 +91,7 @@ public:
 			curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &code);
 			out.status = static_cast<int>(code);
 		}
+		curl_slist_free_all(headers);
 		curl_easy_cleanup(c);
 		return out;
 	}

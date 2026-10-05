@@ -1665,12 +1665,30 @@ ClientSession::virtual_pack_fs() const {
 	return asset_cache_ != nullptr ? asset_cache_->virtual_fs() : kEmpty;
 }
 
+void ClientSession::cancel_sign_in() {
+	auto step = handshake_.cancel_sign_in();
+	if (step.failed) {
+		failure_reason_ = step.failure_reason;
+	}
+}
+
 void ClientSession::tick(double dt_seconds) {
 	// Keep the wall-clock server-time estimate progressing every tick, even
 	// one with no snapshot in it -- see ServerTimeEstimator's own header
 	// comment for why this is what fixes interpolated_pos()'s old
 	// "frozen until the next packet" staircase.
 	server_time_.advance(dt_seconds);
+
+	// An asynchronous sign-in (browser, form, token file) resolves between
+	// frames; the server sends nothing while it waits.
+	if (handshake_.status() == ClientHandshakeStatus::kSigningIn) {
+		auto step = handshake_.poll();
+		send_frames(transport_, conn_, step.send);
+		if (step.failed) {
+			failure_reason_ = step.failure_reason;
+			return;
+		}
+	}
 
 	scratch_.clear();
 	transport_.poll(scratch_);

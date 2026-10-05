@@ -394,6 +394,42 @@ ClientHandshakeStep ClientHandshake::fail(std::string reason) {
 	return step;
 }
 
+ClientHandshakeStep ClientHandshake::send_auth(std::string token) {
+	if (token.size() > protocol::kMaxAuthTokenBytes) {
+		return fail("sign-in token too large");
+	}
+	protocol::C2SAuth auth;
+	auth.player_name = config_.player_name;
+	auth.token = std::move(token);
+	status_ = ClientHandshakeStatus::kAuthenticating;
+	ClientHandshakeStep step;
+	step.send.push_back(frame_message(auth));
+	return step;
+}
+
+ClientHandshakeStep ClientHandshake::poll() {
+	if (status_ != ClientHandshakeStatus::kSigningIn || !sign_in_ticket_) {
+		return {};
+	}
+	TokenPoll p = sign_in_ticket_();
+	if (!p.done) {
+		return {};
+	}
+	sign_in_ticket_ = nullptr;
+	if (!p.error.empty() || p.token.empty()) {
+		return fail(p.error.empty() ? "sign-in cancelled" : p.error);
+	}
+	return send_auth(std::move(p.token));
+}
+
+ClientHandshakeStep ClientHandshake::cancel_sign_in() {
+	if (status_ != ClientHandshakeStatus::kSigningIn) {
+		return {};
+	}
+	sign_in_ticket_ = nullptr; // destroys the ticket, which cancels its task
+	return fail("sign-in cancelled");
+}
+
 ClientHandshakeStep ClientHandshake::start() {
 	protocol::C2SHello hello;
 	hello.engine_protocol_version = kEngineProtocolVersion;
@@ -455,6 +491,15 @@ ClientHandshakeStep ClientHandshake::on_frame(const Frame &frame) {
 			if (!challenge) {
 				return fail("malformed AuthChallenge");
 			}
+			challenge_ = *challenge;
+			if (host_.begin_sign_in) {
+				sign_in_ticket_ = host_.begin_sign_in(*challenge);
+				if (!sign_in_ticket_) {
+					return fail("sign-in is unavailable");
+				}
+				status_ = ClientHandshakeStatus::kSigningIn;
+				return poll(); // a token file resolves on the first poll
+			}
 			std::optional<std::string> token;
 			if (host_.obtain_token) {
 				token = host_.obtain_token(*challenge);
@@ -464,18 +509,12 @@ ClientHandshakeStep ClientHandshake::on_frame(const Frame &frame) {
 			if (!token || token->empty()) {
 				return fail("sign-in required but cancelled or unavailable");
 			}
-			if (token->size() > protocol::kMaxAuthTokenBytes) {
-				return fail("sign-in token too large");
-			}
-
-			protocol::C2SAuth auth;
-			auth.player_name = config_.player_name;
-			auth.token = std::move(*token);
-			status_ = ClientHandshakeStatus::kAuthenticating;
-			ClientHandshakeStep step;
-			step.send.push_back(frame_message(auth));
-			return step;
+			return send_auth(std::move(*token));
 		}
+
+		case ClientHandshakeStatus::kSigningIn:
+			// The server sends nothing while the player signs in.
+			return fail("unexpected message while signing in");
 
 		case ClientHandshakeStatus::kAuthenticating: {
 			if (type != MessageType::kS2CAuthResult) {
