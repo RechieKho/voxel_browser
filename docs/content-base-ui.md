@@ -1,6 +1,6 @@
 # `content/base` UI/UX — investigation and phased plan
 
-> Status: **plan only, nothing implemented yet.** Covers the three reported
+> Status: **U0 (first item) and U1 implemented; U2–U5 not started.** Covers the three reported
 > problems (no health bar, inventory not centered, inventory has no
 > container background) and the related gaps found while looking into them.
 > Same layout as `docs/content-base-testing.md`: findings first, then phases
@@ -87,7 +87,7 @@ U2 is the engine prerequisite for U3.
 
 ### U0 — Verify assumptions (small, do first)
 
-- [ ] Confirm `client.*` is callable from a `ui.define` modal render, not
+- [x] Confirm `client.*` is callable from a `ui.define` modal render, not
       just from `ui.define_hud`. They share one Lua state, so it should work,
       but add a test. U1 depends on `client.screen_size()` there.
 - [ ] Confirm what an empty inventory slot looks like on the wire and in
@@ -97,22 +97,22 @@ U2 is the engine prerequisite for U3.
 
 ### U1 — Inventory screen layout (Lua only, fixes 2 of the 3 reported issues)
 
-- [ ] `inventory.lua`: compute the grid's total width and height from
+- [x] `inventory.lua`: compute the grid's total width and height from
       `kCols`/`kSlotSize`/`kSlotGap` plus padding, and center the panel
       with `client.screen_size()`.
-- [ ] Add a full-screen semi-transparent backdrop `rect` (for example
+- [x] Add a full-screen semi-transparent backdrop `rect` (for example
       `{0, 0, 0, 120}`) and a panel `rect` with a border behind the title,
       grid and button. Panel first in the widget list so it draws underneath.
-- [ ] Swap the title `label` for a centered `text` widget (colorable,
+- [x] Swap the title `label` for a centered `text` widget (colorable,
       matches the HUD).
-- [ ] Center the Close button in the panel's footer.
-- [ ] Highlight the currently selected hotbar slot in the grid (same
+- [x] Center the Close button in the panel's footer.
+- [x] Highlight the currently selected hotbar slot in the grid (same
       yellow border as the hotbar) using `client.selected_slot()`.
-- [ ] Apply the same panel, backdrop and centering to `pause.lua`.
-- [ ] Update `content_base_ui_test.cpp`: assert the panel and backdrop
+- [x] Apply the same panel, backdrop and centering to `pause.lua`.
+- [x] Update `content_base_ui_test.cpp`: assert the panel and backdrop
       widgets exist, and that the panel is centered for a given
       `set_screen_size()` (for example 1280×720 and 800×600).
-- [ ] Fix the stale header comments in `inventory.lua`.
+- [x] Fix the stale header comments in `inventory.lua`.
 
 ### U2 — Engine: send player status to the client (prerequisite for health/hunger UI)
 
