@@ -48,6 +48,12 @@ public:
 				p["health"] = h->first;
 				p["max_health"] = h->second;
 			}
+			// External auth: who the engine verified this player to be. User
+			// data only (never a token); absent when the server isn't authenticating.
+			if (const auto login = session_.player_login(id)) {
+				p["login"] = { { "provider", login->provider }, { "subject", login->subject },
+					{ "name", login->name } };
+			}
 			players.push_back(std::move(p));
 		}
 		return nlohmann::json{

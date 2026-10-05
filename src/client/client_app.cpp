@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
+#include <fstream>
 
 #if defined(VB_WITH_AUTOMATION)
 #include <rlgl.h>
@@ -87,6 +88,9 @@ void ClientApp::begin_connect(bool as_singleplayer) {
 	if (as_singleplayer) {
 		sp = std::make_unique<Singleplayer>(7, menu.player_name(), view_distance);
 		connecting_target = "singleplayer";
+#if defined(VB_WITH_AUTH)
+		install_sign_in(sp->client(), connecting_target);
+#endif
 		state = AppState::kConnecting;
 	} else {
 		connecting_target = menu.address() + ':' + std::to_string(menu.port());
@@ -106,21 +110,7 @@ void ClientApp::begin_connect(bool as_singleplayer) {
 			state = AppState::kError;
 		} else {
 #if defined(VB_WITH_AUTH)
-			// Always installed: it only ever runs if the server answers with
-			// an S2C_AuthChallenge (a server without auth.lua never does).
-			if (!auth_store) {
-				auth_store = std::make_shared<vb::auth::SessionStore>(
-						vb::core::user_config_dir() / "auth");
-			}
-			vb::auth::SignInCoordinator::Options opts;
-			opts.http = std::shared_ptr<vb::auth::HttpFetcher>(vb::auth::make_curl_fetcher());
-			opts.token_file = auth_token_file_;
-			opts.store = auth_store;
-			opts.server_id = connecting_target;
-			sign_in = std::make_unique<vb::auth::SignInCoordinator>(std::move(opts));
-			remote->session->set_sign_in_provider(sign_in->provider());
-			remote->session->set_reauth_provider(sign_in->reauth_provider());
-			reauth_panel_open = false;
+			install_sign_in(*remote->session, connecting_target);
 #endif
 			state = AppState::kConnecting;
 		}
@@ -128,6 +118,64 @@ void ClientApp::begin_connect(bool as_singleplayer) {
 }
 
 #if defined(VB_WITH_AUTH)
+// Always installed: it only ever runs if the server answers with an
+// S2C_AuthChallenge (a server without auth.lua never does). Singleplayer uses
+// the same path, so a pack that declares auth.lua signs in for real there too.
+void ClientApp::install_sign_in(vb::net::ClientSession &session, const std::string &server_id) {
+	if (!auth_store) {
+		auth_store = std::make_shared<vb::auth::SessionStore>(vb::core::user_config_dir() / "auth");
+	}
+	vb::auth::SignInCoordinator::Options opts;
+	opts.http = std::shared_ptr<vb::auth::HttpFetcher>(vb::auth::make_curl_fetcher());
+	opts.token_file = auth_token_file_;
+	opts.store = auth_store;
+	opts.server_id = server_id;
+#if defined(VB_WITH_AUTOMATION)
+	// Dev/test only: instead of launching a browser, write the authorization
+	// URL here so a test can play the user's browser (tests/e2e/test_auth.py).
+	if (const char *url_file = std::getenv("VB_AUTH_URL_FILE"); url_file != nullptr && *url_file != '\0') {
+		opts.open_browser = [path = std::string(url_file)](const std::string &url) {
+			std::ofstream out(path, std::ios::trunc);
+			out << url;
+			return static_cast<bool>(out);
+		};
+	}
+	headless_browser_started_ = false;
+#endif
+	sign_in = std::make_unique<vb::auth::SignInCoordinator>(std::move(opts));
+	session.set_sign_in_provider(sign_in->provider());
+	session.set_reauth_provider(sign_in->reauth_provider());
+	reauth_panel_open = false;
+}
+
+#if defined(VB_WITH_AUTOMATION)
+// Headless automation has no window to click in: accept the trust prompt and
+// start the browser flow by itself (the test then plays the browser). Compiled
+// out of production builds -- auto-trusting a server would defeat the prompt.
+void ClientApp::headless_sign_in_step() {
+	if (render || !sign_in || auth_token_file_) {
+		return;
+	}
+	using Phase = vb::auth::SignInCoordinator::Phase;
+	if (sign_in->needs_trust()) {
+		sign_in->trust();
+	}
+	if (!headless_browser_started_ && sign_in->phase() == Phase::kChoosing &&
+			!sign_in->needs_trust() && sign_in->supports_browser()) {
+		headless_browser_started_ = true;
+		sign_in->start_browser();
+	} else if (headless_browser_started_ && sign_in->phase() == Phase::kChoosing &&
+			!sign_in->last_error().empty()) {
+		// No window to retry in: a failed browser attempt (e.g. no browser could be
+		// opened) ends the join instead of waiting out the server's auth timeout.
+		sign_in->cancel();
+	} else if (!sign_in->supports_browser() && !sign_in->needs_trust() &&
+			sign_in->phase() == Phase::kChoosing) {
+		sign_in->cancel(); // firebase password etc.: nothing a headless client can do
+	}
+}
+#endif
+
 // The engine-drawn sign-in screen (auth.md §7). The player may take minutes in
 // a browser tab, so the client-side connect deadline is held off while it is
 // up; the server's own auth_timeout_seconds is the real bound.
@@ -157,6 +205,7 @@ void ClientApp::draw_sign_in() {
 	auto ui = menu.draw_signing_in(view);
 	if (ui.cancel) {
 		sign_in->cancel();
+		sp.reset(); // before sign_in: its session holds a ticket pointing at it
 		remote.reset();
 		sign_in.reset();
 		client = nullptr;
@@ -234,7 +283,7 @@ void ClientApp::refresh_signed_in_label() {
 	}
 	host = host.substr(0, host.find('/'));
 	menu.set_signed_in_label((sessions.front().label.empty() ? std::string("account")
-															  : sessions.front().label) +
+															 : sessions.front().label) +
 			" (" + host + ")");
 }
 #endif
@@ -463,9 +512,18 @@ bool ClientApp::connect_blocking() {
 		client = &c;
 	} else {
 		client = &*remote->session;
-		const auto deadline = std::chrono::steady_clock::now() + connect_timeout();
+		auto deadline = std::chrono::steady_clock::now() + connect_timeout();
 		while (!client->joined() && !client->failed() &&
 				std::chrono::steady_clock::now() < deadline) {
+#if defined(VB_WITH_AUTH)
+			if (sign_in && client->status() == vb::net::ClientHandshakeStatus::kSigningIn) {
+				// A sign-in takes as long as it takes; the server's own auth timeout bounds it.
+				deadline = std::chrono::steady_clock::now() + connect_timeout();
+#if defined(VB_WITH_AUTOMATION)
+				headless_sign_in_step();
+#endif
+			}
+#endif
 			client->tick(0.05);
 			std::this_thread::sleep_for(std::chrono::milliseconds(10));
 		}
@@ -550,6 +608,17 @@ bool ClientApp::frame(const vb::render::InputFrame &input, double dt) {
 			bool timed_out = false;
 			if (connecting_singleplayer) {
 				vb::net::ClientSession &sp_client = sp->client();
+#if defined(VB_WITH_AUTH)
+				// Signing in takes as long as the player takes: advance the
+				// integrated server in real time (its own auth timeout counts
+				// simulated seconds) and don't let the 128-tick budget expire.
+				if (sign_in && sp_client.status() == vb::net::ClientHandshakeStatus::kSigningIn) {
+					sp->tick(dt);
+					connect_ticks = 0;
+					draw_sign_in();
+					break;
+				}
+#endif
 				for (int i = 0; i < 8 && !sp_client.joined() && !sp_client.failed() &&
 						connect_ticks < 128;
 						++i, ++connect_ticks) {

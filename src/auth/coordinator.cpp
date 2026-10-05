@@ -82,7 +82,8 @@ SignInResult silent_sign_in(HttpFetcher &http, const protocol::S2CAuthChallenge 
 	return r;
 }
 
-SignInCoordinator::SignInCoordinator(Options options) : options_(std::move(options)) {}
+SignInCoordinator::SignInCoordinator(Options options) :
+		options_(std::move(options)) {}
 SignInCoordinator::~SignInCoordinator() = default;
 
 std::function<net::TokenTicket(const protocol::S2CAuthChallenge &)>

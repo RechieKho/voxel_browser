@@ -26,10 +26,11 @@ std::string trim_slash(std::string s) {
 } // namespace
 
 AuthService::AuthService(AuthConfig config, std::shared_ptr<HttpFetcher> http,
-		Options options) : config_(std::move(config)),
-						   http_(std::move(http)),
-						   options_(std::move(options)),
-						   keys_(std::make_shared<const KeySet>()) {
+		Options options) :
+		config_(std::move(config)),
+		http_(std::move(http)),
+		options_(std::move(options)),
+		keys_(std::make_shared<const KeySet>()) {
 	if (config_.provider == Provider::kFirebase) {
 		jwks_uri_ = kFirebaseJwks;
 	}
@@ -108,7 +109,9 @@ bool AuthService::request_refresh() {
 }
 
 bool AuthService::pump() {
-	enum class Work { kNone, kDiscovery, kJwks } work = Work::kNone;
+	enum class Work { kNone,
+		kDiscovery,
+		kJwks } work = Work::kNone;
 	std::string url;
 	const std::int64_t t = now();
 	{

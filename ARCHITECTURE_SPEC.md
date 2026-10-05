@@ -419,7 +419,7 @@ Full loader-order rationale: `architecture_spec/content-pack-format.md`.
 | Custom keybind flood | wire bandwidth / dispatch DoS | closed schema (bounded bitset, §9), not a post-receipt filter; per-connection rate limit on top |
 | Connection flood | resource exhaustion | GNS connection limits, handshake timeout, per-IP cap |
 | Pack-implemented auth | weak/pure-Lua credential hashing | engine offers `vb.crypto.hash` so packs aren't rolling their own; engine itself takes no position on auth |
-| Mandatory auth (`auth.lua`, planned Phase 9) | forged/replayed ID tokens, token forwarding by a hostile server | server-side JWS verify (RS256/ES256 allowlist), iss/aud/exp checks, per-connection nonce, freshness bound, fail closed; full server binding out of scope — `architecture_spec/auth.md` §8 |
+| Mandatory auth (`auth.lua`, Phase 9, implemented; operator guide `docs/auth.md`) | forged/replayed ID tokens, token forwarding by a hostile server | server-side JWS verify (RS256/ES256 allowlist), iss/aud/exp checks, per-connection nonce, freshness bound, periodic live re-auth for revocation, per-IP sign-in rate limit, fail closed; full server binding out of scope — `architecture_spec/auth.md` §8 |
 | Block-break begin/stop spam | CPU DoS via many concurrent damage-pool entries | same reach/tool/protection gate as `C2S_BlockEdit`; sparse map bounded by actual contributors, not attacker-controlled |
 
 The engine assumes a **trusted server operator** but an **untrusted network

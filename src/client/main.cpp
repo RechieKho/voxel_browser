@@ -100,6 +100,9 @@ void print_usage() {
 				 "  --automation-record <file.py>  write what you do as a vbtest script (dev builds only)\n"
 				 "  --auth-token-file <file>  sign in with the ID token in this file instead of the UI (dev builds only)\n"
 #endif
+#if !defined(VB_DISTRIBUTION)
+				 "  --insecure-skip-auth  DEV ONLY: --singleplayer ignores the pack's auth.lua (no sign-in)\n"
+#endif
 				 "  --version        print build info and exit\n"
 				 "  --help           show this help\n"
 				 "\n"
@@ -208,6 +211,15 @@ int main(int argc, char **argv) {
 				vb::core::resolve_beside_program(kSingleplayerContentPack, args.program()).string();
 	}
 	kSingleplayerWorldDir = args.value_or("world-dir", kSingleplayerWorldDir);
+	if (args.has("insecure-skip-auth")) {
+#if defined(VB_DISTRIBUTION)
+		std::cerr << "client: --insecure-skip-auth is not available in this build\n";
+		return EXIT_FAILURE;
+#else
+		// Dev only: --singleplayer ignores the pack's auth.lua (get_login() is nil).
+		kSingleplayerSkipAuth = true;
+#endif
+	}
 
 	std::optional<std::filesystem::path> auth_token_file; // set below, automation builds only
 #if defined(VB_WITH_AUTOMATION)

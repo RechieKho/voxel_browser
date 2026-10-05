@@ -18,14 +18,19 @@ EXE = ".exe" if os.name == "nt" else ""
 DEFAULT_SERVER_CONFIG = {"world_seed": 7, "view_distance": 3, "persist_world": False, "tick_rate": 20}
 
 
-def start_server(server_bin, repo, artifact_dir, workdir, procs, config=None, extra_args=(), name="server"):
+def start_server(server_bin, repo, artifact_dir, workdir, procs, config=None, extra_args=(), name="server",
+                 pack_files=None):
     """A fresh dedicated server on a free loopback port, with a private copy of the base pack
-    (nothing a test does, e.g. vb.storage, can dirty the repo). Returns a connected `Server`."""
+    (nothing a test does, e.g. vb.storage, can dirty the repo). `pack_files` ({relative path: text})
+    are written into that copy, e.g. an `auth.lua` that makes the pack require sign-in.
+    Returns a connected `Server`."""
     cfg = dict(DEFAULT_SERVER_CONFIG, **(config or {}))
     workdir = pathlib.Path(workdir)
     pack = workdir / "content" / "base"
     if not pack.exists():
         shutil.copytree(pathlib.Path(repo) / "content" / "base", pack)
+    for rel, text in (pack_files or {}).items():
+        (pack / rel).write_text(text)
     last = None
     for _ in range(3):  # a free port can be taken between picking it and binding it
         port = free_udp_port()

@@ -221,7 +221,8 @@ Widgets are `{id, type, text, x, y, w, h}` (+ `items`, `list_index` for lists); 
 `label|panel|button|textbox|list|rect|text|icon`.
 
 Server: `tick`, `time_of_day`, `player_count`,
-`players [{name,net_id,pos,health,max_health}]`.
+`players [{name,net_id,pos,health,max_health,login?}]` (`login = {provider,subject,name}` only
+when the server authenticates players -- `auth.lua`; never a token).
 
 ## Predicates (`wait_for.pred`)
 
@@ -237,6 +238,7 @@ bad arguments is `bad_request`.
 | `chat_contains` | `{text}` / `{regex}` or `"text"` | `chat` |
 | `entity_visible` | `{name}` | `entities` |
 | `entity_near` / `player_near` | `{name,pos,radius}` | `entities` / `players` |
+| `player_login` | `{subject, name?, provider?}` | `players[].login` (server): a connected player whose verified login has this subject |
 | `block_is` | `{pos,block}` (registry name, e.g. `"base:air"`) | the role's own block view; `false` if the chunk isn't loaded (both client and server, so an unloaded area never reads as air) |
 | `pos_near` | `{pos,radius}` | `feet` |
 | `health` | `{op,value}` (`< <= > >= == !=`) or a number | top-level `health` (client: the player's own, from `S2C_PlayerStatus`; the server's snapshot has no top-level `health`, use `players[].health`) |

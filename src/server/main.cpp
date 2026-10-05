@@ -29,6 +29,7 @@
 #include "vb/assetsync/manifest.hpp"
 #include "vb/auth/config.hpp"
 #include "vb/auth/http.hpp"
+#include "vb/auth/server_glue.hpp"
 #include "vb/auth/service.hpp"
 #include "vb/core/build_info.hpp"
 #include "vb/core/cli.hpp"
@@ -393,9 +394,9 @@ int main(int argc, char **argv) {
 	hs_config.auth_mode = static_cast<vb::protocol::AuthMode>(config.auth_mode);
 	if (active_auth) {
 		// Derived from auth.lua's presence, never configured (auth.md §4).
-		hs_config.auth_mode = vb::protocol::AuthMode::kExternal;
-		hs_config.reauth_interval_seconds = active_auth->reauth_interval_seconds;
-		hs_config.reauth_grace_seconds = active_auth->reauth_grace_seconds;
+#if defined(VB_WITH_AUTH)
+		vb::auth::apply_external_auth(hs_config, *active_auth);
+#endif
 	}
 	hs_config.max_players = config.max_players;
 	hs_config.world_seed = seed;
@@ -499,64 +500,12 @@ int main(int argc, char **argv) {
 #if defined(VB_WITH_AUTH)
 	// External authentication (auth.md §5): the key set loads in the
 	// background (failure is logged and retried; joins fail closed until a key
-	// set exists); the handshake polls a ticket per connection. A verified
-	// login still passes through the pack's join veto (`host.authenticate`,
-	// installed just above) with the resolved name.
+	// set exists); the handshake polls a ticket per connection. Name
+	// collisions and the pack's join veto then run in the handshake FSM.
 	std::shared_ptr<vb::auth::AuthService> auth_service;
-	
 	if (active_auth) {
-		auth_service = std::make_shared<vb::auth::AuthService>(
-				*active_auth, std::shared_ptr<vb::auth::HttpFetcher>(vb::auth::make_curl_fetcher()));
-		auth_service->start();
-		const vb::auth::AuthConfig auth_cfg = *active_auth;
-		host.auth_challenge = [auth_service, auth_cfg]() -> std::optional<vb::protocol::S2CAuthChallenge> {
-			vb::protocol::S2CAuthChallenge c;
-			c.nonce = auth_service->new_nonce();
-			if (c.nonce.empty()) {
-				return std::nullopt;
-			}
-			c.provider = std::string(vb::auth::provider_name(auth_cfg.provider));
-			c.display_name = auth_cfg.display_name;
-			c.issuer = auth_cfg.issuer;
-			c.client_id = auth_cfg.client_id;
-			c.scopes = auth_cfg.scopes;
-			if (auth_cfg.provider == vb::auth::Provider::kFirebase) {
-				c.params.emplace_back("project_id", auth_cfg.project_id);
-				c.params.emplace_back("api_key", auth_cfg.api_key);
-				std::string methods;
-				for (const auto m : auth_cfg.sign_in) {
-					methods += (methods.empty() ? "" : ",");
-					methods += m == vb::auth::FirebaseSignIn::kPassword ? "password" : "google";
-				}
-				c.params.emplace_back("sign_in", methods);
-			}
-			return c;
-		};
-		host.begin_authenticate = [auth_service](std::string_view token,
-										  std::string_view nonce) -> vb::net::AuthTicket {
-			auto pending = auth_service->begin(std::string(token), std::string(nonce));
-			return [pending]() -> std::optional<vb::net::AuthOutcome> {
-				const auto verdict = pending->poll();
-				if (!verdict) {
-					return std::nullopt;
-				}
-				if (!verdict->ok) {
-					VB_WARN("auth", "sign-in rejected: ", verdict->detail);
-					return vb::net::AuthOutcome{ false, verdict->reason, {}, {} };
-				}
-				// Name collisions and the pack's join veto run in the handshake
-				// FSM (resolve_name / join_veto), with this login attached.
-				auto login = std::make_shared<vb::net::LoginData>();
-				login->provider = std::string(vb::auth::provider_name(verdict->login.provider));
-				login->issuer = verdict->login.issuer;
-				login->subject = verdict->login.subject;
-				login->name = verdict->login.name;
-				login->claims_json = verdict->login.claims_json;
-				login->issued_at = verdict->login.issued_at;
-				login->expires_at = verdict->login.expires_at;
-				return vb::net::AuthOutcome{ true, {}, verdict->login.name, login };
-			};
-		};
+		auth_service = vb::auth::install_external_auth(host, *active_auth,
+				std::shared_ptr<vb::auth::HttpFetcher>(vb::auth::make_curl_fetcher()));
 	}
 #endif
 

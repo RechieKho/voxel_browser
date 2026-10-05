@@ -594,9 +594,36 @@ protocol changes, security notes and per-step task lists:
       **Not verified:** a real Keycloak admin logout kicking within
       interval + grace (manual run); `--auth-token-file` re-auth rotation in
       e2e (9.7).
-- [ ] **9.7 — Singleplayer, `vb`, e2e**: real sign-in in singleplayer,
-      mock IdP e2e tests.
-- [ ] **9.8 — Hardening**: rate limits, operator guide (`docs/auth.md`).
+- [x] **9.7 — Singleplayer, `vb`, e2e** — done 2026-10-05 (client UI
+      compile-checked; e2e run result below).
+      Singleplayer with an auth pack now runs the real sign-in through the same
+      handshake (`vb::auth::install_external_auth` / `apply_external_auth` are
+      shared with the dedicated server; the integrated server ticks in real
+      time while the sign-in screen is up); `--insecure-skip-auth` on the
+      client for dev (compiled out under `VB_DISTRIBUTION`). `vb server config
+      <name> set auth.issuer|client_id|project_id|api_key` edits the `[auth]`
+      table (root keys are now always inserted above the first table). e2e:
+      `tests/e2e/vbtest/mock_idp.py` (stdlib OIDC provider: discovery, JWKS,
+      auth endpoint → loopback redirect, PKCE-checking token endpoint,
+      refresh grant; pure-Python RS256 with the test-only key in
+      `tests/e2e/fixtures/`), `tests/e2e/test_auth.py` (token-file join under
+      the verified name, login visible to pack scripts, 6 bad-token classes
+      never join, missing token / no auth support fail closed, duplicate
+      account kicks the older session, `alex`/`alex#2`, the browser flow with
+      PKCE over a real loopback redirect (headless client writes the
+      authorization URL to `VB_AUTH_URL_FILE`; automation builds only),
+      revoked login kicked after the grace), automation predicate
+      `player_login` + `players[].login` on the server.
+- [x] **9.8 — Hardening** — done 2026-10-05: per-IP sign-in rate limit
+      (`ServerSession::set_max_auth_attempts_per_minute_per_ip`, default 30/min,
+      tested with a fixed-IP transport decorator), single in-flight JWKS fetch
+      + backoff (9.3), security-table row, operator guide `docs/auth.md`.
+      **Not done:** libFuzzer targets (a deterministic mutation test covers
+      JWT/JWKS/verifier; the protocol decoders have truncation tests), OS
+      keychain storage for refresh tokens (0600 files today), Firebase
+      `google` sign-in (needs a Google OAuth client id key in `auth.lua`),
+      manual Keycloak/Firebase runs on Linux/macOS/Windows, Windows build of
+      the socket/ShellExecute code.
 
 ---
 

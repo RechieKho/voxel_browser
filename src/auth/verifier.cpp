@@ -38,22 +38,38 @@ std::optional<std::int64_t> numeric_date(const json &o, const char *key) {
 
 std::string_view to_string(VerifyError e) {
 	switch (e) {
-		case VerifyError::kNone: return "none";
-		case VerifyError::kMalformed: return "malformed";
-		case VerifyError::kAlgorithm: return "algorithm";
-		case VerifyError::kMissingKid: return "missing_kid";
-		case VerifyError::kUnknownKid: return "unknown_kid";
-		case VerifyError::kBadSignature: return "bad_signature";
-		case VerifyError::kIssuer: return "issuer";
-		case VerifyError::kAudience: return "audience";
-		case VerifyError::kAuthorizedParty: return "authorized_party";
-		case VerifyError::kExpired: return "expired";
-		case VerifyError::kNotYetValid: return "not_yet_valid";
-		case VerifyError::kTooOld: return "too_old";
-		case VerifyError::kNonce: return "nonce";
-		case VerifyError::kSubject: return "subject";
-		case VerifyError::kName: return "name";
-		case VerifyError::kClaims: return "claims";
+		case VerifyError::kNone:
+			return "none";
+		case VerifyError::kMalformed:
+			return "malformed";
+		case VerifyError::kAlgorithm:
+			return "algorithm";
+		case VerifyError::kMissingKid:
+			return "missing_kid";
+		case VerifyError::kUnknownKid:
+			return "unknown_kid";
+		case VerifyError::kBadSignature:
+			return "bad_signature";
+		case VerifyError::kIssuer:
+			return "issuer";
+		case VerifyError::kAudience:
+			return "audience";
+		case VerifyError::kAuthorizedParty:
+			return "authorized_party";
+		case VerifyError::kExpired:
+			return "expired";
+		case VerifyError::kNotYetValid:
+			return "not_yet_valid";
+		case VerifyError::kTooOld:
+			return "too_old";
+		case VerifyError::kNonce:
+			return "nonce";
+		case VerifyError::kSubject:
+			return "subject";
+		case VerifyError::kName:
+			return "name";
+		case VerifyError::kClaims:
+			return "claims";
 	}
 	return "unknown";
 }

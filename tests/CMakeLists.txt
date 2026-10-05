@@ -161,6 +161,10 @@ if(NOT VB_WITH_AUTOMATION)
     add_test(NAME client_rejects_automation_record
       COMMAND voxel_browser --automation-record ${CMAKE_BINARY_DIR}/never.py --headless --frames 1)
     set_tests_properties(client_rejects_automation_record PROPERTIES WILL_FAIL TRUE)
+    # Auth sign-in via a file is a dev/CI shortcut around the sign-in screen (auth.md §7).
+    add_test(NAME client_rejects_auth_token_file
+      COMMAND voxel_browser --auth-token-file ${CMAKE_BINARY_DIR}/never.txt --headless --frames 1)
+    set_tests_properties(client_rejects_auth_token_file PROPERTIES WILL_FAIL TRUE)
   endif()
 endif()
 

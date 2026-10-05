@@ -907,6 +907,23 @@ void ServerSession::system_network_io(double dt_seconds) {
 					// ignore unknown types rather than dropping.
 					break;
 				}
+				if (max_auth_attempts_per_minute_ > 0 && it->second.remote_address &&
+						config_.auth_mode == protocol::AuthMode::kExternal &&
+						it->second.handshake.state() == ServerHandshakeState::kAwaitingAuth &&
+						frame->header.type == protocol::MessageType::kC2SAuth) {
+					auto &attempts = auth_attempts_[*it->second.remote_address];
+					while (!attempts.empty() && attempts.front() < uptime_seconds_ - 60.0) {
+						attempts.pop_front();
+					}
+					if (static_cast<int>(attempts.size()) >= max_auth_attempts_per_minute_) {
+						VB_WARN("auth", "too many sign-in attempts from ",
+								*it->second.remote_address, "; dropping");
+						kick_with_message(ev.conn, protocol::DisconnectReason::kAuthFailed,
+								"too many sign-in attempts, try again later");
+						break;
+					}
+					attempts.push_back(uptime_seconds_);
+				}
 				const ServerHandshakeState prev_state = it->second.handshake.state();
 				auto step = it->second.handshake.on_frame(*frame);
 				send_frames(transport_, ev.conn, step.send);
@@ -1004,6 +1021,17 @@ void ServerSession::system_network_io(double dt_seconds) {
 }
 
 void ServerSession::system_handshake_timeouts(double dt_seconds) {
+	uptime_seconds_ += dt_seconds;
+	// Forget IPs whose last attempt is over a minute old (bounded memory).
+	if (!auth_attempts_.empty()) {
+		for (auto it = auth_attempts_.begin(); it != auth_attempts_.end();) {
+			if (it->second.empty() || it->second.back() < uptime_seconds_ - 60.0) {
+				it = auth_attempts_.erase(it);
+			} else {
+				++it;
+			}
+		}
+	}
 	// Handshake timeouts + asset-stream pacing.
 	std::vector<std::pair<ConnId, std::string>> to_drop;
 	std::vector<ConnId> verified; // external auth just succeeded (async path)

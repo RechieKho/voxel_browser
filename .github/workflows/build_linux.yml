@@ -124,6 +124,9 @@ jobs:
               voxel_browser|voxel_browser.exe)
                 if "$dist/$exe" --automation-record /tmp/x.py --headless --frames 1 </dev/null >/dev/null 2>&1; then
                   echo "::error::$exe accepted --automation-record"; exit 1
+                fi
+                if "$dist/$exe" --auth-token-file /tmp/x.txt --headless --frames 1 </dev/null >/dev/null 2>&1; then
+                  echo "::error::$exe accepted --auth-token-file"; exit 1
                 fi ;;
             esac
           done

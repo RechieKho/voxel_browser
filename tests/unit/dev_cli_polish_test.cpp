@@ -333,6 +333,41 @@ TEST_CASE("server config get / set / unset") {
 	CHECK(dump->find("persist_world = false") != std::string::npos);
 }
 
+TEST_CASE("server config: [auth] overrides live in their own table") {
+	TempDir t;
+	const fs::path f = t.path / "server.toml";
+	write(f, "port = 27015\n\n[other]\nx = 1\n");
+
+	// A root key set after a table exists must still land above it.
+	REQUIRE(set_server_config_value(f, "max_players", "8"));
+	CHECK(get_server_config_value(f, "max_players") == "8");
+	CHECK(slurp(f).find("max_players = 8") < slurp(f).find("[other]"));
+
+	REQUIRE(set_server_config_value(f, "auth.issuer", "https://id.example/realms/prod"));
+	REQUIRE(set_server_config_value(f, "auth.client_id", "voxel-prod"));
+	REQUIRE(set_server_config_value(f, "auth.api_key", "AIza-secret"));
+	CHECK(get_server_config_value(f, "auth.issuer") == "https://id.example/realms/prod");
+	CHECK(get_server_config_value(f, "auth.client_id") == "voxel-prod");
+	// The API key is never echoed back.
+	CHECK(get_server_config_value(f, "auth.api_key") == "(set)");
+	REQUIRE(set_server_config_value(f, "auth.client_id", "voxel-staging")); // replace, not duplicate
+	CHECK(get_server_config_value(f, "auth.client_id") == "voxel-staging");
+	const std::string text = slurp(f);
+	CHECK(text.find("[auth]") != std::string::npos);
+	CHECK(text.find("client_id", text.find("client_id") + 1) == std::string::npos);
+	CHECK(get_server_config_value(f, "port") == "27015");
+
+	const auto dump = dump_server_config(f);
+	REQUIRE(dump);
+	CHECK(dump->find("auth.issuer = ") != std::string::npos);
+	CHECK(dump->find("auth.project_id") == std::string::npos); // unset overrides are omitted
+	CHECK(dump->find("AIza-secret") == std::string::npos);
+
+	REQUIRE(unset_server_config_key(f, "auth.issuer"));
+	CHECK(get_server_config_value(f, "auth.issuer") == "");
+	CHECK_FALSE(set_server_config_value(f, "auth.bogus", "x"));
+}
+
 TEST_CASE("vb server config command") {
 	TempDir t;
 	const Layout l = test_layout(t.path);

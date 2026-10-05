@@ -169,9 +169,11 @@ struct TestSigner::Impl {
 	}
 };
 
-TestSigner::TestSigner() : impl_(new Impl) {}
+TestSigner::TestSigner() :
+		impl_(new Impl) {}
 TestSigner::~TestSigner() { delete impl_; }
-TestSigner::TestSigner(TestSigner &&o) noexcept : impl_(o.impl_) { o.impl_ = nullptr; }
+TestSigner::TestSigner(TestSigner &&o) noexcept :
+		impl_(o.impl_) { o.impl_ = nullptr; }
 TestSigner &TestSigner::operator=(TestSigner &&o) noexcept {
 	if (this != &o) {
 		delete impl_;

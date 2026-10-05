@@ -85,7 +85,8 @@ std::optional<StoredSession> parse(const fs::path &p) {
 
 } // namespace
 
-SessionStore::SessionStore(fs::path dir) : dir_(std::move(dir)) {}
+SessionStore::SessionStore(fs::path dir) :
+		dir_(std::move(dir)) {}
 
 fs::path SessionStore::path_for(const std::string &issuer, const std::string &client_id) const {
 	return dir_ / (hex(sha256(issuer + "|" + client_id)) + ".json");
