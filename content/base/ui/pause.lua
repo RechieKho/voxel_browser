@@ -7,26 +7,56 @@
 --
 -- `render(state)` (Phase 6.2) is called once per UI frame while this screen
 -- is open; this screen has no local state to demonstrate, so `state` is
--- unused here.
+-- unused here. The panel is centered on `client.screen_size()`.
+local kPanelW = 240
+local kPanelH = 128
+local kPad = 16
+local kButtonW = 140
+local kButtonH = 32
+
 ui.define("base:pause", function(state)
+	local screen = client.screen_size()
+	local panel_x = math.floor((screen.width - kPanelW) / 2)
+	local panel_y = math.floor((screen.height - kPanelH) / 2)
+
 	return {
 		widgets = {
 			{
+				id = "backdrop",
+				type = "rect",
+				x = 0,
+				y = 0,
+				w = screen.width,
+				h = screen.height,
+				color = { 0, 0, 0, 120 },
+			},
+			{
+				id = "panel",
+				type = "rect",
+				x = panel_x,
+				y = panel_y,
+				w = kPanelW,
+				h = kPanelH,
+				color = { 24, 24, 30, 240 },
+				border = { 110, 110, 125, 255 },
+			},
+			{
 				id = "title",
-				type = "label",
-				x = 24,
-				y = 24,
-				w = 200,
-				h = 28,
+				type = "text",
+				x = panel_x + math.floor(kPanelW / 2),
+				y = panel_y + kPad,
+				align = "center",
 				text = "Paused",
+				font_size = 20,
+				color = { 235, 235, 245, 255 },
 			},
 			{
 				id = "resume",
 				type = "button",
-				x = 24,
-				y = 64,
-				w = 140,
-				h = 32,
+				x = panel_x + math.floor((kPanelW - kButtonW) / 2),
+				y = panel_y + kPanelH - kPad - kButtonH,
+				w = kButtonW,
+				h = kButtonH,
 				text = "Resume",
 				on_click = function()
 					ui.close()

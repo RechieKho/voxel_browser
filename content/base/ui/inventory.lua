@@ -6,11 +6,11 @@
 -- `player:open_ui("base:inventory", { slots = player:get_inventory() })`
 -- shows real, if snapshot-only (not live-updating), inventory contents.
 --
--- `state` is the same Lua table for every frame this screen stays open
--- (Phase 6.2: `render(state)` is now called once per UI frame, not once at
--- open time), so `state.selected` set by the list's `on_change` below is
--- purely local/cosmetic -- no `ui.send_event` -- and just shows up in the
--- title on the very next frame.
+-- `render(state)` is called once per UI frame while this screen stays open.
+-- The panel, backdrop and grid are all positioned from `client.screen_size()`
+-- (the same raw state hud.lua uses), so the screen stays centered at any
+-- window size. The currently selected hotbar slot gets the same yellow
+-- border here as in the hotbar (`client.selected_slot()`, 1-based).
 --
 -- Opened via the E key: `content/base/keybinds.lua` registers
 -- "base:inventory" and calls `player:open_ui("base:inventory", { slots =
@@ -33,27 +33,64 @@
 local kSlotSize = 40
 local kSlotGap = 4
 local kCols = 8
+local kPad = 16
+local kTitleH = 28
+local kSectionGap = 8
+local kButtonW = 140
+local kButtonH = 32
 
 ui.define("base:inventory", function(state)
 	local slots = state and state.slots or {}
+	local screen = client.screen_size()
+	local selected = client.selected_slot()
+
+	local rows = math.max(1, math.ceil(#slots / kCols))
+	local grid_w = kCols * kSlotSize + (kCols - 1) * kSlotGap
+	local grid_h = rows * kSlotSize + (rows - 1) * kSlotGap
+	local panel_w = grid_w + 2 * kPad
+	local panel_h = kPad + kTitleH + kSectionGap + grid_h + kSectionGap + kButtonH + kPad
+	local panel_x = math.floor((screen.width - panel_w) / 2)
+	local panel_y = math.floor((screen.height - panel_h) / 2)
+	local grid_x = panel_x + kPad
+	local grid_y = panel_y + kPad + kTitleH + kSectionGap
 
 	local widgets = {
 		{
+			id = "backdrop",
+			type = "rect",
+			x = 0,
+			y = 0,
+			w = screen.width,
+			h = screen.height,
+			color = { 0, 0, 0, 120 },
+		},
+		{
+			id = "panel",
+			type = "rect",
+			x = panel_x,
+			y = panel_y,
+			w = panel_w,
+			h = panel_h,
+			color = { 24, 24, 30, 240 },
+			border = { 110, 110, 125, 255 },
+		},
+		{
 			id = "title",
-			type = "label",
-			x = 24,
-			y = 24,
-			w = 200,
-			h = 28,
+			type = "text",
+			x = panel_x + math.floor(panel_w / 2),
+			y = panel_y + kPad,
+			align = "center",
 			text = "Inventory",
+			font_size = 20,
+			color = { 235, 235, 245, 255 },
 		},
 	}
 
 	for i, slot in ipairs(slots) do
 		local col = (i - 1) % kCols
 		local row = math.floor((i - 1) / kCols)
-		local x = 24 + col * (kSlotSize + kSlotGap)
-		local y = 60 + row * (kSlotSize + kSlotGap)
+		local x = grid_x + col * (kSlotSize + kSlotGap)
+		local y = grid_y + row * (kSlotSize + kSlotGap)
 
 		table.insert(widgets, {
 			id = "slot_bg_" .. i,
@@ -63,7 +100,7 @@ ui.define("base:inventory", function(state)
 			w = kSlotSize,
 			h = kSlotSize,
 			color = { 40, 40, 46, 220 },
-			border = { 90, 90, 100, 230 },
+			border = i == selected and { 255, 220, 80, 255 } or { 90, 90, 100, 230 },
 		})
 
 		if slot.item and slot.item ~= 0 then
@@ -92,25 +129,22 @@ ui.define("base:inventory", function(state)
 	if #slots == 0 then
 		table.insert(widgets, {
 			id = "empty",
-			type = "label",
-			x = 24,
-			y = 60,
-			w = 220,
-			h = 24,
+			type = "text",
+			x = panel_x + math.floor(panel_w / 2),
+			y = grid_y,
+			align = "center",
 			text = "(empty)",
+			color = { 170, 170, 180, 255 },
 		})
 	end
-
-	local rows = math.max(1, math.ceil(#slots / kCols))
-	local close_y = 60 + rows * (kSlotSize + kSlotGap) + 8
 
 	table.insert(widgets, {
 		id = "close",
 		type = "button",
-		x = 24,
-		y = close_y,
-		w = 140,
-		h = 32,
+		x = panel_x + math.floor((panel_w - kButtonW) / 2),
+		y = grid_y + grid_h + kSectionGap,
+		w = kButtonW,
+		h = kButtonH,
 		text = "Close",
 		on_click = function()
 			ui.close()

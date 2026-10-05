@@ -12,6 +12,7 @@
 #if VB_WITH_LUA
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -88,13 +89,14 @@ TEST_CASE("content/base/ui: every file parses and registers its screen/HUD") {
 
 TEST_CASE("content/base/ui: base:pause renders a title and a working Resume button") {
 	UiRuntime ui = load_base_ui();
+	ui.set_screen_size(1280, 720);
 	ui.open("base:pause", "{}");
 	REQUIRE(ui.is_open());
 
 	const auto &widgets = ui.render_frame();
 	const Widget *title = find(widgets, "title");
 	REQUIRE(title != nullptr);
-	CHECK(title->type == WidgetType::kLabel);
+	CHECK(title->type == WidgetType::kText);
 	CHECK(title->text == "Paused");
 
 	const Widget *resume = find(widgets, "resume");
@@ -102,13 +104,77 @@ TEST_CASE("content/base/ui: base:pause renders a title and a working Resume butt
 	CHECK(resume->type == WidgetType::kButton);
 	CHECK(resume->text == "Resume");
 
+	// U0: client.* is callable from a modal render (not just the HUD), and
+	// the panel + backdrop are centered on the screen size.
+	const Widget *backdrop = find(widgets, "backdrop");
+	const Widget *panel = find(widgets, "panel");
+	REQUIRE(backdrop != nullptr);
+	REQUIRE(panel != nullptr);
+	CHECK(backdrop->w == 1280);
+	CHECK(backdrop->h == 720);
+	CHECK(panel->x + panel->w / 2 == doctest::Approx(640).epsilon(0.01));
+	CHECK(panel->y + panel->h / 2 == doctest::Approx(360).epsilon(0.01));
+	CHECK(resume->x >= panel->x);
+	CHECK(resume->x + resume->w <= panel->x + panel->w);
+
 	ui.report_click("resume");
 	CHECK_FALSE(ui.is_open());
+}
+
+TEST_CASE("content/base/ui: base:inventory panel and backdrop are centered at any "
+		"screen size, and highlight the selected slot") {
+	UiRuntime ui = load_base_ui();
+	const int sizes[][2] = { { 1280, 720 }, { 800, 600 } };
+	for (const auto &sz : sizes) {
+		ui.set_screen_size(sz[0], sz[1]);
+		ui.set_inventory({ { "base:stone", 5 }, { "base:planks", 2 } }, /*selected_slot=*/2);
+		ui.open("base:inventory", R"({"slots":[{"item":2,"count":5},{"item":3,"count":1}]})");
+		REQUIRE(ui.is_open());
+		const auto &widgets = ui.render_frame();
+
+		const Widget *backdrop = find(widgets, "backdrop");
+		const Widget *panel = find(widgets, "panel");
+		REQUIRE(backdrop != nullptr);
+		REQUIRE(panel != nullptr);
+		CHECK(backdrop->w == sz[0]);
+		CHECK(backdrop->h == sz[1]);
+		CHECK(std::abs((panel->x + panel->w / 2.0f) - sz[0] / 2.0f) <= 1.0f);
+		CHECK(std::abs((panel->y + panel->h / 2.0f) - sz[1] / 2.0f) <= 1.0f);
+
+		// Panel is listed before the slots so it draws underneath them.
+		const auto idx = [&](const std::string &id) {
+			for (size_t i = 0; i < widgets.size(); ++i) {
+				if (widgets[i].id == id) {
+					return static_cast<int>(i);
+				}
+			}
+			return -1;
+		};
+		CHECK(idx("backdrop") < idx("panel"));
+		CHECK(idx("panel") < idx("slot_bg_1"));
+
+		// Slots and Close sit inside the panel.
+		const Widget *slot1 = find(widgets, "slot_bg_1");
+		const Widget *close = find(widgets, "close");
+		REQUIRE(slot1 != nullptr);
+		REQUIRE(close != nullptr);
+		CHECK(slot1->x >= panel->x);
+		CHECK(close->y + close->h <= panel->y + panel->h);
+		CHECK(std::abs((close->x + close->w / 2.0f) - (panel->x + panel->w / 2.0f)) <= 1.0f);
+
+		// Selected slot (2) is outlined differently from slot 1.
+		const Widget *slot2 = find(widgets, "slot_bg_2");
+		REQUIRE(slot2 != nullptr);
+		CHECK(slot1->border_g != slot2->border_g);
+
+		ui.close();
+	}
 }
 
 TEST_CASE("content/base/ui: base:inventory renders one row of widgets per slot, "
 		"or an empty-state label with none") {
 	UiRuntime ui = load_base_ui();
+	ui.set_screen_size(1280, 720);
 
 	ui.open("base:inventory",
 			R"({"slots":[{"item":2,"count":5},{"item":3,"count":1},{"item":4,"count":9}]})");
