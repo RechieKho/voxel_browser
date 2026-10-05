@@ -231,13 +231,14 @@ struct Eval {
 			}
 			return result(have == a["name"], json{ { "ui", have } });
 		}
-		if (name == "widget") {
+		if (name == "widget" || name == "hud_widget") {
 			if (!arg.is_object() || !arg.contains("id") || !arg["id"].is_string()) {
-				return fail("widget: needs 'id'");
+				return fail(name + ": needs 'id'");
 			}
 			json ids = json::array();
 			bool matched = false;
-			if (const json *f = state_field("ui"); f != nullptr && f->is_object()) {
+			if (const json *f = state_field(name == "widget" ? "ui" : "hud");
+					f != nullptr && f->is_object()) {
 				for (const json &w : f->value("widgets", json::array())) {
 					ids.push_back(w.value("id", std::string()));
 					if (json(w.value("id", std::string())) == arg["id"]) {

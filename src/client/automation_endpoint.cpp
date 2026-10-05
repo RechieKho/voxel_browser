@@ -144,7 +144,8 @@ const char *widget_type_name(vb::script::WidgetType t) {
 json widgets_json(const std::vector<vb::script::Widget> &ws) {
 	json out = json::array();
 	for (const auto &w : ws) {
-		json j{ { "id", w.id }, { "type", widget_type_name(w.type) }, { "text", w.text } };
+		json j{ { "id", w.id }, { "type", widget_type_name(w.type) }, { "text", w.text },
+			{ "x", w.x }, { "y", w.y }, { "w", w.w }, { "h", w.h } };
 		if (w.type == vb::script::WidgetType::kList) {
 			j["items"] = w.items;
 			j["list_index"] = w.list_index;
@@ -543,6 +544,13 @@ json ClientAutomationEndpoint::state() {
 		s["ui"] = json{ { "name", app_.ui().current_name() }, { "widgets", widgets_json(app_.ui().widgets()) } };
 	}
 	s["hud"] = json{ { "widgets", widgets_json(app_.hud_widgets()) } };
+	// The local player's own status (S2C_PlayerStatus); absent until the first one arrives.
+	if (const auto &st = c->player_status()) {
+		s["health"] = st->health;
+		s["max_health"] = st->max_health;
+		s["hunger"] = st->hunger;
+		s["max_hunger"] = st->max_hunger;
+	}
 	if (c->joined()) {
 		const auto feet = c->predicted_feet();
 		s["feet"] = { feet.x, feet.y, feet.z };

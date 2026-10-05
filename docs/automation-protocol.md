@@ -203,8 +203,6 @@ test_recorder.py` records a session and replays the script on a fresh server.
 
 - Clicking raygui widgets by pixel (menu *results* are injected instead), settings and
   keybindings screens.
-- The `health` predicate on a client: health isn't replicated to clients. Read
-  `players[].health` from the server's `state` instead.
 - `--net-sim` for `--singleplayer` (loopback transport has no delay/drop queue).
 - Recording: mouse look, scene setup, multi-client sessions, and replaying menu-driven starts.
 - TCP: more than one simultaneous connection, non-loopback binding (deliberately).
@@ -214,11 +212,12 @@ test_recorder.py` records a session and replays the script on a fresh server.
 Client: `app_state` (`menu|settings|keybindings|connecting|loading|playing|error`),
 `joined`, `net_id`, `feet [x,y,z]`, `on_ground`, `yaw`, `pitch`, `chat [str]` (the HUD's last 8
 lines), `chat_open`, `mouse_captured`, `selected_slot` (1-based),
-`inventory [{item,count}]` (item = block name), `entities [{net_id,name,pos}]`,
+`health`/`max_health`/`hunger`/`max_hunger` (the player's own status, once the server's first
+`S2C_PlayerStatus` arrives; absent before), `inventory [{item,count}]` (item = block name), `entities [{net_id,name,pos}]`,
 `chunks_loaded`, `rtt_ms` (once measured; real connections only), `target_block {pos,normal,block}` (what the crosshair is on,
 within reach; absent if nothing), `ui {name, widgets}` (only while a modal screen
 is open), `hud {widgets}`, `busy_actions` (in-flight multi-frame commands).
-Widgets are `{id, type, text}` (+ `items`, `list_index` for lists); `type` is
+Widgets are `{id, type, text, x, y, w, h}` (+ `items`, `list_index` for lists); `type` is
 `label|panel|button|textbox|list|rect|text|icon`.
 
 Server: `tick`, `time_of_day`, `player_count`,
@@ -240,7 +239,7 @@ bad arguments is `bad_request`.
 | `entity_near` / `player_near` | `{name,pos,radius}` | `entities` / `players` |
 | `block_is` | `{pos,block}` (registry name, e.g. `"base:air"`) | the role's own block view; `false` if the chunk isn't loaded (both client and server, so an unloaded area never reads as air) |
 | `pos_near` | `{pos,radius}` | `feet` |
-| `health` | `{op,value}` (`< <= > >= == !=`) or a number | top-level `health` *(neither snapshot has one: clients don't receive health; use the server's `players[].health`)* |
+| `health` | `{op,value}` (`< <= > >= == !=`) or a number | top-level `health` (client: the player's own, from `S2C_PlayerStatus`; the server's snapshot has no top-level `health`, use `players[].health`) |
 | `chunks_loaded` | `{min}` or a number | `chunks_loaded` |
 | `chunk_loaded` | `{pos}` | whether the chunk containing `pos` exists in the process's world (client: its mirror; server: its `World`). Wait for this before building a scene on the server |
 | `on_ground` | `true` | `on_ground` (client: landed after the spawn drop) |
@@ -248,6 +247,7 @@ bad arguments is `bad_request`.
 | `player_count` | `{op,value}` or a number | `player_count` (server) |
 | `ui_open` | `{name}` or `"name"` | `ui.name` |
 | `widget` | `{id, text?}` | `ui.widgets` (modal screen only) |
+| `hud_widget` | `{id, text?}` | `hud.widgets` (the always-on HUD) |
 | `inventory_has` | `{item, count=1}` | `inventory` (client) |
 
 ## Known limitation: no `--port 0`

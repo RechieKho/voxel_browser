@@ -86,3 +86,36 @@ def test_a_windowed_client_draws_the_hud(server, clients, artifact_dir):
     # itself failed to render (same ceiling test_windowed.py's own world screenshot uses).
     assert world["distinct_colors"] >= 40, "the HUD/world screenshot looks blank: %r" % world
 
+
+def test_hud_health_bar_follows_the_players_health(server, clients):
+    """The whole chain: server health -> S2C_PlayerStatus -> client.health() -> base:hud's bar."""
+    (alice,) = clients(1, names=["Alice"])
+    expect(alice).to_be_on_ground()
+
+    # Full health: the bar's background, fill and "20 / 20" readout are all up.
+    expect(alice).to_have_health(20)
+    expect(alice).to_have_hud_widget("health_text", text="20 / 20")
+    full = alice.hud_widget("health_fill")
+    background = alice.hud_widget("health_bg")
+    assert full is not None and background is not None
+    assert abs(full["w"] - (background["w"] - 2)) < 0.01  # fill spans the inside of the border
+
+    # With something in the inventory the hotbar exists, and the bar sits above it.
+    server.give("Alice", "base:stone", 1)
+    expect(alice).to_have_inventory("base:stone", 1)
+    expect(alice).to_have_hud_widget("hotbar_container")
+    hotbar = alice.hud_widget("hotbar_container")
+    assert background["y"] + background["h"] <= hotbar["y"], (background, hotbar)
+
+    # Half health: the client sees the new value and the fill is half as wide.
+    server.set_health("Alice", 10)
+    expect(alice).to_have_health(10)
+    expect(alice).to_have_hud_widget("health_text", text="10 / 20")
+    half = alice.hud_widget("health_fill")
+    assert abs(half["w"] - full["w"] / 2) < 0.01, (half, full)
+
+    # Healing back restores the full-width fill.
+    server.set_health("Alice", 20)
+    expect(alice).to_have_health(20)
+    expect(alice).to_have_hud_widget("health_text", text="20 / 20")
+    assert abs(alice.hud_widget("health_fill")["w"] - full["w"]) < 0.01
