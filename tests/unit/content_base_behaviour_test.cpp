@@ -257,6 +257,25 @@ TEST_CASE("content/base keybinds.lua: both keybinds open on the rising edge only
 	fx.release_keybind();
 }
 
+TEST_CASE("content/base death.lua: dying opens base:death with the cause, "
+		"and the engine's own respawn still happens") {
+	BasePackFixture fx("c2_death_notice");
+	CHECK_FALSE(fx.client().take_open_ui().has_value());
+
+	fx.server().damage_player(fx.player_id(), 1000.0f, "fall");
+	fx.pump(3);
+
+	auto open = fx.client().take_open_ui();
+	REQUIRE(open.has_value());
+	CHECK(open->ui_name == "base:death");
+	CHECK(open->ctx_json.find("\"fall\"") != std::string::npos);
+
+	// The handler returned nothing, so the default decision applied: the
+	// player is respawned with health restored, not left dead.
+	REQUIRE(fx.client().player_status().has_value());
+	CHECK(fx.client().player_status()->health > 0.0f);
+}
+
 TEST_CASE("content/base init.lua: vb.storage.boot_count persists across a restart") {
 	const auto storage_path = vb::test::content_base_storage("c2_boot_count");
 	std::filesystem::remove(storage_path);

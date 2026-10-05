@@ -39,6 +39,8 @@ void UiRuntime::report_change(const std::string &, std::string_view) {}
 void UiRuntime::report_list_change(const std::string &, int) {}
 void UiRuntime::set_break_progress(std::optional<float>) {}
 void UiRuntime::set_screen_size(int, int) {}
+void UiRuntime::set_clock(double) {}
+void UiRuntime::set_mouse_position(float, float) {}
 void UiRuntime::set_player_list(std::string, std::vector<std::string>) {}
 void UiRuntime::set_chat(std::vector<std::string>, bool) {}
 void UiRuntime::set_inventory(std::vector<InventorySlotView>, int) {}
@@ -269,6 +271,9 @@ struct UiRuntime::Impl {
 	// widgets take absolute pixel positions, so centering anything needs
 	// this. Zero until the first set_screen_size() call.
 	int screen_w = 0;
+	double clock_seconds = 0.0;
+	float mouse_x = 0.0f;
+	float mouse_y = 0.0f;
 	int screen_h = 0;
 
 	// Player list / chat / hotbar raw state (see the header's own comments
@@ -348,6 +353,13 @@ void UiRuntime::Impl::install_bindings() {
 		sol::table t = lua_state().create_table();
 		t["width"] = screen_w;
 		t["height"] = screen_h;
+		return t;
+	};
+	client_tbl["time"] = [this]() -> double { return clock_seconds; };
+	client_tbl["mouse_position"] = [this]() -> sol::table {
+		sol::table t = lua_state().create_table();
+		t["x"] = mouse_x;
+		t["y"] = mouse_y;
 		return t;
 	};
 	client_tbl["player_name"] = [this]() -> std::string { return own_player_name; };
@@ -623,6 +635,15 @@ void UiRuntime::report_hud_list_change(const std::string &widget_id, int new_ind
 
 void UiRuntime::set_break_progress(std::optional<float> fraction) {
 	impl_->break_progress = fraction;
+}
+
+void UiRuntime::set_clock(double seconds) {
+	impl_->clock_seconds = seconds;
+}
+
+void UiRuntime::set_mouse_position(float x, float y) {
+	impl_->mouse_x = x;
+	impl_->mouse_y = y;
 }
 
 void UiRuntime::set_screen_size(int width, int height) {

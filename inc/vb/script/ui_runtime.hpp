@@ -167,6 +167,12 @@ public:
 	// center something needs this raw value rather than a hardcoded guess.
 	void set_screen_size(int width, int height);
 
+	// Raw per-frame client state for `client.time()` (monotonic seconds, for
+	// presentation timing like fades) and `client.mouse_position()` (window
+	// pixels, same space as widget x/y). Both are 0 until first set.
+	void set_clock(double seconds);
+	void set_mouse_position(float x, float y);
+
 	// The remaining set_* calls below (player list, chat, inventory) close
 	// REMAINING_TASKS.md's "player list / chat box / hotbar are still
 	// hardcoded C++, not migrated to ui.define_hud" gap -- same "engine

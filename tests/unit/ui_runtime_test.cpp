@@ -310,6 +310,21 @@ TEST_CASE("client.inventory() entries carry name, count and raw item id") {
 	CHECK(ui.render_hud()[0].text == "base:stone:5:2");
 }
 
+TEST_CASE("client.time() and client.mouse_position() read back what was set") {
+	UiRuntime ui;
+	REQUIRE(ui.load_pack_file(R"(
+		ui.define_hud(function(state)
+			local m = client.mouse_position()
+			return { widgets = { { id = "s", type = "label", x=0,y=0,w=1,h=1,
+				text = string.format("%.1f %d,%d", client.time(), m.x, m.y) } } }
+		end)
+	)"));
+	CHECK(ui.render_hud()[0].text == "0.0 0,0");
+	ui.set_clock(12.5);
+	ui.set_mouse_position(30.0f, 40.0f);
+	CHECK(ui.render_hud()[0].text == "12.5 30,40");
+}
+
 TEST_CASE("client.health()/client.hunger() are nil until a status is set, "
 		"then report current/max") {
 	UiRuntime ui;
