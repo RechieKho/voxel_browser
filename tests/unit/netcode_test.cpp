@@ -533,6 +533,49 @@ TEST_CASE("hunger decay is disabled by default, and a configured rate "
 	CHECK(*server.player_hunger(a_id) == doctest::Approx(90.0f).epsilon(0.02));
 }
 
+TEST_CASE("the client receives its own health/hunger once after joining, "
+		"then only when a value changes") {
+	LoopbackNetwork net;
+	ServerSession server(net.server(), [] {
+		HandshakeServerConfig c;
+		c.world_seed = 1;
+		return c;
+	}());
+	REQUIRE(net.server().listen(0));
+
+	vb::net::Transport &ta = net.create_client();
+	auto ida = ta.connect("x", 0);
+	REQUIRE(ida);
+	std::optional<ClientSession> a;
+	a.emplace(ta, *ida, HandshakeClientConfig{ "Status", "", "v", 1 });
+
+	auto pump = [&](int n) {
+		for (int i = 0; i < n; ++i) {
+			server.tick(0.05);
+			a->tick(0.05);
+		}
+	};
+	CHECK_FALSE(a->player_status().has_value());
+	pump(16);
+	REQUIRE(a->joined());
+	pump(2);
+	REQUIRE(a->player_status().has_value());
+	CHECK(a->player_status()->health == doctest::Approx(20.0f));
+	CHECK(a->player_status()->max_health == doctest::Approx(20.0f));
+	CHECK(a->player_status()->hunger == doctest::Approx(100.0f));
+
+	const NetId a_id = a->join_accept()->your_net_id;
+	server.damage_player(a_id, 13.0f, "test");
+	pump(2);
+	CHECK(a->player_status()->health == doctest::Approx(7.0f));
+
+	ServerSession::HungerParams params;
+	params.decay_per_second = 10.0f;
+	server.set_hunger_params(params);
+	pump(20);
+	CHECK(a->player_status()->hunger < 95.0f);
+}
+
 TEST_CASE("starvation damage (hunger at 0) kills + respawns with cause "
 		"\"hunger\", and respawn restores full hunger") {
 	LoopbackNetwork net;

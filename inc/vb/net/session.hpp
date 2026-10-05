@@ -556,6 +556,9 @@ private:
 		// cleared by check_respawns() when it calls the respawn handler.
 		std::string death_cause;
 		float death_health_before = 0.0f;
+		// Last S2C_PlayerStatus sent to this player; nullopt until the first
+		// one (sent the tick after join), then re-sent only on change.
+		std::optional<protocol::S2CPlayerStatus> last_status;
 	};
 
 	void drop(ConnId conn, const std::string &reason);
@@ -570,6 +573,9 @@ private:
 	void apply_damage(Conn &state, float amount, std::string_view cause);
 	void update_hunger(double dt_seconds);
 	void check_respawns();
+	// Sends S2C_PlayerStatus to each playing player whose health/hunger
+	// changed since the last one sent.
+	void sync_player_status();
 	void update_item_drops(double dt_seconds);
 	void update_block_damage();
 	void update_block_punch_healing(double dt_seconds);
@@ -923,6 +929,12 @@ public:
 		return inventory_;
 	}
 
+	// This player's own health/hunger, kept in sync by S2C_PlayerStatus.
+	// nullopt until the first one arrives (the tick after joining).
+	const std::optional<protocol::S2CPlayerStatus> &player_status() const {
+		return player_status_;
+	}
+
 	// Day/night cycle (spec §5.4): S2C_JoinAccept's value until the first
 	// periodic S2C_TimeOfDay update arrives, then the latest of those. Ticks
 	// into the day cycle -- see vb::world::daynight.hpp for the convention.
@@ -985,6 +997,7 @@ private:
 	std::unordered_map<core::NetId, std::string> players_;
 	std::optional<std::uint32_t> time_of_day_override_;
 	std::vector<protocol::InventorySlot> inventory_;
+	std::optional<protocol::S2CPlayerStatus> player_status_;
 	std::vector<std::string> keybind_names_;
 	std::vector<protocol::EntityKindRegistryRecord> entity_kinds_;
 	// entity_visual_override()'s storage, populated from EntityRecord::

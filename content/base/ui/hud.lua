@@ -99,15 +99,86 @@ local function push_chat_log(widgets, screen)
 	end
 end
 
+local kSlotW, kSlotH, kSlotGap = 96, 40, 6
+local kHotbarMargin = 16
+
+-- Shared by the hotbar and the status bars that sit on top of it.
+local function hotbar_layout(screen)
+	local n = math.max(#client.inventory(), 1)
+	local total_w = n * (kSlotW + kSlotGap) - kSlotGap
+	return {
+		x = (screen.width - total_w) / 2,
+		y = screen.height - kSlotH - kHotbarMargin,
+		w = total_w,
+	}
+end
+
+-- One horizontal bar: dark background + border, fill sized by current/max,
+-- and a centered "cur / max" readout. `fill` is the fill color.
+local function push_bar(widgets, id, x, y, w, h, current, max, fill)
+	local frac = max > 0 and math.min(math.max(current / max, 0), 1) or 0
+	table.insert(widgets, {
+		id = id .. "_bg",
+		type = "rect",
+		x = x, y = y, w = w, h = h,
+		color = { 30, 30, 34, 200 },
+		border = { 90, 90, 100, 230 },
+	})
+	if frac > 0 then
+		table.insert(widgets, {
+			id = id .. "_fill",
+			type = "rect",
+			x = x + 1, y = y + 1,
+			w = (w - 2) * frac, h = h - 2,
+			color = fill,
+		})
+	end
+	table.insert(widgets, {
+		id = id .. "_text",
+		type = "text",
+		x = x + w / 2,
+		y = y + (h - 12) / 2,
+		align = "center",
+		font_size = 12,
+		text = string.format("%d / %d", math.ceil(current), math.ceil(max)),
+		color = { 255, 255, 255, 240 },
+	})
+end
+
+-- Health (left) and hunger (right) bars just above the hotbar, each taking
+-- half its width. Nothing is drawn until the server's first status arrives.
+local function push_status_bars(widgets, screen)
+	local health, hunger = client.health(), client.hunger()
+	if not health or not hunger then
+		return
+	end
+	local bar = hotbar_layout(screen)
+	local gap, h = 12, 14
+	local w = (bar.w - gap) / 2
+	local y = bar.y - h - 8
+
+	-- Green -> yellow -> red as health drops.
+	local frac = health.max > 0 and health.current / health.max or 0
+	local fill = { 80, 200, 90, 240 }
+	if frac <= 0.25 then
+		fill = { 220, 60, 60, 240 }
+	elseif frac <= 0.5 then
+		fill = { 230, 190, 60, 240 }
+	end
+	push_bar(widgets, "health", bar.x, y, w, h, health.current, health.max, fill)
+	push_bar(widgets, "hunger", bar.x + w + gap, y, w, h,
+			hunger.current, hunger.max, { 200, 140, 70, 240 })
+end
+
 local function push_hotbar(widgets, screen)
 	local inv = client.inventory()
 	if #inv == 0 then
 		return
 	end
-	local slot_w, slot_h, gap = 96, 40, 6
-	local total_w = #inv * (slot_w + gap) - gap
-	local x = (screen.width - total_w) / 2
-	local y = screen.height - slot_h - 16
+	local slot_w, slot_h, gap = kSlotW, kSlotH, kSlotGap
+	local layout = hotbar_layout(screen)
+	local x = layout.x
+	local y = layout.y
 	local selected = client.selected_slot()
 
 	for i, slot in ipairs(inv) do
@@ -138,6 +209,7 @@ ui.define_hud(function(state)
 	push_player_list(widgets, screen)
 	push_chat_log(widgets, screen)
 	push_hotbar(widgets, screen)
+	push_status_bars(widgets, screen)
 
 	local progress = client.break_progress()
 	if progress then

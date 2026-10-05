@@ -34,4 +34,20 @@ struct S2CInventory {
 	static Decoded<S2CInventory> decode(std::span<const std::byte> in);
 };
 
+// The receiving player's own health and hunger, so a client UI can draw a
+// health/hunger bar (nothing else replicates these -- EntityRecord has no
+// health field). Sent to one player, and only when a value changes (plus
+// once right after joining). Full snapshot, same posture as S2CInventory.
+struct S2CPlayerStatus {
+	static constexpr MessageType kType = MessageType::kS2CPlayerStatus;
+
+	float health = 0.0f;
+	float max_health = 0.0f;
+	float hunger = 0.0f;
+	float max_hunger = 0.0f;
+
+	void encode(std::vector<std::byte> &out) const;
+	static Decoded<S2CPlayerStatus> decode(std::span<const std::byte> in);
+};
+
 } // namespace vb::protocol

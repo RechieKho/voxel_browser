@@ -1,6 +1,6 @@
 # `content/base` UI/UX — investigation and phased plan
 
-> Status: **U0 (first item) and U1 implemented; U2–U5 not started.** Covers the three reported
+> Status: **U0 (first item), U1, U2 and U3 implemented; U4–U5 not started.** (`PlayerHandle:get_health()`, automation health state and the e2e check are still open.) Covers the three reported
 > problems (no health bar, inventory not centered, inventory has no
 > container background) and the related gaps found while looking into them.
 > Same layout as `docs/content-base-testing.md`: findings first, then phases
@@ -116,36 +116,36 @@ U2 is the engine prerequisite for U3.
 
 ### U2 — Engine: send player status to the client (prerequisite for health/hunger UI)
 
-- [ ] Protocol: add `S2CPlayerStatus { float health, max_health, hunger,
+- [x] Protocol: add `S2CPlayerStatus { float health, max_health, hunger,
       max_hunger }` in `inc/vb/protocol/` with encode/decode and a
       `MessageType`. Send only to the owning player, only when a value
       changes (dirty flag in `apply_damage`, `set_player_health`, the
       respawn heal, and `update_hunger`), plus once at join. This follows
       `S2CInventory`'s "full snapshot, no deltas" approach.
-- [ ] Client session: store the latest status, and pass it to `UiRuntime`
+- [x] Client session: store the latest status, and pass it to `UiRuntime`
       each frame next to `set_inventory` in `client_app.cpp`.
-- [ ] `UiRuntime`: add `client.health()` returning `{current, max}` and
+- [x] `UiRuntime`: add `client.health()` returning `{current, max}` and
       `client.hunger()` returning `{current, max}`, or nil before the first
       status arrives.
 - [ ] Optional: add `PlayerHandle:get_health()` for server Lua, which closes
       the `content-base-testing.md` finding and lets the fall-damage tests
       run without `VB_WITH_AUTOMATION`.
-- [ ] Tests: protocol round-trip unit test, session test that damage
+- [x] Tests: protocol round-trip unit test, session test that damage
       produces a status message, `UiRuntime` test for the new accessors.
-- [ ] Docs: `docs/protocol.md` (new message) and `docs/lua-api.md` (new
+- [x] Docs: `docs/protocol.md` (new message) and `docs/lua-api.md` (new
       `client.*` functions).
 - [ ] Automation (optional): expose health in the automation state, so e2e
       tests can assert on it.
 
 ### U3 — Health bar (and hunger) in the HUD (Lua, needs U2)
 
-- [ ] `hud.lua`: add `push_health_bar`. Background, border and fill `rect`s
+- [x] `hud.lua`: add `push_health_bar`. Background, border and fill `rect`s
       above the hotbar, left-aligned to the hotbar's left edge. Fill width
       is `current / max`, and the color shifts from green to yellow to red as
       it drops. Optional `text` reading `"14 / 20"`.
-- [ ] Mirror it with a hunger bar right-aligned to the hotbar's right edge.
-- [ ] Hide both when `client.health()` returns nil (not joined yet).
-- [ ] Tests in `content_base_ui_test.cpp`: the bar exists, the fill width
+- [x] Mirror it with a hunger bar right-aligned to the hotbar's right edge.
+- [x] Hide both when `client.health()` returns nil (not joined yet).
+- [x] Tests in `content_base_ui_test.cpp`: the bar exists, the fill width
       scales with the value, and nothing is drawn when status is nil.
 - [ ] E2E (optional): take fall damage, then check the bar shrinks, through
       the automation widget cache.

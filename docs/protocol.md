@@ -4,7 +4,15 @@
 > as any change to a struct in `inc/vb/protocol/`, and bump
 > `kEngineProtocolVersion` in `cmake/version.hpp.in`.
 
-Current `ENGINE_PROTOCOL_VERSION`: **27**.
+Current `ENGINE_PROTOCOL_VERSION`: **28**.
+
+- **28** — `S2C_PlayerStatus` (108, lane `kControl`) payload defined:
+  `f32 health`, `f32 max_health`, `f32 hunger`, `f32 max_hunger`. Sent to
+  one player the tick after they join and again whenever any value changes
+  (the server diffs each tick, so damage, healing, hunger decay and respawn
+  all reach the client without per-source dirty flags). Full snapshot.
+  `ClientSession::player_status()` keeps the latest copy; `nullopt` until
+  the first arrives. Lets a Lua HUD draw health/hunger bars.
 
 - **27** — `C2SHello` (`C2S_Hello`, 1) gains a trailing `u8 client_flags`
   (new constant `kClientFlagAutomation = 1 << 0`). Clients built with
@@ -553,6 +561,10 @@ Sent to one player whenever their inventory changes (currently only
 delta — mirrors `S2C_PlayerList`'s "just resend the whole thing" posture.
 `ClientSession::inventory()` holds the latest copy client-side; the HUD
 hotbar (`src/client/main.cpp`) reads it directly.
+
+`S2C_PlayerStatus` (108) — `f32 health`, `f32 max_health`, `f32 hunger`,
+`f32 max_hunger`; see protocol 28 above. Read client-side through
+`client.health()`/`client.hunger()` in `ui/*.lua`.
 
 `S2C_Chat`/`S2C_OpenUi` sent by the server Lua runtime
 (`player:send_message`/`player:open_ui`, Phase 4.2); `ctx_json` is the

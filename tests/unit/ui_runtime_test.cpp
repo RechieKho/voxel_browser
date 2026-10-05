@@ -297,6 +297,24 @@ TEST_CASE("the HUD's state table persists across render_hud() calls, "
 	CHECK(ui.render_hud()[0].text == "3");
 }
 
+TEST_CASE("client.health()/client.hunger() are nil until a status is set, "
+		"then report current/max") {
+	UiRuntime ui;
+	REQUIRE(ui.load_pack_file(R"(
+		ui.define_hud(function(state)
+			local h, g = client.health(), client.hunger()
+			return { widgets = { { id = "s", type = "label", x=0,y=0,w=1,h=1,
+				text = (h and string.format("%d/%d", h.current, h.max) or "nil")
+					.. " " .. (g and string.format("%d/%d", g.current, g.max) or "nil") } } }
+		end)
+	)"));
+	CHECK(ui.render_hud()[0].text == "nil nil");
+	ui.set_player_status(UiRuntime::StatusView{ 14.0f, 20.0f, 60.0f, 100.0f });
+	CHECK(ui.render_hud()[0].text == "14/20 60/100");
+	ui.set_player_status(std::nullopt);
+	CHECK(ui.render_hud()[0].text == "nil nil");
+}
+
 TEST_CASE("report_hud_click invokes a HUD widget's on_click callback, "
 		"distinct from a modal screen's own widget_by_id map (REMAINING_TASKS' "
 		"'HUD widgets aren't wired to report_click/report_change' gap)") {

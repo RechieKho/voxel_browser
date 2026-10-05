@@ -255,4 +255,50 @@ TEST_CASE("content/base/ui: the HUD renders the hotbar, chat log, player list, "
 	CHECK(find(widgets2, "break_progress_fill") == nullptr);
 }
 
+TEST_CASE("content/base/ui: base:hud draws health and hunger bars above the "
+		"hotbar, scaled and colored by value, and nothing before status arrives") {
+	UiRuntime ui = load_base_ui();
+	ui.set_screen_size(1280, 720);
+	ui.set_inventory({ { "base:stone", 5 } }, 1);
+
+	// No S2C_PlayerStatus yet -> no bars.
+	{
+		const auto &w = ui.render_hud();
+		CHECK(find(w, "health_bg") == nullptr);
+		CHECK(find(w, "hunger_bg") == nullptr);
+	}
+
+	ui.set_player_status(UiRuntime::StatusView{ 20.0f, 20.0f, 100.0f, 100.0f });
+	const auto full = ui.render_hud();
+	const Widget *bg = find(full, "health_bg");
+	const Widget *fill = find(full, "health_fill");
+	const Widget *hotbar = find(full, "hotbar_bg_1");
+	REQUIRE(bg != nullptr);
+	REQUIRE(fill != nullptr);
+	REQUIRE(hotbar != nullptr);
+	CHECK(bg->y + bg->h <= hotbar->y); // sits above the hotbar
+	CHECK(bg->x == hotbar->x);         // left-aligned to it
+	CHECK(fill->w == doctest::Approx(bg->w - 2));
+	CHECK(find(full, "health_text")->text == "20 / 20");
+	const Widget *hunger_bg = find(full, "hunger_bg");
+	REQUIRE(hunger_bg != nullptr);
+	CHECK(hunger_bg->x > bg->x + bg->w); // hunger is to the right
+
+	// Half health: fill is half-width and turns yellow; low turns red.
+	ui.set_player_status(UiRuntime::StatusView{ 10.0f, 20.0f, 100.0f, 100.0f });
+	const auto half = ui.render_hud();
+	CHECK(find(half, "health_fill")->w == doctest::Approx((bg->w - 2) / 2));
+	const auto mid_g = find(half, "health_fill")->fill_g;
+	ui.set_player_status(UiRuntime::StatusView{ 4.0f, 20.0f, 100.0f, 100.0f });
+	const auto low = ui.render_hud();
+	CHECK(find(low, "health_fill")->fill_r > find(low, "health_fill")->fill_g);
+	CHECK(find(low, "health_fill")->fill_g < mid_g);
+
+	// Zero health: no fill rect at all, background still drawn.
+	ui.set_player_status(UiRuntime::StatusView{ 0.0f, 20.0f, 100.0f, 100.0f });
+	const auto dead = ui.render_hud();
+	CHECK(find(dead, "health_bg") != nullptr);
+	CHECK(find(dead, "health_fill") == nullptr);
+}
+
 #endif // VB_WITH_LUA

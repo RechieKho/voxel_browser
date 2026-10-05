@@ -65,6 +65,7 @@ enum class MessageType : std::uint16_t {
 	kS2CPlayerLeave = 105,
 	kS2CPlayerList = 106,
 	kS2CInventory = 107,
+	kS2CPlayerStatus = 108,
 };
 
 enum class Lane : std::uint8_t {

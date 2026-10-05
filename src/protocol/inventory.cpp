@@ -44,4 +44,26 @@ Decoded<S2CInventory> S2CInventory::decode(std::span<const std::byte> in) {
 	return m;
 }
 
+void S2CPlayerStatus::encode(std::vector<std::byte> &out) const {
+	ByteWriter w(out);
+	w.f32(health);
+	w.f32(max_health);
+	w.f32(hunger);
+	w.f32(max_hunger);
+}
+
+Decoded<S2CPlayerStatus> S2CPlayerStatus::decode(std::span<const std::byte> in) {
+	ByteReader r(in);
+	S2CPlayerStatus m;
+	m.health = r.f32();
+	m.max_health = r.f32();
+	m.hunger = r.f32();
+	m.max_hunger = r.f32();
+	r.expect_consumed();
+	if (r.failed()) {
+		return Err{ r.error() };
+	}
+	return m;
+}
+
 } // namespace vb::protocol
