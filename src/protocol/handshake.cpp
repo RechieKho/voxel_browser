@@ -76,7 +76,80 @@ Decoded<C2SAuth> C2SAuth::decode(std::span<const std::byte> in) {
 	ByteReader r(in);
 	C2SAuth m;
 	m.player_name = r.string();
-	m.token = r.string();
+	m.token = r.string(kMaxAuthTokenBytes);
+	return finish(r, std::move(m));
+}
+
+// --- S2CAuthChallenge -----------------------------------------------------
+void S2CAuthChallenge::encode(std::vector<std::byte> &out) const {
+	ByteWriter w(out);
+	w.string(provider);
+	w.string(display_name);
+	w.string(issuer);
+	w.string(client_id);
+	w.varint(scopes.size());
+	for (const auto &s : scopes) {
+		w.string(s);
+	}
+	w.varint(params.size());
+	for (const auto &[k, v] : params) {
+		w.string(k);
+		w.string(v);
+	}
+	w.string(nonce);
+}
+
+Decoded<S2CAuthChallenge> S2CAuthChallenge::decode(std::span<const std::byte> in) {
+	ByteReader r(in);
+	S2CAuthChallenge m;
+	m.provider = r.string(kMaxAuthFieldBytes);
+	m.display_name = r.string(kMaxAuthFieldBytes);
+	m.issuer = r.string(kMaxAuthFieldBytes);
+	m.client_id = r.string(kMaxAuthFieldBytes);
+	const std::uint64_t ns = r.varint();
+	if (!r.failed() && ns > kMaxAuthListEntries) {
+		return Err{ ProtocolError::kLengthExceeded };
+	}
+	for (std::uint64_t i = 0; i < ns && !r.failed(); ++i) {
+		m.scopes.push_back(r.string(kMaxAuthFieldBytes));
+	}
+	const std::uint64_t np = r.varint();
+	if (!r.failed() && np > kMaxAuthListEntries) {
+		return Err{ ProtocolError::kLengthExceeded };
+	}
+	for (std::uint64_t i = 0; i < np && !r.failed(); ++i) {
+		std::string k = r.string(kMaxAuthFieldBytes);
+		std::string v = r.string(kMaxAuthFieldBytes);
+		m.params.emplace_back(std::move(k), std::move(v));
+	}
+	m.nonce = r.string(kMaxAuthNonceBytes);
+	return finish(r, std::move(m));
+}
+
+// --- S2CReauthRequest / C2SReauth ----------------------------------------
+void S2CReauthRequest::encode(std::vector<std::byte> &out) const {
+	ByteWriter w(out);
+	w.string(nonce);
+	w.u16(grace_seconds);
+}
+
+Decoded<S2CReauthRequest> S2CReauthRequest::decode(std::span<const std::byte> in) {
+	ByteReader r(in);
+	S2CReauthRequest m;
+	m.nonce = r.string(kMaxAuthNonceBytes);
+	m.grace_seconds = r.u16();
+	return finish(r, std::move(m));
+}
+
+void C2SReauth::encode(std::vector<std::byte> &out) const {
+	ByteWriter w(out);
+	w.string(token);
+}
+
+Decoded<C2SReauth> C2SReauth::decode(std::span<const std::byte> in) {
+	ByteReader r(in);
+	C2SReauth m;
+	m.token = r.string(kMaxAuthTokenBytes);
 	return finish(r, std::move(m));
 }
 
@@ -85,6 +158,7 @@ void S2CAuthResult::encode(std::vector<std::byte> &out) const {
 	ByteWriter w(out);
 	w.boolean(ok);
 	w.string(reason);
+	w.string(resolved_name);
 }
 
 Decoded<S2CAuthResult> S2CAuthResult::decode(std::span<const std::byte> in) {
@@ -92,6 +166,7 @@ Decoded<S2CAuthResult> S2CAuthResult::decode(std::span<const std::byte> in) {
 	S2CAuthResult m;
 	m.ok = r.boolean();
 	m.reason = r.string();
+	m.resolved_name = r.string();
 	return finish(r, std::move(m));
 }
 

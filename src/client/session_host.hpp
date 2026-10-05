@@ -548,6 +548,8 @@ inline const char *connecting_status_text(vb::net::ClientHandshakeStatus s) {
 	switch (s) {
 		case ClientHandshakeStatus::kConnecting:
 			return "Connecting...";
+		case ClientHandshakeStatus::kAwaitingChallenge:
+			return "Waiting for sign-in request...";
 		case ClientHandshakeStatus::kAuthenticating:
 			return "Authenticating...";
 		case ClientHandshakeStatus::kAwaitingAssetManifest:

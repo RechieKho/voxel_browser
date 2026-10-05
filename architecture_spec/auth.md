@@ -2,7 +2,7 @@
 
 > Full detail for this topic; the backlog entry is `REMAINING_TASKS.md`
 > Phase 9. Status: **in progress — 9.0 (docs) and 9.1 (`auth.lua` loading, fail-closed
-> startup) landed 2026-10-05; 9.2+ not started.** Supersedes
+> startup) landed 2026-10-05; 9.2 (protocol v29 + handshake plumbing) landed; 9.3+ not started.** Supersedes
 > the 2026-09-17 direction on spec §18 Q6 ("engine owns no auth concept") —
 > see §11.
 
@@ -155,7 +155,7 @@ parse server.toml/CLI
 → PackRuntime load (auth.lua skipped by the walk) → worldgen → listen
 ```
 
-### 5.2 Handshake (protocol v28)
+### 5.2 Handshake (protocol v29; v28 was taken by S2C_PlayerStatus)
 
 ```
 Client                                         Server
@@ -443,7 +443,7 @@ day, M ≈ 2–3 days, L ≈ a week.
 - **Exit:** malformed `auth.lua` ⇒ exit 1 with a clear message; valid one ⇒
   config logged (redacted); no `auth.lua` ⇒ unchanged behavior.
 
-### 9.2 — Protocol v28 + handshake plumbing, stub verifier (M)
+### 9.2 — Protocol v29 + handshake plumbing, stub verifier (M)
 - [ ] `AuthMode::kExternal`; `S2C_AuthChallenge`; `S2C_AuthResult.resolved_name`;
       `C2S_Auth.token` 16 KiB cap; `S2C_ReauthRequest` / `C2S_Reauth`
       (wire format only here, used in 9.6); bump `kEngineProtocolVersion`;

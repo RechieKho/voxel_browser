@@ -848,8 +848,16 @@ void ServerSession::system_network_io(double dt_seconds) {
 					// ignore unknown types rather than dropping.
 					break;
 				}
+				const ServerHandshakeState prev_state = it->second.handshake.state();
 				auto step = it->second.handshake.on_frame(*frame);
 				send_frames(transport_, ev.conn, step.send);
+				// The (long) external sign-in window is over: the remaining
+				// states get a fresh handshake-timeout budget.
+				if (prev_state == ServerHandshakeState::kAwaitingAuth &&
+						it->second.handshake.state() ==
+								ServerHandshakeState::kAwaitingAssetManifestRequest) {
+					it->second.age = 0.0;
+				}
 				if (step.completed) {
 					it->second.playing = true;
 					++playing_;
@@ -947,8 +955,20 @@ void ServerSession::system_handshake_timeouts(double dt_seconds) {
 				continue;
 			}
 		}
+		if (state.handshake.state() == ServerHandshakeState::kVerifyingAuth) {
+			auto step = state.handshake.poll_auth();
+			send_frames(transport_, conn, step.send);
+			if (step.disconnect) {
+				to_drop.emplace_back(conn, "sign-in rejected");
+				continue;
+			}
+			if (state.handshake.state() ==
+					ServerHandshakeState::kAwaitingAssetManifestRequest) {
+				state.age = 0.0;
+			}
+		}
 		state.age += dt_seconds;
-		if (state.age > config_.handshake_timeout_seconds) {
+		if (state.age > state.handshake.timeout_seconds()) {
 			auto step = state.handshake.on_timeout();
 			send_frames(transport_, conn, step.send);
 			to_drop.emplace_back(conn, "handshake timeout");

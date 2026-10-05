@@ -2512,7 +2512,7 @@ void PackRuntime::install_join_veto(net::HandshakeServerHost &host) {
 			return outcome;
 		}
 		if (!self->run_veto("player_join", std::string(name))) {
-			return { false, "denied by pack" };
+			return { false, "denied by pack", {} };
 		}
 		return outcome;
 	};

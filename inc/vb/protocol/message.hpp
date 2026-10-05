@@ -26,6 +26,9 @@ enum class MessageType : std::uint16_t {
 	kC2SReady = 5,
 	kS2CJoinAccept = 6,
 	kS2CDisconnect = 7,
+	kS2CAuthChallenge = 8, // protocol v29, only when auth_mode == kExternal
+	kS2CReauthRequest = 9, // protocol v29 wire format; used from Phase 9.6
+	kC2SReauth = 10, // protocol v29 wire format; used from Phase 9.6
 
 	// --- asset sync (lane 3) ---
 	kC2SAssetManifestRequest = 20,

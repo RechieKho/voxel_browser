@@ -561,6 +561,59 @@ TEST_CASE("asset sync messages round-trip") {
 	CHECK(d3.bytes.empty());
 }
 
+TEST_CASE("external-auth messages round-trip and enforce their bounds") {
+	S2CAuthChallenge ch;
+	ch.provider = "keycloak";
+	ch.display_name = "Acme SSO";
+	ch.issuer = "https://id.example/realms/vb";
+	ch.client_id = "voxel";
+	ch.scopes = { "openid", "profile" };
+	ch.params = { { "sign_in", "browser" }, { "api_key", "k" } };
+	ch.nonce = "bm9uY2U";
+	auto c2 = round_trip(ch);
+	CHECK(c2.provider == "keycloak");
+	CHECK(c2.issuer == ch.issuer);
+	CHECK(c2.scopes == ch.scopes);
+	CHECK(c2.params == ch.params);
+	CHECK(c2.nonce == "bm9uY2U");
+
+	auto r2 = round_trip(S2CAuthResult{ true, "", "alice" });
+	CHECK(r2.resolved_name == "alice");
+
+	auto q2 = round_trip(S2CReauthRequest{ "n", 120 });
+	CHECK(q2.nonce == "n");
+	CHECK(q2.grace_seconds == 120);
+	CHECK(round_trip(C2SReauth{ "jwt" }).token == "jwt");
+
+	CHECK(valid(AuthMode::kExternal));
+	CHECK_FALSE(valid(static_cast<AuthMode>(3)));
+
+	// Token cap: exactly the limit decodes, one byte over is rejected.
+	C2SAuth big{ "n", std::string(kMaxAuthTokenBytes, 'a') };
+	CHECK(round_trip(big).token.size() == kMaxAuthTokenBytes);
+	big.token.push_back('a');
+	std::vector<std::byte> bytes;
+	big.encode(bytes);
+	auto over = C2SAuth::decode(as_span(bytes));
+	CHECK_FALSE(over);
+	CHECK(over.error() == vb::core::ProtocolError::kLengthExceeded);
+
+	// Too many scopes.
+	S2CAuthChallenge many = ch;
+	many.scopes.assign(kMaxAuthListEntries + 1, "s");
+	bytes.clear();
+	many.encode(bytes);
+	CHECK_FALSE(S2CAuthChallenge::decode(as_span(bytes)));
+
+	// Truncated payloads never crash.
+	bytes.clear();
+	ch.encode(bytes);
+	for (std::size_t n = 0; n < bytes.size(); ++n) {
+		CHECK_FALSE(S2CAuthChallenge::decode(
+				std::span<const std::byte>(bytes.data(), n)));
+	}
+}
+
 TEST_CASE("decode rejects a bad enum and trailing bytes") {
 	std::vector<std::byte> bytes;
 	S2CServerInfo{ "p", "v", 1, 20, 8, "m", AuthMode::kNone }.encode(bytes);

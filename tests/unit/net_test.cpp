@@ -199,7 +199,7 @@ TEST_CASE("full handshake, auth_mode=none") {
 TEST_CASE("handshake rejects a bad player name") {
 	Harness h;
 	h.server_host.authenticate = [](std::string_view, std::string_view) {
-		return AuthOutcome{ false, "name taken" };
+		return AuthOutcome{ false, "name taken", {} };
 	};
 	h.start();
 	h.run();
@@ -459,3 +459,228 @@ TEST_CASE("frame_message leaves a small payload uncompressed") {
 }
 
 #endif // VB_WITH_COMPRESSION
+
+// ---------------------------------------------------------------------------
+// External authentication (auth.md §5.2): challenge, async verification
+// ---------------------------------------------------------------------------
+
+namespace {
+
+struct ExternalAuthFsm {
+	HandshakeServerConfig config;
+	HandshakeServerHost host;
+	std::unique_ptr<ServerHandshake> fsm;
+	int begin_calls = 0;
+	std::string seen_token;
+	std::string seen_nonce;
+	std::optional<vb::net::AuthOutcome> verdict; // what the pending ticket returns
+
+	ExternalAuthFsm() {
+		config.auth_mode = proto::AuthMode::kExternal;
+		host.auth_challenge = [] {
+			proto::S2CAuthChallenge c;
+			c.provider = "oidc";
+			c.issuer = "https://idp.example";
+			c.client_id = "vb";
+			c.nonce = "nonce-1";
+			return std::optional<proto::S2CAuthChallenge>(c);
+		};
+		host.begin_authenticate = [this](std::string_view token, std::string_view nonce) {
+			++begin_calls;
+			seen_token = std::string(token);
+			seen_nonce = std::string(nonce);
+			return vb::net::AuthTicket([this] { return verdict; });
+		};
+	}
+	void build() { fsm = std::make_unique<ServerHandshake>(config, host); }
+
+	template <typename Msg>
+	vb::net::ServerHandshakeStep feed(Msg msg) {
+		std::vector<std::byte> payload;
+		msg.encode(payload);
+		std::vector<std::byte> frame;
+		proto::write_frame(frame, Msg::kType, payload);
+		std::size_t consumed = 0;
+		auto parsed = proto::read_frame(span_of(frame), consumed);
+		REQUIRE(parsed);
+		return fsm->on_frame(*parsed);
+	}
+};
+
+proto::MessageType first_type(const vb::net::OutgoingFrame &f) {
+	std::size_t consumed = 0;
+	auto parsed = proto::read_frame(span_of(f.bytes), consumed);
+	REQUIRE(parsed);
+	return parsed->header.type;
+}
+
+} // namespace
+
+TEST_CASE("external auth: Hello is answered with ServerInfo then AuthChallenge") {
+	ExternalAuthFsm t;
+	t.build();
+	auto step = t.feed(proto::C2SHello{ vb::kEngineProtocolVersion, 1, "t" });
+	REQUIRE(step.send.size() == 2);
+	CHECK(first_type(step.send[0]) == proto::MessageType::kS2CServerInfo);
+	CHECK(first_type(step.send[1]) == proto::MessageType::kS2CAuthChallenge);
+	CHECK(t.fsm->state() == ServerHandshakeState::kAwaitingAuth);
+	CHECK(t.fsm->timeout_seconds() == doctest::Approx(300.0));
+}
+
+TEST_CASE("external auth fails closed without a challenge or a verifier") {
+	{
+		ExternalAuthFsm t;
+		t.host.auth_challenge = [] { return std::optional<proto::S2CAuthChallenge>{}; };
+		t.build();
+		auto step = t.feed(proto::C2SHello{ vb::kEngineProtocolVersion, 1, "t" });
+		CHECK(step.disconnect);
+		CHECK(step.disconnect_reason == proto::DisconnectReason::kAuthFailed);
+	}
+	{
+		ExternalAuthFsm t;
+		t.host.begin_authenticate = nullptr;
+		t.build();
+		t.feed(proto::C2SHello{ vb::kEngineProtocolVersion, 1, "t" });
+		auto step = t.feed(proto::C2SAuth{ "ignored", "jwt" });
+		CHECK(step.disconnect);
+		CHECK(t.fsm->state() == ServerHandshakeState::kClosed);
+	}
+}
+
+TEST_CASE("external auth: pending ticket resolves on poll_auth, accepted name wins") {
+	ExternalAuthFsm t;
+	t.build();
+	t.feed(proto::C2SHello{ vb::kEngineProtocolVersion, 1, "t" });
+	auto step = t.feed(proto::C2SAuth{ "ignored", "jwt-abc" });
+	CHECK(step.send.empty());
+	CHECK(t.fsm->state() == ServerHandshakeState::kVerifyingAuth);
+	CHECK(t.seen_token == "jwt-abc");
+	CHECK(t.seen_nonce == "nonce-1");
+
+	// Still pending: nothing happens, extra client messages are refused.
+	CHECK(t.fsm->poll_auth().send.empty());
+	CHECK(t.fsm->state() == ServerHandshakeState::kVerifyingAuth);
+
+	t.verdict = vb::net::AuthOutcome{ true, {}, "alice" };
+	auto done = t.fsm->poll_auth();
+	REQUIRE(done.send.size() == 1);
+	CHECK(first_type(done.send[0]) == proto::MessageType::kS2CAuthResult);
+	CHECK_FALSE(done.disconnect);
+	CHECK(t.fsm->state() == ServerHandshakeState::kAwaitingAssetManifestRequest);
+	CHECK(t.fsm->player_name() == "alice");
+	CHECK(t.fsm->timeout_seconds() == doctest::Approx(t.config.handshake_timeout_seconds));
+}
+
+TEST_CASE("external auth: fast-path ticket resolves inside on_frame") {
+	ExternalAuthFsm t;
+	t.verdict = vb::net::AuthOutcome{ true, {}, "bob" };
+	t.build();
+	t.feed(proto::C2SHello{ vb::kEngineProtocolVersion, 1, "t" });
+	auto step = t.feed(proto::C2SAuth{ "x", "jwt" });
+	CHECK(step.send.size() == 1);
+	CHECK(t.fsm->state() == ServerHandshakeState::kAwaitingAssetManifestRequest);
+	CHECK(t.fsm->player_name() == "bob");
+}
+
+TEST_CASE("external auth: rejected token disconnects and never reaches the asset manifest") {
+	ExternalAuthFsm t;
+	t.verdict = vb::net::AuthOutcome{ false, "not accepted by this server", {} };
+	t.build();
+	t.feed(proto::C2SHello{ vb::kEngineProtocolVersion, 1, "t" });
+	auto step = t.feed(proto::C2SAuth{ "x", "bad" });
+	CHECK(step.disconnect);
+	CHECK(step.disconnect_reason == proto::DisconnectReason::kAuthFailed);
+	CHECK(t.fsm->state() == ServerHandshakeState::kClosed);
+
+	// A manifest request after the rejection is refused (no manifest sent).
+	auto after = t.feed(proto::C2SAssetManifestRequest{});
+	for (const auto &f : after.send) {
+		CHECK(first_type(f) != proto::MessageType::kS2CAssetManifest);
+	}
+}
+
+TEST_CASE("external auth: a message while verifying is a handshake error") {
+	ExternalAuthFsm t;
+	t.build();
+	t.feed(proto::C2SHello{ vb::kEngineProtocolVersion, 1, "t" });
+	t.feed(proto::C2SAuth{ "x", "jwt" });
+	auto step = t.feed(proto::C2SAssetManifestRequest{});
+	CHECK(step.disconnect);
+}
+
+TEST_CASE("external auth: client obtains a token from the challenge") {
+	std::string seen_nonce;
+	HandshakeClientConfig cc;
+	cc.player_name = "Player";
+	vb::net::HandshakeClientHost chost;
+	chost.obtain_token = [&](const proto::S2CAuthChallenge &c) {
+		seen_nonce = c.nonce;
+		return std::optional<std::string>("jwt-from-idp");
+	};
+	ClientHandshake client(cc, chost);
+	client.start();
+
+	auto frame_of = [](auto msg) {
+		std::vector<std::byte> payload;
+		msg.encode(payload);
+		std::vector<std::byte> frame;
+		proto::write_frame(frame, decltype(msg)::kType, payload);
+		return frame;
+	};
+	proto::S2CServerInfo info;
+	info.engine_protocol_version = vb::kEngineProtocolVersion;
+	info.auth_mode = proto::AuthMode::kExternal;
+	auto f1 = frame_of(info);
+	std::size_t consumed = 0;
+	auto p1 = proto::read_frame(span_of(f1), consumed);
+	REQUIRE(p1);
+	CHECK(client.on_frame(*p1).send.empty()); // waits for the challenge
+	CHECK(client.status() == ClientHandshakeStatus::kAwaitingChallenge);
+
+	proto::S2CAuthChallenge ch;
+	ch.nonce = "n-xyz";
+	auto f2 = frame_of(ch);
+	auto p2 = proto::read_frame(span_of(f2), consumed);
+	REQUIRE(p2);
+	auto step = client.on_frame(*p2);
+	REQUIRE(step.send.size() == 1);
+	CHECK(seen_nonce == "n-xyz");
+	CHECK(client.status() == ClientHandshakeStatus::kAuthenticating);
+
+	std::size_t c2 = 0;
+	auto sent = proto::read_frame(span_of(step.send[0].bytes), c2);
+	REQUIRE(sent);
+	auto auth = proto::C2SAuth::decode(sent->payload);
+	REQUIRE(auth);
+	CHECK(auth->token == "jwt-from-idp");
+
+	auto f3 = frame_of(proto::S2CAuthResult{ true, "", "alice" });
+	auto p3 = proto::read_frame(span_of(f3), consumed);
+	REQUIRE(p3);
+	client.on_frame(*p3);
+	CHECK(client.resolved_name() == "alice");
+	CHECK(client.status() == ClientHandshakeStatus::kAwaitingAssetManifest);
+}
+
+TEST_CASE("external auth: client without a token source cancels the join") {
+	ClientHandshake client(HandshakeClientConfig{});
+	client.start();
+	proto::S2CServerInfo info;
+	info.engine_protocol_version = vb::kEngineProtocolVersion;
+	info.auth_mode = proto::AuthMode::kExternal;
+	std::vector<std::byte> payload, frame;
+	info.encode(payload);
+	proto::write_frame(frame, proto::MessageType::kS2CServerInfo, payload);
+	std::size_t consumed = 0;
+	auto p = proto::read_frame(span_of(frame), consumed);
+	REQUIRE(p);
+	client.on_frame(*p);
+
+	payload.clear();
+	frame.clear();
+	proto::S2CAuthChallenge{}.encode(payload);
+	proto::write_frame(frame, proto::MessageType::kS2CAuthChallenge, payload);
+	auto p2 = proto::read_frame(span_of(frame), consumed);
+	REQUIRE(p2);
+	CHECK(client.on_frame(*p2).failed);
+}

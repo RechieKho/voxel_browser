@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "vb/core/ids.hpp"
@@ -24,10 +25,21 @@ using Decoded = core::Result<T, core::ProtocolError>;
 enum class AuthMode : std::uint8_t {
 	kNone = 0,
 	kToken = 1,
+	// Pack-level auth.lua: the client signs in with an external identity
+	// provider and the server verifies the ID token (docs/auth.md design:
+	// architecture_spec/auth.md). Followed by S2C_AuthChallenge.
+	kExternal = 2,
 };
 constexpr bool valid(AuthMode m) {
-	return m == AuthMode::kNone || m == AuthMode::kToken;
+	return m == AuthMode::kNone || m == AuthMode::kToken ||
+			m == AuthMode::kExternal;
 }
+
+// Wire bounds for the external-auth messages (auth.md §5.2).
+inline constexpr std::size_t kMaxAuthTokenBytes = 16u * 1024u;
+inline constexpr std::size_t kMaxAuthFieldBytes = 2048;
+inline constexpr std::size_t kMaxAuthNonceBytes = 256;
+inline constexpr std::size_t kMaxAuthListEntries = 16;
 
 enum class DisconnectReason : std::uint8_t {
 	kUnknown = 0,
@@ -90,10 +102,47 @@ struct C2SAuth {
 	static Decoded<C2SAuth> decode(std::span<const std::byte> in);
 };
 
+// Sent right after S2C_ServerInfo when auth_mode == kExternal: tells the
+// client which identity provider to sign in with and the server's one-time
+// nonce, which the client must bind into the sign-in request so the resulting
+// ID token cannot be replayed against another connection.
+struct S2CAuthChallenge {
+	static constexpr MessageType kType = MessageType::kS2CAuthChallenge;
+	std::string provider; // "oidc" | "keycloak" | "firebase"
+	std::string display_name;
+	std::string issuer;
+	std::string client_id;
+	std::vector<std::string> scopes;
+	std::vector<std::pair<std::string, std::string>> params; // preset extras
+	std::string nonce; // base64url, <= kMaxAuthNonceBytes
+
+	void encode(std::vector<std::byte> &out) const;
+	static Decoded<S2CAuthChallenge> decode(std::span<const std::byte> in);
+};
+
+// Periodic live re-authentication (wire format only until Phase 9.6).
+struct S2CReauthRequest {
+	static constexpr MessageType kType = MessageType::kS2CReauthRequest;
+	std::string nonce;
+	std::uint16_t grace_seconds = 0;
+
+	void encode(std::vector<std::byte> &out) const;
+	static Decoded<S2CReauthRequest> decode(std::span<const std::byte> in);
+};
+
+struct C2SReauth {
+	static constexpr MessageType kType = MessageType::kC2SReauth;
+	std::string token;
+
+	void encode(std::vector<std::byte> &out) const;
+	static Decoded<C2SReauth> decode(std::span<const std::byte> in);
+};
+
 struct S2CAuthResult {
 	static constexpr MessageType kType = MessageType::kS2CAuthResult;
 	bool ok = false;
 	std::string reason;
+	std::string resolved_name; // name the server will use (kExternal: from name_claim)
 
 	void encode(std::vector<std::byte> &out) const;
 	static Decoded<S2CAuthResult> decode(std::span<const std::byte> in);
