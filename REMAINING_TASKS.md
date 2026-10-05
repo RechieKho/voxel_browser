@@ -465,6 +465,42 @@ surface and per-phase task lists: `architecture_spec/dev-cli.md` §11.
 
 ---
 
+## Phase 9 — In-Engine Authentication (`auth.lua`) — planned (2026-10-05)
+
+User-requested: a pack-level `auth.lua` declares the identity provider
+(generic OIDC, Keycloak, Firebase); its **presence makes authentication
+mandatory**. The engine signs the player in and verifies the ID token
+server-side during the handshake, before any asset/registry/chunk is sent.
+Pack scripts read verified login data via `player:get_login()`, which is
+`nil` exactly when the server isn't authenticating. Supersedes the
+2026-09-17 §18 Q6 "engine owns no auth concept" direction. Full design,
+protocol changes, security notes and per-step task lists:
+`architecture_spec/auth.md` §12.
+
+- [ ] **9.0 — Decision & docs** (spec §17/§18, networking diagram).
+- [ ] **9.1 — `auth.lua` loading & fail-closed startup**: sandboxed
+      return-a-table config VM, validation, presets, `server.toml [auth]`
+      overrides, dev-only `--insecure-skip-auth`, refuse to start without
+      `VB_WITH_AUTH`.
+- [ ] **9.2 — Protocol v28 + handshake plumbing**: `AuthMode::kExternal`,
+      `S2C_AuthChallenge` (server nonce), async `kVerifyingAuth`, per-state
+      auth timeout; stub verifier.
+- [ ] **9.3 — Server token verification**: Mbed TLS + curl, JWT/JWKS,
+      discovery, RS256/ES256 allowlist, iss/aud/exp/nonce checks, fuzzers.
+- [ ] **9.4 — Lua exposure**: `player:get_login()`, `player_join(name,
+      login)`, `vb.auth.required()`, name from `name_claim`, identity by
+      `(issuer, subject)`.
+- [ ] **9.5 — Client sign-in**: engine-drawn `kSigningIn` screen, OIDC
+      PKCE loopback redirect (RFC 8252) in the system browser, Firebase
+      password form, `--auth-token-file` for headless.
+- [ ] **9.6 — Sessions & UX**: refresh-token cache, silent re-login, sign
+      out, first-use trust prompt.
+- [ ] **9.7 — Singleplayer, `vb`, e2e**: real sign-in in singleplayer,
+      mock IdP e2e tests.
+- [ ] **9.8 — Hardening**: rate limits, operator guide (`docs/auth.md`).
+
+---
+
 ## Cross-Cutting / Continuous
 
 Full detail: `remaining_tasks/cross_cutting.md`.
@@ -530,7 +566,7 @@ Full detail: `remaining_tasks/cross_cutting.md`.
 
 ## Deferred (post first-playable)
 
-region file format versioning/migration · token auth verification · audio subsystem + Lua sfx/music API · server-side
+region file format versioning/migration · audio subsystem + Lua sfx/music API · server-side
 plugin hot-reload · entity-entity physics/mounts/projectiles · particle
 system beyond block-break puffs · compression tuning (zstd, snapshot deltas,
 bit-packed inputs) · dedicated server browser/master list · modding

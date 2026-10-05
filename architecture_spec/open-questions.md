@@ -127,6 +127,13 @@
    browser or client secret is needed. This would land as a new `auth_mode =
    oidc` value at the transport/handshake level, alongside (not replacing)
    the pack-level `vb.db`-based identity approach above.
+   **Direction revised (2026-10-05, planned as Phase 9):** mandatory,
+   engine-verified auth declared by a pack-level `auth.lua` (provider,
+   client id, scopes, name/claim mapping); presence = mandatory, verified
+   during the handshake before asset sync, exposed to Lua as
+   `player:get_login()` (`nil` = no auth). This is the anticipated
+   `auth_mode = oidc`, chosen by the pack rather than `server.toml`. Full
+   design: `architecture_spec/auth.md`.
 7. **Entity visual presentation**: 3D blocky models vs. 2D sprites.
    **Resolved (2026-09-11): Don't Starve-style Y-axis-billboarded sprites**, not
    blocky models — full design in §11.3. Key parameters locked in: raylib
