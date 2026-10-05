@@ -375,6 +375,7 @@ void UiRuntime::Impl::install_bindings() {
 			sol::table entry = lua_state().create_table();
 			entry["name"] = slot.name;
 			entry["count"] = slot.count;
+			entry["item"] = slot.item;
 			t[i++] = entry;
 		}
 		return t;

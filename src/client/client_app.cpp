@@ -676,7 +676,8 @@ bool ClientApp::frame(const vb::render::InputFrame &input, double dt) {
 					std::string name = registry.contains(slot.item)
 							? registry.get(slot.item).name
 							: "?";
-					slots.push_back({ std::move(name), slot.count });
+					slots.push_back({ std::move(name), slot.count,
+							static_cast<std::uint32_t>(slot.item) });
 				}
 				ui_runtime.set_inventory(std::move(slots), selected_slot + 1);
 			}

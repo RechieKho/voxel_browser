@@ -99,16 +99,22 @@ local function push_chat_log(widgets, screen)
 	end
 end
 
-local kSlotW, kSlotH, kSlotGap = 96, 40, 6
+-- The hotbar is the first kHotbarSlots inventory slots -- the ones the
+-- number keys 1-9 can select (src/client/client_app.cpp) -- as square icon
+-- slots on a shared container.
+local kHotbarSlots = 9
+local kSlotSize, kSlotGap = 44, 6
 local kHotbarMargin = 16
+local kHotbarPad = 6
 
--- Shared by the hotbar and the status bars that sit on top of it.
+-- Shared by the hotbar and the status bars that sit on top of it. `x/y/w`
+-- describe the row of slots, not the container behind them.
 local function hotbar_layout(screen)
-	local n = math.max(#client.inventory(), 1)
-	local total_w = n * (kSlotW + kSlotGap) - kSlotGap
+	local n = math.min(math.max(#client.inventory(), 1), kHotbarSlots)
+	local total_w = n * (kSlotSize + kSlotGap) - kSlotGap
 	return {
 		x = (screen.width - total_w) / 2,
-		y = screen.height - kSlotH - kHotbarMargin,
+		y = screen.height - kSlotSize - kHotbarMargin - kHotbarPad,
 		w = total_w,
 	}
 end
@@ -154,8 +160,8 @@ local function push_status_bars(widgets, screen)
 	end
 	local bar = hotbar_layout(screen)
 	local gap, h = 12, 14
-	local w = (bar.w - gap) / 2
-	local y = bar.y - h - 8
+	local w = (bar.w - gap) / 2 -- bars span the slot row, not the container
+	local y = bar.y - kHotbarPad - h - 6
 
 	-- Green -> yellow -> red as health drops.
 	local frac = health.max > 0 and health.current / health.max or 0
@@ -175,30 +181,50 @@ local function push_hotbar(widgets, screen)
 	if #inv == 0 then
 		return
 	end
-	local slot_w, slot_h, gap = kSlotW, kSlotH, kSlotGap
 	local layout = hotbar_layout(screen)
-	local x = layout.x
-	local y = layout.y
 	local selected = client.selected_slot()
+	local n = math.min(#inv, kHotbarSlots)
 
-	for i, slot in ipairs(inv) do
+	table.insert(widgets, {
+		id = "hotbar_container",
+		type = "rect",
+		x = layout.x - kHotbarPad,
+		y = layout.y - kHotbarPad,
+		w = layout.w + 2 * kHotbarPad,
+		h = kSlotSize + 2 * kHotbarPad,
+		color = { 20, 20, 26, 190 },
+		border = { 110, 110, 125, 230 },
+	})
+
+	for i = 1, n do
+		local slot = inv[i]
+		local x = layout.x + (i - 1) * (kSlotSize + kSlotGap)
+		local y = layout.y
 		table.insert(widgets, {
 			id = "hotbar_bg_" .. i,
 			type = "rect",
-			x = x, y = y, w = slot_w, h = slot_h,
-			color = { 30, 30, 34, 200 },
+			x = x, y = y, w = kSlotSize, h = kSlotSize,
+			color = { 40, 40, 46, 220 },
 			border = (i == selected) and { 230, 220, 120, 255 } or { 90, 90, 100, 230 },
 		})
-		table.insert(widgets, {
-			id = "hotbar_label_" .. i,
-			type = "text",
-			x = x + 6,
-			y = y + 12,
-			font_size = 14,
-			text = string.format("%s x%d", slot.name, slot.count),
-			color = { 220, 220, 220, 230 },
-		})
-		x = x + slot_w + gap
+		if slot.item ~= 0 and slot.count > 0 then
+			table.insert(widgets, {
+				id = "hotbar_icon_" .. i,
+				type = "icon",
+				x = x + 3, y = y + 3, w = kSlotSize - 6, h = kSlotSize - 6,
+				item = slot.item,
+			})
+			table.insert(widgets, {
+				id = "hotbar_count_" .. i,
+				type = "text",
+				x = x + kSlotSize - 4,
+				y = y + kSlotSize - 14,
+				align = "right",
+				font_size = 12,
+				text = tostring(slot.count),
+				color = { 255, 255, 255, 255 },
+			})
+		end
 	end
 end
 

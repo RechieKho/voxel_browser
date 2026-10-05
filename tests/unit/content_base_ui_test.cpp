@@ -127,7 +127,7 @@ TEST_CASE("content/base/ui: base:inventory panel and backdrop are centered at an
 	const int sizes[][2] = { { 1280, 720 }, { 800, 600 } };
 	for (const auto &sz : sizes) {
 		ui.set_screen_size(sz[0], sz[1]);
-		ui.set_inventory({ { "base:stone", 5 }, { "base:planks", 2 } }, /*selected_slot=*/2);
+		ui.set_inventory({ { "base:stone", 5, 2 }, { "base:planks", 2, 3 } }, /*selected_slot=*/2);
 		ui.open("base:inventory", R"({"slots":[{"item":2,"count":5},{"item":3,"count":1}]})");
 		REQUIRE(ui.is_open());
 		const auto &widgets = ui.render_frame();
@@ -187,12 +187,9 @@ TEST_CASE("content/base/ui: base:inventory renders one row of widgets per slot, 
 			REQUIRE_MESSAGE(find(widgets, "slot_icon_" + n) != nullptr, n);
 			REQUIRE_MESSAGE(find(widgets, "slot_count_" + n) != nullptr, n);
 		}
-		// ctx_json's numbers parse as Lua floats (open()'s JSON -> Lua
-		// table conversion), and tostring() on a float prints "5.0", not
-		// "5" -- the real inventory screen has this same quirk whenever a
-		// slot's count round-trips through JSON (same class of thing
-		// init.lua's own boot_count comment calls out).
-		CHECK(find(widgets, "slot_count_1")->text == "5.0");
+		// ctx_json's numbers parse as Lua floats; the screen formats counts
+		// with %d so a snapshot-supplied "5.0" still shows as "5".
+		CHECK(find(widgets, "slot_count_1")->text == "5");
 		CHECK(find(widgets, "empty") == nullptr);
 		REQUIRE(find(widgets, "close") != nullptr);
 	}
@@ -216,8 +213,8 @@ TEST_CASE("content/base/ui: the HUD renders the hotbar, chat log, player list, "
 
 	ui.set_player_list("Alice", { "Bob", "Carol" });
 	ui.set_chat({ "Alice: hi", "Bob: hey" }, false);
-	ui.set_inventory(
-			{ { "base:stone", 5 }, { "base:planks", 2 } }, /*selected_slot=*/1);
+	ui.set_inventory({ { "base:stone", 5, 2 }, { "base:planks", 2, 3 }, { "air", 0, 0 } },
+			/*selected_slot=*/1);
 	ui.set_break_progress(0.25f);
 
 	const auto &widgets = ui.render_hud();
@@ -235,11 +232,18 @@ TEST_CASE("content/base/ui: the HUD renders the hotbar, chat log, player list, "
 	CHECK(find(widgets, "chat_log_1")->text == "Alice: hi");
 	CHECK(find(widgets, "chat_log_2")->text == "Bob: hey");
 
-	// Hotbar: one bg/label pair per inventory slot, selected slot's bg
-	// outlined differently (hud.lua's own border color branch).
+	// Hotbar: a container, one bg per slot (selected slot's outlined
+	// differently), and an icon + count only for non-empty slots.
+	REQUIRE(find(widgets, "hotbar_container") != nullptr);
 	REQUIRE(find(widgets, "hotbar_bg_1") != nullptr);
-	CHECK(find(widgets, "hotbar_label_1")->text == "base:stone x5");
-	CHECK(find(widgets, "hotbar_label_2")->text == "base:planks x2");
+	CHECK(find(widgets, "hotbar_bg_1")->border_g != find(widgets, "hotbar_bg_2")->border_g);
+	REQUIRE(find(widgets, "hotbar_icon_1") != nullptr);
+	CHECK(find(widgets, "hotbar_icon_1")->item == vb::core::BlockId{ 2 });
+	CHECK(find(widgets, "hotbar_count_1")->text == "5");
+	CHECK(find(widgets, "hotbar_icon_2")->item == vb::core::BlockId{ 3 });
+	REQUIRE(find(widgets, "hotbar_bg_3") != nullptr);
+	CHECK(find(widgets, "hotbar_icon_3") == nullptr); // empty slot: bg only
+	CHECK(find(widgets, "hotbar_count_3") == nullptr);
 
 	// Break-progress bar: fill width tracks the fraction.
 	const Widget *bg = find(widgets, "break_progress_bg");
@@ -259,7 +263,7 @@ TEST_CASE("content/base/ui: base:hud draws health and hunger bars above the "
 		"hotbar, scaled and colored by value, and nothing before status arrives") {
 	UiRuntime ui = load_base_ui();
 	ui.set_screen_size(1280, 720);
-	ui.set_inventory({ { "base:stone", 5 } }, 1);
+	ui.set_inventory({ { "base:stone", 5, 2 } }, 1);
 
 	// No S2C_PlayerStatus yet -> no bars.
 	{
@@ -299,6 +303,46 @@ TEST_CASE("content/base/ui: base:hud draws health and hunger bars above the "
 	const auto dead = ui.render_hud();
 	CHECK(find(dead, "health_bg") != nullptr);
 	CHECK(find(dead, "health_fill") == nullptr);
+}
+
+TEST_CASE("content/base/ui: the hotbar shows at most the 9 selectable slots, "
+		"centered, with the container wrapping them") {
+	UiRuntime ui = load_base_ui();
+	ui.set_screen_size(1280, 720);
+	std::vector<UiRuntime::InventorySlotView> slots;
+	for (int i = 0; i < 12; ++i) {
+		slots.push_back({ "base:stone", 1, 2 });
+	}
+	ui.set_inventory(slots, 1);
+	const auto &w = ui.render_hud();
+	CHECK(find(w, "hotbar_bg_9") != nullptr);
+	CHECK(find(w, "hotbar_bg_10") == nullptr);
+
+	const Widget *first = find(w, "hotbar_bg_1");
+	const Widget *last = find(w, "hotbar_bg_9");
+	const Widget *box = find(w, "hotbar_container");
+	REQUIRE(box != nullptr);
+	CHECK(box->x < first->x);
+	CHECK(box->x + box->w > last->x + last->w);
+	CHECK(std::abs((box->x + box->w / 2.0f) - 640.0f) <= 1.0f);
+}
+
+TEST_CASE("content/base/ui: base:inventory shows the live inventory, falling "
+		"back to the open-time snapshot only when there is none") {
+	UiRuntime ui = load_base_ui();
+	ui.set_screen_size(1280, 720);
+	ui.open("base:inventory", R"({"slots":[{"item":2,"count":5}]})");
+	REQUIRE(ui.is_open());
+
+	// No live inventory yet -> the snapshot.
+	CHECK(find(ui.render_frame(), "slot_bg_2") == nullptr);
+
+	// Live inventory arrives while the screen is open -> it wins, next frame.
+	ui.set_inventory({ { "base:stone", 7, 2 }, { "base:planks", 3, 3 } }, 1);
+	const auto &w = ui.render_frame();
+	REQUIRE(find(w, "slot_bg_2") != nullptr);
+	CHECK(find(w, "slot_count_1")->text == "7");
+	CHECK(find(w, "slot_icon_2")->item == vb::core::BlockId{ 3 });
 }
 
 #endif // VB_WITH_LUA

@@ -194,6 +194,9 @@ public:
 	struct InventorySlotView {
 		std::string name;
 		std::uint32_t count = 0;
+		// Raw block/item id (0 = empty slot) -- what an `icon` widget's
+		// `item` field takes.
+		std::uint32_t item = 0;
 	};
 
 	// Sets the state `client.inventory()`/`client.selected_slot()` read

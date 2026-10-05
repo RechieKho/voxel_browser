@@ -1,6 +1,6 @@
 # `content/base` UI/UX — investigation and phased plan
 
-> Status: **U0 (first item), U1, U2 and U3 implemented; U4–U5 not started.** (`PlayerHandle:get_health()`, automation health state and the e2e check are still open.) Covers the three reported
+> Status: **U0 (first item), U1, U2, U3 and U4 implemented; U5 not started.** (`PlayerHandle:get_health()`, automation health state and the e2e check are still open.) Covers the three reported
 > problems (no health bar, inventory not centered, inventory has no
 > container background) and the related gaps found while looking into them.
 > Same layout as `docs/content-base-testing.md`: findings first, then phases
@@ -152,14 +152,14 @@ U2 is the engine prerequisite for U3.
 
 ### U4 — Hotbar polish (needs a small engine change)
 
-- [ ] Engine: add `item` (the raw block/item id) to each
+- [x] Engine: add `item` (the raw block/item id) to each
       `client.inventory()` entry. `InventorySlotView` gets an id field, and
       `client_app.cpp` already has `slot.item` in hand.
-- [ ] `hud.lua`: switch the hotbar to square icon slots (`icon` + count
+- [x] `hud.lua`: switch the hotbar to square icon slots (`icon` + count
       `text`, same composition as `inventory.lua`). Cap it at 9 slots to
       match the 1–9 selection keys. Add a container `rect` behind the bar
       and skip drawing empty slots' labels.
-- [ ] `inventory.lua`: optionally switch to live `client.inventory()`
+- [x] `inventory.lua`: optionally switch to live `client.inventory()`
       instead of the open-time `state.slots` snapshot, so the screen updates
       while open. Keep `state.slots` as a fallback for packs that pass their
       own.
