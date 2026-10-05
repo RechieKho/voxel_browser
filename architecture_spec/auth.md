@@ -1,7 +1,8 @@
 # In-Engine Authentication — Design & Phased Plan
 
 > Full detail for this topic; the backlog entry is `REMAINING_TASKS.md`
-> Phase 9. Status: **planned (2026-10-05), nothing implemented.** Supersedes
+> Phase 9. Status: **in progress — 9.0 (docs) and 9.1 (`auth.lua` loading, fail-closed
+> startup) landed 2026-10-05; 9.2+ not started.** Supersedes
 > the 2026-09-17 direction on spec §18 Q6 ("engine owns no auth concept") —
 > see §11.
 

@@ -252,7 +252,8 @@ every `on_spawn`/`on_tick`/`on_hit`/`on_death` callback.
 `player_input` may return a replacement input table; damage-tick handlers
 return numbers); `vb.after`/`vb.every` scheduling; `vb.storage` (pack-global
 persisted table) vs. `vb.db.get/set/delete(key)` (generic per-key store, no
-built-in auth concept — see the scripting doc for the login-flow framing).
+built-in `vb.db` login concept; engine-verified external auth is the
+separate, planned pack-level `auth.lua` — `architecture_spec/auth.md`).
 
 **Client UI VM:** `ui.define(name, render_fn)` — `render_fn(state)` runs
 **every UI frame** the screen is open and returns the widget tree (raygui

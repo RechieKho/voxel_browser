@@ -18,12 +18,14 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <system_error>
 #include <thread>
 
 #include <raygui.h>
 #include <raylib.h>
 
 #include "vb/assetsync/cache.hpp"
+#include "vb/auth/config.hpp"
 #include "vb/core/build_info.hpp"
 #include "vb/core/cli.hpp"
 #include "vb/core/config.hpp"
@@ -139,7 +141,18 @@ inline vb::script::PackRuntime make_singleplayer_pack_runtime(
 		vb::net::Transport &transport, vb::world::BlockRegistry &registry) {
 	vb::script::PackRuntime rt(transport, registry,
 			std::filesystem::path(kSingleplayerContentPack) / "storage.json");
-	if (!vb::script::load_content_pack(rt, kSingleplayerContentPack)) {
+	// A pack that declares auth.lua makes authentication mandatory
+	// (architecture_spec/auth.md). Singleplayer sign-in is step 9.7; until it
+	// lands the pack's scripts must not run unauthenticated, so fall back to
+	// the hardcoded base set exactly like a pack that failed to load.
+	std::error_code auth_ec;
+	const std::filesystem::path auth_lua = std::filesystem::path(kSingleplayerContentPack) /
+			std::string(vb::auth::kAuthLuaFilename);
+	if (std::filesystem::exists(auth_lua, auth_ec)) {
+		std::cerr << "client: singleplayer content pack '" << kSingleplayerContentPack
+				  << "' declares auth.lua (mandatory authentication), which singleplayer "
+				  << "does not support yet -- running with the hardcoded base block set only\n";
+	} else if (!vb::script::load_content_pack(rt, kSingleplayerContentPack)) {
 		std::cerr << "client: singleplayer content pack '"
 				  << kSingleplayerContentPack << "' failed to load -- "
 				  << "running with the hardcoded base block set only\n";

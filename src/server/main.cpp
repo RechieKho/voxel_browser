@@ -26,6 +26,7 @@
 #include <thread>
 
 #include "vb/assetsync/manifest.hpp"
+#include "vb/auth/config.hpp"
 #include "vb/core/build_info.hpp"
 #include "vb/core/cli.hpp"
 #include "vb/core/config.hpp"
@@ -104,6 +105,10 @@ void print_usage() {
 				 "  --automation-token <t>   fixed token for tcp (default: random)\n"
 				 "  --automation-info <file> write {host,port,token,pid} here for tcp (default: print to stderr)\n"
 				 "  --net-sim <spec>      fake lag/jitter/loss on sent packets, e.g. lag_ms=100,loss_pct=2 (dev builds only)\n"
+#endif
+#if !defined(VB_DISTRIBUTION)
+				 "  --insecure-skip-auth  DEV ONLY: ignore the pack's auth.lua and admit unauthenticated\n"
+				 "                        players (get_login() returns nil); not in distribution builds\n"
 #endif
 				 "  --version             print build info and exit\n"
 				 "  --help                show this help\n";
@@ -223,6 +228,56 @@ int main(int argc, char **argv) {
 	}
 	vb::core::ServerConfig config = *loaded;
 	vb::core::apply_cli_overrides(config, args);
+
+	// In-engine authentication (architecture_spec/auth.md §4): a pack-root
+	// auth.lua makes authentication mandatory. Fail closed -- any problem
+	// here ends startup, never a silent downgrade to no-auth.
+	{
+		vb::auth::AuthOverrides overrides;
+		overrides.issuer = config.auth.issuer;
+		overrides.client_id = config.auth.client_id;
+		overrides.project_id = config.auth.project_id;
+		overrides.api_key = config.auth.api_key;
+		const vb::auth::AuthLoad auth =
+				vb::auth::load_auth_lua(config.content_pack, overrides);
+		const bool skip_auth = args.has("insecure-skip-auth");
+#if defined(VB_DISTRIBUTION)
+		if (skip_auth) {
+			std::cerr << "server: --insecure-skip-auth is not available in this build\n";
+			return EXIT_FAILURE;
+		}
+#endif
+		if (!auth.present) {
+			if (skip_auth) {
+				std::cerr << "server: --insecure-skip-auth given but the content pack declares "
+							 "no auth.lua; nothing to skip\n";
+			}
+		} else if (skip_auth) {
+			VB_WARN("auth", "*** --insecure-skip-auth: '", config.content_pack,
+					"' declares auth.lua but authentication is DISABLED; every player is "
+					"admitted unverified and get_login() returns nil. Development only. ***");
+		} else if (!auth.error.empty()) {
+			std::cerr << "server: " << config.content_pack << ": " << auth.error << '\n';
+			return EXIT_FAILURE;
+		} else if (!vb::auth::kBuiltWithAuth) {
+			std::cerr << "server: content pack '" << config.content_pack
+					  << "' requires authentication (auth.lua); rebuild with VB_WITH_AUTH\n";
+			return EXIT_FAILURE;
+		} else {
+			VB_INFO("auth", "authentication required: ", vb::auth::describe(*auth.config));
+			if (!vb::auth::kVerifierAvailable) {
+				// 9.1 only loads/validates the declaration; the handshake
+				// (9.2) and verifier (9.3) are not in yet. Admitting players
+				// anyway would silently disable the feature the pack asked
+				// for, so refuse instead.
+				std::cerr << "server: content pack '" << config.content_pack
+						  << "' requires authentication, but this build has no token "
+							 "verifier yet (in-engine auth is under construction, see "
+							 "REMAINING_TASKS.md Phase 9); refusing to start\n";
+				return EXIT_FAILURE;
+			}
+		}
+	}
 
 	const long long max_ticks = args.int_or("ticks", 0);
 	// Empty = disabled. A stale file from a previous run is the launcher's to

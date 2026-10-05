@@ -93,6 +93,19 @@ ServerConfig server_from_table(const toml::table &tbl) {
 			VB_WARN("config", "unknown auth_mode '", *mode, "', using 'none'");
 		}
 	}
+	if (const toml::table *auth = tbl["auth"].as_table()) {
+		read_string(*auth, "issuer", c.auth.issuer);
+		read_string(*auth, "client_id", c.auth.client_id);
+		read_string(*auth, "project_id", c.auth.project_id);
+		read_string(*auth, "api_key", c.auth.api_key);
+		for (const auto &[key, value] : *auth) {
+			(void)value;
+			const std::string_view k = key.str();
+			if (k != "issuer" && k != "client_id" && k != "project_id" && k != "api_key") {
+				VB_WARN("config", "unknown [auth] key '", k, "' ignored");
+			}
+		}
+	}
 	if (c.tick_rate < 1 || c.tick_rate > 240) {
 		VB_WARN("config", "tick_rate ", c.tick_rate, " out of 1..240, clamped");
 		c.tick_rate = c.tick_rate < 1 ? 1u : 240u;
