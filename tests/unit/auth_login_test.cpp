@@ -27,7 +27,8 @@ std::filesystem::path temp_storage(const char *name) {
 	return p;
 }
 
-// Token format of the fake IdP: "<name>|<subject>|<claims-json>"; "bad" is rejected.
+// Token format of the fake IdP: "<name>|<subject>|<claims-json>[|<iat>]"; "bad" is
+// rejected. Without an iat the login is stamped 0 (join does not check it).
 AuthTicket fake_verify(std::string_view token, std::string_view nonce) {
 	AuthOutcome out;
 	if (token == "bad" || nonce != "nonce-1") {
@@ -36,12 +37,16 @@ AuthTicket fake_verify(std::string_view token, std::string_view nonce) {
 		const std::string t(token);
 		const auto p1 = t.find('|');
 		const auto p2 = t.find('|', p1 + 1);
+		const auto p3 = t.find('|', p2 + 1);
 		auto login = std::make_shared<LoginData>();
 		login->provider = "keycloak";
 		login->issuer = "https://idp.example";
 		login->name = t.substr(0, p1);
 		login->subject = t.substr(p1 + 1, p2 - p1 - 1);
-		login->claims_json = t.substr(p2 + 1);
+		login->claims_json = t.substr(p2 + 1, p3 == std::string::npos ? std::string::npos : p3 - p2 - 1);
+		if (p3 != std::string::npos) {
+			login->issued_at = std::stoll(t.substr(p3 + 1));
+		}
 		out = AuthOutcome{ true, {}, login->name, login };
 	}
 	return [out] { return std::optional<AuthOutcome>(out); };
@@ -55,7 +60,12 @@ struct AuthRig {
 	std::vector<std::unique_ptr<ClientSession>> clients;
 	std::vector<std::pair<Transport *, ConnId>> links;
 
-	AuthRig(const char *name, const std::string &pack, bool external) {
+	static constexpr std::int64_t kBase = 1'800'000'000;
+	double elapsed = 0.0;
+	std::int64_t now() const { return kBase + static_cast<std::int64_t>(elapsed); }
+
+	AuthRig(const char *name, const std::string &pack, bool external,
+			std::uint32_t reauth_interval = 0, std::uint32_t reauth_grace = 3) {
 		rt = std::make_unique<vb::script::PackRuntime>(net.server(), registry,
 				temp_storage(name));
 		rt->set_auth_required(external);
@@ -63,7 +73,10 @@ struct AuthRig {
 		rt->freeze();
 		HandshakeServerConfig cfg;
 		cfg.world_seed = 7;
+		cfg.reauth_interval_seconds = reauth_interval;
+		cfg.reauth_grace_seconds = reauth_grace;
 		HandshakeServerHost host;
+		host.unix_time = [this] { return now(); };
 		if (external) {
 			cfg.auth_mode = vb::protocol::AuthMode::kExternal;
 			host.auth_challenge = [] {
@@ -110,9 +123,13 @@ struct AuthRig {
 			for (const auto &j : server->take_joins()) {
 				rt->dispatch_player_join_completed(j);
 			}
+			for (const auto &c : server->take_login_changes()) {
+				rt->dispatch_login_changed(c);
+			}
 			for (const auto &l : server->take_leaves()) {
 				rt->dispatch_player_leave(l);
 			}
+			elapsed += 0.05;
 		}
 	}
 };
@@ -239,6 +256,140 @@ TEST_CASE("auth pack: the same account signing in again kicks the older session"
 		assert(#leave_logins == 1 and leave_logins[1] == "sub-c")
 		assert(join_calls[2].name == "carol")
 	)"));
+}
+
+// ---------------------------------------------------------------------------
+// Periodic live re-authentication (auth.md §5.6)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+constexpr const char *kReauthPack = R"(
+	changes = {}
+	vb.on("login_changed", function(player, login)
+		changes[#changes + 1] = { subject = login.subject, groups = login.claims.groups, name = login.name }
+	end)
+	leaves = 0
+	vb.on("player_leave", function(player) leaves = leaves + 1 end)
+)";
+
+// The client's re-auth hook: answers every request with `answer()` immediately.
+void answer_reauth(ClientSession &c, std::function<TokenPoll()> answer) {
+	c.set_reauth_provider([answer](const vb::protocol::S2CReauthRequest &) -> TokenTicket {
+		return [answer] { return answer(); };
+	});
+}
+
+TokenPoll token_poll(const std::string &t) {
+	TokenPoll p;
+	p.done = true;
+	p.token = t;
+	return p;
+}
+TokenPoll refused_poll() {
+	TokenPoll p;
+	p.done = true;
+	p.error = "refresh refused";
+	return p;
+}
+
+} // namespace
+
+TEST_CASE("re-auth: a live session answers repeated requests and is never kicked") {
+	AuthRig rig("reauth_ok", kReauthPack, true, /*interval=*/10, /*grace=*/3);
+	auto &c = rig.connect("c", "dana|sub-d|{}");
+	int answered = 0;
+	answer_reauth(c, [&] {
+		++answered;
+		return token_poll("dana|sub-d|{}|" + std::to_string(rig.now()));
+	});
+	rig.pump(10);
+	REQUIRE(c.joined());
+	rig.pump(260); // ~13 s: one interval (10 s ±10%) has passed
+	CHECK(answered == 1);
+	CHECK(rig.server->player_count() == 1);
+	rig.pump(260);
+	CHECK(answered == 2);
+	CHECK(rig.server->player_count() == 1);
+	REQUIRE(rig.rt->load_pack_file("assert(#changes == 0 and leaves == 0)"));
+}
+
+TEST_CASE("re-auth: a changed allowlisted claim fires login_changed and swaps get_login") {
+	AuthRig rig("reauth_claims", kReauthPack, true, 10, 3);
+	auto &c = rig.connect("c", R"(erin|sub-e|{"groups":["user"]})");
+	answer_reauth(c, [&] {
+		return token_poll(R"(erin|sub-e|{"groups":["mod"]}|)" + std::to_string(rig.now()));
+	});
+	rig.pump(10);
+	REQUIRE(c.joined());
+	rig.pump(260);
+	CHECK(rig.server->player_count() == 1);
+	REQUIRE(rig.rt->load_pack_file(R"(
+		assert(#changes == 1)
+		assert(changes[1].subject == "sub-e" and changes[1].groups[1] == "mod")
+		assert(changes[1].name == "erin") -- the in-game name is fixed for the session
+	)"));
+	// An identical claim set on the next round does not fire it again.
+	rig.pump(260);
+	REQUIRE(rig.rt->load_pack_file("assert(#changes == 1)"));
+}
+
+TEST_CASE("re-auth: a revoked login (no valid answer) is kicked when the grace runs out") {
+	AuthRig rig("reauth_revoked", kReauthPack, true, 10, 3);
+	auto &c = rig.connect("c", "fay|sub-f|{}");
+	answer_reauth(c, [] { return refused_poll(); });
+	rig.pump(10);
+	REQUIRE(c.joined());
+	rig.pump(240); // interval (≤ 11 s) elapsed: request sent, grace (3 s) still running
+	rig.pump(80);
+	CHECK(rig.server->player_count() == 0);
+	REQUIRE(rig.rt->load_pack_file("assert(leaves == 1)"));
+}
+
+TEST_CASE("re-auth: a stale token (issued before the request) is rejected") {
+	AuthRig rig("reauth_stale", kReauthPack, true, 10, 3);
+	auto &c = rig.connect("c", "gus|sub-g|{}");
+	const std::int64_t old_iat = rig.now() - 600;
+	answer_reauth(c, [&] { return token_poll("gus|sub-g|{}|" + std::to_string(old_iat)); });
+	rig.pump(10);
+	REQUIRE(c.joined());
+	rig.pump(300);
+	CHECK(rig.server->player_count() == 0);
+}
+
+TEST_CASE("re-auth: a different account answering is kicked") {
+	AuthRig rig("reauth_other", kReauthPack, true, 10, 3);
+	auto &c = rig.connect("c", "hal|sub-h|{}");
+	answer_reauth(c, [&] {
+		return token_poll("mallory|sub-OTHER|{}|" + std::to_string(rig.now()));
+	});
+	rig.pump(10);
+	REQUIRE(c.joined());
+	rig.pump(260);
+	CHECK(rig.server->player_count() == 0);
+}
+
+TEST_CASE("re-auth: disabled (interval 0) or no auth.lua never sends a request") {
+	AuthRig rig("reauth_off", kReauthPack, true, /*interval=*/0, 3);
+	auto &c = rig.connect("c", "ivy|sub-i|{}");
+	int asked = 0;
+	answer_reauth(c, [&] {
+		++asked;
+		return refused_poll();
+	});
+	rig.pump(600);
+	CHECK(asked == 0);
+	CHECK(rig.server->player_count() == 1);
+
+	AuthRig plain("reauth_plain", kReauthPack, false, 10, 3);
+	auto &p = plain.connect("Bob", "");
+	answer_reauth(p, [&] {
+		++asked;
+		return refused_poll();
+	});
+	plain.pump(400);
+	CHECK(asked == 0);
+	CHECK(plain.server->player_count() == 1);
 }
 
 #endif // VB_WITH_LUA

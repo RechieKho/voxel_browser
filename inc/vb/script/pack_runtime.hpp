@@ -203,6 +203,9 @@ public:
 	// Drive from the main loop, once per tick, after ServerSession::tick():
 	void dispatch_player_join_completed(const net::SessionPlayerJoined &j);
 	void dispatch_player_leave(const net::SessionPlayerLeft &l);
+	// Periodic re-auth changed an allowlisted claim (auth.md §5.6): swaps the
+	// player's frozen login table and fires vb.on("login_changed", ...).
+	void dispatch_login_changed(const net::SessionLoginChanged &c);
 	void dispatch_tick(double dt_seconds);
 
 	// Generic bus hook for player_interact (no C2S message yet) -- exposed so

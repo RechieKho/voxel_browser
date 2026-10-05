@@ -31,10 +31,15 @@ public:
 		bool singleplayer = false;
 		bool open_settings = false;
 		bool quit = false;
+		bool sign_out = false; // "Sign out" (only shown while signed_in_label is set)
 	};
 	// `recent_servers` is "host:port" strings, most-recent first; clicking one
 	// fills the address/port fields.
 	MainResult draw_main(const std::vector<std::string> &recent_servers);
+
+	// Phase 9.6: shown top-right with a Sign out button when non-empty (e.g.
+	// "alice (id.example.com)"). Empty = nothing drawn.
+	void set_signed_in_label(std::string label) { signed_in_label_ = std::move(label); }
 
 	const std::string &address() const { return address_; }
 	int port() const { return port_; }
@@ -83,12 +88,14 @@ public:
 		std::string_view title; // auth.lua display_name (may be empty)
 		std::string_view server; // "host:port"
 		std::string_view provider_host; // host of the issuer, so the player sees who they sign in with
+		bool needs_trust = false; // first use of this (server, issuer): ask before contacting the IdP
 		bool offer_browser = false; // oidc/keycloak: "Sign in with your browser"
 		bool offer_password = false; // firebase e-mail/password form
 		bool working = false; // a sign-in is in flight; inputs disabled
 		std::string_view error; // previous attempt's failure, empty if none
 	};
 	struct SigningInResult {
+		bool trust = false; // "Continue" on the first-use prompt
 		bool cancel = false;
 		bool browser = false;
 		bool submit_password = false;
@@ -121,6 +128,7 @@ private:
 	bool address_edit_ = false;
 	bool port_edit_ = false;
 	bool name_edit_ = false;
+	std::string signed_in_label_;
 	// Sign-in screen form state.
 	std::string si_email_;
 	std::string si_password_;

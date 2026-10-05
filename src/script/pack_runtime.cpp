@@ -65,6 +65,7 @@ std::shared_ptr<const worldgen::PackWorldGenPipeline> PackRuntime::build_worldge
 }
 void PackRuntime::dispatch_player_join_completed(const net::SessionPlayerJoined &) {}
 void PackRuntime::dispatch_player_leave(const net::SessionPlayerLeft &) {}
+void PackRuntime::dispatch_login_changed(const net::SessionLoginChanged &) {}
 void PackRuntime::dispatch_tick(double) {}
 net::ServerSession::ChatHookResult PackRuntime::dispatch_chat(
 		core::NetId, std::string_view) {
@@ -1969,7 +1970,7 @@ void PackRuntime::Impl::install_bindings() {
 		"player_leave", "block_break", "block_place", "player_interact",
 		"chat", "tick", "ui_event", "player_death", "player_input",
 		"block_break_begin", "block_break_tick", "block_health_tick",
-		"region_enter", "region_exit", "player_landed" };
+		"region_enter", "region_exit", "player_landed", "login_changed" };
 	vb["on"] = [this](const std::string &event, sol::protected_function fn) {
 		if (kValidEvents.find(event) == kValidEvents.end()) {
 			throw sol::error("vb.on: unknown event '" + event + "'");
@@ -3119,6 +3120,17 @@ void PackRuntime::dispatch_player_join_completed(
 	if (j.login) {
 		impl_->logins[j.net_id] = j.login;
 	}
+}
+
+void PackRuntime::dispatch_login_changed(const net::SessionLoginChanged &c) {
+	if (!c.login) {
+		return;
+	}
+	impl_->logins[c.net_id] = c.login;
+	impl_->login_tables.erase(c.net_id); // next get_login() sees the new claims
+	PlayerHandle p{ c.net_id, impl_.get() };
+	sol::state_view lua(impl_->lua_state());
+	impl_->fire("login_changed", p, impl_->login_object(c.net_id, lua));
 }
 
 void PackRuntime::dispatch_player_leave(const net::SessionPlayerLeft &l) {

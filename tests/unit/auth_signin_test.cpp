@@ -21,6 +21,7 @@
 #include "vb/auth/http.hpp"
 #include "vb/auth/jwt.hpp"
 #include "vb/auth/oidc_client.hpp"
+#include "vb/auth/session_store.hpp"
 #include "vb/auth/signin.hpp"
 #include "vb/core/version.hpp"
 #include "vb/net/handshake.hpp"
@@ -532,6 +533,229 @@ TEST_CASE("coordinator: cancel ends the join with 'sign-in cancelled'") {
 	const auto c = rig2.hs->cancel_sign_in();
 	CHECK(c.failed);
 	CHECK(rig2.hs->status() == vb::net::ClientHandshakeStatus::kFailed);
+}
+
+namespace {
+
+std::filesystem::path fresh_dir(const char *name) {
+	auto d = std::filesystem::temp_directory_path() / (std::string("vb_auth_store_") + name);
+	std::filesystem::remove_all(d);
+	return d;
+}
+
+// Fake IdP whose token endpoint accepts exactly one refresh token.
+struct RefreshIdp final : HttpFetcher {
+	std::string valid_refresh = "R-valid";
+	int refreshes = 0;
+	HttpResult get(const std::string &url) override {
+		HttpResult r;
+		if (url == kIssuer + "/.well-known/openid-configuration") {
+			r.status = 200;
+			r.body = json{ { "issuer", kIssuer }, { "authorization_endpoint", kIssuer + "/auth" },
+				{ "token_endpoint", kIssuer + "/token" } }
+							 .dump();
+		}
+		return r;
+	}
+	HttpResult post(const std::string &, const std::string &, const std::string &body) override {
+		++refreshes;
+		HttpResult r;
+		if (body.find("refresh_token=" + valid_refresh) != std::string::npos) {
+			r.status = 200;
+			r.body = R"({"id_token":"NEW.ID.TOKEN","refresh_token":"R-rotated"})";
+		} else {
+			r.status = 400;
+			r.body = R"({"error":"invalid_grant"})";
+		}
+		return r;
+	}
+};
+
+} // namespace
+
+TEST_CASE("session store: round trip, owner-only file, sign out, trust list") {
+	const auto dir = fresh_dir("rt");
+	SessionStore store(dir);
+	CHECK_FALSE(store.load(kIssuer, "voxel"));
+	StoredSession s;
+	s.issuer = kIssuer;
+	s.client_id = "voxel";
+	s.provider = "keycloak";
+	s.refresh_token = "R1";
+	s.label = "alice";
+	REQUIRE(store.save(s));
+	const auto back = store.load(kIssuer, "voxel");
+	REQUIRE(back);
+	CHECK(back->refresh_token == "R1");
+	CHECK(back->label == "alice");
+	CHECK_FALSE(store.load(kIssuer, "other-client"));
+	CHECK(store.list().size() == 1);
+#if !defined(_WIN32)
+	for (const auto &e : std::filesystem::directory_iterator(dir)) {
+		const auto perms = std::filesystem::status(e.path()).permissions();
+		CHECK((perms & (std::filesystem::perms::group_all | std::filesystem::perms::others_all)) ==
+				std::filesystem::perms::none);
+	}
+#endif
+	CHECK_FALSE(store.is_trusted("srv:1", kIssuer));
+	REQUIRE(store.trust("srv:1", kIssuer));
+	CHECK(store.is_trusted("srv:1", kIssuer));
+	CHECK_FALSE(store.is_trusted("srv:2", kIssuer)); // per (server, issuer)
+	CHECK(store.list().size() == 1); // the trust file is not a session
+
+	store.clear(); // "Sign out"
+	CHECK(store.list().empty());
+	CHECK(store.is_trusted("srv:1", kIssuer)); // trust survives sign-out
+	std::filesystem::remove_all(dir);
+
+	CHECK(label_from_id_token("not a jwt").empty());
+}
+
+TEST_CASE("coordinator: first use asks for trust, then a cached refresh token signs in silently") {
+	const auto dir = fresh_dir("silent");
+	auto store = std::make_shared<SessionStore>(dir);
+	StoredSession s;
+	s.issuer = kIssuer;
+	s.client_id = "voxel";
+	s.provider = "keycloak";
+	s.refresh_token = "R-valid";
+	store->save(s);
+
+	auto idp = std::make_shared<RefreshIdp>();
+	SignInCoordinator::Options o;
+	o.http = idp;
+	o.store = store;
+	o.server_id = "play.example:27015";
+	auto coord = std::make_unique<SignInCoordinator>(std::move(o));
+	vb::net::ClientHandshake hs(vb::net::HandshakeClientConfig{});
+	hs.set_sign_in_provider(coord->provider());
+	hs.start();
+	std::vector<std::byte> storage;
+	vb::protocol::S2CServerInfo info;
+	info.engine_protocol_version = vb::kEngineProtocolVersion;
+	info.auth_mode = vb::protocol::AuthMode::kExternal;
+	hs.on_frame(frame_of(info, storage));
+	vb::protocol::S2CAuthChallenge ch;
+	ch.provider = "keycloak";
+	ch.issuer = kIssuer;
+	ch.client_id = "voxel";
+	ch.scopes = { "openid" };
+	ch.nonce = "n";
+	hs.on_frame(frame_of(ch, storage));
+
+	// Untrusted server: nothing is sent to the IdP, not even the refresh token.
+	CHECK(coord->needs_trust());
+	CHECK(coord->phase() == SignInCoordinator::Phase::kChoosing);
+	CHECK(idp->refreshes == 0);
+	coord->start_browser(); // refused until trusted
+	CHECK(coord->phase() == SignInCoordinator::Phase::kChoosing);
+
+	coord->trust();
+	CHECK_FALSE(coord->needs_trust());
+	for (int i = 0; i < 400 && hs.status() == vb::net::ClientHandshakeStatus::kSigningIn; ++i) {
+		auto step = hs.poll();
+		if (!step.send.empty()) {
+			std::size_t consumed = 0;
+			auto f = vb::protocol::read_frame(step.send[0].bytes, consumed);
+			CHECK(vb::protocol::C2SAuth::decode(f->payload)->token == "NEW.ID.TOKEN");
+		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(5));
+	}
+	CHECK(hs.status() == vb::net::ClientHandshakeStatus::kAuthenticating);
+	CHECK(idp->refreshes == 1);
+	// The rotated refresh token was stored.
+	CHECK(store->load(kIssuer, "voxel")->refresh_token == "R-rotated");
+	std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("coordinator: a dead refresh token is forgotten and falls back to the chooser") {
+	const auto dir = fresh_dir("dead");
+	auto store = std::make_shared<SessionStore>(dir);
+	StoredSession s;
+	s.issuer = kIssuer;
+	s.client_id = "voxel";
+	s.provider = "keycloak";
+	s.refresh_token = "R-revoked";
+	store->save(s);
+	store->trust("srv:1", kIssuer);
+
+	auto idp = std::make_shared<RefreshIdp>();
+	SignInCoordinator::Options o;
+	o.http = idp;
+	o.store = store;
+	o.server_id = "srv:1";
+	SignInCoordinator coord(std::move(o));
+	vb::protocol::S2CAuthChallenge ch;
+	ch.provider = "keycloak";
+	ch.issuer = kIssuer;
+	ch.client_id = "voxel";
+	ch.nonce = "n";
+	auto ticket = coord.provider()(ch);
+	for (int i = 0; i < 400 && coord.phase() == SignInCoordinator::Phase::kWorking; ++i) {
+		std::this_thread::sleep_for(std::chrono::milliseconds(5));
+	}
+	CHECK(coord.phase() == SignInCoordinator::Phase::kChoosing);
+	CHECK(coord.last_error() == "Your saved sign-in expired");
+	CHECK_FALSE(store->load(kIssuer, "voxel")); // forgotten
+	CHECK_FALSE(ticket().done);
+	std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("coordinator: a re-auth request is answered silently, else it raises the prompt") {
+	const auto dir = fresh_dir("reauth");
+	auto store = std::make_shared<SessionStore>(dir);
+	StoredSession s;
+	s.issuer = kIssuer;
+	s.client_id = "voxel";
+	s.provider = "keycloak";
+	s.refresh_token = "R-valid";
+	store->save(s);
+	store->trust("srv:1", kIssuer);
+
+	auto idp = std::make_shared<RefreshIdp>();
+	SignInCoordinator::Options o;
+	o.http = idp;
+	o.store = store;
+	o.server_id = "srv:1";
+	SignInCoordinator coord(std::move(o));
+	vb::protocol::S2CAuthChallenge ch;
+	ch.provider = "keycloak";
+	ch.issuer = kIssuer;
+	ch.client_id = "voxel";
+	ch.nonce = "join-nonce";
+	auto join_ticket = coord.provider()(ch);
+	vb::net::TokenPoll p;
+	for (int i = 0; i < 400 && !(p = join_ticket()).done; ++i) {
+		std::this_thread::sleep_for(std::chrono::milliseconds(5));
+	}
+	REQUIRE(p.done);
+	CHECK(p.token == "NEW.ID.TOKEN");
+
+	// Silent re-auth works while the rotated refresh token is valid.
+	idp->valid_refresh = "R-rotated";
+	vb::protocol::S2CReauthRequest req;
+	req.nonce = "reauth-nonce";
+	req.grace_seconds = 120;
+	auto ticket = coord.reauth_provider()(req);
+	for (int i = 0; i < 400 && !(p = ticket()).done; ++i) {
+		std::this_thread::sleep_for(std::chrono::milliseconds(5));
+	}
+	REQUIRE(p.done);
+	CHECK(p.token == "NEW.ID.TOKEN");
+	CHECK_FALSE(coord.reauth_prompt_active());
+
+	// Revoked at the IdP: silent refresh fails, a non-blocking prompt appears and
+	// the ticket stays pending until the player signs in again (or the server's
+	// grace period runs out).
+	idp->valid_refresh = "nothing-matches";
+	ticket = coord.reauth_provider()(req);
+	for (int i = 0; i < 400 && coord.phase() == SignInCoordinator::Phase::kWorking; ++i) {
+		std::this_thread::sleep_for(std::chrono::milliseconds(5));
+	}
+	CHECK(coord.reauth_prompt_active());
+	CHECK_FALSE(ticket().done);
+	CHECK(coord.supports_browser());
+	std::filesystem::remove_all(dir);
 }
 
 #endif // VB_WITH_AUTH

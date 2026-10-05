@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <ctime>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -67,6 +68,12 @@ struct HandshakeServerConfig {
 	// The player is in a browser here, so this is far longer than the
 	// handshake timeout that covers every other state.
 	double auth_timeout_seconds = 300.0;
+	// External auth: periodic live re-authentication (auth.md §5.6). Every
+	// `reauth_interval_seconds` (±10% per player) a playing player is asked to
+	// re-prove their login; no valid answer within `reauth_grace_seconds` kicks
+	// them. 0 disables (the login is trusted until disconnect).
+	std::uint32_t reauth_interval_seconds = 0;
+	std::uint32_t reauth_grace_seconds = 120;
 	std::uint64_t world_seed = 0; // used for JoinAccept when the host grant is 0
 	// Whether to accept clients that set protocol::kClientFlagAutomation in
 	// C2SHello. Defaults to "only if this binary itself was built with
@@ -128,6 +135,10 @@ struct HandshakeServerHost {
 	// player is admitted: `resolve_name` picks the final in-game name (the
 	// session suffixes collisions: alex -> alex#2); `join_veto` is the pack's
 	// `player_join(name, login)` veto. Defaults admit under the verified name.
+	// Wall clock (unix seconds) for re-auth freshness checks; tests override.
+	std::function<std::int64_t()> unix_time = [] {
+		return static_cast<std::int64_t>(std::time(nullptr));
+	};
 	std::function<std::string(std::string_view name, const LoginData &login)>
 			resolve_name = [](std::string_view name, const LoginData &) {
 		return std::string(name);
