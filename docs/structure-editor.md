@@ -5,7 +5,7 @@
 > `remaining_tasks/deferred.md` ("Rule-based decorative structure
 > placement") left for after the Lua worldgen pipeline. Phase 6.14 shipped
 > that pipeline. Same layout as `docs/content-base-ui.md`: findings first,
-> then the design, then phases (S0–S6) with checkbox tasks.
+> then the design, then phases (S0–S7) with checkbox tasks.
 
 The goal is an interactive voxel tool for building biome decorations (trees,
 bushes, boulders, ruins, and so on), saving them into a content pack, and
@@ -97,7 +97,7 @@ These points come from `architecture_spec/worldgen.md` §6 and
  │   Volume · Selection · Command/undo stack · Generators · Writer         │
  └────────┬───────────────────────────────────────────────┬────────────────┘
           │ writes structures/*.lua                       │ loads pack via
-          ▼                                               ▼ load_content_pack
+          ▼                                               ▼ load_pack_definitions
    content/<pack>/structures/oak.lua  ──► PackRuntime (vb.register_structure)
                                             │ build_worldgen_pipeline
                                             ▼
@@ -124,12 +124,12 @@ server accepts.
 
 Rejected for now: an in-game `/structure` capture command. It could be
 added later on top of the same writer, for example "select a region in
-singleplayer and export". It's listed as optional in S6.
+singleplayer and export". It's listed as optional in S7.
 
 ### C. File format: `structures/*.lua`
 
 A structure is a Lua file that calls a new `vb.register_structure`. It is
-loaded in the pack's existing fixed walk, after `entities/` and **before
+loaded in the pack's definition stage (G), after `entities/` and **before
 `biomes/`**, so biomes can refer to structures by name. Lua is chosen over a
 binary or JSON file because:
 
@@ -157,7 +157,7 @@ vb.register_structure({
 			{ ".....", ".....", "..W..", ".....", "....." },
 			-- ...
 		} },
-		-- more baked variants (S4); one is chosen per placement
+		-- more baked variants (S5); one is chosen per placement
 	},
 	placement = {                       -- defaults; a biome entry can override them
 		on = { "base:grass", "base:dirt" }, -- block directly under the anchor
@@ -214,7 +214,7 @@ struct PlacementRule {
 
 `PackWorldGenPipeline` gains `std::vector<StructureDef> structures`, and
 each biome's decoration list becomes `std::vector<PlacementRule>`.
-`DecorationEntry` is removed after its uses are migrated in S0.
+`DecorationEntry` is removed after its uses are migrated in S1.
 
 ### E. Cross-chunk placement without waiting on neighbors ("pull" stamping)
 
@@ -267,19 +267,65 @@ main-thread apply pass, stays deferred. Its entry in `deferred.md` is
 narrowed to cases bakes can't cover, such as structures that react to their
 surroundings.
 
-### G. The content pack directory is the workspace
+### G. Two-stage pack loading: definitions, then runtime
+
+Today any pack file can call any `vb.register_*`, at any point in the load.
+For the editor, that would mean running the whole pack, `init.lua`
+included, just to get the block list, and then working around the side
+effects (`init.lua` writing `vb.storage`, handlers being registered, and so
+on). Instead, pack loading gets two enforced stages:
+
+| Stage | Files, in order | Allowed at file top level |
+|---|---|---|
+| **1. Definitions** | `blocks/*.lua` → `entities/*.lua` → `structures/*.lua` → `biomes/*.lua` → `worldgen/*.lua` | only the directory's own call: `vb.register_block` / `register_entity` / `register_structure` / `register_biome` / `vb.worldgen.set_pipeline`, plus `vb.noise.*`, `require`, and plain Lua |
+| **2. Runtime** | other root `*.lua` → `init.lua` | everything else: `vb.on`, `vb.storage`, `vb.config`, `vb.register_craft`, `vb.register_keybind`, `vb.physics.set_params`, and so on. **No** content registration. |
+
+- **Strict per directory.** Calling `vb.register_block` from `init.lua`,
+  `crafting.lua`, or `biomes/forest.lua` is a pack load error that names the
+  file and where the call belongs: "vb.register_block is only allowed in
+  blocks/*.lua (called from init.lua)". The check uses the file the loader
+  is currently running, not the Lua call stack, so a shared helper
+  `require`d from `blocks/` can still register blocks for that file.
+- **Runtime APIs are refused during stage 1.** A top-level `vb.storage`
+  read or write, `vb.on`, `vb.config.get`, and similar calls fail with a
+  stage error. The guard is a stage flag inside each binding, plus a
+  metatable on `vb.storage`. It is not a restricted `_ENV`, because
+  handlers defined in definition files (`on_break` calling
+  `vb.world.spawn_item_drop`) are closures that must see the full `vb`
+  table when they run later.
+- **Content registries are complete after stage 1.** The block, entity,
+  structure, and biome registries can be frozen at the end of stage 1,
+  before any gameplay script runs.
+- **Loader API** (`inc/vb/script/pack_loader.hpp`):
+  `load_pack_definitions(rt, dir)` and `load_pack_runtime(rt, dir)`. The
+  existing `load_content_pack` runs both, so the server, singleplayer, and
+  tests keep calling one function.
+- **Who uses only stage 1:** the structure editor, `vb structure validate`,
+  and any future content tool. They get exactly the pack's content without
+  running its gameplay code.
+- **Migration is small.** `content/base` already keeps every
+  block, entity, and biome registration in its own directory. Its
+  `on_break` handlers only call `vb.world` inside the handler body. The one
+  move is `content/examples/kitchen_sink/worldgen.lua` (top-level
+  `set_pipeline`) to `worldgen/pipeline.lua`. `crafting.lua` and
+  `keybinds.lua` stay as runtime modules.
+- **Hard error, not a warning.** The only packs that exist are the two in
+  this repo (stacking third-party packs is deferred), so nothing outside the
+  repo breaks.
+
+### H. The content pack directory is the workspace
 
 The editor doesn't keep its own block list. Blocks, textures, biomes, and the
 worldgen pipeline all come from the pack, so the unit the editor opens is a
 **whole content pack directory**: `vb_structure_editor <pack-dir>`, or File →
 Open Pack. One open pack is one session.
 
-- **Loading uses the engine's real path.** The editor calls
-  `vb::script::load_content_pack` on a `PackRuntime`, which runs
-  `blocks/`, `entities/`, `structures/`, `biomes/`, root modules, and then
-  `init.lua`, in the same order the server uses. Whatever the server would
-  see, the editor sees: blocks added by any file, `texture` overrides, and
-  `vb.register_biome` / `set_pipeline` data.
+- **Loading uses the engine's real path, definition stage only.** The
+  editor calls `vb::script::load_pack_definitions` (G), which runs
+  `blocks/`, `entities/`, `structures/`, `biomes/`, and `worldgen/` in the
+  same order and with the same checks as the server. It never runs root
+  modules or `init.lua`. Because of the stage rules, those files can't
+  register blocks, so nothing the editor needs is missed.
 - **What comes from the pack:**
   - the block palette, from the frozen `BlockRegistry` (the `base()` set
     plus every `vb.register_block`). Structure files store block **names**,
@@ -291,7 +337,7 @@ Open Pack. One open pack is one session.
   - the structure list, from every `vb.register_structure` the pack made
     (`structures/*.lua`). The Open dialog lists these, not files picked
     from disk.
-  - the biomes and pipeline for the placement panel and preview (S5).
+  - the biomes and pipeline for the placement panel and preview (S6).
 - **Saves go back into the pack**, to `<pack>/structures/<local-name>.lua`.
   The `name` prefix (`base:` and so on) defaults to the pack's `pack.toml`
   name.
@@ -300,18 +346,16 @@ Open Pack. One open pack is one session.
   structure is kept in memory and its block names are resolved again. Names
   that no longer exist turn into a visible "missing block" marker instead of
   being dropped.
-- **No side effects on the pack.** Loading runs the pack's Lua, including
-  `init.lua`. For example, `content/base/init.lua` increments
-  `vb.storage.boot_count`. The editor gives `PackRuntime` a throwaway
-  storage path in a temp directory and never calls `flush_storage()`, so
-  opening a pack never writes anything except the structure files the user
-  saves. Server-only functions (`vb.world.*`, `player:*`) aren't attached and
-  behave as they do at pack load on the server.
+- **No side effects on the pack.** Definition files can't touch
+  `vb.storage`, subscribe to events, or reach the network (G), so loading
+  a pack can't write anything. The editor uses a `PackRuntime` with no
+  transport and no storage file. The only writes are the structure files
+  the user saves.
 - **Load errors are shown, not fatal.** A Lua error or invalid structure
   file is listed with its file name in an errors panel. If the pack can't
   load at all, the editor stays on the Open Pack screen.
 
-### H. Editor UX
+### I. Editor UX
 
 - **Viewport:** orbit, pan, and zoom camera around the structure bounds.
   Ground-grid plane at the anchor. Bounding box drawn as a wireframe, anchor
@@ -334,12 +378,12 @@ Open Pack. One open pack is one session.
   and switches to fly-camera view. Re-roll seed. Toggle "only this
   structure" or "all decorations". It reuses `WorldGenerator` and
   `ChunkRenderer` as they are.
-- **Files:** open a pack directory (see G), then open one of its
+- **Files:** open a pack directory (see H), then open one of its
   structures or create a new one, save, and save-as (both into the pack's
   `structures/`). A dirty marker in the title
   and a confirm prompt before closing unsaved work.
 
-### I. Code layout
+### J. Code layout
 
 ```
 inc/vb/worldgen/structure.hpp          StructureDef, PlacementRule (engine)
@@ -359,18 +403,44 @@ builds whenever tests do, so CI covers it everywhere.
 
 ## Phases
 
-Each phase can ship on its own. S0–S1 are engine-only and give the base pack
-real trees even before any UI exists. S2–S5 build the tool. S6 integrates
-and documents.
+Each phase can ship on its own. S0–S2 are engine-only, and S1–S2 give the
+base pack real trees even before any UI exists. S3–S6 build the tool. S7
+integrates and documents.
 
-### S0 — Structure format and loading (engine)
+### S0 — Two-stage pack loading (engine)
+
+- [ ] Stage flag and current-file tracking in `PackRuntime`, set by the
+      loader. Each `vb.register_*` and `vb.worldgen.set_pipeline` checks the
+      file's directory. Runtime bindings and `vb.storage` (via a metatable)
+      refuse calls during stage 1. Error messages name the file and the
+      directory where the call belongs.
+- [ ] `load_pack_definitions` / `load_pack_runtime` in `pack_loader.cpp`.
+      Add a `worldgen/` directory to the walk. `load_content_pack` calls
+      both. The content registries freeze at the end of stage 1.
+- [ ] Move `content/examples/kitchen_sink/worldgen.lua` to
+      `worldgen/pipeline.lua`, and update its `init.lua` index comment and
+      `docs/lua-api.md`.
+- [ ] Docs: `architecture_spec/content-pack-format.md` (stage table, load
+      order), `docs/lua-api.md` (which calls are allowed where),
+      `pack_loader.hpp` header comment, and `pack.toml` comments in both
+      packs.
+- [ ] Tests (`content_pack_test.cpp`, `pack_runtime_test.cpp`): registering
+      in the wrong directory or from `init.lua` fails with the expected
+      message; `vb.storage`/`vb.on` at the top level of a definition file
+      fails; an `on_break` handler defined in `blocks/` can still call
+      `vb.world` at runtime; `load_pack_definitions` alone on both in-repo
+      packs gives the same block registry as a full load and leaves the pack
+      directory byte-identical; the existing `content_base_*` and
+      `kitchen_sink_pack_test` suites pass unchanged.
+
+### S1 — Structure format and loading (engine)
 
 - [ ] `inc/vb/worldgen/structure.hpp`: `StructureDef`, `StructureVariant`,
       `PlacementRule`, `kMaxStructureDim`, and the keep sentinel.
 - [ ] `vb.register_structure{...}` in `PackRuntime`: capture it, check that
       size, layers, row lengths, and palette keys are valid, and report
       errors that name the file and the structure.
-- [ ] Pack loader walk adds `structures/*.lua` (sorted) between
+- [ ] Definition-stage walk (S0) adds `structures/*.lua` (sorted) between
       `entities/` and `biomes/`. Update `pack_loader.hpp`'s header comment
       and `architecture_spec/content-pack-format.md`.
 - [ ] `build_worldgen_pipeline`: resolve palette names to ids, build
@@ -382,7 +452,7 @@ and documents.
       (bad row length, unknown key, unknown block, size over the cap) give
       clear errors; inline-form compatibility.
 
-### S1 — Rule-based, cross-chunk placement (engine)
+### S2 — Rule-based, cross-chunk placement (engine)
 
 - [ ] `structure_placement.cpp`: per-column anchor enumeration (jittered
       grid, spawn-rate thinning, cluster noise) and per-anchor biome lookup.
@@ -405,21 +475,19 @@ and documents.
 - [ ] Content: a hand-written `structures/oak_tree.lua` in
       `content/examples/kitchen_sink`, used by its forest-like biome.
 
-### S2 — Editor shell (viewing only)
+### S3 — Editor shell (viewing only)
 
 - [ ] `VB_BUILD_EDITOR` option, `vb_editor_model` library,
       `vb_structure_editor` executable, CI build in the existing matrix.
 - [ ] `Volume` model with a conversion to and from a private
       `ClientChunkStore`, so `ChunkRenderer` meshes it unchanged.
 - [ ] Open a pack directory (`vb_structure_editor <pack-dir>`, or an Open
-      Pack screen) through `load_content_pack`, as described in G: throwaway
-      `vb.storage` path that is never flushed, an errors panel, and Reload
-      Pack (`F5`). Build the `TextureAtlas` from the pack's registry and
+      Pack screen) through `load_pack_definitions` (S0), as described in H:
+      definition stage only, an errors panel, and Reload Pack (`F5`). Build the `TextureAtlas` from the pack's registry and
       `textures/`.
-- [ ] Test: opening `content/base` and `content/examples/kitchen_sink`
-      leaves the pack directory byte-identical (no `storage.json` or other
-      writes), and the palette matches the registry the server builds from
-      the same pack.
+- [ ] Test: the editor's palette for `content/base` and
+      `content/examples/kitchen_sink` matches the registry the server builds
+      from the same pack.
 - [ ] Open a structure from the list of the pack's `vb.register_structure`
       entries (optionally preselected with `--open <name>`). Orbit camera, ground grid, bounds box, anchor
       marker, variant switcher.
@@ -428,7 +496,7 @@ and documents.
       through `PackRuntime`, gives an equal `StructureDef` for every
       fixture.
 
-### S3 — Interactive editing
+### S4 — Interactive editing
 
 - [ ] `Command` interface plus `UndoStack` in the model. Commands for
       setting cells, box fill, line, flood replace, paste, resize, and
@@ -444,7 +512,7 @@ and documents.
 - [ ] New structure dialog (name, size, anchor). Save and save-as into
       `<pack>/structures/`.
 
-### S4 — Generators and variants
+### S5 — Generators and variants
 
 - [ ] `Generator` interface (parameters, then fill the volume) in the model,
       seeded by `DetRng`, so the same seed always gives the same shape.
@@ -459,7 +527,7 @@ and documents.
 - [ ] Tests: generator output is deterministic per seed (hash golden) and
       stays inside the volume bounds.
 
-### S5 — Placement authoring and live terrain preview
+### S6 — Placement authoring and live terrain preview
 
 - [ ] Placement panel bound to the structure's `placement` defaults, plus a
       biome dropdown taken from the pack's `vb.register_biome` entries.
@@ -475,7 +543,7 @@ and documents.
       previewed. Show a clear message, and fall back to a flat grass test
       patch so rules can still be tried.
 
-### S6 — Integration, docs, base content
+### S7 — Integration, docs, base content
 
 - [ ] `vb structure` CLI subcommands (`architecture_spec/dev-cli.md`):
       `new`, `edit` (launches the editor on the current pack), and
@@ -498,7 +566,7 @@ and documents.
 1. **Should `content/base` move onto `vb.worldgen.set_pipeline`?** Base
    trees need it, but it changes the default world's terrain (a new golden
    and new spawn behavior). The recommendation is yes, as its own task
-   before the base-content part of S6, so the terrain change and the tree
+   before the base-content part of S7, so the terrain change and the tree
    change can be reviewed separately.
 2. **Size cap.** 64³ is plenty for trees and rocks. Ruins or villages would
    need bigger pieces or a jigsaw/assembly system. Treat that as a separate
@@ -507,6 +575,10 @@ and documents.
    `min_spacing` only applies within one rule. Cross-rule exclusion needs
    rules to know about each other's anchors. It's possible with the column
    enumeration, but leave it out until there's real content that needs it.
-4. **Hot reload into a running singleplayer world.** Useful, but server-side
-   hot reload is deferred as a whole. Preview mode (S5) covers the need for
+4. **Should definition files read `vb.config`?** It would allow
+   server-config-dependent content, but then the editor and the server could
+   see different content for the same pack. The recommendation is no: keep
+   stage 1 a pure function of the pack directory.
+5. **Hot reload into a running singleplayer world.** Useful, but server-side
+   hot reload is deferred as a whole. Preview mode (S6) covers the need for
    now.

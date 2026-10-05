@@ -30,7 +30,7 @@
   content pack as a schematic, placed by declarative rules (neighbor-block
   constraints — e.g. "must be on dirt", clustering tendency, biome/density
   weighting) rather than every structure needing a hand-written procedural
-  callback. **Design and phased plan (S0–S6): `docs/structure-editor.md`.**
+  callback. **Design and phased plan (S0–S7): `docs/structure-editor.md`.**
   Explicitly post-first-playable — depends on the Lua-driven
   worldgen pipeline itself (Phase 4.2/6) landing and settling first; noted
   now so the decoration-pass design leaves room for it. **Phase 6.14 landed
