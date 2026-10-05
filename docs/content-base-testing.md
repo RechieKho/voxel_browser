@@ -1,12 +1,17 @@
 # Testing `content/base` — design and phased plan
 
-> Status: **C0–C4 implemented, C5 partial** (this file). Phases C0 (fixture),
-> C1 (declarative surface), C2 (server-side behaviour), C3 (UI pack files)
-> and C4 (e2e journeys) are done — see `tests/unit/content_base_fixture.hpp`,
+> Status: **C0–C5 all done** (this file). Phases C0 (fixture), C1
+> (declarative surface), C2 (server-side behaviour), C3 (UI pack files) and
+> C4 (e2e journeys) are done — see `tests/unit/content_base_fixture.hpp`,
 > `content_base_data_test.cpp`, `content_base_behaviour_test.cpp`,
 > `content_base_ui_test.cpp` and `tests/e2e/test_base_pack.py`. C5's CI/docs
-> checks are done (this status line, CONTRIBUTING.md); the findings below
-> are what's left.
+> checks are done (this status line, CONTRIBUTING.md), and its optional
+> cleanup (task 4) is also done: `content_pack_test.cpp`'s three cases that
+> load the real `content/base` directory now use `BasePackFixture` instead
+> of their own inline setup (the two that load a synthetic throwaway pack —
+> `require()`, a broken-Lua directory — stayed as-is, since `BasePackFixture`
+> is specifically about the real `content/base/` directory). The findings
+> below are what's left.
 >
 > **Findings from implementing this:**
 > - No read-back accessor exists for `vb.register_biome` entries (C1 task 4
