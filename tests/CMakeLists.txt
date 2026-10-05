@@ -4,6 +4,7 @@
 add_executable(vb_tests
   main.cpp
   unit/auth_config_test.cpp
+  unit/auth_verifier_test.cpp
   unit/assetsync_cache_test.cpp
   unit/assetsync_manifest_test.cpp
   unit/biome_selector_test.cpp
@@ -64,6 +65,10 @@ target_link_libraries(vb_tests
     vb_warnings
     vb_sanitizers
 )
+
+if(VB_WITH_AUTH)
+  target_link_libraries(vb_tests PRIVATE nlohmann_json::nlohmann_json)
+endif()
 
 if(VB_BUILD_CLI)
   target_sources(vb_tests PRIVATE unit/dev_cli_test.cpp)

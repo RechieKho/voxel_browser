@@ -29,10 +29,10 @@ inline constexpr bool kBuiltWithAuth = true;
 inline constexpr bool kBuiltWithAuth = false;
 #endif
 
-// True once a real server-side token verifier exists (step 9.3). Until then
-// the server must refuse to run a pack that declares auth rather than admit
-// unverified players (spec §2 goal 2, fail closed).
-inline constexpr bool kVerifierAvailable = false;
+// True when this build can verify tokens (step 9.3: Mbed TLS + libcurl behind
+// VB_WITH_AUTH). A server whose pack declares auth must refuse to start
+// without it rather than admit unverified players (spec §2 goal 2).
+inline constexpr bool kVerifierAvailable = kBuiltWithAuth;
 
 // The pack-root filename. Excluded from the pack-VM walk and the asset
 // manifest (it runs in its own VM and holds nothing a client needs).

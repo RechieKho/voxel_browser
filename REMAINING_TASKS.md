@@ -507,8 +507,25 @@ protocol changes, security notes and per-step task lists:
       still never sets `auth_mode = kExternal` (9.3 supplies the real verifier);
       a full loopback ServerSession join with the fake verifier is not
       covered, only the FSMs.
-- [ ] **9.3 — Server token verification**: Mbed TLS + curl, JWT/JWKS,
-      discovery, RS256/ES256 allowlist, iss/aud/exp/nonce checks, fuzzers.
+- [x] **9.3 — Server token verification** — done 2026-10-05: `VB_WITH_AUTH`
+      now pulls libcurl (hoisted from the CLI block) and **Mbed TLS 3.6.2**
+      (`vb_fetch`). `vb_auth` gains `jwt` (base64url, compact JWS),
+      `crypto` (RS256 ≥2048-bit / ES256 P-256 verify, SHA-256, OS entropy,
+      test-only `TestSigner`), `jwks` (RSA n/e + EC x/y, skips unusable keys),
+      `http` (`HttpFetcher` + curl impl, https/loopback only, 1 MiB cap),
+      `verifier` (`verify_id_token`, rules 1–7, `LoginInfo`, coarse
+      `public_reason`) and `service` (`AuthService`: OIDC discovery with
+      issuer check, JWKS prefetch thread with backoff, one in-flight fetch,
+      ≥60 s unknown-`kid` refresh limit, pollable `Pending` verification,
+      Firebase preset). `kVerifierAvailable = kBuiltWithAuth`; the server
+      now starts on an auth pack (`auth_mode = kExternal`, challenge nonce per
+      connection, ticket → verdict → pack join veto with the resolved name).
+      Tests (`auth_verifier_test.cpp`): every rule has pass + fail cases,
+      JWKS cache/refresh/rate-limit via a fake fetcher, mutation fuzz,
+      redaction. **Not verified here:** a real Keycloak token (needs a manual
+      run); libFuzzer targets (a deterministic mutation test stands in).
+      **Known gap until 9.4:** the verified `LoginInfo` is not yet kept on the
+      session, so `get_login()` and duplicate-subject handling don't exist yet.
 - [ ] **9.4 — Lua exposure**: `player:get_login()`, `player_join(name,
       login)` (user data only — no tokens), `vb.auth.required()`, name
       from `name_claim`, identity by `(issuer, subject)`, duplicate login
