@@ -30,6 +30,7 @@ target_link_libraries(vb_cli_lib
   PUBLIC
     vb_core
   PRIVATE
+    vb_editor_model
     tomlplusplus::tomlplusplus
     CURL::libcurl
     nlohmann_json::nlohmann_json

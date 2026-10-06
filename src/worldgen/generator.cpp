@@ -50,6 +50,10 @@ WorldGenerator::Column WorldGenerator::column_at(int world_x, int world_z) const
 		col.filler = biome.filler != core::BlockId::kAir ? biome.filler : col.filler;
 		col.stone = biome.stone != core::BlockId::kAir ? biome.stone : col.stone;
 	}
+	if (pipe.beach != core::BlockId::kAir && col.height <= pipe.sea_level + 1) {
+		col.surface = pipe.beach;
+		col.filler = pipe.beach;
+	}
 	return col;
 }
 

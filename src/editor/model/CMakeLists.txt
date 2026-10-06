@@ -7,6 +7,7 @@ add_library(vb_editor_model STATIC
   preview.cpp
   structure_doc.cpp
   structure_writer.cpp
+  validate.cpp
   volume_view.cpp
   workspace.cpp
 )

@@ -184,7 +184,7 @@ rt.dispatch_tick(dt);
   names returns the same pre-assigned index (idempotent-by-name already
   covers it); it does not let a pack change which physical key drives it.
   `vb.worldgen.set_pipeline{height=, base_height=, amplitude=, sea_level=,
-  soil_depth=, cell_size=, carvers={{noise=, threshold=, y_min=, y_max=},
+  soil_depth=, beach=, cell_size=, carvers={{noise=, threshold=, y_min=, y_max=},
   ...}, veins={{block=, target_rock=, height_min=, height_max=, vein_size=,
   spawn_rate=}, ...}}` (Phase 6.14, pack-load-time only) replaces
   `WorldGenerator`'s fixed fBm-heightmap default with a pack-driven pipeline
@@ -206,6 +206,11 @@ rt.dispatch_tick(dt);
   `WorldGenerator` on its exact pre-6.14 fixed path — byte-identical output,
   `tests/unit/worldgen_test.cpp`'s golden-hash gate for the default path is
   unaffected.
+  `beach = "base:sand"` (optional block name, default off) makes every
+  column whose surface is at or below `sea_level + 1` use that block for
+  surface and filler, like the fixed default path's sand beaches; without it
+  each biome's own surface block runs down to the sea floor, and a structure
+  rule with `on = {grass}` never anchors on a beach.
   `vb.noise.*` builds the node-graph description `set_pipeline`'s `height`
   and each carver's `noise` field expect — plain tagged Lua tables, not
   opaque handles: `vb.noise.constant(v)`, `vb.noise.value{frequency=}`,

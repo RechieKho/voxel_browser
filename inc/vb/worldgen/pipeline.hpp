@@ -47,6 +47,11 @@ struct PackWorldGenPipeline {
 	std::function<double(double world_x, double world_z)> height_field;
 	int sea_level = 62;
 	int soil_depth = 4;
+	// Optional: columns whose surface is at or below sea_level + 1 get this
+	// block for both surface and filler (the fixed default path's sand
+	// beaches). kAir = off, every biome keeps its own surface down to the
+	// sea floor.
+	core::BlockId beach = core::BlockId::kAir;
 
 	BiomeSelector biomes;
 	std::vector<CarverDef> carvers;

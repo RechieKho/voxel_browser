@@ -73,20 +73,62 @@ std::optional<Workspace> Workspace::open(const fs::path &block_data_script, std:
 	return ws;
 }
 
-void Workspace::scan() {
-	structures_.clear();
+std::vector<fs::path> list_structure_files(const fs::path &structures_dir) {
 	std::vector<fs::path> files;
 	std::error_code ec;
-	if (fs::is_directory(structures_dir(), ec)) {
-		for (const auto &entry : fs::directory_iterator(structures_dir(), ec)) {
-			if (entry.is_regular_file(ec) && entry.path().extension() == ".lua" &&
-					entry.path().stem() != kAllIndexStem) {
+	if (fs::is_directory(structures_dir, ec)) {
+		for (const auto &entry : fs::directory_iterator(structures_dir, ec)) {
+			if (entry.is_regular_file(ec) && entry.path().extension() == ".lua" && entry.path().stem() != kAllIndexStem) {
 				files.push_back(entry.path());
 			}
 		}
 	}
 	std::sort(files.begin(), files.end());
-	for (const fs::path &file : files) {
+	return files;
+}
+
+bool write_structures_index(const fs::path &structures_dir, std::string *error) {
+	std::vector<std::string> stems;
+	for (const fs::path &file : list_structure_files(structures_dir)) {
+		stems.push_back(file.stem().string());
+	}
+	return write_file(structures_dir / (std::string(kAllIndexStem) + ".lua"), write_all_index(stems), error);
+}
+
+bool create_structure_file(const fs::path &pack_root, const std::string &name, core::IVec3 size, fs::path *out_path, std::string *error) {
+	const auto fail = [&](const std::string &msg) {
+		if (error) {
+			*error = msg;
+		}
+		return false;
+	};
+	if (name.empty() || name.back() == ':') {
+		return fail("structure name '" + name + "' is empty");
+	}
+	const fs::path dir = pack_root / "structures";
+	const fs::path file = dir / (structure_file_stem(name) + ".lua");
+	std::error_code ec;
+	if (fs::exists(file, ec)) {
+		return fail(file.generic_string() + " already exists");
+	}
+	StructureDoc doc = StructureDoc::create(name, size, { size.x / 2, 0, size.z / 2 });
+	const worldgen::StructureSpec spec = doc.to_spec();
+	const std::string bad = worldgen::validate_structure_spec(spec);
+	if (!bad.empty()) {
+		return fail(bad);
+	}
+	if (!write_file(file, write_structure_lua(spec), error) || !write_structures_index(dir, error)) {
+		return false;
+	}
+	if (out_path) {
+		*out_path = file;
+	}
+	return true;
+}
+
+void Workspace::scan() {
+	structures_.clear();
+	for (const fs::path &file : list_structure_files(structures_dir())) {
 		StructureEntry entry;
 		entry.path = file;
 		std::string error;
@@ -142,20 +184,7 @@ fs::path Workspace::path_for(const std::string &doc_name) const {
 	return structures_dir() / (structure_file_stem(doc_name) + ".lua");
 }
 
-bool Workspace::write_index(std::string *error) const {
-	std::vector<std::string> stems;
-	std::error_code ec;
-	if (fs::is_directory(structures_dir(), ec)) {
-		for (const auto &entry : fs::directory_iterator(structures_dir(), ec)) {
-			if (entry.is_regular_file(ec) && entry.path().extension() == ".lua" &&
-					entry.path().stem() != kAllIndexStem) {
-				stems.push_back(entry.path().stem().string());
-			}
-		}
-	}
-	std::sort(stems.begin(), stems.end());
-	return write_file(structures_dir() / (std::string(kAllIndexStem) + ".lua"), write_all_index(stems), error);
-}
+bool Workspace::write_index(std::string *error) const { return write_structures_index(structures_dir(), error); }
 
 bool Workspace::save(StructureDoc &doc, std::string *error) {
 	const worldgen::StructureSpec spec = doc.to_spec();

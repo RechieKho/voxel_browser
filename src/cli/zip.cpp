@@ -52,7 +52,7 @@ bool is_known_binary(const fs::path &rel) {
 	if (std::distance(rel.begin(), rel.end()) != 1) {
 		return false;
 	}
-	for (const Binary b : { Binary::Client, Binary::Server }) {
+	for (const Binary b : { Binary::Client, Binary::Server, Binary::Editor }) {
 		if (rel.string() == binary_file_name(b)) {
 			return true;
 		}

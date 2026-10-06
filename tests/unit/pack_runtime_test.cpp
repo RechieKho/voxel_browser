@@ -1203,3 +1203,45 @@ TEST_CASE("a busy-looping tick handler hits the instruction budget instead "
 }
 
 #endif // VB_WITH_LUA
+
+TEST_CASE("vb.worldgen.set_pipeline{beach=} puts the beach block at and below sea level + 1") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("worldgen_beach"));
+	REQUIRE(rt.load_pack_file(R"(
+		vb.register_biome({ name = "t:b", surface = "base:grass", filler = "base:dirt", stone = "base:stone" })
+		vb.worldgen.set_pipeline({
+			height = vb.noise.constant(0.5), base_height = 62, amplitude = 0, sea_level = 62, beach = "base:sand",
+		})
+	)"));
+	rt.freeze();
+	REQUIRE(rt.validate_worldgen());
+	const auto pipeline = rt.build_worldgen_pipeline(vb::worldgen::WorldGenParams{});
+	REQUIRE(pipeline);
+	CHECK(pipeline->beach == registry.find("base:sand"));
+	// A flat world exactly at sea level is all beach.
+	const vb::worldgen::WorldGenerator gen(vb::worldgen::WorldGenParams{}, registry, pipeline);
+	CHECK(gen.block_at_pregen(5, 62, 5) == registry.find("base:sand"));
+	CHECK(gen.block_at_pregen(5, 60, 5) == registry.find("base:sand"));
+
+	// Without it the biome's own surface is used.
+	vb::world::BlockRegistry registry2 = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt2(net.server(), registry2, temp_storage("worldgen_nobeach"));
+	REQUIRE(rt2.load_pack_file(R"(
+		vb.register_biome({ name = "t:b", surface = "base:grass", filler = "base:dirt", stone = "base:stone" })
+		vb.worldgen.set_pipeline({ height = vb.noise.constant(0.5), base_height = 62, amplitude = 0, sea_level = 62 })
+	)"));
+	rt2.freeze();
+	const auto plain = rt2.build_worldgen_pipeline(vb::worldgen::WorldGenParams{});
+	const vb::worldgen::WorldGenerator gen2(vb::worldgen::WorldGenParams{}, registry2, plain);
+	CHECK(gen2.block_at_pregen(5, 62, 5) == registry2.find("base:grass"));
+
+	// An unknown beach block is a validation error.
+	vb::world::BlockRegistry registry3 = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt3(net.server(), registry3, temp_storage("worldgen_badbeach"));
+	REQUIRE(rt3.load_pack_file(R"(vb.worldgen.set_pipeline({ height = vb.noise.constant(0.5), beach = "nope:sand" }))"));
+	rt3.freeze();
+	const auto bad = rt3.validate_worldgen();
+	CHECK_FALSE(bad);
+	CHECK(bad.message.find("nope:sand") != std::string::npos);
+}

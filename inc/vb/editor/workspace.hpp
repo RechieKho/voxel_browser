@@ -26,6 +26,20 @@ struct StructureEntry {
 	bool ok = false;
 };
 
+// Lists the structure files (without all.lua) in `structures_dir`, sorted by
+// file name; empty when the folder doesn't exist.
+std::vector<std::filesystem::path> list_structure_files(const std::filesystem::path &structures_dir);
+
+// Regenerates `<structures_dir>/all.lua` from the files present.
+bool write_structures_index(const std::filesystem::path &structures_dir, std::string *error);
+
+// Writes an empty structure (one all-keep variant, anchor at the bottom
+// center) into `<pack_root>/structures/` and regenerates all.lua. `name` is
+// the full "pack:local" name; fails if the file exists. `out_path` receives the
+// file written.
+bool create_structure_file(const std::filesystem::path &pack_root, const std::string &name, core::IVec3 size,
+		std::filesystem::path *out_path, std::string *error);
+
 class Workspace {
 public:
 	// Loads the block data script and scans `structures/`. nullopt (and

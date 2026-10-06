@@ -2864,6 +2864,14 @@ std::string PackRuntime::Impl::build_decoration(std::vector<worldgen::StructureD
 }
 
 ScriptResult PackRuntime::validate_worldgen() const {
+	if (impl_->worldgen_pipeline_table) {
+		const std::string beach = impl_->worldgen_pipeline_table->get_or("beach", std::string{});
+		if (!beach.empty() && impl_->registry.find(beach) == core::BlockId::kAir &&
+				impl_->registry.get(core::BlockId::kAir).name != beach) {
+			return { false, core::ScriptError::kRuntime,
+				"vb.worldgen.set_pipeline: 'beach' names unknown block '" + beach + "'" };
+		}
+	}
 	std::vector<worldgen::StructureDef> structures;
 	std::vector<std::vector<worldgen::PlacementRule>> decoration;
 	const std::string err = impl_->build_decoration(structures, decoration);
@@ -2906,6 +2914,9 @@ std::shared_ptr<const worldgen::PackWorldGenPipeline> PackRuntime::Impl::build_w
 	};
 	pipeline->sea_level = def.get_or("sea_level", base.sea_level);
 	pipeline->soil_depth = def.get_or("soil_depth", base.soil_depth);
+	if (const std::string beach = def.get_or("beach", std::string{}); !beach.empty()) {
+		pipeline->beach = registry.find(beach);
+	}
 
 	// Biomes: every vb.register_biome entry becomes a worldgen::BiomeEntry,
 	// resolved surface/filler/stone block ids and a same-order adjacency

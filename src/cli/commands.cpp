@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <functional>
@@ -42,6 +43,9 @@
 #include "vb/core/config.hpp"
 #include "vb/core/paths.hpp"
 #include "vb/core/version.hpp"
+#include "vb/editor/block_catalog.hpp"
+#include "vb/editor/validate.hpp"
+#include "vb/editor/workspace.hpp"
 
 namespace vb::cli {
 
@@ -234,13 +238,15 @@ int cmd_which(const Ctx &c, std::vector<std::string> args) {
 	}
 	Binary which = Binary::Client;
 	if (args.size() > 1) {
-		return usage_error(c, "usage: vb which [client|server] [--version <v>] [--json]");
+		return usage_error(c, "usage: vb which [client|server|editor] [--version <v>] [--json]");
 	}
 	if (args.size() == 1) {
 		if (args[0] == "server") {
 			which = Binary::Server;
+		} else if (args[0] == "editor") {
+			which = Binary::Editor;
 		} else if (args[0] != "client") {
-			return usage_error(c, "usage: vb which [client|server] [--version <v>] [--json]");
+			return usage_error(c, "usage: vb which [client|server|editor] [--version <v>] [--json]");
 		}
 	}
 	std::string why;
@@ -253,7 +259,7 @@ int cmd_which(const Ctx &c, std::vector<std::string> args) {
 		return failure(c, e->name + " has no " + binary_file_name(which) + " in " + e->root.string());
 	}
 	if (as_json) {
-		print_json(c, { { "version", e->name }, { "kind", which == Binary::Server ? "server" : "client" }, { "path", bin->string() } });
+		print_json(c, { { "version", e->name }, { "kind", which == Binary::Server ? "server" : (which == Binary::Editor ? "editor" : "client") }, { "path", bin->string() } });
 		return kExitOk;
 	}
 	c.out << bin->string() << "\n";
@@ -1400,6 +1406,126 @@ int cmd_server(const Ctx &c, const std::vector<std::string> &args) {
 	return it->second(c, std::vector<std::string>(args.begin() + 1, args.end()));
 }
 
+// ---- structures ----------------------------------------------------------
+
+// The pack the current directory belongs to: the nearest ancestor holding a
+// pack.toml, else the current directory itself.
+std::filesystem::path current_pack_root() {
+	std::error_code ec;
+	return vb::editor::find_pack_root(std::filesystem::current_path(ec) / "x");
+}
+
+// "<root>/data/blocks.lua", the block data script convention.
+std::filesystem::path default_block_script() { return current_pack_root() / "data" / "blocks.lua"; }
+
+bool parse_size(const std::string &text, vb::core::IVec3 &out) {
+	return std::sscanf(text.c_str(), "%dx%dx%d", &out.x, &out.y, &out.z) == 3;
+}
+
+int structure_new(const Ctx &c, const std::vector<std::string> &args) {
+	const Opts o = parse_opts(args, { "--size", "--pack" }, {});
+	if (!o.error.empty()) {
+		return usage_error(c, o.error);
+	}
+	if (o.positional.size() != 1) {
+		return usage_error(c, "usage: vb structure new <name> [--size XxYxZ] [--pack <dir>]");
+	}
+	const std::filesystem::path root = o.values.count("--pack") != 0
+			? std::filesystem::absolute(o.values.at("--pack"))
+			: current_pack_root();
+	std::string name = o.positional[0];
+	if (name.find(':') == std::string::npos) {
+		name = vb::editor::read_pack_name(root) + ":" + name;
+	}
+	vb::core::IVec3 size{ 5, 6, 5 };
+	if (o.values.count("--size") != 0 && !parse_size(o.values.at("--size"), size)) {
+		return usage_error(c, "--size must look like 5x7x5");
+	}
+	if (size.x < 1 || size.y < 1 || size.z < 1 || size.x > vb::worldgen::kMaxStructureDim ||
+			size.y > vb::worldgen::kMaxStructureDim || size.z > vb::worldgen::kMaxStructureDim) {
+		return usage_error(c, "--size must be 1.." + std::to_string(vb::worldgen::kMaxStructureDim) + " on every axis");
+	}
+	std::filesystem::path written;
+	std::string error;
+	if (!vb::editor::create_structure_file(root, name, size, &written, &error)) {
+		return failure(c, error);
+	}
+	c.out << "created " << written.generic_string() << " (" << name << ", " << size.x << "x" << size.y << "x" << size.z
+		  << ") and updated structures/all.lua\n";
+	return kExitOk;
+}
+
+int structure_validate(const Ctx &c, const std::vector<std::string> &args) {
+	const Opts o = parse_opts(args, {}, {});
+	if (!o.error.empty()) {
+		return usage_error(c, o.error);
+	}
+	if (o.positional.size() > 1) {
+		return usage_error(c, "usage: vb structure validate [block-data-script]");
+	}
+	const std::filesystem::path script = o.positional.empty() ? default_block_script() : std::filesystem::path(o.positional[0]);
+	const vb::editor::ValidationReport report = vb::editor::validate_pack(script);
+	for (const auto &issue : report.issues) {
+		c.out << issue.file << ": " << issue.message << "\n";
+	}
+	if (report.ok()) {
+		c.out << "ok: pack '" << report.pack_name << "', " << report.blocks << " blocks, " << report.structure_files
+			  << " structure files\n";
+		return kExitOk;
+	}
+	c.err << "vb: " << report.issues.size() << " problem(s) found\n";
+	return kExitFailure;
+}
+
+int structure_edit(const Ctx &c, const std::vector<std::string> &raw) {
+	auto [opts, passthrough] = split_passthrough(raw);
+	std::string version;
+	if (!take_version_flag(opts, version)) {
+		return usage_error(c, "--version needs a value");
+	}
+	if (opts.size() > 1) {
+		return usage_error(c, "usage: vb structure edit [block-data-script] [--version <v>] [-- editor args...]");
+	}
+	std::error_code ec;
+	const std::filesystem::path script = std::filesystem::absolute(opts.empty() ? default_block_script() : std::filesystem::path(opts[0]), ec);
+	if (!std::filesystem::is_regular_file(script, ec)) {
+		return failure(c, "block data script " + script.generic_string() + " not found (pass its path, or run inside a pack with data/blocks.lua)");
+	}
+	std::string why;
+	const auto e = resolve_entry(c.layout, version, &why);
+	if (!e) {
+		return failure(c, why);
+	}
+	const auto bin = find_binary(*e, Binary::Editor);
+	if (!bin) {
+		return failure(c, e->name + " has no " + binary_file_name(Binary::Editor) + " in " + e->root.string() + " (the editor is built with the renderer and Lua; see VB_BUILD_EDITOR)");
+	}
+	std::vector<std::string> args{ script.string() };
+	args.insert(args.end(), passthrough.begin(), passthrough.end());
+	const RunResult r = run_foreground(*bin, args);
+	if (!r.error.empty()) {
+		return failure(c, r.error);
+	}
+	return r.exit_code;
+}
+
+int cmd_structure(const Ctx &c, const std::vector<std::string> &args) {
+	if (args.empty()) {
+		return usage_error(c, "usage: vb structure <new|edit|validate> ...");
+	}
+	const std::vector<std::string> rest(args.begin() + 1, args.end());
+	if (args[0] == "new") {
+		return structure_new(c, rest);
+	}
+	if (args[0] == "edit") {
+		return structure_edit(c, rest);
+	}
+	if (args[0] == "validate") {
+		return structure_validate(c, rest);
+	}
+	return usage_error(c, "unknown structure command '" + args[0] + "'");
+}
+
 const std::map<std::string, Command> &commands();
 
 int cmd_self(const Ctx &c, std::vector<std::string> args) {
@@ -1546,7 +1672,7 @@ const std::map<std::string, Command> &commands() {
 						[](const Ctx &c, const std::vector<std::string> &a) { return cmd_list(c, a); } } },
 		{ "use", { "use <version>", "set the default version", cmd_use } },
 		{ "which",
-				{ "which [client|server] [--version <v>] [--json]", "print a binary's path",
+				{ "which [client|server|editor] [--version <v>] [--json]", "print a binary's path",
 						[](const Ctx &c, const std::vector<std::string> &a) {
 							return cmd_which(c, a);
 						} } },
@@ -1573,6 +1699,9 @@ const std::map<std::string, Command> &commands() {
 		{ "server",
 				{ "server <new|list|start|stop|restart|status|logs|config|service|rm> ...",
 						"manage named, background server instances", cmd_server } },
+		{ "structure",
+				{ "structure <new|edit|validate> ...", "author decorative structures (new, edit in the editor, validate)",
+						cmd_structure } },
 		{ "self",
 				{ "self update [--check] [--force]", "update vb itself to the latest release",
 						[](const Ctx &c, const std::vector<std::string> &a) { return cmd_self(c, a); } } },
