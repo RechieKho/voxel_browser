@@ -9,3 +9,7 @@ lines. Run `wc -l REMAINING_TASKS.md STATE.md ARCHITECTURE_SPEC.md`; if any is
 at or over 500 (or you just closed a phase / investigation), move inactive
 material into `remaining_tasks/`, `state/` or `architecture_spec/` following
 `DREAMING.md`, in a separate docs-only commit.
+
+**"Implement in autopilot mode"** means: implement the given task list in
+order without check-ins, update the docs (including `README.md`), open a PR,
+then fix CI until it is all green. Read `AUTOPILOT.md` for the full procedure.
