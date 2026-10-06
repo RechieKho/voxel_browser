@@ -1,5 +1,6 @@
 #include "vb/render/entity_renderer.hpp"
 
+#include <cmath>
 #include <cstdint>
 #include <optional>
 #include <string_view>
@@ -8,10 +9,12 @@
 #include <utility>
 
 #include <raylib.h>
+#include <rlgl.h>
 
 #include "vb/core/ids.hpp"
 #include "vb/core/log.hpp"
 #include "vb/net/session.hpp"
+#include "vb/render/chunk_renderer.hpp"
 #include "vb/render/entity_visual.hpp"
 #include "vb/render/entity_visual_layout.hpp"
 
@@ -65,6 +68,8 @@ struct TrackedEntity {
 	// pose selection never runs against a stale/default facings count.
 	int facings = kDefaultFacings;
 	bool mirror = true;
+	// Set for a dropped-item entity: draw_item_cube() instead of a billboard.
+	std::optional<core::BlockId> item;
 
 	explicit TrackedEntity(int initial_facings) : state(initial_facings) {}
 };
@@ -89,6 +94,7 @@ struct EntityRenderer::Impl {
 	// lifetime (same as `kind`), so there's never a reason to retry.
 	std::unordered_set<core::NetId> instance_visual_attempted;
 	VirtualFs vfs; // set once, right after join, by set_virtual_fs()
+	const ChunkRenderer *chunks = nullptr; // set_block_colors()
 };
 
 EntityRenderer::EntityRenderer() : impl_(std::make_unique<Impl>()) {
@@ -194,6 +200,7 @@ void EntityRenderer::sync(const net::ClientSession &client,
 		// snapshot still takes effect -- frame arrival order across the
 		// S2C_EntityKindRegistry/S2C_EntitySnapshot messages isn't guaranteed.
 		it->second.kind = rec.kind;
+		it->second.item = client.entity_item(id);
 		const protocol::EntityKindRegistryRecord *kind_record = client.entity_kind(rec.kind);
 		if (kind_record != nullptr) {
 			it->second.width = kind_record->width;
@@ -251,6 +258,29 @@ void EntityRenderer::sync(const net::ClientSession &client,
 	}
 }
 
+void EntityRenderer::set_block_colors(const ChunkRenderer *chunks) {
+	impl_->chunks = chunks;
+}
+
+namespace {
+
+// A dropped item: a small cube spinning and bobbing above its resting point.
+// `phase` (the drop's id) desynchronises neighbouring drops.
+void draw_item_cube(Vector3 feet, Color color, float phase) {
+	constexpr float kSize = 0.3f;
+	const float t = static_cast<float>(GetTime());
+	const float bob = 0.12f + 0.05f * std::sin(t * 2.5f + phase);
+	rlPushMatrix();
+	rlTranslatef(feet.x, feet.y + bob + kSize * 0.5f, feet.z);
+	rlRotatef(std::fmod(t * 60.0f + phase * 37.0f, 360.0f), 0.0f, 1.0f, 0.0f);
+	DrawCube(Vector3{ 0.0f, 0.0f, 0.0f }, kSize, kSize, kSize, color);
+	DrawCubeWires(Vector3{ 0.0f, 0.0f, 0.0f }, kSize, kSize, kSize,
+			Color{ 0, 0, 0, 120 });
+	rlPopMatrix();
+}
+
+} // namespace
+
 void EntityRenderer::draw(const CameraView &camera_view) const {
 	const Camera3D camera = to_raylib_camera(camera_view);
 	for (const auto &[id, tracked] : impl_->states) {
@@ -270,6 +300,12 @@ void EntityRenderer::draw(const CameraView &camera_view) const {
 			visual = &kind_it->second;
 		}
 		const bool has_visual = visual != nullptr;
+
+		if (tracked.item && impl_->chunks != nullptr) {
+			draw_item_cube(feet, impl_->chunks->underwater_tint(*tracked.item),
+					static_cast<float>(id));
+			continue;
+		}
 
 		Rectangle source;
 		Texture2D texture;

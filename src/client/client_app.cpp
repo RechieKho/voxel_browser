@@ -420,6 +420,7 @@ void ClientApp::enter_playing() {
 			crack_overlay->set_texture(crack_atlas.upload());
 		}
 		entity_renderer = std::make_unique<vb::render::EntityRenderer>();
+		entity_renderer->set_block_colors(chunk_renderer.get());
 		// Entity-management follow-up: build any registered kind's real
 		// spritesheet (S2C_EntityKindRegistry.visual) the same session the
 		// block texture atlas above was built -- both are one-shot,

@@ -188,7 +188,8 @@ MoveState step_movement(const MoveState &state, const MoveInput &input,
 		out.velocity.z += dv.z;
 
 		// Gravity.
-		out.velocity.y -= params.gravity * dt;
+		out.velocity.y -= params.gravity *
+				(out.velocity.y < 0.0 ? kFallGravityScale : 1.0) * dt;
 		if (out.velocity.y < -params.terminal_velocity) {
 			out.velocity.y = -params.terminal_velocity;
 		}

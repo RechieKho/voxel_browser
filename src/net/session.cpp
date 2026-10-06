@@ -1233,7 +1233,17 @@ void ServerSession::update_item_drops(double dt_seconds) {
 			players.emplace_back(state.net_id, e->pos);
 		}
 	}
-	const world::ItemDropTickResult result = item_drops_.tick(dt_seconds, players);
+	const world::ItemDropTickResult result = item_drops_.tick(dt_seconds, players,
+			move_params_.height, replicator_ != nullptr ? &world_query() : nullptr);
+	for (core::NetId id : result.moved) {
+		const auto drop = item_drops_.drops().find(id);
+		const auto *e = interest_.get(id);
+		if (drop != item_drops_.drops().end() && e != nullptr) {
+			replication::EntityState moved = *e;
+			moved.pos = drop->second.pos;
+			interest_.upsert(moved);
+		}
+	}
 	for (core::NetId id : result.removed) {
 		interest_.remove(id);
 	}
@@ -1563,7 +1573,8 @@ namespace {
 // default nullptr, leaving EntityRecord::visual_override unset ("unchanged",
 // not "cleared"; see that field's own comment in snapshot.hpp).
 protocol::EntityRecord to_record(const replication::EntityState &s,
-		const protocol::EntityVisualOverride *override_def = nullptr) {
+		const protocol::EntityVisualOverride *override_def = nullptr,
+		std::optional<std::uint16_t> item = std::nullopt) {
 	protocol::EntityRecord r;
 	r.net_id = s.net_id;
 	r.kind = s.kind;
@@ -1573,6 +1584,7 @@ protocol::EntityRecord to_record(const replication::EntityState &s,
 	if (override_def != nullptr) {
 		r.visual_override = *override_def;
 	}
+	r.item = item;
 	return r;
 }
 
@@ -1596,9 +1608,14 @@ void ServerSession::broadcast_snapshots() {
 		for (core::NetId id : d.entered) {
 			if (const auto *e = interest_.get(id)) {
 				const auto ov_it = script_entity_visual_overrides_.find(id);
+				const auto drop_it = item_drops_.drops().find(id);
 				snap.entered.push_back(to_record(*e,
 						ov_it != script_entity_visual_overrides_.end() ? &ov_it->second
-																	   : nullptr));
+																	   : nullptr,
+						drop_it != item_drops_.drops().end()
+								? std::optional<std::uint16_t>(
+										static_cast<std::uint16_t>(drop_it->second.item))
+								: std::nullopt));
 			}
 		}
 		for (core::NetId id : d.stayed) {
@@ -2248,6 +2265,9 @@ void ClientSession::apply_snapshot(const protocol::S2CEntitySnapshot &snap) {
 		if (r.visual_override) {
 			entity_visual_overrides_[r.net_id] = *r.visual_override;
 		}
+		if (r.item) {
+			entity_items_[r.net_id] = *r.item;
+		}
 		auto [it, inserted] = net_to_entity_.try_emplace(r.net_id, entt::null);
 		if (inserted) {
 			it->second = entity_registry_.create();
@@ -2278,6 +2298,7 @@ void ClientSession::apply_snapshot(const protocol::S2CEntitySnapshot &snap) {
 	for (core::NetId id : snap.removed) {
 		remote_.erase(id);
 		entity_visual_overrides_.erase(id);
+		entity_items_.erase(id);
 		if (const auto it = net_to_entity_.find(id); it != net_to_entity_.end()) {
 			entity_registry_.destroy(it->second);
 			net_to_entity_.erase(it);

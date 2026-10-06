@@ -196,6 +196,23 @@ TEST_CASE("entity snapshot round-trips a per-instance visual override") {
 	CHECK_FALSE(s2.updated[0].visual_override.has_value());
 }
 
+TEST_CASE("entity snapshot round-trips a dropped item's block id") {
+	S2CEntitySnapshot s;
+	EntityRecord drop{ vb::core::NetId{ 0x80000001u }, vb::core::EntityKindId{ 2 },
+		{ 1.0, 2.0, 3.0 }, {}, {}, 0, std::nullopt };
+	drop.item = 7;
+	s.entered.push_back(drop);
+	s.updated.push_back({ vb::core::NetId{ 5 }, vb::core::EntityKindId{ 1 },
+			{ 0.0, 0.0, 0.0 }, {}, {}, 0, std::nullopt });
+
+	auto s2 = round_trip(s);
+	REQUIRE(s2.entered.size() == 1);
+	REQUIRE(s2.entered[0].item.has_value());
+	CHECK(*s2.entered[0].item == 7);
+	CHECK(s2.entered[0] == drop);
+	CHECK_FALSE(s2.updated[0].item.has_value());
+}
+
 TEST_CASE("chat / open_ui round-trip") {
 	auto c1 = round_trip(C2SChat{ "hi there" });
 	CHECK(c1.text == "hi there");

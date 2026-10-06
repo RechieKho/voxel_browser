@@ -8,6 +8,7 @@
 
 #include "vb/core/ids.hpp"
 #include "vb/core/math.hpp"
+#include "vb/world/block_query.hpp"
 
 // Dropped-item entities (spec §5.1 / §11.3, REMAINING_TASKS.md 5.1's
 // "Dropped-item entity" gap). No generic EnTT registry exists yet (Phase 3.1
@@ -46,6 +47,7 @@ struct ItemDrop {
 	// the system's own engine-default), not looked up again on every tick.
 	double pickup_radius = 0.0;
 	double lifetime_seconds = 0.0;
+	double vel_y = 0.0; // m/s; only non-zero while falling to the ground
 };
 
 struct ItemPickup {
@@ -61,6 +63,8 @@ struct ItemDropTickResult {
 	// Drop ids that no longer exist (picked up or expired) -- the caller
 	// removes them from its own replication interest grid.
 	std::vector<core::NetId> removed;
+	// Drops that fell this tick -- the caller re-publishes their position.
+	std::vector<core::NetId> moved;
 };
 
 class ItemDropSystem {
@@ -89,8 +93,16 @@ public:
 	// tick), and expires anything past `lifetime_seconds`. Pure output --
 	// applying the result (inventory credit, interest-grid removal) is the
 	// caller's job.
+	//
+	// A player position is their feet; pickup range is measured to the
+	// nearest point of a vertical segment `player_height` tall above it, so
+	// a drop at chest/head height in front of the player is collected the
+	// same as one at their feet. With a `world`, drops fall under gravity
+	// and come to rest on the first solid block below (reported in `moved`).
 	ItemDropTickResult tick(double dt,
-			const std::vector<std::pair<core::NetId, core::Vec3d>> &players);
+			const std::vector<std::pair<core::NetId, core::Vec3d>> &players,
+			double player_height = 1.8,
+			const BlockSolidQuery *world = nullptr);
 
 	const std::unordered_map<core::NetId, ItemDrop> &drops() const {
 		return drops_;

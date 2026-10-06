@@ -1,32 +1,34 @@
--- content/base/fall_damage.lua -- REMAINING_TASKS.md Phase 6's "no fall
--- damage" gap. vb.on("player_landed", ...) (Phase 6.22,
+-- content/base/fall_damage.lua -- vb.on("player_landed", ...) (Phase 6.22,
 -- src/net/session.cpp's ServerSession -- fires once per player exactly on
 -- the tick a fall is arrested by hitting ground) hands this file a raw
 -- impact speed in m/s and nothing else -- the engine ships zero fall-damage
 -- policy of its own, same "mechanism, not policy" split as punching/block
 -- breaking in mechanics.lua.
 --
--- Policy here: no damage below SAFE_SPEED (a short hop/step-off never hurts),
--- then 1 HP per m/s above that, matching player:damage()'s existing float
--- amount -- deliberately simple/linear, not Minecraft's per-block-of-fall
--- table, since this engine has no block-count fall history to draw from
--- (only the terminal impact speed).
+-- Policy: measured in blocks fallen, not speed. A fall of SAFE_BLOCKS or
+-- fewer never hurts; each block beyond that costs 1 HP. The height is
+-- recovered from the impact speed with v^2 = 2 * g * h, where g is the
+-- engine's *falling* gravity (gravity * fall_gravity_scale, both read back
+-- from vb.physics.get_params() inside the handler -- a pack can call
+-- vb.physics.set_params() at any point during load, so this file must not
+-- cache them at load time).
 --
--- SAFE_SPEED must clear a plain jump's own landing speed, or jumping on flat
--- ground hurts (found as a bug: a hardcoded 8.0 sat *below* the engine
--- default jump_speed of 8.9 m/s, and gravity is symmetric -- a jump lands at
--- about the speed it launched at). Read jump_speed back from the engine
--- (vb.physics.get_params(), Phase 6.21) instead of a second hardcoded guess
--- that could drift out of sync with it again -- called inside the handler,
--- like mechanics.lua's own get_params() uses, since a pack can call
--- vb.physics.set_params() at any point during load and this file's load
--- order relative to that isn't guaranteed. Plus a margin: session.cpp
--- captures impact speed one tick *before* the landing tick's own gravity
--- step, so the real impact is up to one tick of gravity (params.gravity *
--- dt) higher than what player_landed reports.
+-- A plain jump rises only ~1.3 blocks, far under SAFE_BLOCKS, so no jump-speed
+-- margin is needed any more.
+--
+-- session.cpp captures impact speed one tick *before* the landing tick's own
+-- gravity step, so the reported speed is up to one tick of falling gravity
+-- low; TICK_SECONDS adds that back so a fall of exactly SAFE_BLOCKS is not
+-- read as slightly shorter than it was.
+local SAFE_BLOCKS = 6.0
+local TICK_SECONDS = 1.0 / 20.0 -- default server tick_rate
+
 vb.on("player_landed", function(player, impact_speed)
-	local safe_speed = vb.physics.get_params().jump_speed + 1.5
-	local excess = impact_speed - safe_speed
+	local params = vb.physics.get_params()
+	local fall_gravity = params.gravity * params.fall_gravity_scale
+	local speed = impact_speed + fall_gravity * TICK_SECONDS
+	local blocks = speed * speed / (2.0 * fall_gravity)
+	local excess = blocks - SAFE_BLOCKS
 	if excess > 0 then
 		player:damage(excess, "fall")
 	end

@@ -38,7 +38,7 @@ struct ServerConfig {
 	std::uint32_t view_distance = 4; // chunks
 	std::uint32_t tick_rate = 20;
 	std::uint64_t world_seed = 0; // 0 = random at startup
-	double gravity = 24.0;
+	double gravity = 32.0;
 	double void_kill_y = -64.0; // fall below this Y -> instant death, respawn at spawn
 	// Real seconds for one full in-game day/night cycle (spec §5.4). Matches
 	// ServerSession::day_length_seconds_'s own hardcoded default -- an unset
