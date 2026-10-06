@@ -103,6 +103,11 @@ public:
 	// Weights must be positive (the writer and validator require it).
 	bool set_weight(std::size_t index, double weight);
 
+	// --- placement defaults ---
+	// Replaces the structure's `placement` table. Invalid specs (see
+	// worldgen::validate_placement_spec) are refused.
+	bool set_placement(const worldgen::PlacementSpec &placement);
+
 	// --- history ---
 	bool undo();
 	bool redo();

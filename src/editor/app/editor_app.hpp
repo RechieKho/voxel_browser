@@ -13,8 +13,10 @@
 #include "vb/editor/edit_session.hpp"
 #include "vb/editor/orbit_camera.hpp"
 #include "vb/editor/pick.hpp"
+#include "vb/editor/preview.hpp"
 #include "vb/editor/volume_view.hpp"
 #include "vb/editor/workspace.hpp"
+#include "vb/render/camera.hpp"
 #include "vb/render/chunk_renderer.hpp"
 #include "vb/render/window.hpp"
 
@@ -50,7 +52,9 @@ enum class Tool { kPlace,
 
 enum class SideTab { kBlocks,
 	kGenerate,
-	kVariants };
+	kVariants,
+	kPlacement,
+	kPreview };
 
 enum class Dialog { kNone,
 	kNew,
@@ -94,6 +98,13 @@ private:
 	// --- per frame: input ---
 	void handle_input();
 	void handle_shortcuts();
+	void handle_preview_input();
+	// --- preview ---
+	bool preview_mode() const { return side_tab_ == SideTab::kPreview && session_ != nullptr; }
+	void load_other_structures();
+	void mark_preview_dirty();
+	void update_preview();
+	void draw_preview_world();
 	void handle_viewport_click();
 	PickResult current_pick() const;
 	void apply_tool(const PickResult &pick, bool shift, bool ctrl, bool alt);
@@ -111,6 +122,8 @@ private:
 	void draw_palette(Rectangle area);
 	void draw_generate_tab(Rectangle area);
 	void draw_variants_tab(Rectangle area);
+	void draw_placement_tab(Rectangle area);
+	void draw_preview_tab(Rectangle area);
 	void draw_errors_panel();
 	void draw_open_dialog();
 	void draw_dialogs();
@@ -148,6 +161,23 @@ private:
 	bool gen_value_edit_[2] = {};
 	int weight_edit_ = -1; // variant whose weight is being typed
 	std::string weight_text_;
+
+	// Placement tab: which integer fields are being typed into.
+	bool placement_edit_[4] = {};
+	float cluster_ui_ = 0.0f;
+	bool cluster_dragging_ = false;
+
+	// Preview tab (S6).
+	PreviewInput preview_input_;
+	std::vector<worldgen::StructureSpec> other_specs_; // the folder's other structures
+	std::unique_ptr<TerrainPreview> preview_;
+	std::unique_ptr<render::ChunkRenderer> preview_renderer_;
+	render::FirstPersonController fly_;
+	bool preview_pending_ = true;
+	double preview_changed_at_ = 0.0;
+	std::uint64_t preview_seen_revision_ = 0;
+	bool preview_value_edit_[2] = {};
+	int preview_seed_box_ = 1;
 
 	bool show_open_ = false;
 	bool show_errors_ = false;

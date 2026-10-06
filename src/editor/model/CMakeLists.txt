@@ -4,6 +4,7 @@ add_library(vb_editor_model STATIC
   edit_session.cpp
   generators.cpp
   pick.cpp
+  preview.cpp
   structure_doc.cpp
   structure_writer.cpp
   volume_view.cpp

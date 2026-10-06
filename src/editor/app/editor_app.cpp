@@ -149,19 +149,20 @@ EditorApp::EditorApp(Workspace workspace, EditorOptions options) : workspace_(st
 EditorApp::~EditorApp() {
 	// The renderer owns GPU resources and must go before the window.
 	view_.reset();
+	preview_.reset();
+	preview_renderer_.reset();
 	renderer_.reset();
 }
 
 // ---------------------------------------------------------------------------
 // Loading and documents
 
-void EditorApp::rebuild_renderer() {
-	renderer_.reset();
-	view_.reset();
-	renderer_ = std::make_unique<render::ChunkRenderer>();
-
-	const render::VirtualFs vfs = load_textures(workspace_);
-	render::TextureAtlas atlas = render::TextureAtlas::build(workspace_.catalog().registry(), vfs);
+// A renderer with the pack's atlas. The renderer takes ownership of the
+// uploaded texture, so every renderer needs its own upload.
+static std::unique_ptr<render::ChunkRenderer> make_renderer(const Workspace &workspace) {
+	auto renderer = std::make_unique<render::ChunkRenderer>();
+	const render::VirtualFs vfs = load_textures(workspace);
+	render::TextureAtlas atlas = render::TextureAtlas::build(workspace.catalog().registry(), vfs);
 	std::vector<render::AtlasRect> rects;
 	std::vector<Color> averages;
 	for (std::size_t i = 0; i < atlas.block_count(); ++i) {
@@ -169,7 +170,17 @@ void EditorApp::rebuild_renderer() {
 		rects.push_back(atlas.rect_for(id));
 		averages.push_back(atlas.average_color_for(id));
 	}
-	renderer_->set_atlas(atlas.upload(), std::move(rects), std::move(averages));
+	renderer->set_atlas(atlas.upload(), std::move(rects), std::move(averages));
+	return renderer;
+}
+
+void EditorApp::rebuild_renderer() {
+	renderer_.reset();
+	view_.reset();
+	preview_renderer_.reset();
+	preview_.reset();
+	preview_pending_ = true;
+	renderer_ = make_renderer(workspace_);
 
 	view_ = std::make_unique<VolumeView>(workspace_.catalog());
 	seen_revision_ = 0; // force a rebuild of the view on the next frame
@@ -477,6 +488,10 @@ void EditorApp::handle_viewport_click() {
 }
 
 void EditorApp::handle_input() {
+	if (preview_mode()) {
+		handle_preview_input();
+		return;
+	}
 	handle_shortcuts();
 	if (mouse_over_ui() || dialog_ != Dialog::kNone) {
 		return;
@@ -504,6 +519,10 @@ void EditorApp::handle_input() {
 // World drawing
 
 void EditorApp::draw_world() {
+	if (preview_mode()) {
+		draw_preview_world();
+		return;
+	}
 	if (session_ && (session_->revision() != seen_revision_)) {
 		refresh_view();
 	}
@@ -868,16 +887,25 @@ void EditorApp::draw_side_panel() {
 	GuiLabel(Rectangle{ panel.x + 106, y, panel.width - 116, 24 }, weight);
 	y += 34;
 
-	// Tabs.
-	static constexpr const char *kTabLabels[] = { "Blocks", "Generate", "Variants" };
-	const float tab_w = (panel.width - 16) / 3.0f;
-	for (int i = 0; i < 3; ++i) {
+	// Tabs, two rows.
+	static constexpr const char *kTabLabels[] = { "Blocks", "Generate", "Variants", "Placement", "Preview" };
+	for (int i = 0; i < 5; ++i) {
+		const int per_row = i < 3 ? 3 : 2;
+		const int col = i < 3 ? i : i - 3;
+		const float tab_w = (panel.width - 16) / static_cast<float>(per_row);
 		bool active = static_cast<int>(side_tab_) == i;
-		if (GuiToggle(Rectangle{ panel.x + 8 + static_cast<float>(i) * tab_w, y, tab_w - 2, 24 }, kTabLabels[i], &active) && active) {
+		if (GuiToggle(Rectangle{ panel.x + 8 + static_cast<float>(col) * tab_w, y + (i < 3 ? 0.0f : 28.0f), tab_w - 2, 24 }, kTabLabels[i],
+					&active) &&
+				active) {
 			side_tab_ = static_cast<SideTab>(i);
+			if (side_tab_ == SideTab::kPreview) {
+				load_other_structures();
+				mark_preview_dirty();
+				preview_changed_at_ = GetTime() - 1.0; // no debounce when entering
+			}
 		}
 	}
-	y += 30;
+	y += 60;
 	const Rectangle area{ panel.x + 8, y, panel.width - 16, panel.y + panel.height - y - 8 };
 	switch (side_tab_) {
 		case SideTab::kBlocks: {
@@ -891,6 +919,12 @@ void EditorApp::draw_side_panel() {
 			break;
 		case SideTab::kVariants:
 			draw_variants_tab(area);
+			break;
+		case SideTab::kPlacement:
+			draw_placement_tab(area);
+			break;
+		case SideTab::kPreview:
+			draw_preview_tab(area);
 			break;
 	}
 }
@@ -1035,6 +1069,331 @@ void EditorApp::draw_variants_tab(Rectangle area) {
 			session_->delete_variant(i);
 		}
 		y += 32;
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Placement tab
+
+void EditorApp::draw_placement_tab(Rectangle area) {
+	const worldgen::PlacementSpec current = session_->doc().placement;
+	worldgen::PlacementSpec next = current;
+	float y = area.y;
+
+	GuiLabel(Rectangle{ area.x, y, area.width, 20 }, "Defaults a biome entry can override");
+	y += 24;
+
+	// on: the block directly under the anchor.
+	GuiLabel(Rectangle{ area.x, y, area.width, 20 }, "On (block under the anchor)");
+	y += 22;
+	std::vector<std::string> on = next.on.value_or(std::vector<std::string>{});
+	if (on.empty()) {
+		GuiLabel(Rectangle{ area.x + 6, y, area.width - 6, 20 }, "any solid block");
+		y += 22;
+	}
+	for (std::size_t i = 0; i < on.size();) {
+		GuiLabel(Rectangle{ area.x + 6, y, area.width - 40, 22 }, on[i].c_str());
+		if (GuiButton(Rectangle{ area.x + area.width - 30, y, 28, 22 }, "x")) {
+			on.erase(on.begin() + static_cast<std::ptrdiff_t>(i));
+			next.on = on;
+			continue;
+		}
+		y += 24;
+		++i;
+	}
+	const bool can_add = session_->brush() && std::find(on.begin(), on.end(), *session_->brush()) == on.end();
+	if (!can_add) {
+		GuiDisable();
+	}
+	if (GuiButton(Rectangle{ area.x, y, area.width, 24 }, "+ add the current brush")) {
+		on.push_back(*session_->brush());
+		next.on = on;
+	}
+	GuiEnable();
+	y += 32;
+
+	// replace
+	GuiLabel(Rectangle{ area.x, y, area.width * 0.35f, 24 }, "Replace");
+	int replace = static_cast<int>(next.replace.value_or(worldgen::ReplacePolicy::kAir));
+	GuiComboBox(Rectangle{ area.x + area.width * 0.35f, y, area.width * 0.65f, 24 }, "air;air + plants;everything", &replace);
+	next.replace = static_cast<worldgen::ReplacePolicy>(replace);
+	y += 32;
+
+	bool rotate = next.rotate.value_or(worldgen::kDefaultRotate);
+	bool mirror = next.mirror.value_or(worldgen::kDefaultMirror);
+	GuiCheckBox(Rectangle{ area.x, y, 18, 18 }, "Rotate", &rotate);
+	GuiCheckBox(Rectangle{ area.x + 110, y, 18, 18 }, "Mirror", &mirror);
+	next.rotate = rotate;
+	next.mirror = mirror;
+	y += 30;
+
+	const auto int_field = [&](const char *label, std::optional<int> &field, int fallback, int lo, int hi, int slot) {
+		int value = field.value_or(fallback);
+		GuiLabel(Rectangle{ area.x, y, area.width * 0.55f, 24 }, label);
+		if (GuiValueBox(Rectangle{ area.x + area.width * 0.55f, y, area.width * 0.45f, 24 }, nullptr, &value, lo, hi, placement_edit_[slot])) {
+			placement_edit_[slot] = !placement_edit_[slot];
+		}
+		if (value != field.value_or(fallback)) {
+			field = value;
+		}
+		y += 30;
+	};
+	int_field("Min spacing", next.min_spacing, worldgen::kDefaultMinSpacing, 1, 64, 0);
+	int_field("Max slope", next.max_slope, worldgen::kDefaultMaxSlope, 0, 64, 1);
+	int_field("Lowest y", next.y_min, worldgen::kDefaultYMin, -64, 512, 2);
+	int_field("Highest y", next.y_max, worldgen::kDefaultYMax, -64, 512, 3);
+
+	// Cluster: commit on release so a drag is one undo step.
+	if (!cluster_dragging_) {
+		cluster_ui_ = static_cast<float>(next.cluster.value_or(worldgen::kDefaultCluster));
+	}
+	char label[48];
+	std::snprintf(label, sizeof label, "Cluster: %.2f", static_cast<double>(cluster_ui_));
+	GuiLabel(Rectangle{ area.x, y, area.width, 18 }, label);
+	const Rectangle slider{ area.x, y + 18, area.width, 14 };
+	GuiSlider(slider, nullptr, nullptr, &cluster_ui_, 0.0f, 1.0f);
+	if (inside(slider, GetMousePosition()) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+		cluster_dragging_ = true;
+	}
+	if (cluster_dragging_ && IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) {
+		cluster_dragging_ = false;
+		next.cluster = std::round(static_cast<double>(cluster_ui_) * 100.0) / 100.0;
+	}
+	y += 40;
+
+	if (GuiButton(Rectangle{ area.x, y, area.width, 24 }, "Reset to engine defaults")) {
+		next = {};
+	}
+	y += 30;
+	GuiLabel(Rectangle{ area.x, y, area.width, 36 },
+			"Spawn rate is set where the structure\nis used (a biome's decoration entry).");
+
+	if (!(next == current)) {
+		session_->set_placement(next);
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Preview
+
+void EditorApp::load_other_structures() {
+	other_specs_.clear();
+	if (!session_) {
+		return;
+	}
+	for (const StructureEntry &entry : workspace_.structures()) {
+		if (!entry.ok || entry.name == session_->doc().name) {
+			continue;
+		}
+		std::string error;
+		if (auto doc = workspace_.open_structure(entry.name, &error)) {
+			other_specs_.push_back(doc->to_spec());
+		}
+	}
+}
+
+void EditorApp::mark_preview_dirty() {
+	preview_pending_ = true;
+	preview_changed_at_ = GetTime();
+}
+
+void EditorApp::update_preview() {
+	if (!session_) {
+		return;
+	}
+	if (!preview_) {
+		preview_ = std::make_unique<TerrainPreview>(workspace_.catalog());
+		preview_pending_ = true;
+	}
+	// Any edit (cells, variants, placement) re-runs the preview, debounced so
+	// a drag or typing doesn't regenerate on every frame.
+	if (session_->revision() != preview_seen_revision_) {
+		preview_seen_revision_ = session_->revision();
+		mark_preview_dirty();
+	}
+	if (preview_pending_ && GetTime() - preview_changed_at_ >= 0.4) {
+		preview_pending_ = false;
+		preview_input_.structures.clear();
+		preview_input_.structures.push_back(session_->doc().to_spec());
+		for (const worldgen::StructureSpec &other : other_specs_) {
+			preview_input_.structures.push_back(other);
+		}
+		const bool first = !preview_->started();
+		preview_->start(preview_input_);
+		if (first) {
+			const core::Vec3d p = preview_->spawn_point();
+			fly_.set_position(p);
+			fly_.set_look(0.0, -35.0);
+		}
+	}
+	preview_->poll();
+}
+
+void EditorApp::handle_preview_input() {
+	if (IsKeyPressed(KEY_F5)) {
+		reload();
+	}
+	update_preview();
+	if (mouse_over_ui() || dialog_ != Dialog::kNone || preview_value_edit_[0] || preview_value_edit_[1]) {
+		return;
+	}
+	render::LookMoveInput in;
+	if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT)) {
+		const Vector2 d = GetMouseDelta();
+		in.look_delta = { static_cast<double>(d.x), static_cast<double>(d.y) };
+	}
+	in.move_axis.z = (IsKeyDown(KEY_W) ? 1.0 : 0.0) - (IsKeyDown(KEY_S) ? 1.0 : 0.0);
+	in.move_axis.x = (IsKeyDown(KEY_D) ? 1.0 : 0.0) - (IsKeyDown(KEY_A) ? 1.0 : 0.0);
+	in.move_axis.y = (IsKeyDown(KEY_E) || IsKeyDown(KEY_SPACE) ? 1.0 : 0.0) - (IsKeyDown(KEY_Q) ? 1.0 : 0.0);
+	in.sprint = IsKeyDown(KEY_LEFT_SHIFT);
+	fly_.set_speed(28.0);
+	fly_.update(in, static_cast<double>(GetFrameTime()));
+	if (IsKeyPressed(KEY_R) && preview_) {
+		fly_.set_position(preview_->spawn_point());
+		fly_.set_look(0.0, -35.0);
+	}
+}
+
+void EditorApp::draw_preview_world() {
+	update_preview();
+	if (!preview_renderer_) {
+		preview_renderer_ = make_renderer(workspace_);
+	}
+	Camera3D camera{};
+	const core::Vec3d eye = fly_.position();
+	const core::Vec3d target = fly_.target();
+	camera.position = Vector3{ static_cast<float>(eye.x), static_cast<float>(eye.y), static_cast<float>(eye.z) };
+	camera.target = Vector3{ static_cast<float>(target.x), static_cast<float>(target.y), static_cast<float>(target.z) };
+	camera.up = Vector3{ 0.0f, 1.0f, 0.0f };
+	camera.fovy = 60.0f;
+	camera.projection = CAMERA_PERSPECTIVE;
+
+	preview_renderer_->sync(preview_->store(), 64, 64);
+	preview_renderer_->set_fog(eye, world::SkyColor{ 150, 190, 230 }, 160.0f, 420.0f);
+	ClearBackground(Color{ 150, 190, 230, 255 });
+	BeginMode3D(camera);
+	preview_renderer_->draw(camera);
+	EndMode3D();
+}
+
+void EditorApp::draw_preview_tab(Rectangle area) {
+	TerrainConfig &t = preview_input_.terrain;
+	float y = area.y;
+	const auto label = [&](const std::string &text) {
+		GuiLabel(Rectangle{ area.x, y, area.width, 18 }, text.c_str());
+		y += 18;
+	};
+	bool changed = false;
+	const auto slider = [&](const char *name, double &value, double lo, double hi, bool integer) {
+		char text[64];
+		std::snprintf(text, sizeof text, integer ? "%s: %.0f" : "%s: %.1f", name, value);
+		label(text);
+		float f = static_cast<float>(value);
+		GuiSlider(Rectangle{ area.x, y, area.width, 14 }, nullptr, nullptr, &f, static_cast<float>(lo), static_cast<float>(hi));
+		const double v = integer ? std::round(static_cast<double>(f)) : std::round(static_cast<double>(f) * 10.0) / 10.0;
+		if (std::abs(v - value) > 1e-9 && IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+			value = v;
+			changed = true;
+		}
+		y += 22;
+	};
+
+	if (!preview_) {
+		GuiLabel(Rectangle{ area.x, y, area.width, 20 }, "starting...");
+		return;
+	}
+	const PreviewStats &stats = preview_->stats();
+	char counters[96];
+	std::snprintf(counters, sizeof counters, "placed: %zu this structure, %zu others", stats.edited_placements, stats.other_placements);
+	label(counters);
+	label(preview_->busy() ? "generating terrain..." : (stats.error.empty() ? "ready  (WASD, Q/E, right-drag, R resets)" : "not built"));
+	y += 4;
+
+	double amplitude = t.amplitude;
+	double scale = t.scale;
+	double sea = t.sea_level;
+	double density = preview_input_.spawn_rate;
+	slider("Hilliness", amplitude, 0.0, 30.0, false);
+	slider("Feature size", scale, 16.0, 128.0, true);
+	slider("Sea level", sea, 20.0, 100.0, true);
+	slider("Density per 32x32", density, 0.0, 8.0, false);
+	t.amplitude = amplitude;
+	t.scale = scale;
+	t.sea_level = static_cast<int>(sea);
+	preview_input_.spawn_rate = density;
+
+	const auto block_button = [&](const char *name, std::string &field) {
+		GuiLabel(Rectangle{ area.x, y, area.width * 0.35f, 22 }, name);
+		if (GuiButton(Rectangle{ area.x + area.width * 0.35f, y, area.width * 0.65f, 22 }, field.c_str()) && session_->brush()) {
+			field = *session_->brush();
+			changed = true;
+		}
+		y += 26;
+	};
+	block_button("Surface", t.surface);
+	block_button("Filler", t.filler);
+	block_button("Stone", t.stone);
+	label("(click a block button to use the Blocks tab brush)");
+
+	GuiLabel(Rectangle{ area.x, y, 40, 24 }, "Seed");
+	if (GuiValueBox(Rectangle{ area.x + 42, y, 80, 24 }, nullptr, &preview_seed_box_, 0, 1000000000, preview_value_edit_[0])) {
+		preview_value_edit_[0] = !preview_value_edit_[0];
+		if (!preview_value_edit_[0]) {
+			t.seed = static_cast<std::uint64_t>(preview_seed_box_);
+			changed = true;
+		}
+	}
+	if (GuiButton(Rectangle{ area.x + 128, y, area.width - 128, 24 }, "Re-roll")) {
+		preview_seed_box_ = static_cast<int>(core::noise::mix64(static_cast<std::uint64_t>(preview_seed_box_) + 0x9E3779B9ULL) % 1000000000ULL);
+		t.seed = static_cast<std::uint64_t>(preview_seed_box_);
+		changed = true;
+	}
+	y += 30;
+
+	GuiLabel(Rectangle{ area.x, y, 60, 24 }, "Patch");
+	int patch = t.patch;
+	if (GuiValueBox(Rectangle{ area.x + 42, y, 50, 24 }, nullptr, &patch, 2, 16, preview_value_edit_[1])) {
+		preview_value_edit_[1] = !preview_value_edit_[1];
+	}
+	if (patch != t.patch) {
+		t.patch = patch;
+		changed = true;
+	}
+	GuiLabel(Rectangle{ area.x + 98, y, area.width - 98, 24 }, "columns per side");
+	y += 30;
+
+	bool others = preview_input_.include_others;
+	GuiCheckBox(Rectangle{ area.x, y, 18, 18 }, "Also place the folder's other structures", &others);
+	if (others != preview_input_.include_others) {
+		preview_input_.include_others = others;
+		changed = true;
+	}
+	y += 28;
+
+	if (!stats.error.empty()) {
+		DrawRectangle(static_cast<int>(area.x), static_cast<int>(y), static_cast<int>(area.width), 44, Color{ 200, 70, 70, 255 });
+		DrawText(stats.error.substr(0, 46).c_str(), static_cast<int>(area.x + 4), static_cast<int>(y + 4), 10, WHITE);
+		if (stats.error.size() > 46) {
+			DrawText(stats.error.substr(46, 46).c_str(), static_cast<int>(area.x + 4), static_cast<int>(y + 20), 10, WHITE);
+		}
+		y += 50;
+	}
+	for (const std::string &warning : stats.warnings) {
+		if (y + 36 > area.y + area.height) {
+			break;
+		}
+		DrawRectangle(static_cast<int>(area.x), static_cast<int>(y), static_cast<int>(area.width), 44, Color{ 230, 180, 60, 255 });
+		DrawText(warning.substr(0, 46).c_str(), static_cast<int>(area.x + 4), static_cast<int>(y + 4), 10, Color{ 40, 30, 0, 255 });
+		if (warning.size() > 46) {
+			DrawText(warning.substr(46, 46).c_str(), static_cast<int>(area.x + 4), static_cast<int>(y + 18), 10, Color{ 40, 30, 0, 255 });
+		}
+		if (warning.size() > 92) {
+			DrawText(warning.substr(92, 46).c_str(), static_cast<int>(area.x + 4), static_cast<int>(y + 32), 10, Color{ 40, 30, 0, 255 });
+		}
+		y += 50;
+	}
+	if (changed) {
+		mark_preview_dirty();
 	}
 }
 
@@ -1256,7 +1615,7 @@ void EditorApp::draw_ui() {
 //   place|remove|paint|flood x,y,z      box|line x,y,z x,y,z
 //   mirror x|z|off                      slice <layer>        select x,y,z x,y,z
 //   copy|cut                            paste x,y,z          variant <n>
-//   generate <id> [seed]   bake <id> <n> [seed]   tab <0-2>   save
+//   generate <id> [seed]   bake <id> <n> [seed]   tab <0-4>   save
 void EditorApp::run_script(const std::string &script) {
 	std::stringstream commands(script);
 	std::string command;
@@ -1326,7 +1685,12 @@ void EditorApp::run_script(const std::string &script) {
 				session_->bake(*g, default_params(*g), seed, std::atoi(w[2].c_str()));
 			}
 		} else if (w[0] == "tab" && w.size() >= 2) {
-			side_tab_ = static_cast<SideTab>(std::clamp(std::atoi(w[1].c_str()), 0, 2));
+			side_tab_ = static_cast<SideTab>(std::clamp(std::atoi(w[1].c_str()), 0, 4));
+			if (side_tab_ == SideTab::kPreview) {
+				load_other_structures();
+				mark_preview_dirty();
+				preview_changed_at_ = GetTime() - 1.0;
+			}
 		} else if (w[0] == "save") {
 			save();
 		} else {

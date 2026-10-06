@@ -85,6 +85,19 @@ private:
 	std::vector<DocVariant> after_;
 };
 
+// Replaces the structure's placement defaults.
+class PlacementReplace final : public Command {
+public:
+	PlacementReplace(worldgen::PlacementSpec before, worldgen::PlacementSpec after) : before_(std::move(before)), after_(std::move(after)) {}
+	void apply(StructureDoc &doc) override { doc.placement = after_; }
+	void revert(StructureDoc &doc) override { doc.placement = before_; }
+	std::string label() const override { return "placement"; }
+
+private:
+	worldgen::PlacementSpec before_;
+	worldgen::PlacementSpec after_;
+};
+
 class UndoStack {
 public:
 	// Applies `command` to `doc` and records it, dropping any redo history.

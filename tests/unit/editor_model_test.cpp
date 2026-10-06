@@ -1090,3 +1090,224 @@ TEST_CASE("a baked structure saves with its variants and weights") {
 	const auto text = editor::write_structure_lua(spec);
 	CHECK(text.find("weight = 3") != std::string::npos);
 }
+
+// ---------------------------------------------------------------------------
+// S6: placement authoring and the terrain preview.
+
+#include <chrono>
+#include <thread>
+
+#include "vb/editor/preview.hpp"
+
+namespace {
+
+worldgen::StructureSpec preview_tree() {
+	worldgen::StructureSpec spec;
+	spec.name = "t:tree";
+	spec.size = { 3, 3, 3 };
+	spec.anchor = { 1, 0, 1 };
+	spec.palette['.'] = std::nullopt;
+	spec.palette['W'] = std::string("base:wood");
+	spec.palette['L'] = std::string("base:leaves");
+	spec.variants.push_back({ 1.0, { { "...", ".W.", "..." }, { "...", ".W.", "..." }, { "LLL", "LWL", "LLL" } } });
+	spec.placement.min_spacing = 6;
+	spec.placement.max_slope = 16;
+	return spec;
+}
+
+editor::BlockCatalog base_catalog() {
+	editor::BlockCatalog catalog;
+	catalog.add_missing_marker();
+	return catalog;
+}
+
+bool wait_for(editor::TerrainPreview &preview) {
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+	while (preview.busy() && std::chrono::steady_clock::now() < deadline) {
+		preview.poll();
+		std::this_thread::sleep_for(std::chrono::milliseconds(2));
+	}
+	preview.poll();
+	return !preview.busy();
+}
+
+editor::PreviewInput preview_input() {
+	editor::PreviewInput in;
+	in.terrain.patch = 3;
+	in.terrain.amplitude = 2.0;
+	in.spawn_rate = 2.0;
+	in.structures.push_back(preview_tree());
+	return in;
+}
+
+} // namespace
+
+TEST_CASE("EditSession::set_placement is undoable and validated") {
+	auto s = make_session();
+	worldgen::PlacementSpec p;
+	p.min_spacing = 7;
+	p.rotate = true;
+	CHECK(s.set_placement(p));
+	CHECK(s.doc().placement == p);
+	CHECK(s.dirty());
+	CHECK_FALSE(s.set_placement(p)); // unchanged
+	worldgen::PlacementSpec bad;
+	bad.cluster = 3.0;
+	CHECK_FALSE(s.set_placement(bad));
+	worldgen::PlacementSpec bad2;
+	bad2.min_spacing = 0;
+	CHECK_FALSE(s.set_placement(bad2));
+	CHECK(s.undo());
+	CHECK(s.doc().placement.empty());
+	CHECK(s.redo());
+	CHECK(s.doc().placement == p);
+	// The placement is written and read back.
+	CHECK(editor::write_structure_lua(s.doc().to_spec()).find("min_spacing = 7") != std::string::npos);
+}
+
+TEST_CASE("the preview places the in-memory structure on test terrain with the engine's placement code") {
+	const auto catalog = base_catalog();
+	editor::TerrainPreview preview(catalog);
+	CHECK_FALSE(preview.started());
+	preview.start(preview_input());
+	REQUIRE(preview.started());
+	REQUIRE_MESSAGE(preview.stats().error.empty(), preview.stats().error);
+	REQUIRE(wait_for(preview));
+
+	const auto &stats = preview.stats();
+	CHECK(stats.patch == 3);
+	CHECK(stats.edited_placements > 10);
+	CHECK(stats.other_placements == 0);
+	CHECK(stats.warnings.empty());
+	CHECK(preview.store().size() >= 9);
+
+	// Every placement's trunk base really is wood in the generated store.
+	REQUIRE(preview.generator());
+	std::size_t checked = 0;
+	for (const auto &p : preview.generator()->structure_placements(0, 0, 95, 95)) {
+		const core::IVec3 at{ p.x, p.ground_y + 1, p.z };
+		CHECK(preview.store().block_at(at) == catalog.registry().find("base:wood"));
+		++checked;
+	}
+	CHECK(checked == stats.edited_placements);
+
+	// The camera frames the patch from above.
+	CHECK(preview.spawn_point().y > stats.surface_max);
+}
+
+TEST_CASE("the preview is deterministic per seed and changes with it") {
+	const auto catalog = base_catalog();
+	editor::TerrainPreview a(catalog);
+	editor::TerrainPreview b(catalog);
+	auto in = preview_input();
+	a.start(in);
+	b.start(in);
+	CHECK(a.stats().edited_placements == b.stats().edited_placements);
+	REQUIRE(wait_for(a));
+	REQUIRE(wait_for(b));
+	CHECK(a.generator()->structure_placements(0, 0, 95, 95) == b.generator()->structure_placements(0, 0, 95, 95));
+
+	in.terrain.seed = 99;
+	b.start(in);
+	CHECK(a.generator()->structure_placements(0, 0, 95, 95) != b.generator()->structure_placements(0, 0, 95, 95));
+}
+
+TEST_CASE("restarting the preview cancels the previous run") {
+	const auto catalog = base_catalog();
+	editor::TerrainPreview preview(catalog);
+	auto in = preview_input();
+	in.terrain.patch = 6;
+	preview.start(in);
+	in.terrain.patch = 2;
+	preview.start(in); // before the first run finished
+	REQUIRE(wait_for(preview));
+	CHECK(preview.stats().patch == 2);
+	// Only the second run's chunks are in the store: a 2x2 patch.
+	for (const auto &coord : preview.store().loaded_coords()) {
+		CHECK(coord.x < 2);
+		CHECK(coord.z < 2);
+	}
+}
+
+TEST_CASE("the preview warns when the rule can't anchor") {
+	const auto catalog = base_catalog();
+	{
+		editor::TerrainPreview preview(catalog);
+		auto in = preview_input();
+		in.structures[0].placement.on = std::vector<std::string>{ "base:sand" };
+		preview.start(in);
+		const auto &w = preview.stats().warnings;
+		REQUIRE(w.size() == 2);
+		CHECK(w[0].find("surface block (base:grass)") != std::string::npos);
+		CHECK(w[1].find("no valid anchor") != std::string::npos);
+		CHECK(preview.stats().edited_placements == 0);
+	}
+	{
+		editor::TerrainPreview preview(catalog);
+		auto in = preview_input();
+		in.structures[0].placement.y_min = 200;
+		in.structures[0].placement.y_max = 250;
+		preview.start(in);
+		bool found = false;
+		for (const auto &w : preview.stats().warnings) {
+			found = found || w.find("doesn't cover the terrain heights") != std::string::npos;
+		}
+		CHECK(found);
+	}
+	{
+		editor::TerrainPreview preview(catalog);
+		auto in = preview_input();
+		in.terrain.base_height = 40; // under the default sea level of 58
+		in.terrain.amplitude = 1.0;
+		preview.start(in);
+		bool found = false;
+		for (const auto &w : preview.stats().warnings) {
+			found = found || w.find("under water") != std::string::npos;
+		}
+		CHECK(found);
+	}
+}
+
+TEST_CASE("the preview reports unknown blocks instead of building") {
+	const auto catalog = base_catalog();
+	editor::TerrainPreview preview(catalog);
+	auto in = preview_input();
+	in.structures[0].palette['W'] = std::string("nope:wood");
+	preview.start(in);
+	CHECK(preview.stats().error.find("nope:wood") != std::string::npos);
+	CHECK_FALSE(preview.busy());
+	CHECK(preview.generator() == nullptr);
+
+	auto terrain = preview_input();
+	terrain.terrain.surface = "nope:grass";
+	preview.start(terrain);
+	CHECK(preview.stats().error.find("nope:grass") != std::string::npos);
+}
+
+TEST_CASE("the preview can place the folder's other structures too") {
+	const auto catalog = base_catalog();
+	editor::TerrainPreview preview(catalog);
+	auto in = preview_input();
+	auto other = preview_tree();
+	other.name = "t:other";
+	in.structures.push_back(other);
+
+	preview.start(in);
+	CHECK(preview.stats().other_placements == 0);
+	in.include_others = true;
+	preview.start(in);
+	CHECK(preview.stats().other_placements > 10);
+	CHECK(preview.stats().edited_placements > 10);
+}
+
+TEST_CASE("flat terrain has one surface height; amplitude spreads it") {
+	const auto catalog = base_catalog();
+	editor::TerrainPreview preview(catalog);
+	auto in = preview_input();
+	in.terrain.amplitude = 0.0;
+	preview.start(in);
+	CHECK(preview.stats().surface_min == preview.stats().surface_max);
+	in.terrain.amplitude = 20.0;
+	preview.start(in);
+	CHECK(preview.stats().surface_max - preview.stats().surface_min > 4);
+}

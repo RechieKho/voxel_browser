@@ -1,6 +1,6 @@
 # Structure editor — design and phased plan
 
-> Status: **In progress: S0–S5 done, S6–S7 planned.** Plans the "dedicated external structure
+> Status: **In progress: S0–S6 done, S7 planned.** Plans the "dedicated external structure
 > tool" that `architecture_spec/worldgen.md` §6 stage 6 and
 > `remaining_tasks/deferred.md` ("Rule-based decorative structure
 > placement") left for after the Lua worldgen pipeline. Phase 6.14 shipped
@@ -584,17 +584,17 @@ integrates and documents.
 
 ### S6 — Placement authoring and live terrain preview
 
-- [ ] Placement panel bound to the structure's `placement` defaults.
-- [ ] Test-terrain panel: height noise, sea level, and surface, filler, and
+- [x] Placement panel bound to the structure's `placement` defaults.
+- [x] Test-terrain panel: height noise, sea level, and surface, filler, and
       stone blocks from the palette, built into a one-biome
       `PackWorldGenPipeline` in C++.
-- [ ] Preview mode: run the in-memory structure and rule (not saved yet)
+- [x] Preview mode: run the in-memory structure and rule (not saved yet)
       on that pipeline, generate an N×N column patch on a
       `WorldGenWorkerPool`, mesh it, and use a fly camera.
-- [ ] Re-roll seed, toggle "only this structure" or "all structures in the
+- [x] Re-roll seed, toggle "only this structure" or "all structures in the
       folder", re-generate on any rule change (debounced), and show a
       placements counter.
-- [ ] Warnings shown in the panel, such as "no valid anchor in the preview
+- [x] Warnings shown in the panel, such as "no valid anchor in the preview
       patch" or "`on` block is not the test terrain's surface block".
 
 ### S7 — Integration, docs, base content

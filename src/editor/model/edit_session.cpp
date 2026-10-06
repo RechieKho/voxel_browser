@@ -363,6 +363,15 @@ bool EditSession::set_weight(std::size_t index, double weight) {
 	return true;
 }
 
+bool EditSession::set_placement(const worldgen::PlacementSpec &placement) {
+	if (placement == doc_.placement || !worldgen::validate_placement_spec(placement, "structure '" + doc_.name + "'").empty()) {
+		return false;
+	}
+	undo_.push(std::make_unique<PlacementReplace>(doc_.placement, placement), doc_);
+	++revision_;
+	return true;
+}
+
 bool EditSession::undo() {
 	if (!undo_.undo(doc_)) {
 		return false;
