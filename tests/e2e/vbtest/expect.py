@@ -12,6 +12,11 @@ import json
 from .process import AutomationError
 
 
+def _scale():
+    from .process import timeout_scale
+    return timeout_scale()
+
+
 class Expectation:
     def __init__(self, handle, negate=False):
         self._h = handle
@@ -99,6 +104,28 @@ class Expectation:
             return self._check("entity %r visible" % name, {"entity_visible": {"name": name}}, timeout)
         return self._check("entity %r within %.1f of %s" % (name, radius, list(near)),
                            {"entity_near": {"name": name, "pos": list(near), "radius": radius}}, timeout)
+
+    def to_have_auth(self, timeout=10.0, **fields):
+        """The sign-in coordinator's view: phase="choosing", reauth_prompt=True, needs_trust=False,
+        error_contains="expired" (every given field must match)."""
+        return self._check("auth %s" % json.dumps(fields, sort_keys=True), {"auth": fields}, timeout)
+
+    def to_have_logged(self, regex, timeout=10.0, count=1):
+        """The process's stderr log has at least `count` lines matching `regex` (how a test asserts
+        the *cause* the server wrote down while the player only sees a coarse reason). Polls the log
+        file. `.not_` asserts there is none."""
+        import re
+        import time
+        pattern, deadline = re.compile(regex), time.time() + timeout * _scale()
+        while True:
+            text = self._h.stderr_text()
+            found = len(pattern.findall(text)) >= count
+            if found != self._neg:
+                return
+            if time.time() > deadline:
+                raise AssertionError("%s: expected %sa log line matching %r within %.1fs; log tail:\n%s"
+                                     % (self._h.name, "no " if self._neg else "", regex, timeout, self._h.stderr_tail()))
+            time.sleep(0.05)
 
     # -- server ------------------------------------------------------------
     def to_have_player_count(self, n, timeout=5.0):

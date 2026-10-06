@@ -158,6 +158,10 @@ class Process:
             return self._proc.poll() is None
         return not self._eof  # attached to someone else's process: as alive as our connection
 
+    def stderr_text(self):
+        with open(self.stderr_path, errors="replace") as f:
+            return f.read()
+
     def stderr_tail(self, lines=40):
         try:
             with open(self.stderr_path) as f:

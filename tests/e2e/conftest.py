@@ -205,8 +205,8 @@ def idp(request, artifact_dir):
 @pytest.fixture
 def auth_server(binaries, artifact_dir, tmp_path, _procs, idp):
     """`auth_server(**auth_lua_kwargs)`: a server whose pack requires sign-in at `idp`."""
-    def make(config=None, **auth_kw):
-        return start_server(binaries["server"], REPO, artifact_dir, tmp_path, _procs, config=config,
+    def make(config=None, name="server", **auth_kw):
+        return start_server(binaries["server"], REPO, artifact_dir, tmp_path, _procs, config=config, name=name,
                             pack_files={"auth.lua": auth_lua(idp, **auth_kw)})
     return make
 
@@ -214,8 +214,16 @@ def auth_server(binaries, artifact_dir, tmp_path, _procs, idp):
 @pytest.fixture
 def make_clients(binaries, artifact_dir, tmp_path, _procs):
     """`make_clients(server)(n, names=None, extra_args=())`: a ClientFactory for that server."""
+    factories = {}
+
     def make(server):
-        return ClientFactory(binaries["client"], server, artifact_dir, tmp_path, _procs)
+        # One factory per server for the whole test, so calling make_clients(server)(...) twice
+        # gives client1, client2, ... instead of colliding on client1's directories.
+        if id(server) not in factories:
+            f = ClientFactory(binaries["client"], server, artifact_dir, tmp_path, _procs)
+            f._count = sum(x._count for x in factories.values())
+            factories[id(server)] = f
+        return factories[id(server)]
     return make
 
 
