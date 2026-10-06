@@ -36,6 +36,10 @@ struct EntityRecord {
 	// entity's whole replicated lifetime, same as `kind`). Absent entirely
 	// (the common case) costs one bool on the wire.
 	std::optional<EntityVisualOverride> visual_override;
+	// The block id a dropped-item entity represents, so the client can draw
+	// it as that block. Same "entered records only, nullopt = unchanged"
+	// contract as `visual_override` above.
+	std::optional<std::uint16_t> item;
 
 	bool operator==(const EntityRecord &) const = default;
 };

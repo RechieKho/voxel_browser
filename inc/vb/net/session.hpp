@@ -928,6 +928,16 @@ public:
 		return it == entity_visual_overrides_.end() ? nullptr : &it->second;
 	}
 
+	// The block a replicated dropped-item entity represents (learned from its
+	// `entered` record, EntityRecord::item); nullopt for anything else.
+	std::optional<core::BlockId> entity_item(core::NetId id) const {
+		const auto it = entity_items_.find(id);
+		if (it == entity_items_.end()) {
+			return std::nullopt;
+		}
+		return static_cast<core::BlockId>(it->second);
+	}
+
 	// --- client UI VM (spec §10.4, Phase 4.5) ---------------------------
 
 	// Drains a pending S2C_OpenUi, if one arrived since the last call.
@@ -1074,6 +1084,7 @@ private:
 	// removal.
 	std::unordered_map<core::NetId, protocol::EntityVisualOverride>
 			entity_visual_overrides_;
+	std::unordered_map<core::NetId, std::uint16_t> entity_items_;
 	world::DayNightCurve day_night_curve_; // empty = default_day_night_curve()
 	std::optional<protocol::S2CFogParams> fog_override_;
 	std::unordered_map<core::IVec3, std::uint16_t> block_damage_;

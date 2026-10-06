@@ -33,6 +33,12 @@ def test_gameplay_survives_lag_jitter_and_loss(server, clients):
     expect(bob).to_see_block(target, "base:air", timeout=10)
 
     # ... and so must the unreliable input lane that drives prediction/reconciliation.
+    # clear_corridor only opens the aiming box (x-1..x+1); the walk continues to x+3.5 over
+    # whatever the random terrain put there, and a two-block wall can't be stepped or jumped.
+    lo, hi = (x + 2, y, z), (x + 4, y + 2, z)
+    for cx in (lo[0], hi[0]):
+        expect(server).to_have_chunk_loaded((cx, y, z))
+    assert server.fill(lo, hi, "base:air")["not_loaded"] == 0
     goal = (x + 3.5, None, z + 0.5)
     alice.walk_to(goal, tolerance=0.8, timeout=25)
     expect(bob).to_see_entity("Alice", near=(goal[0], y, goal[2]), radius=3.0, timeout=10)

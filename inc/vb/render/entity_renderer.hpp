@@ -24,6 +24,8 @@ class ClientSession;
 
 namespace vb::render {
 
+class ChunkRenderer;
+
 struct CameraView {
 	core::Vec3d position{};
 	core::Vec3d target{};
@@ -57,6 +59,12 @@ public:
 	// story exists for mid-session pack writes -- see REMAINING_TASKS.md), so
 	// one copy taken right after join stays valid for the whole session.
 	void set_virtual_fs(VirtualFs vfs);
+
+	// Dropped-item entities (net::ClientSession::entity_item) are drawn as a
+	// small spinning cube coloured like the block they came from, using
+	// `chunks`' block colours. Must outlive this renderer; nullptr (the
+	// default) keeps drops on their kind's sprite.
+	void set_block_colors(const ChunkRenderer *chunks);
 
 	// Refresh per-entity animation clip + facing from `client`'s replicated
 	// remote entities (spec §8.4's remote_entities()/interpolated_pos()). Call

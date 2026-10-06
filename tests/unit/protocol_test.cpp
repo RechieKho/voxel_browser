@@ -144,9 +144,9 @@ TEST_CASE("entity snapshot round-trips") {
 	s.server_tick = 4242;
 	s.last_acked_input_seq = 17;
 	s.entered.push_back({ vb::core::NetId{ 3 }, vb::core::EntityKindId{ 1 },
-			{ 1.0, 2.0, 3.0 }, { 45.0f, -10.0f }, { 0.1f, 0.0f, -0.2f }, 0, std::nullopt });
+			{ 1.0, 2.0, 3.0 }, { 45.0f, -10.0f }, { 0.1f, 0.0f, -0.2f }, 0, std::nullopt, std::nullopt });
 	s.updated.push_back({ vb::core::NetId{ 4 }, vb::core::EntityKindId{ 0 },
-			{ -8.0, 64.0, 0.0 }, {}, {}, 2, std::nullopt });
+			{ -8.0, 64.0, 0.0 }, {}, {}, 2, std::nullopt, std::nullopt });
 	s.removed.push_back(vb::core::NetId{ 9 });
 
 	auto s2 = round_trip(s);
@@ -166,7 +166,7 @@ TEST_CASE("entity snapshot round-trips a per-instance visual override") {
 	s.last_acked_input_seq = 0;
 
 	EntityRecord entered{ vb::core::NetId{ 3 }, vb::core::EntityKindId{ 1 },
-		{ 1.0, 2.0, 3.0 }, { 45.0f, -10.0f }, { 0.1f, 0.0f, -0.2f }, 0, std::nullopt };
+		{ 1.0, 2.0, 3.0 }, { 45.0f, -10.0f }, { 0.1f, 0.0f, -0.2f }, 0, std::nullopt, std::nullopt };
 	EntityVisualOverride ov;
 	ov.texture = "textures/entities/skins/player_red.png";
 	ov.facings = 4;
@@ -178,7 +178,7 @@ TEST_CASE("entity snapshot round-trips a per-instance visual override") {
 	// net::ServerSession::to_record) -- nullopt round-trips as absent, not a
 	// spurious default-constructed EntityVisualOverride.
 	s.updated.push_back({ vb::core::NetId{ 4 }, vb::core::EntityKindId{ 1 },
-			{ 0.0, 0.0, 0.0 }, {}, {}, 0, std::nullopt });
+			{ 0.0, 0.0, 0.0 }, {}, {}, 0, std::nullopt, std::nullopt });
 
 	auto s2 = round_trip(s);
 	REQUIRE(s2.entered.size() == 1);
@@ -194,6 +194,23 @@ TEST_CASE("entity snapshot round-trips a per-instance visual override") {
 
 	REQUIRE(s2.updated.size() == 1);
 	CHECK_FALSE(s2.updated[0].visual_override.has_value());
+}
+
+TEST_CASE("entity snapshot round-trips a dropped item's block id") {
+	S2CEntitySnapshot s;
+	EntityRecord drop{ vb::core::NetId{ 0x80000001u }, vb::core::EntityKindId{ 2 },
+		{ 1.0, 2.0, 3.0 }, {}, {}, 0, std::nullopt, std::nullopt };
+	drop.item = 7;
+	s.entered.push_back(drop);
+	s.updated.push_back({ vb::core::NetId{ 5 }, vb::core::EntityKindId{ 1 },
+			{ 0.0, 0.0, 0.0 }, {}, {}, 0, std::nullopt, std::nullopt });
+
+	auto s2 = round_trip(s);
+	REQUIRE(s2.entered.size() == 1);
+	REQUIRE(s2.entered[0].item.has_value());
+	CHECK(*s2.entered[0].item == 7);
+	CHECK(s2.entered[0] == drop);
+	CHECK_FALSE(s2.updated[0].item.has_value());
 }
 
 TEST_CASE("chat / open_ui round-trip") {

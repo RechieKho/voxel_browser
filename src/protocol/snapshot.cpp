@@ -111,6 +111,10 @@ void write_record(ByteWriter &w, const EntityRecord &r) {
 	if (r.visual_override) {
 		write_visual_override(w, *r.visual_override);
 	}
+	w.boolean(r.item.has_value());
+	if (r.item) {
+		w.u16(*r.item);
+	}
 }
 
 EntityRecord read_record(ByteReader &r) {
@@ -128,6 +132,9 @@ EntityRecord read_record(ByteReader &r) {
 	out.flags = r.u8();
 	if (r.boolean()) {
 		out.visual_override = read_visual_override(r);
+	}
+	if (r.boolean()) {
+		out.item = r.u16();
 	}
 	return out;
 }

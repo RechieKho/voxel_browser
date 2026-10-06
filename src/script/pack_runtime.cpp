@@ -1438,6 +1438,7 @@ void PackRuntime::Impl::install_bindings() {
 		t["air_accel"] = p.air_accel;
 		t["friction"] = p.friction;
 		t["gravity"] = p.gravity;
+		t["fall_gravity_scale"] = physics::kFallGravityScale;
 		t["jump_speed"] = p.jump_speed;
 		t["terminal_velocity"] = p.terminal_velocity;
 		t["step_height"] = p.step_height;

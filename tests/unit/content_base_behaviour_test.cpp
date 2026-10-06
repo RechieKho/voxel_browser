@@ -4,6 +4,7 @@
 // vb.storage persistence -- via BasePackFixture
 // (content_base_fixture.hpp).
 
+#include <cmath>
 #include <doctest/doctest.h>
 
 #include "content_base_fixture.hpp"
@@ -203,38 +204,37 @@ TEST_CASE("content/base mechanics.lua: placing respects the engine's effective r
 	CHECK(fx.count_of("base:planks") == 1); // nothing spent on the refused attempt
 }
 
-TEST_CASE("content/base fall_damage.lua: the SAFE_SPEED curve") {
-	// SAFE_SPEED is jump_speed (engine default 8.9 m/s) + 1.5 margin == 10.4,
-	// not a hardcoded constant -- see fall_damage.lua's comment: it must
-	// clear a plain jump's own landing speed, or jumping on flat ground
-	// takes fall damage (the bug this margin fixes).
+TEST_CASE("content/base fall_damage.lua: nothing up to 6 blocks, 1 HP per block after") {
+	// Impact speed reported by the engine for a fall of `blocks`, one tick
+	// before the landing tick's own gravity step (see fall_damage.lua).
+	const vb::physics::MoveParams p;
+	const double g = p.gravity * vb::physics::kFallGravityScale;
+	const auto speed_for = [&](double blocks) {
+		return std::sqrt(2.0 * g * blocks) - g * (1.0 / 20.0);
+	};
 	{
-		BasePackFixture fx("c2_fall_safe_103");
+		BasePackFixture fx("c2_fall_3_blocks");
 		fx.with_world();
-		fx.land(10.3);
+		fx.land(speed_for(3.0));
 		CHECK(fx.server().player_health(fx.player_id())->first == doctest::Approx(20.0f));
 	}
 	{
-		// excess > 0 is strict: exactly SAFE_SPEED takes no damage either.
-		BasePackFixture fx("c2_fall_safe_104");
+		BasePackFixture fx("c2_fall_6_blocks");
 		fx.with_world();
-		fx.land(10.4);
+		fx.land(speed_for(6.0));
 		CHECK(fx.server().player_health(fx.player_id())->first == doctest::Approx(20.0f));
 	}
 	{
-		BasePackFixture fx("c2_fall_144");
+		BasePackFixture fx("c2_fall_10_blocks");
 		fx.with_world();
-		fx.land(14.4);
-		// 1 HP per m/s above SAFE_SPEED (10.4): 14.4 - 10.4 == 4 HP.
+		fx.land(speed_for(10.0));
 		CHECK(fx.server().player_health(fx.player_id())->first == doctest::Approx(16.0f));
 	}
 	{
-		// The actual bug report: a plain jump (launch == jump_speed, 8.9 m/s)
-		// lands at about the same speed under symmetric gravity and must
-		// never take damage.
+		// A plain jump must never take damage.
 		BasePackFixture fx("c2_fall_plain_jump");
 		fx.with_world();
-		fx.land(8.9);
+		fx.land(p.jump_speed);
 		CHECK(fx.server().player_health(fx.player_id())->first == doctest::Approx(20.0f));
 	}
 }

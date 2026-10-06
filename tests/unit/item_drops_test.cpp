@@ -89,3 +89,42 @@ TEST_CASE("ItemDropSystem: multiple drops tracked independently") {
 	CHECK(result.pickups[0].item == BlockId{ 1 });
 	CHECK(sys.count() == 1); // the far one survives
 }
+
+TEST_CASE("ItemDropSystem: pickup range is measured to the player's body, not their feet") {
+	ItemDropSystem sys(/*pickup_radius*/ 1.5, /*lifetime*/ 120.0);
+	// 1.3 above the feet and 1 block ahead: ~1.64 from the feet (out of
+	// range) but only 1.0 from the body segment.
+	sys.spawn({ 1.0, 1.3, 0.0 }, BlockId{ 3 }, 1);
+	auto r = sys.tick(0.05, { { NetId{ 1 }, Vec3d{ 0, 0, 0 } } }, 1.8);
+	CHECK(r.pickups.size() == 1);
+}
+
+TEST_CASE("ItemDropSystem: a drop above the player's head stays out of range") {
+	ItemDropSystem sys(/*pickup_radius*/ 1.5, /*lifetime*/ 120.0);
+	sys.spawn({ 0.0, 4.0, 0.0 }, BlockId{ 3 }, 1); // 2.2 above the head
+	auto r = sys.tick(0.05, { { NetId{ 1 }, Vec3d{ 0, 0, 0 } } }, 1.8);
+	CHECK(r.pickups.empty());
+}
+
+namespace {
+struct FloorAtZero final : BlockSolidQuery {
+	vb::core::BlockId block_at(vb::core::IVec3 v) const override {
+		return v.y <= 0 ? BlockId{ 1 } : BlockId::kAir;
+	}
+	bool solid_at(vb::core::IVec3 v) const override { return v.y <= 0; }
+};
+} // namespace
+
+TEST_CASE("ItemDropSystem: a drop falls and rests on the floor") {
+	ItemDropSystem sys;
+	FloorAtZero floor;
+	const NetId id = sys.spawn({ 0.5, 5.5, 0.5 }, BlockId{ 1 }, 1);
+	bool moved = false;
+	for (int i = 0; i < 100; ++i) {
+		moved |= !sys.tick(0.05, {}, 1.8, &floor).moved.empty();
+	}
+	CHECK(moved);
+	// Rests with its bottom face on the floor's top (y = 1).
+	CHECK(sys.drops().at(id).pos.y == doctest::Approx(1.15));
+	CHECK(sys.tick(0.05, {}, 1.8, &floor).moved.empty());
+}

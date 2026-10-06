@@ -15,6 +15,10 @@ namespace vb::physics {
 
 // Player collision box + movement tunables. Engine defaults; a Lua pack overrides
 // per entity kind in Phase 4.
+// Gravity is scaled up by this while falling (velocity.y < 0): a jump rises at
+// normal gravity but drops faster, which reads as snappy instead of floaty.
+inline constexpr double kFallGravityScale = 1.4;
+
 struct MoveParams {
 	double half_width = 0.4; // x/z half-extent of the AABB
 	double height = 1.8; // full height, feet -> top
@@ -24,8 +28,8 @@ struct MoveParams {
 	double accel = 45.0; // horizontal accel toward wish velocity (m/s^2)
 	double air_accel = 10.0;
 	double friction = 12.0; // ground friction (1/s)
-	double gravity = 28.0; // m/s^2, downward
-	double jump_speed = 8.9;
+	double gravity = 32.0; // m/s^2, downward
+	double jump_speed = 9.0; // ~1.27 block rise at the default gravity
 	double terminal_velocity = 60.0;
 	double step_height = 1.05; // climb a full voxel step without jumping
 	double fly_speed = 12.0;
