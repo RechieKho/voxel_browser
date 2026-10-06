@@ -21,6 +21,7 @@ enum class VerifyError : std::uint8_t {
 	kMalformed,
 	kAlgorithm, // alg not in {RS256, ES256}, or it contradicts the key type
 	kMissingKid,
+	kTokenType, // an access/logout token, not an ID token (rule 1b)
 	kUnknownKid, // not in the key set: the caller may refresh JWKS once
 	kBadSignature,
 	kIssuer,

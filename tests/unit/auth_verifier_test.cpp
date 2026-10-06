@@ -48,7 +48,7 @@ std::string sign_token(const TestSigner &key, const json &header, const json &pa
 }
 
 json good_claims() {
-	return json{ { "iss", kIssuer }, { "aud", "voxel" }, { "sub", "user-1" },
+	return json{ { "iss", kIssuer }, { "aud", "voxel" }, { "sub", "user-1" }, { "typ", "ID" },
 		{ "exp", kNow + 600 }, { "iat", kNow - 10 }, { "preferred_username", "alice" },
 		{ "email", "a@example.com" }, { "secret", "not exposed" } };
 }

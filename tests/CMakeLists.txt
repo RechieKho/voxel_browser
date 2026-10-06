@@ -4,6 +4,7 @@
 add_executable(vb_tests
   main.cpp
   unit/auth_config_test.cpp
+  unit/auth_keycloak_test.cpp
   unit/auth_verifier_test.cpp
   unit/auth_login_test.cpp
   unit/auth_signin_test.cpp

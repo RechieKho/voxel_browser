@@ -21,6 +21,23 @@ VerifyResult fail(VerifyError e, std::string detail) {
 	return r;
 }
 
+std::string lower(std::string s) {
+	for (char &c : s) {
+		c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+	}
+	return s;
+}
+
+// RFC 9068 access tokens carry the JWS header `typ` "at+jwt" (or the full media type).
+bool is_access_token_typ(std::string typ) {
+	typ = lower(std::move(typ));
+	constexpr std::string_view kPrefix = "application/";
+	if (typ.rfind(kPrefix, 0) == 0) {
+		typ.erase(0, kPrefix.size());
+	}
+	return typ == "at+jwt";
+}
+
 // Integer NumericDate (seconds). JWT allows fractions; we floor them.
 std::optional<std::int64_t> numeric_date(const json &o, const char *key) {
 	auto it = o.find(key);
@@ -46,6 +63,8 @@ std::string_view to_string(VerifyError e) {
 			return "algorithm";
 		case VerifyError::kMissingKid:
 			return "missing_kid";
+		case VerifyError::kTokenType:
+			return "token_type";
 		case VerifyError::kUnknownKid:
 			return "unknown_kid";
 		case VerifyError::kBadSignature:
@@ -164,6 +183,12 @@ VerifyResult verify_id_token(const AuthConfig &config, const KeySet &keys,
 		return fail(VerifyError::kMissingKid, "JWS header has no kid");
 	}
 
+	// Rule 1b: an access token is not an ID token, whoever signed it.
+	if (const auto typ_it = header.find("typ"); typ_it != header.end() && typ_it->is_string() &&
+			is_access_token_typ(typ_it->get<std::string>())) {
+		return fail(VerifyError::kTokenType, "JWS header typ marks an access token (at+jwt)");
+	}
+
 	// Rule 2: key by kid.
 	const std::string kid = kid_it->get<std::string>();
 	const auto key_it = keys.find(kid);
@@ -184,6 +209,16 @@ VerifyResult verify_id_token(const AuthConfig &config, const KeySet &keys,
 	const json claims = json::parse(parsed.jws->payload_json, nullptr, false);
 	if (claims.is_discarded() || !claims.is_object()) {
 		return fail(VerifyError::kMalformed, "JWT payload is not a JSON object");
+	}
+
+	// Rule 1b (Keycloak): the realm key also signs access and logout tokens, which can carry
+	// our client in `aud` once an audience mapper is configured. Only `typ: "ID"` is a login.
+	if (config.provider == Provider::kKeycloak) {
+		const auto it = claims.find("typ");
+		if (it == claims.end() || !it->is_string() || it->get<std::string>() != "ID") {
+			std::string seen = it == claims.end() ? "missing" : it->is_string() ? "'" + it->get<std::string>().substr(0, 16) + "'" : "not a string";
+			return fail(VerifyError::kTokenType, "typ claim is " + seen + ", not 'ID'");
+		}
 	}
 
 	// Rule 4: iss / aud / azp.

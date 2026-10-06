@@ -82,7 +82,15 @@ disabling the account.
 Algorithm allowlist (RS256/ES256 only; `none`/`HS*` rejected), key by `kid` from the IdP's JWKS
 (one rate-limited refresh when an unknown `kid` shows up), signature, `iss`, `aud`/`azp`, `exp`
 (60 s skew), `iat` no older than `max_token_age_seconds`, the per-connection `nonce` when the token
-has one, a non-empty `sub`, and a usable name. Players are identified by `(issuer, subject)` —
+has one, a non-empty `sub`, and a usable name.
+
+It also checks **what kind of token** it was given. A JWS header `typ` of `at+jwt` (an RFC 9068
+access token) is refused for every provider preset, and for `provider = "keycloak"` the payload
+claim `typ` must be `"ID"`. Keycloak signs access tokens (`typ: "Bearer"`) and logout tokens with
+the same realm key; with an audience mapper an access token's `aud` contains your client id, so
+without this rule anything that holds a player's access token could present it as a login.
+Real players are unaffected (the client only ever sends the `id_token`); `--auth-token-file`
+users who paste an access token by mistake get a clear refusal in the server log. Players are identified by `(issuer, subject)` —
 **never by name**. Two accounts that want the same name get `alex` and `alex#2`; a second
 sign-in of the same account kicks the older session ("signed in elsewhere").
 
