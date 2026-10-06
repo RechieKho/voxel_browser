@@ -510,6 +510,23 @@ bool ClientApp::connect_blocking() {
 		for (int i = 0; i < 128 && !c.joined() && !c.failed(); ++i) {
 			sp->tick(0.05);
 		}
+#if defined(VB_WITH_AUTH) && defined(VB_WITH_AUTOMATION)
+		// A pack with auth.lua makes the integrated server ask this client to sign in, which
+		// takes as long as the (test-played) browser takes, and the server verifies the token on
+		// a worker thread: from here on wait in real time like for a remote server (automation
+		// builds only; a production headless client has no way to answer and keeps failing fast).
+		if (sign_in && !c.joined() && !c.failed() && c.status() != vb::net::ClientHandshakeStatus::kConnecting) {
+			auto deadline = std::chrono::steady_clock::now() + connect_timeout();
+			while (!c.joined() && !c.failed() && std::chrono::steady_clock::now() < deadline) {
+				if (c.status() == vb::net::ClientHandshakeStatus::kSigningIn) {
+					deadline = std::chrono::steady_clock::now() + connect_timeout();
+					headless_sign_in_step();
+				}
+				sp->tick(0.05);
+				std::this_thread::sleep_for(std::chrono::milliseconds(10));
+			}
+		}
+#endif
 		client = &c;
 	} else {
 		client = &*remote->session;

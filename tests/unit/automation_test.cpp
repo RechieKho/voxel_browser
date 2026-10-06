@@ -131,6 +131,15 @@ TEST_CASE("automation: leaf predicates") {
 		CHECK_FALSE(eval({ { "player_login", { { "subject", "sub-x" } } } }, authed));
 		CHECK_FALSE(eval({ { "player_login", { { "subject", "sub-a" } } } }, json{ { "players", json::array({ { { "name", "alice" } } }) } }));
 	}
+	{
+		json authed = { { "auth", { { "phase", "choosing" }, { "needs_trust", false }, { "reauth_prompt", true },
+							   { "error", "sign-in was cancelled or denied" } } } };
+		CHECK(eval({ { "auth", { { "phase", "choosing" } } } }, authed));
+		CHECK(eval({ { "auth", { { "reauth_prompt", true }, { "error_contains", "cancelled" } } } }, authed));
+		CHECK_FALSE(eval({ { "auth", { { "phase", "working" } } } }, authed));
+		CHECK_FALSE(eval({ { "auth", { { "error_contains", "revoked" } } } }, authed));
+		CHECK_FALSE(eval({ { "auth", { { "phase", "choosing" } } } }, json::object())); // no coordinator yet
+	}
 	CHECK(eval({ { "block_is", { { "pos", { 4, 70, 4 } }, { "block", "base:stone" } } } }, st));
 	CHECK_FALSE(eval({ { "block_is", { { "pos", { 4, 70, 4 } }, { "block", "base:air" } } } }, st));
 	CHECK_FALSE(eval({ { "block_is", { { "pos", { 9, 9, 9 } }, { "block", "base:air" } } } }, st));

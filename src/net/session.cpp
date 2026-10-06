@@ -1759,6 +1759,7 @@ void ServerSession::finish_reauth(ConnId conn, Conn &state, const AuthOutcome &o
 	fresh->name = old_login->name; // the in-game name is fixed for the session
 	const bool changed = fresh->claims_json != old_login->claims_json;
 	state.login = fresh;
+	VB_INFO("auth", "re-auth ok for '", fresh->name, "'", changed ? " (claims changed)" : "");
 	r.pending = false;
 	r.ticket = nullptr;
 	r.nonce.clear();

@@ -215,7 +215,7 @@ Client: `app_state` (`menu|settings|keybindings|connecting|loading|playing|error
 lines), `chat_open`, `mouse_captured`, `selected_slot` (1-based),
 `health`/`max_health`/`hunger`/`max_hunger` (the player's own status, once the server's first
 `S2C_PlayerStatus` arrives; absent before), `inventory [{item,count}]` (item = block name), `entities [{net_id,name,pos}]`,
-`chunks_loaded`, `rtt_ms` (once measured; real connections only), `target_block {pos,normal,block}` (what the crosshair is on,
+`chunks_loaded`, `auth {phase: idle|choosing|working|finished, needs_trust, reauth_prompt, error}` (once a sign-in coordinator exists, i.e. after connecting; `reauth_prompt` is the "sign in again" banner), `rtt_ms` (once measured; real connections only), `target_block {pos,normal,block}` (what the crosshair is on,
 within reach; absent if nothing), `ui {name, widgets}` (only while a modal screen
 is open), `hud {widgets}`, `busy_actions` (in-flight multi-frame commands).
 Widgets are `{id, type, text, x, y, w, h}` (+ `items`, `list_index` for lists); `type` is
@@ -240,6 +240,7 @@ bad arguments is `bad_request`.
 | `entity_visible` | `{name}` | `entities` |
 | `entity_near` / `player_near` | `{name,pos,radius}` | `entities` / `players` |
 | `player_login` | `{subject, name?, provider?}` | `players[].login` (server): a connected player whose verified login has this subject |
+| `auth` | `{phase?, needs_trust?, reauth_prompt?, error_contains?}` (all given fields must match) | `auth` (client, builds with `VB_WITH_AUTH`): the sign-in coordinator's view |
 | `block_is` | `{pos,block}` (registry name, e.g. `"base:air"`) | the role's own block view; `false` if the chunk isn't loaded (both client and server, so an unloaded area never reads as air) |
 | `pos_near` | `{pos,radius}` | `feet` |
 | `health` | `{op,value}` (`< <= > >= == !=`) or a number | top-level `health` (client: the player's own, from `S2C_PlayerStatus`; the server's snapshot has no top-level `health`, use `players[].health`) |
