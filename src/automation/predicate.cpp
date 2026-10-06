@@ -242,8 +242,7 @@ struct Eval {
 				if (!arg["error_contains"].is_string()) {
 					return fail("auth: 'error_contains' must be a string");
 				}
-				matched = matched && f->value("error", std::string()).find(arg["error_contains"].get<std::string>()) !=
-						std::string::npos;
+				matched = matched && f->value("error", std::string()).find(arg["error_contains"].get<std::string>()) != std::string::npos;
 			}
 			return result(matched, *f);
 		}

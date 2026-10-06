@@ -216,7 +216,10 @@ VerifyResult verify_id_token(const AuthConfig &config, const KeySet &keys,
 	if (config.provider == Provider::kKeycloak) {
 		const auto it = claims.find("typ");
 		if (it == claims.end() || !it->is_string() || it->get<std::string>() != "ID") {
-			std::string seen = it == claims.end() ? "missing" : it->is_string() ? "'" + it->get<std::string>().substr(0, 16) + "'" : "not a string";
+			std::string seen = "missing";
+			if (it != claims.end()) {
+				seen = it->is_string() ? "'" + it->get<std::string>().substr(0, 16) + "'" : "not a string";
+			}
 			return fail(VerifyError::kTokenType, "typ claim is " + seen + ", not 'ID'");
 		}
 	}
