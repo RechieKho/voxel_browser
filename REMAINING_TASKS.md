@@ -8,6 +8,9 @@
 > own `remaining_tasks/phaseN.md`, linked from each phase section below. Read
 > this file for current status and what's actually left; open the linked file
 > only when you need the historical detail behind a specific `[x]` line.
+>
+> **Hard cap: 500 lines.** Over that (or after closing a phase), "dream":
+> move inactive detail into `remaining_tasks/*.md` — see `DREAMING.md`.
 
 ## Current State (baseline)
 

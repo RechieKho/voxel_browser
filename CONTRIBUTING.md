@@ -8,6 +8,9 @@ touching anything networking-, threading-, or dependency-related — several
 subtle bugs have already been found and fixed there, and re-discovering them
 wastes time.
 
+Those three files are each kept under 500 lines; when one grows past that,
+compact it into its vault directory as described in `DREAMING.md`.
+
 ## Module map
 
 The engine is split into two static libraries plus three executables

@@ -5,6 +5,8 @@
 > something non-obvious or fix something listed here. Keep this file lean
 > (~300-400 lines) — new verbose writeups belong in `state/*.md`, linked from
 > here, not pasted inline. See "Detail files" at the bottom for the index.
+> **Hard cap: 500 lines** — over that, "dream" (move inactive entries into
+> `state/*.md`) before ending the session; see `DREAMING.md`.
 >
 > Companion docs: `ARCHITECTURE_SPEC.md` (target design) · `REMAINING_TASKS.md`
 > (implementation backlog). This file is for *traps and context*, not the plan.
