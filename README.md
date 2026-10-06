@@ -142,9 +142,9 @@ account (no administrator rights, nothing outside your profile) and runs servers
 
 ```bash
 # Linux / macOS
-curl -fsSL https://github.com/RechieKho/voxel_browser/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/VoxelBrowser/voxel_browser/releases/latest/download/install.sh | sh
 # Windows (PowerShell)
-irm https://github.com/RechieKho/voxel_browser/releases/latest/download/install.ps1 | iex
+irm https://github.com/VoxelBrowser/voxel_browser/releases/latest/download/install.ps1 | iex
 ```
 
 That installs `vb`, puts it on your user `PATH`, and downloads the latest game.
@@ -203,7 +203,7 @@ first configure.
 #### Compiling
 
 ```bash
-git clone https://github.com/RechieKho/voxel_browser.git
+git clone https://github.com/VoxelBrowser/voxel_browser.git
 cd voxel_browser
 
 cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo

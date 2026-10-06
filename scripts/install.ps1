@@ -3,7 +3,7 @@
   Bootstrap `vb`, the Voxel Browser developer CLI (Windows).
 
 .DESCRIPTION
-  irm https://github.com/RechieKho/voxel_browser/releases/latest/download/install.ps1 | iex
+  irm https://github.com/VoxelBrowser/voxel_browser/releases/latest/download/install.ps1 | iex
 
   Downloads the newest vb, verifies its SHA-256 against the release's
   release.toml, puts it in <data>\bin, adds that directory to your *user* PATH
@@ -21,7 +21,7 @@ function Get-Setting($name, $default) {
   return $v
 }
 
-$repo    = Get-Setting 'VB_REPO' 'RechieKho/voxel_browser'
+$repo    = Get-Setting 'VB_REPO' 'VoxelBrowser/voxel_browser'
 $baseUrl = Get-Setting 'VB_BASE_URL' 'https://github.com'
 $relDir  = Get-Setting 'VB_RELEASE_DIR' ''
 
@@ -120,7 +120,7 @@ try {
     if ($src -eq '') {
       if ($relDir -ne '') { $src = "dir:$relDir" }
       elseif ($baseUrl -ne 'https://github.com') { $src = "$repo@$baseUrl" }
-      elseif ($repo -ne 'RechieKho/voxel_browser') { $src = $repo }
+      elseif ($repo -ne 'VoxelBrowser/voxel_browser') { $src = $repo }
     }
     $env:VB_SOURCE = $src
     if ($data -ne (Join-Path $env:LOCALAPPDATA 'voxel_browser')) { $env:VB_HOME = $data }
