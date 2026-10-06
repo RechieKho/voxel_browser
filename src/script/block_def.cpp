@@ -41,6 +41,25 @@ world::BlockType parse_block_type(const sol::table &def) {
 	return type;
 }
 
+core::BlockId register_block_type(world::BlockRegistry &registry, const world::BlockType &type) {
+	const core::BlockId id = registry.add_or_get(type.name, type);
+	// add_or_get is a no-op on an already-registered name (see its own
+	// comment) -- set_texture() is the one field this pass needs to still
+	// land for a block a hardcoded BlockRegistry::base() default (or an
+	// earlier pack file) already registered, e.g. content/base's stone/water
+	// re-declaring an existing Phase 2 block purely to attach a texture.
+	if (!type.texture.empty()) {
+		registry.set_texture(id, type.texture);
+	}
+	if (!type.crack_texture.empty()) {
+		registry.set_crack_texture(id, type.crack_texture);
+	}
+	if (type.replaceable) {
+		registry.set_replaceable(id, true);
+	}
+	return id;
+}
+
 } // namespace vb::script
 
 #endif // VB_WITH_LUA

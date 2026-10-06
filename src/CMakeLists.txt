@@ -19,6 +19,8 @@ if(VB_BUILD_CLIENT)
   add_subdirectory(render)
 endif()
 
+add_subdirectory(editor)
+
 if(VB_BUILD_SERVER)
   add_subdirectory(server)
 endif()

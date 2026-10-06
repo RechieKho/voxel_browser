@@ -19,6 +19,14 @@ namespace vb::script {
 // Throws sol::error if `name` is missing or empty.
 world::BlockType parse_block_type(const sol::table &def);
 
+// Adds `type` to `registry` the way `vb.register_block` does: idempotent by
+// name (`add_or_get`), then the fields add_or_get leaves alone on an already
+// registered block (texture, crack_texture, replaceable) are applied on top,
+// so a pack re-declaring a built-in block to attach a texture works.
+// Shared by PackRuntime and the structure editor's block catalog so both
+// build identical registries from the same data. Returns the block's id.
+core::BlockId register_block_type(world::BlockRegistry &registry, const world::BlockType &type);
+
 } // namespace vb::script
 
 #endif // VB_WITH_LUA

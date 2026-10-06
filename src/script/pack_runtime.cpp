@@ -1172,22 +1172,7 @@ void PackRuntime::Impl::install_bindings() {
 			throw sol::error("vb.register_block: 'name' is required");
 		}
 		world::BlockType type = parse_block_type(def);
-		const core::BlockId id = registry.add_or_get(name, type);
-		// add_or_get is a no-op on an already-registered name (see its own
-		// comment) -- set_texture() is the one field this pass needs to
-		// still land for a block a hardcoded BlockRegistry::base() default
-		// (or an earlier pack file) already registered, e.g.
-		// content/base/blocks/stone.lua/water.lua re-declaring an existing
-		// Phase 2 block purely to attach a texture.
-		if (!type.texture.empty()) {
-			registry.set_texture(id, type.texture);
-		}
-		if (!type.crack_texture.empty()) {
-			registry.set_crack_texture(id, type.crack_texture);
-		}
-		if (type.replaceable) {
-			registry.set_replaceable(id, true);
-		}
+		const core::BlockId id = register_block_type(registry, type);
 		auto it = std::find_if(blocks.begin(), blocks.end(),
 				[&](const BlockDef &b) { return b.name == name; });
 		if (it == blocks.end()) {

@@ -1,6 +1,6 @@
 # Structure editor — design and phased plan
 
-> Status: **In progress: S0–S2 done, S3–S7 planned.** Plans the "dedicated external structure
+> Status: **In progress: S0–S3 done, S4–S7 planned.** Plans the "dedicated external structure
 > tool" that `architecture_spec/worldgen.md` §6 stage 6 and
 > `remaining_tasks/deferred.md` ("Rule-based decorative structure
 > placement") left for after the Lua worldgen pipeline. Phase 6.14 shipped
@@ -527,24 +527,24 @@ integrates and documents.
 
 ### S3 — Editor shell (viewing only)
 
-- [ ] `VB_BUILD_EDITOR` option, `vb_editor_model` library,
+- [x] `VB_BUILD_EDITOR` option, `vb_editor_model` library,
       `vb_structure_editor` executable, CI build in the existing matrix.
-- [ ] `Volume` model with a conversion to and from a private
+- [x] `Volume` model with a conversion to and from a private
       `ClientChunkStore`, so `ChunkRenderer` meshes it unchanged.
-- [ ] `vb_structure_editor <block-data-script>`: load blocks with
+- [x] `vb_structure_editor <block-data-script>`: load blocks with
       `eval_data_script` and `parse_block_type` (S0), find the pack root,
       build the `TextureAtlas`, show an errors panel, and support Reload
       (`F5`), as described in H. Read the `pack.toml` `name` for the
       default name prefix.
-- [ ] Test: the editor's palette for `content/base/data/blocks.lua` matches
+- [x] Test: the editor's palette for `content/base/data/blocks.lua` matches
       the block registry the server builds from the full pack.
-- [ ] Open a structure from `structures/*.lua`, skipping the reserved
+- [x] Open a structure from `structures/*.lua`, skipping the reserved
       `all.lua` (optionally preselected with `--open <name>`). Orbit camera,
       ground grid, bounds box, anchor marker, variant switcher.
-- [ ] Block names a structure uses that aren't in the block data script
+- [x] Block names a structure uses that aren't in the block data script
       show as a "missing block" marker and are kept on save, never dropped.
       Test: load, then save, a structure with an unknown name keeps it.
-- [ ] `StructureWriter` producing canonical Lua with stable key order, so a
+- [x] `StructureWriter` producing canonical Lua with stable key order, so a
       save of an unchanged file is byte-identical, plus regeneration of
       `structures/all.lua`. Test: write, then read back through
       `eval_data_script` and `parse_structure`, gives an equal

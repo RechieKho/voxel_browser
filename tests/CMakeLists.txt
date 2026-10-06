@@ -19,6 +19,7 @@ add_executable(vb_tests
   unit/data_script_test.cpp
   unit/core_test.cpp
   unit/daynight_test.cpp
+  unit/editor_model_test.cpp
   unit/entity_visual_layout_test.cpp
   unit/entity_visual_test.cpp
   unit/frustum_test.cpp
@@ -61,6 +62,7 @@ target_compile_definitions(vb_tests PRIVATE
 target_link_libraries(vb_tests
   PRIVATE
     vb_core
+    vb_editor_model
     doctest::doctest
     vb_warnings
     vb_sanitizers
@@ -132,6 +134,15 @@ if(VB_BUILD_CLIENT)
             --render-distance 2)
   set_tests_properties(singleplayer_smoke PROPERTIES
     PASS_REGULAR_EXPRESSION "joined singleplayer" TIMEOUT 60)
+endif()
+
+# The structure editor: load the real content/base pack headless and print a
+# summary (--check opens no window).
+if(VB_BUILD_EDITOR)
+  add_test(NAME editor_check
+    COMMAND vb_structure_editor "${CMAKE_SOURCE_DIR}/content/base/data/blocks.lua" --check)
+  set_tests_properties(editor_check PROPERTIES
+    PASS_REGULAR_EXPRESSION "pack 'base' at .*: [0-9]+ blocks, [0-9]+ structure files, 0 errors")
 endif()
 
 # A build without VB_WITH_AUTOMATION must reject --automation loudly instead of
