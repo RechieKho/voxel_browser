@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -46,6 +47,10 @@ enum class Tool { kPlace,
 	kFlood,
 	kSelect,
 	kAnchor };
+
+enum class SideTab { kBlocks,
+	kGenerate,
+	kVariants };
 
 enum class Dialog { kNone,
 	kNew,
@@ -104,6 +109,8 @@ private:
 	void draw_tool_bar();
 	void draw_side_panel();
 	void draw_palette(Rectangle area);
+	void draw_generate_tab(Rectangle area);
+	void draw_variants_tab(Rectangle area);
 	void draw_errors_panel();
 	void draw_open_dialog();
 	void draw_dialogs();
@@ -132,6 +139,15 @@ private:
 	std::string search_;
 	bool search_edit_ = false;
 	float palette_scroll_ = 0.0f;
+
+	SideTab side_tab_ = SideTab::kBlocks;
+	int gen_index_ = 0; // into all_generators()
+	std::map<std::string, ParamValues> gen_params_; // per generator id
+	int gen_seed_ = 1;
+	int bake_count_ = 4;
+	bool gen_value_edit_[2] = {};
+	int weight_edit_ = -1; // variant whose weight is being typed
+	std::string weight_text_;
 
 	bool show_open_ = false;
 	bool show_errors_ = false;

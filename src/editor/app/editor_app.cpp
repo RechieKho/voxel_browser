@@ -11,6 +11,7 @@
 
 #include <raygui.h>
 
+#include "vb/core/noise.hpp"
 #include "vb/render/texture_atlas.hpp"
 #include "vb/world/daynight.hpp"
 
@@ -867,9 +868,174 @@ void EditorApp::draw_side_panel() {
 	GuiLabel(Rectangle{ panel.x + 106, y, panel.width - 116, 24 }, weight);
 	y += 34;
 
-	const std::string brush = session_->brush() ? *session_->brush() : std::string("keep (erase)");
-	line("Brush: " + brush);
-	draw_palette(Rectangle{ panel.x + 8, y + 2, panel.width - 16, panel.y + panel.height - y - 10 });
+	// Tabs.
+	static constexpr const char *kTabLabels[] = { "Blocks", "Generate", "Variants" };
+	const float tab_w = (panel.width - 16) / 3.0f;
+	for (int i = 0; i < 3; ++i) {
+		bool active = static_cast<int>(side_tab_) == i;
+		if (GuiToggle(Rectangle{ panel.x + 8 + static_cast<float>(i) * tab_w, y, tab_w - 2, 24 }, kTabLabels[i], &active) && active) {
+			side_tab_ = static_cast<SideTab>(i);
+		}
+	}
+	y += 30;
+	const Rectangle area{ panel.x + 8, y, panel.width - 16, panel.y + panel.height - y - 8 };
+	switch (side_tab_) {
+		case SideTab::kBlocks: {
+			const std::string brush = session_->brush() ? *session_->brush() : std::string("keep (erase)");
+			GuiLabel(Rectangle{ area.x, area.y, area.width, 20 }, ("Brush: " + brush).c_str());
+			draw_palette(Rectangle{ area.x, area.y + 22, area.width, area.height - 22 });
+			break;
+		}
+		case SideTab::kGenerate:
+			draw_generate_tab(area);
+			break;
+		case SideTab::kVariants:
+			draw_variants_tab(area);
+			break;
+	}
+}
+
+void EditorApp::draw_generate_tab(Rectangle area) {
+	const auto &generators = all_generators();
+	std::string names;
+	for (const auto &g : generators) {
+		names += (names.empty() ? "" : ";") + g->label();
+	}
+	GuiComboBox(Rectangle{ area.x, area.y, area.width, 24 }, names.c_str(), &gen_index_);
+	gen_index_ = std::clamp(gen_index_, 0, static_cast<int>(generators.size()) - 1);
+	const Generator &generator = *generators[static_cast<std::size_t>(gen_index_)];
+	ParamValues &values = gen_params_[generator.id()];
+	if (values.empty()) {
+		values = default_params(generator);
+	}
+
+	float y = area.y + 32;
+	for (const ParamDesc &d : generator.params()) {
+		ParamValue &value = values[d.key];
+		switch (d.kind) {
+			case ParamKind::kInt:
+			case ParamKind::kFloat: {
+				char label[96];
+				if (d.kind == ParamKind::kInt) {
+					std::snprintf(label, sizeof label, "%s: %d", d.label.c_str(), static_cast<int>(std::lround(value.number)));
+				} else {
+					std::snprintf(label, sizeof label, "%s: %.2f", d.label.c_str(), value.number);
+				}
+				GuiLabel(Rectangle{ area.x, y, area.width, 18 }, label);
+				float f = static_cast<float>(value.number);
+				GuiSlider(Rectangle{ area.x, y + 18, area.width, 14 }, nullptr, nullptr, &f, static_cast<float>(d.min), static_cast<float>(d.max));
+				value.number = d.kind == ParamKind::kInt ? std::round(static_cast<double>(f)) : static_cast<double>(f);
+				y += 38;
+				break;
+			}
+			case ParamKind::kBlock: {
+				GuiLabel(Rectangle{ area.x, y, area.width * 0.4f, 24 }, d.label.c_str());
+				// Click to use the current brush.
+				const std::string shown = value.text.empty() ? std::string("(brush)") : value.text;
+				if (GuiButton(Rectangle{ area.x + area.width * 0.4f, y, area.width * 0.6f, 24 }, shown.c_str()) && session_->brush()) {
+					value.text = *session_->brush();
+				}
+				y += 30;
+				break;
+			}
+			case ParamKind::kChoice: {
+				std::string choices;
+				for (const std::string &c : d.choices) {
+					choices += (choices.empty() ? "" : ";") + c;
+				}
+				GuiLabel(Rectangle{ area.x, y, area.width * 0.4f, 24 }, d.label.c_str());
+				int index = static_cast<int>(value.number);
+				GuiComboBox(Rectangle{ area.x + area.width * 0.4f, y, area.width * 0.6f, 24 }, choices.c_str(), &index);
+				value.number = index;
+				y += 30;
+				break;
+			}
+		}
+	}
+	y += 4;
+	GuiLabel(Rectangle{ area.x, y, 46, 24 }, "Seed");
+	if (GuiValueBox(Rectangle{ area.x + 48, y, 90, 24 }, nullptr, &gen_seed_, 0, 1000000000, gen_value_edit_[0])) {
+		gen_value_edit_[0] = !gen_value_edit_[0];
+	}
+	if (GuiButton(Rectangle{ area.x + 144, y, area.width - 144, 24 }, "Random")) {
+		gen_seed_ = static_cast<int>(core::noise::mix64(static_cast<std::uint64_t>(gen_seed_) + 0x9E3779B9ULL) % 1000000000ULL);
+	}
+	y += 32;
+	if (GuiButton(Rectangle{ area.x, y, area.width, 28 }, "Generate (replaces this variant)")) {
+		session_->generate(generator, values, static_cast<std::uint64_t>(gen_seed_));
+		set_status("generated " + generator.label());
+	}
+	y += 34;
+	GuiLabel(Rectangle{ area.x, y, 20, 24 }, "N");
+	if (GuiValueBox(Rectangle{ area.x + 22, y, 50, 24 }, nullptr, &bake_count_, 1, 32, gen_value_edit_[1])) {
+		gen_value_edit_[1] = !gen_value_edit_[1];
+	}
+	if (GuiButton(Rectangle{ area.x + 78, y, area.width - 78, 24 }, "Bake xN (adds variants)")) {
+		session_->bake(generator, values, static_cast<std::uint64_t>(gen_seed_), bake_count_);
+		set_status("baked " + std::to_string(bake_count_) + " variants");
+	}
+}
+
+void EditorApp::draw_variants_tab(Rectangle area) {
+	const StructureDoc &doc = session_->doc();
+	float y = area.y;
+	if (GuiButton(Rectangle{ area.x, y, area.width / 2 - 2, 24 }, "Add blank")) {
+		session_->add_variant();
+	}
+	if (GuiButton(Rectangle{ area.x + area.width / 2 + 2, y, area.width / 2 - 2, 24 }, "Duplicate")) {
+		session_->duplicate_variant(session_->variant());
+	}
+	y += 30;
+	GuiLabel(Rectangle{ area.x, y, area.width, 18 }, "One is chosen per placement, by weight.");
+	y += 24;
+
+	double total = 0.0;
+	for (const DocVariant &v : doc.variants) {
+		total += v.weight;
+	}
+	for (std::size_t i = 0; i < doc.variants.size(); ++i) {
+		const Rectangle row{ area.x, y, area.width, 28 };
+		if (row.y + row.height > area.y + area.height) {
+			break;
+		}
+		const bool selected = i == session_->variant();
+		DrawRectangleRec(row, selected ? Color{ 70, 110, 170, 255 } : Color{ 232, 232, 236, 255 });
+		char label[48];
+		std::snprintf(label, sizeof label, "%zu  (%.0f%%)", i + 1, total > 0 ? doc.variants[i].weight / total * 100.0 : 0.0);
+		const Rectangle label_r{ row.x + 4, row.y + 2, 74, 24 };
+		DrawText(label, static_cast<int>(label_r.x), static_cast<int>(label_r.y + 8), 10, selected ? WHITE : Color{ 30, 30, 36, 255 });
+		if (inside(label_r, GetMousePosition()) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+			session_->set_variant(i);
+		}
+
+		// Weight: click to type, Enter to commit.
+		const Rectangle weight_r{ row.x + 80, row.y + 2, 54, 24 };
+		if (weight_edit_ == static_cast<int>(i)) {
+			bool editing = true;
+			if (text_box(weight_r, weight_text_, editing)) {
+				const double w = std::strtod(weight_text_.c_str(), nullptr);
+				session_->set_weight(i, w);
+				weight_edit_ = -1;
+			}
+		} else {
+			char w[32];
+			std::snprintf(w, sizeof w, "%.3g", doc.variants[i].weight);
+			if (GuiButton(weight_r, w)) {
+				weight_edit_ = static_cast<int>(i);
+				weight_text_ = w;
+			}
+		}
+		if (GuiButton(Rectangle{ row.x + 138, row.y + 2, 28, 24 }, "^")) {
+			session_->move_variant(i, -1);
+		}
+		if (GuiButton(Rectangle{ row.x + 168, row.y + 2, 28, 24 }, "v")) {
+			session_->move_variant(i, 1);
+		}
+		if (GuiButton(Rectangle{ row.x + 198, row.y + 2, 28, 24 }, "x")) {
+			session_->delete_variant(i);
+		}
+		y += 32;
+	}
 }
 
 void EditorApp::draw_open_dialog() {
@@ -1090,6 +1256,7 @@ void EditorApp::draw_ui() {
 //   place|remove|paint|flood x,y,z      box|line x,y,z x,y,z
 //   mirror x|z|off                      slice <layer>        select x,y,z x,y,z
 //   copy|cut                            paste x,y,z          variant <n>
+//   generate <id> [seed]   bake <id> <n> [seed]   tab <0-2>   save
 void EditorApp::run_script(const std::string &script) {
 	std::stringstream commands(script);
 	std::string command;
@@ -1148,6 +1315,18 @@ void EditorApp::run_script(const std::string &script) {
 			if (n >= 1 && n <= 9) {
 				tool_ = kTools[n - 1];
 			}
+		} else if (w[0] == "generate" && w.size() >= 2) {
+			if (const Generator *g = find_generator(w[1])) {
+				const auto seed = static_cast<std::uint64_t>(w.size() >= 3 ? std::atoll(w[2].c_str()) : 1);
+				session_->generate(*g, default_params(*g), seed);
+			}
+		} else if (w[0] == "bake" && w.size() >= 3) {
+			if (const Generator *g = find_generator(w[1])) {
+				const auto seed = static_cast<std::uint64_t>(w.size() >= 4 ? std::atoll(w[3].c_str()) : 1);
+				session_->bake(*g, default_params(*g), seed, std::atoi(w[2].c_str()));
+			}
+		} else if (w[0] == "tab" && w.size() >= 2) {
+			side_tab_ = static_cast<SideTab>(std::clamp(std::atoi(w[1].c_str()), 0, 2));
 		} else if (w[0] == "save") {
 			save();
 		} else {

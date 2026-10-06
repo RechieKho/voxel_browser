@@ -2,6 +2,7 @@ add_library(vb_editor_model STATIC
   block_catalog.cpp
   commands.cpp
   edit_session.cpp
+  generators.cpp
   pick.cpp
   structure_doc.cpp
   structure_writer.cpp

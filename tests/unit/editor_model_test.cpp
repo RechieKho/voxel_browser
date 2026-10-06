@@ -792,3 +792,301 @@ TEST_CASE("EditSession::revision moves on every change") {
 	s.undo();
 	CHECK(s.revision() > r1);
 }
+
+// ---------------------------------------------------------------------------
+// S5: generators and variants.
+
+#include "vb/core/hash.hpp"
+#include "vb/editor/generators.hpp"
+
+namespace {
+
+std::uint64_t volume_digest(const editor::Volume &v, const editor::NameTable &names) {
+	core::Fnv1a h;
+	const auto s = v.size();
+	h.update_u<std::uint32_t>(static_cast<std::uint32_t>(s.x));
+	h.update_u<std::uint32_t>(static_cast<std::uint32_t>(s.y));
+	h.update_u<std::uint32_t>(static_cast<std::uint32_t>(s.z));
+	for (const auto c : v.cells()) {
+		// Hash the block name, not the table index, so the digest doesn't
+		// depend on interning order.
+		if (c == editor::kKeepCell) {
+			h.update_u<std::uint8_t>(0);
+		} else {
+			for (const char ch : names.name(c)) {
+				h.update_u<std::uint8_t>(static_cast<std::uint8_t>(ch));
+			}
+			h.update_u<std::uint8_t>(1);
+		}
+	}
+	return h.digest();
+}
+
+std::size_t count_cells(const editor::Volume &v) {
+	std::size_t n = 0;
+	for (const auto c : v.cells()) {
+		n += c != editor::kKeepCell ? 1u : 0u;
+	}
+	return n;
+}
+
+} // namespace
+
+TEST_CASE("every generator has described parameters and sane defaults") {
+	REQUIRE(editor::all_generators().size() == 4);
+	CHECK(editor::find_generator("tree"));
+	CHECK(editor::find_generator("bush"));
+	CHECK(editor::find_generator("boulder"));
+	CHECK(editor::find_generator("fallen_log"));
+	CHECK_FALSE(editor::find_generator("nope"));
+	for (const auto &g : editor::all_generators()) {
+		CHECK_FALSE(g->params().empty());
+		const auto defaults = editor::default_params(*g);
+		for (const auto &d : g->params()) {
+			REQUIRE(defaults.count(d.key) == 1);
+			if (d.kind == editor::ParamKind::kBlock) {
+				CHECK_FALSE(defaults.at(d.key).text.empty());
+			} else {
+				CHECK(defaults.at(d.key).number >= d.min);
+				CHECK(defaults.at(d.key).number <= d.max);
+			}
+		}
+	}
+}
+
+TEST_CASE("normalized_params clamps, defaults missing keys and ignores unknown ones") {
+	const auto *tree = editor::find_generator("tree");
+	REQUIRE(tree);
+	editor::ParamValues in;
+	in["radius"].number = 99;
+	in["trunk_block"].text = "base:planks";
+	in["bogus"].number = 5;
+	const auto out = editor::normalized_params(*tree, in);
+	CHECK(out.at("radius").number == 8);
+	CHECK(out.at("trunk_block").text == "base:planks");
+	CHECK(out.at("leaf_block").text == "base:leaves");
+	CHECK(out.count("bogus") == 0);
+}
+
+TEST_CASE("generators are deterministic per seed, differ across seeds and stay inside the volume") {
+	for (const auto &g : editor::all_generators()) {
+		const auto params = editor::default_params(*g);
+		editor::NameTable names;
+		editor::Volume a({ 13, 14, 13 });
+		editor::Volume b({ 13, 14, 13 });
+		editor::Volume other({ 13, 14, 13 });
+		const core::IVec3 anchor{ 6, 0, 6 };
+		g->generate(a, anchor, names, params, 1234);
+		g->generate(b, anchor, names, params, 1234);
+		g->generate(other, anchor, names, params, 99);
+		INFO(g->id());
+		CHECK(a == b);
+		CHECK(count_cells(a) > 3);
+
+		// A bigger canvas holds the same shape: nothing was clipped at 13x14x13
+		// except what really lies outside it (the generators root at the
+		// anchor and grow up and out).
+		editor::NameTable big_names;
+		editor::Volume big({ 25, 26, 25 });
+		g->generate(big, { 12, 0, 12 }, big_names, params, 1234);
+		for (int y = 0; y < 14; ++y) {
+			for (int z = 0; z < 13; ++z) {
+				for (int x = 0; x < 13; ++x) {
+					const auto small = a.get(x, y, z);
+					const auto bigger = big.get(x + 6, y, z + 6);
+					CHECK((small == editor::kKeepCell) == (bigger == editor::kKeepCell));
+				}
+			}
+		}
+	}
+	// Different seeds give different shapes for the stochastic generators.
+	const auto *tree = editor::find_generator("tree");
+	editor::NameTable names;
+	editor::Volume a({ 13, 14, 13 });
+	editor::Volume b({ 13, 14, 13 });
+	tree->generate(a, { 6, 0, 6 }, names, editor::default_params(*tree), 1);
+	tree->generate(b, { 6, 0, 6 }, names, editor::default_params(*tree), 2);
+	CHECK(volume_digest(a, names) != volume_digest(b, names));
+}
+
+TEST_CASE("generating into a tiny volume or off its edge never writes out of bounds") {
+	for (const auto &g : editor::all_generators()) {
+		editor::NameTable names;
+		editor::Volume tiny({ 2, 2, 2 });
+		g->generate(tiny, { 0, 0, 0 }, names, editor::default_params(*g), 7);
+		g->generate(tiny, { 1, 1, 1 }, names, editor::default_params(*g), 7);
+		// An anchor outside the volume is clipped away entirely, not a crash.
+		editor::Volume small({ 4, 4, 4 });
+		g->generate(small, { 40, 0, 40 }, names, editor::default_params(*g), 7);
+		CHECK(small.size() == core::IVec3{ 4, 4, 4 });
+	}
+}
+
+TEST_CASE("tree shapes: a trunk on the anchor, leaves on top, and the canopy options differ") {
+	const auto *tree = editor::find_generator("tree");
+	auto params = editor::default_params(*tree);
+	params["trunk_min"].number = 5;
+	params["trunk_max"].number = 5;
+	params["density"].number = 1.0;
+	params["radius"].number = 2;
+
+	std::vector<std::uint64_t> digests;
+	for (int shape = 0; shape < 3; ++shape) {
+		params["canopy"].number = shape;
+		editor::NameTable names;
+		editor::Volume v({ 9, 12, 9 });
+		tree->generate(v, { 4, 0, 4 }, names, params, 5);
+		INFO("canopy " << shape);
+		for (int y = 0; y < 5; ++y) {
+			REQUIRE(v.get(4, y, 4) != editor::kKeepCell);
+			CHECK(names.name(v.get(4, y, 4)) == "base:wood");
+		}
+		// Leaves reach above the trunk top for every shape.
+		bool leaf_above = false;
+		for (int y = 4; y < 12; ++y) {
+			for (int z = 0; z < 9; ++z) {
+				for (int x = 0; x < 9; ++x) {
+					const auto c = v.get(x, y, z);
+					leaf_above = leaf_above || (c != editor::kKeepCell && names.name(c) == "base:leaves");
+				}
+			}
+		}
+		CHECK(leaf_above);
+		digests.push_back(volume_digest(v, names));
+	}
+	CHECK(digests[0] != digests[1]);
+	CHECK(digests[1] != digests[2]);
+
+	// Branches add wood beyond the trunk column.
+	params["canopy"].number = 0;
+	params["branches"].number = 3;
+	editor::NameTable names;
+	editor::Volume v({ 15, 12, 15 });
+	tree->generate(v, { 7, 0, 7 }, names, params, 5);
+	std::size_t wood_off_trunk = 0;
+	for (int y = 0; y < 12; ++y) {
+		for (int z = 0; z < 15; ++z) {
+			for (int x = 0; x < 15; ++x) {
+				const auto c = v.get(x, y, z);
+				if (c != editor::kKeepCell && names.name(c) == "base:wood" && !(x == 7 && z == 7)) {
+					++wood_off_trunk;
+				}
+			}
+		}
+	}
+	CHECK(wood_off_trunk >= 2);
+}
+
+TEST_CASE("generator golden hashes") {
+	// If one of these changes, a generator's output changed: existing seeds
+	// no longer reproduce their shapes.
+	const std::pair<const char *, std::uint64_t> goldens[] = {
+		{ "tree", 0x6C6C2C5B1065B2A1ULL },
+		{ "bush", 0x53151408B126E072ULL },
+		{ "boulder", 0x337CEDE2BA1F09D5ULL },
+		{ "fallen_log", 0x6DE8B2E353738840ULL },
+	};
+	for (const auto &[id, golden] : goldens) {
+		const auto *g = editor::find_generator(id);
+		REQUIRE(g);
+		editor::NameTable names;
+		editor::Volume v({ 13, 14, 13 });
+		g->generate(v, { 6, 0, 6 }, names, editor::default_params(*g), 20260705);
+		INFO(id << " digest " << volume_digest(v, names));
+		CHECK(volume_digest(v, names) == golden);
+	}
+}
+
+TEST_CASE("variant_seed is stable and distinct per index") {
+	CHECK(editor::variant_seed(5, 0) == editor::variant_seed(5, 0));
+	CHECK(editor::variant_seed(5, 0) != editor::variant_seed(5, 1));
+	CHECK(editor::variant_seed(5, 0) != editor::variant_seed(6, 0));
+	CHECK(editor::variant_seed(5, 0) != 5);
+}
+
+TEST_CASE("EditSession: generate replaces the current variant and is one undo step") {
+	auto s = make_session({ 9, 10, 9 }, { 4, 0, 4 });
+	s.place({ 0, 0, 0 });
+	const auto *bush = editor::find_generator("bush");
+	CHECK(s.generate(*bush, editor::default_params(*bush), 42));
+	CHECK(name_at(s, 0, 0, 0) == "<keep>"); // the old content is replaced
+	CHECK(count_cells(s.volume()) > 5);
+	// The same seed again changes nothing.
+	CHECK_FALSE(s.generate(*bush, editor::default_params(*bush), 42));
+	CHECK(s.undo());
+	CHECK(name_at(s, 0, 0, 0) == "base:stone");
+	CHECK(count_cells(s.volume()) == 1);
+}
+
+TEST_CASE("EditSession: bake appends variants with derived seeds and undoes as one step") {
+	auto s = make_session({ 9, 10, 9 }, { 4, 0, 4 });
+	const auto *tree = editor::find_generator("tree");
+	CHECK_FALSE(s.bake(*tree, {}, 1, 0));
+	CHECK(s.bake(*tree, editor::default_params(*tree), 77, 4));
+	REQUIRE(s.doc().variants.size() == 5);
+	CHECK(s.variant() == 1); // the first baked variant is selected
+	// Same base seed and index -> same shape, different indices differ.
+	editor::NameTable names;
+	editor::Volume expect({ 9, 10, 9 });
+	tree->generate(expect, { 4, 0, 4 }, names, editor::default_params(*tree), editor::variant_seed(77, 2));
+	CHECK(volume_digest(s.doc().variants[3].volume, s.doc().names) == volume_digest(expect, names));
+	CHECK(s.doc().variants[1].volume != s.doc().variants[2].volume);
+
+	CHECK(s.undo());
+	CHECK(s.doc().variants.size() == 1);
+	CHECK(s.variant() == 0);
+	CHECK(s.redo());
+	CHECK(s.doc().variants.size() == 5);
+}
+
+TEST_CASE("EditSession: variant list editing") {
+	auto s = make_session({ 3, 3, 3 }, { 1, 0, 1 });
+	s.place({ 0, 0, 0 });
+	CHECK(s.add_variant());
+	CHECK(s.doc().variants.size() == 2);
+	CHECK(s.variant() == 1);
+	CHECK(count_cells(s.volume()) == 0);
+	s.place({ 2, 2, 2 });
+
+	CHECK(s.duplicate_variant(1));
+	CHECK(s.doc().variants.size() == 3);
+	CHECK(s.variant() == 2);
+	CHECK(s.doc().variants[2].volume == s.doc().variants[1].volume);
+
+	CHECK(s.set_weight(2, 0.5));
+	CHECK(s.doc().variants[2].weight == 0.5);
+	CHECK_FALSE(s.set_weight(2, 0.5));
+	CHECK_FALSE(s.set_weight(2, 0.0));
+	CHECK_FALSE(s.set_weight(2, -1.0));
+	CHECK_FALSE(s.set_weight(9, 1.0));
+
+	// Reorder: move the first variant to the end.
+	const auto first = s.doc().variants[0].volume;
+	CHECK(s.move_variant(0, 1));
+	CHECK(s.doc().variants[1].volume == first);
+	CHECK(s.variant() == 1);
+	CHECK_FALSE(s.move_variant(2, 1));
+	CHECK_FALSE(s.move_variant(0, -1));
+
+	CHECK(s.delete_variant(1));
+	CHECK(s.doc().variants.size() == 2);
+	CHECK(s.undo()); // back to 3, weights kept
+	CHECK(s.doc().variants.size() == 3);
+
+	// The last variant can't be deleted.
+	auto one = make_session();
+	CHECK_FALSE(one.delete_variant(0));
+}
+
+TEST_CASE("a baked structure saves with its variants and weights") {
+	auto s = make_session({ 7, 8, 7 }, { 3, 0, 3 });
+	const auto *tree = editor::find_generator("tree");
+	REQUIRE(s.bake(*tree, editor::default_params(*tree), 3, 3));
+	s.set_weight(1, 3.0);
+	const auto spec = s.doc().to_spec();
+	CHECK(spec.variants.size() == 4);
+	CHECK(spec.variants[1].weight == 3.0);
+	CHECK(worldgen::validate_structure_spec(spec).empty());
+	const auto text = editor::write_structure_lua(spec);
+	CHECK(text.find("weight = 3") != std::string::npos);
+}

@@ -1,6 +1,6 @@
 # Structure editor — design and phased plan
 
-> Status: **In progress: S0–S4 done, S5–S7 planned.** Plans the "dedicated external structure
+> Status: **In progress: S0–S5 done, S6–S7 planned.** Plans the "dedicated external structure
 > tool" that `architecture_spec/worldgen.md` §6 stage 6 and
 > `remaining_tasks/deferred.md` ("Rule-based decorative structure
 > placement") left for after the Lua worldgen pipeline. Phase 6.14 shipped
@@ -569,17 +569,17 @@ integrates and documents.
 
 ### S5 — Generators and variants
 
-- [ ] `Generator` interface (parameters, then fill the volume) in the model,
+- [x] `Generator` interface (parameters, then fill the volume) in the model,
       seeded by `DetRng`, so the same seed always gives the same shape.
-- [ ] Generators: **tree** (trunk height range, trunk block, canopy shape
+- [x] Generators: **tree** (trunk height range, trunk block, canopy shape
       (sphere, cone, or layered blob), canopy radius, leaf density, branch
       count), **bush**, **boulder** (noise-deformed ellipsoid with block
       mix), and **fallen log**.
-- [ ] Generator panel: parameter widgets driven by each generator's
+- [x] Generator panel: parameter widgets driven by each generator's
       parameter descriptor list. "Generate" replaces the current variant;
       "Bake ×N" appends N variants with seeds derived from one base seed.
-- [ ] Variant list editing (weights, duplicate, delete, reorder).
-- [ ] Tests: generator output is deterministic per seed (hash golden) and
+- [x] Variant list editing (weights, duplicate, delete, reorder).
+- [x] Tests: generator output is deterministic per seed (hash golden) and
       stays inside the volume bounds.
 
 ### S6 — Placement authoring and live terrain preview

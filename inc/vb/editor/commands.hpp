@@ -68,6 +68,23 @@ private:
 	core::IVec3 anchor_after_;
 };
 
+// Replaces the whole variant list (add, duplicate, delete, reorder, reweight,
+// bake). Snapshots are cheap at the 64^3 cap, and the name table only ever
+// grows, so undo leaves unused names behind that the writer skips.
+class VariantsReplace final : public Command {
+public:
+	VariantsReplace(std::string label, std::vector<DocVariant> before, std::vector<DocVariant> after) :
+			label_(std::move(label)), before_(std::move(before)), after_(std::move(after)) {}
+	void apply(StructureDoc &doc) override { doc.variants = after_; }
+	void revert(StructureDoc &doc) override { doc.variants = before_; }
+	std::string label() const override { return label_; }
+
+private:
+	std::string label_;
+	std::vector<DocVariant> before_;
+	std::vector<DocVariant> after_;
+};
+
 class UndoStack {
 public:
 	// Applies `command` to `doc` and records it, dropping any redo history.

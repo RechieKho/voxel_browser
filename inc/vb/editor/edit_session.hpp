@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "vb/editor/commands.hpp"
+#include "vb/editor/generators.hpp"
 #include "vb/editor/shapes.hpp"
 #include "vb/editor/structure_doc.hpp"
 
@@ -85,6 +86,23 @@ public:
 	bool resize(core::IVec3 new_size, ResizeAnchor side);
 	bool set_anchor(core::IVec3 anchor);
 
+	// --- generators and variants ---
+	// Replaces the current variant's cells with the generator's output, rooted
+	// at the structure's anchor. One undo step. False when nothing changed.
+	bool generate(const Generator &generator, const ParamValues &params, std::uint64_t seed);
+	// Appends `count` variants generated with seeds derived from `base_seed`
+	// (variant_seed), each weight 1. Selects the first new one.
+	bool bake(const Generator &generator, const ParamValues &params, std::uint64_t base_seed, int count);
+	// A blank variant after the current one; selects it.
+	bool add_variant();
+	bool duplicate_variant(std::size_t index);
+	// The last remaining variant can't be deleted.
+	bool delete_variant(std::size_t index);
+	// Moves variant `index` by `delta` places (negative = earlier).
+	bool move_variant(std::size_t index, int delta);
+	// Weights must be positive (the writer and validator require it).
+	bool set_weight(std::size_t index, double weight);
+
 	// --- history ---
 	bool undo();
 	bool redo();
@@ -106,6 +124,7 @@ private:
 	template <typename Filter>
 	bool apply_cells(const std::string &label, const std::vector<core::IVec3> &positions, Cell value, Filter only_if);
 	bool push_changes(const std::string &label, std::vector<CellChange> changes);
+	bool push_variants(const std::string &label, std::vector<DocVariant> after, std::size_t select);
 	void clamp_selection();
 
 	StructureDoc doc_;

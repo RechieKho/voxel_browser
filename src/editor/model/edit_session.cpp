@@ -1,6 +1,7 @@
 #include "vb/editor/edit_session.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <set>
 
 namespace vb::editor {
@@ -272,10 +273,101 @@ bool EditSession::set_anchor(core::IVec3 anchor) {
 	return true;
 }
 
+bool EditSession::push_variants(const std::string &label, std::vector<DocVariant> after, std::size_t select) {
+	undo_.push(std::make_unique<VariantsReplace>(label, doc_.variants, std::move(after)), doc_);
+	variant_ = std::min(select, doc_.variants.size() - 1);
+	selection_.reset();
+	++revision_;
+	return true;
+}
+
+bool EditSession::generate(const Generator &generator, const ParamValues &params, std::uint64_t seed) {
+	Volume fresh = volume();
+	generator.generate(fresh, doc_.anchor, doc_.names, normalized_params(generator, params), seed);
+	std::vector<CellChange> changes;
+	const Volume &old = volume();
+	for (int y = 0; y < fresh.size().y; ++y) {
+		for (int z = 0; z < fresh.size().z; ++z) {
+			for (int x = 0; x < fresh.size().x; ++x) {
+				if (old.get(x, y, z) != fresh.get(x, y, z)) {
+					changes.push_back({ variant_, { x, y, z }, old.get(x, y, z), fresh.get(x, y, z) });
+				}
+			}
+		}
+	}
+	return push_changes("generate " + generator.id(), std::move(changes));
+}
+
+bool EditSession::bake(const Generator &generator, const ParamValues &params, std::uint64_t base_seed, int count) {
+	if (count < 1) {
+		return false;
+	}
+	const ParamValues values = normalized_params(generator, params);
+	std::vector<DocVariant> after = doc_.variants;
+	const std::size_t first = after.size();
+	for (int i = 0; i < count; ++i) {
+		DocVariant v;
+		v.volume = Volume(doc_.size());
+		generator.generate(v.volume, doc_.anchor, doc_.names, values, variant_seed(base_seed, i));
+		after.push_back(std::move(v));
+	}
+	return push_variants("bake " + generator.id() + " x" + std::to_string(count), std::move(after), first);
+}
+
+bool EditSession::add_variant() {
+	std::vector<DocVariant> after = doc_.variants;
+	after.insert(after.begin() + static_cast<std::ptrdiff_t>(variant_) + 1, DocVariant{ Volume(doc_.size()), 1.0 });
+	return push_variants("add variant", std::move(after), variant_ + 1);
+}
+
+bool EditSession::duplicate_variant(std::size_t index) {
+	if (index >= doc_.variants.size()) {
+		return false;
+	}
+	std::vector<DocVariant> after = doc_.variants;
+	after.insert(after.begin() + static_cast<std::ptrdiff_t>(index) + 1, doc_.variants[index]);
+	return push_variants("duplicate variant", std::move(after), index + 1);
+}
+
+bool EditSession::delete_variant(std::size_t index) {
+	if (index >= doc_.variants.size() || doc_.variants.size() < 2) {
+		return false;
+	}
+	std::vector<DocVariant> after = doc_.variants;
+	after.erase(after.begin() + static_cast<std::ptrdiff_t>(index));
+	return push_variants("delete variant", std::move(after), index == 0 ? 0 : index - 1);
+}
+
+bool EditSession::move_variant(std::size_t index, int delta) {
+	if (index >= doc_.variants.size()) {
+		return false;
+	}
+	const auto target = static_cast<long>(index) + delta;
+	if (target < 0 || target >= static_cast<long>(doc_.variants.size()) || target == static_cast<long>(index)) {
+		return false;
+	}
+	std::vector<DocVariant> after = doc_.variants;
+	std::swap(after[index], after[static_cast<std::size_t>(target)]);
+	return push_variants("move variant", std::move(after), static_cast<std::size_t>(target));
+}
+
+bool EditSession::set_weight(std::size_t index, double weight) {
+	if (index >= doc_.variants.size() || !(weight > 0.0) || !std::isfinite(weight) || doc_.variants[index].weight == weight) {
+		return false;
+	}
+	std::vector<DocVariant> after = doc_.variants;
+	after[index].weight = weight;
+	// Keep the selection where it is.
+	undo_.push(std::make_unique<VariantsReplace>("set weight", doc_.variants, std::move(after)), doc_);
+	++revision_;
+	return true;
+}
+
 bool EditSession::undo() {
 	if (!undo_.undo(doc_)) {
 		return false;
 	}
+	variant_ = std::min(variant_, doc_.variants.size() - 1);
 	clamp_selection();
 	++revision_;
 	return true;
@@ -285,6 +377,7 @@ bool EditSession::redo() {
 	if (!undo_.redo(doc_)) {
 		return false;
 	}
+	variant_ = std::min(variant_, doc_.variants.size() - 1);
 	clamp_selection();
 	++revision_;
 	return true;
