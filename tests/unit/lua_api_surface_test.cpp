@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "vb/core/paths.hpp"
 #include "vb/net/loopback.hpp"
 #include "vb/script/pack_runtime.hpp"
 #include "vb/script/ui_runtime.hpp"
@@ -59,8 +60,8 @@ TEST_CASE("Lua API surface matches sdk/lua/api_index.txt") {
 	}
 	REQUIRE_FALSE(live.empty());
 
-	if (const char *dump = std::getenv("VB_DUMP_API")) {
-		std::ofstream out(dump);
+	if (const auto dump = vb::core::get_env("VB_DUMP_API")) {
+		std::ofstream out(*dump);
 		for (auto &n : live) {
 			out << n << '\n';
 		}
@@ -116,7 +117,7 @@ TEST_CASE("Lua reference examples are syntactically valid") {
 			} else if (in_code && line == "```") {
 				in_code = false;
 				const auto loaded = lua.load(code, "=" + entry.path().filename().string());
-				INFO(entry.path().filename().string() << ":" << block_start << ": " << (loaded.valid() ? "" : sol::error(loaded).what()));
+				INFO(entry.path().filename().string() << ":" << block_start << ": " << (loaded.valid() ? "" : loaded.get<sol::error>().what()));
 				CHECK(loaded.valid());
 				++checked;
 			} else if (in_code) {
