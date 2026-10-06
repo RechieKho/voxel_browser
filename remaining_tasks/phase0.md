@@ -47,7 +47,7 @@ Prerequisite for everything else. Not in the README's phase list but required.
 Follow-ups deferred out of Phase 0:
 - [x] First `git tag v0.0.1` so `git describe` yields a real version —
       landed and pushed to `origin` 2026-09-28, see `REMAINING_TASKS.md`'s
-      Phase 0 entry / `STATE.md`'s "Current status" for the full note.
+      Phase 0 entry / `STATE.md`\'s history (`state/changelog-*.md`) for the full note.
 - [x] doctest bumped `v2.4.11` → `v2.5.3` (2026-09-30), which declares
       `cmake_minimum_required(VERSION 3.14)` instead of the old `3.0` floor.
       The `CMAKE_POLICY_VERSION_MINIMUM=3.5` shim in `cmake/Dependencies.cmake`
@@ -62,3 +62,22 @@ Follow-ups deferred out of Phase 0:
 - [ ] Explicit source lists instead of relying on re-running CMake (targets use
       explicit lists already; keep it that way as modules grow).
 
+---
+
+### Moved from `REMAINING_TASKS.md`'s core (dream, 2026-10-06)
+
+> Verbatim text of the core file's "Remaining" list for this section at the
+> time of the move; the core now keeps a one-line summary.
+
+- [x] First `git tag v0.0.1` so `git describe` yields a real version —
+      landed and pushed to `origin` 2026-09-28 (`git describe` now returns
+      `v0.0.1` instead of erroring with "No names found"). First real tag
+      on the repo, so this is also the first time CI's `bundle`/`publish`
+      steps will actually run against a real `git describe` version —
+      worth checking that run once it appears.
+- [x] doctest bumped `v2.4.11` -> `v2.5.3` (2026-09-30) — landed, but the
+      `CMAKE_POLICY_VERSION_MINIMUM=3.5` shim stays: lz4 `v1.9.4`
+      (`VB_WITH_COMPRESSION`) independently needs it too (`cmake_minimum_required
+      (VERSION 2.8.12)`), confirmed by actually removing the shim and watching
+      lz4's subbuild fail to configure under CMake >= 4. See
+      `remaining_tasks/phase0.md` for the full note.

@@ -728,7 +728,7 @@
       again on `nullopt`, hud `state` persists independent of a modal
       screen's open/close cycle, disabled-build stub no-ops cleanly).
 - [x] HUD widgets wired to `report_click`/`report_change`/`report_list_change`
-      — landed 2026-09-27. See "Current status" in `STATE.md` for the write-up.
+      — landed 2026-09-27. See `STATE.md` history (`state/changelog-*.md`) for the write-up.
 - [x] Player list / chat log / hotbar migrated off hardcoded C++ into
       `ui.define_hud` — landed 2026-09-27. New `WidgetType::kText` (`inc/vb/
       script/ui_runtime.hpp`) is a raw, colored, alignable text draw —
@@ -1327,3 +1327,82 @@ half of its own original scope.
       `InputCmd`-pumped ticks to an actual kill, confirming
       `cause == "zombie"`), clean `-Werror` build.
 
+---
+
+### Moved from `REMAINING_TASKS.md`'s core (dream, 2026-10-06)
+
+> Verbatim text of the core file's "Remaining" list for this section at the
+> time of the move; the core now keeps a one-line summary.
+
+- [x] **6.22: fall damage** — landed 2026-09-27 as `net::ServerSession::
+      set_landed_hook(fn(NetId, impact_speed))`, firing once per player on
+      the tick a fall is arrested. `vb.on("player_landed", ...)` is the new
+      Lua event (opt-in, mechanism not policy); `content/base/
+      fall_damage.lua` is the reference policy (8 m/s safe threshold, 1 HP
+      per m/s above it).
+- [x] **PvP confirmed already real, not stale text** — checked 2026-09-28.
+      `ServerSession::punch()` already resolved player-vs-player hits and
+      `content/base/mechanics.lua` already dispatched them; what was
+      missing was proof, closed by a new `netcode_test.cpp` case driving 20
+      punches to a confirmed kill+respawn with `cause == "pvp"`.
+- [x] **Hunger primitive** — landed 2026-09-28. New `vb::ecs::Hunger`
+      component + `ServerSession::HungerParams` (decay/starvation rates,
+      both `0.0` by default), a new `"update_hunger"` `SystemRunner` phase,
+      and `vb.hunger.set_params{}`/`player:get_hunger()`/`add_hunger()`.
+      Server-side bookkeeping only, no client HUD/replication. Also fixed a
+      real pre-existing link-error gap: `effective_action_params()` (6.21)
+      had no `!VB_WITH_LUA` stub at all.
+- [x] **Mob damage** — landed 2026-09-28 as `content/base/entities/
+      zombie.lua`, a real hostile mob using existing damage primitives —
+      no new engine mechanism needed. **Found and worked around, not fixed,
+      a real engine bug while building this:** a `script::PlayerHandle`
+      stored across calls and read back from inside `vb.on("tick", ...)` or
+      an entity's own `on_tick` silently returns corrupted data (confirmed
+      with ASan) — see Cross-Cutting's own entry below for the full repro.
+      `zombie.lua` works around it by driving chase/attack from
+      `vb.on("player_input", ...)` instead, which always hands over a fresh
+      handle.
+- [x] Automatic despawn-on-health trigger for generic script entities —
+      landed 2026-09-25. Opt-in via `vb.register_entity{health=...}`;
+      `entity:damage()` now decrements real HP and auto-despawns at 0
+      instead of requiring the pack to track it and call `:remove()`.
+- [x] Client-side kind-specific rendering for script entities — landed
+      2026-09-25 (`EntityKind` id drives billboard width/height via
+      `S2C_EntityKindRegistry`, protocol 19). Real per-kind sprite art
+      landed the same day, see Phase 4's own entry.
+- [x] Per-connection rate limiting on custom-keybind events — closed
+      2026-09-27 as part of Phase 3's flood guard (same token bucket
+      already covers keybind bits riding inside `InputCmd`).
+- [x] Replicate block-damage *value* to nearby players — landed 2026-09-27.
+      `S2C_BlockDamage` (protocol 25) fans out every live punch-count
+      change; `client.break_progress()` (6.16) now reports a real fraction
+      instead of always `nullopt`, with a default darkening crack overlay.
+- [x] Real crack-stage texture art + `crack_texture` override — landed
+      2026-09-27, closing 6.5 in full (protocol **25 -> 26**). New
+      `vb::render::CrackAtlas`/`CrackOverlay` replace the flat overlay with
+      real per-stage texture art. Also fixed a real pre-existing bug: three
+      `BlockRegistryRecord` call sites were silently dropping `max_damage`
+      on every hop, so `break_progress()` was permanently `nullopt`.
+- [x] Movement/action key bindings extended into the 6.3 keybind registry
+      (6.19) — movement/primary/secondary are pre-registered by every
+      `PackRuntime`, so a pack reads them like any custom keybind.
+      Physical-key rebinding is Phase 5.3's separate keybindings screen.
+- [x] HUD widgets wired to `report_click`/`report_change`/`report_list_change`
+      — landed 2026-09-27.
+- [x] Player list / chat log / hotbar migrated off hardcoded C++ into
+      `ui.define_hud` — landed 2026-09-27. New `WidgetType::kText` (colored,
+      alignable) plus 6 new `client.*` read-only accessors; the chat input
+      box itself deliberately stays a plain `GuiTextBox`, never a widget.
+- [x] No punch-rate cooldown enforced engine-side — landed 2026-09-28 as
+      `PunchParams::punch_cooldown_seconds` (default `0.0`, opt-in). A whiff
+      arms the next cooldown just like a landed hit. Still open: no swing
+      animation, no PvP armor/knockback.
+- [x] Held item / hotbar selection — landed 2026-09-25, closing 6.20's own
+      gap. Protocol **21 -> 22**: `InputCmd` gains `u8 selected_slot`.
+      `player:get_selected_slot()`/`get_held_item()` let placing read what's
+      actually in hand instead of an infinite hardcoded stone dispenser.
+- [x] **6.21:** block-edit reach and punch reach unified into one
+      pack-overridable `net::ActionParams::reach`, replacing
+      `WorldReplicator`'s old hardcoded constant. New
+      `vb.action.set_params{reach=}`/`get_params()` and
+      `vb.physics.get_params()` (its own namespace, not `vb.combat`).

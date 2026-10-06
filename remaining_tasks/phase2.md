@@ -222,3 +222,25 @@ compression (`VB_WITH_COMPRESSION`). Greedy merge (Cellulose,
 (2026-09-17); the mesh worker pool itself shipped (2026-09-15) with the
 hand-rolled per-face mesher.
 
+---
+
+### Moved from `REMAINING_TASKS.md`'s core (dream, 2026-10-06)
+
+> Verbatim text of the core file's "Remaining" list for this section at the
+> time of the move; the core now keeps a one-line summary.
+
+- [x] Horizontal cross-chunk light propagation — landed 2026-09-28, closing
+      this phase's last remaining item. `LightEngine::Neighbours`
+      (`inc/vb/world/lighting.hpp`) extends `relight_chunk`/`relight_column`
+      from vertical-only to all 4 horizontal neighbours, plus a `push`
+      parameter that reactively relights an already-stable neighbour when a
+      live edit opens a gap near a border (bounded to one hop by light's
+      0-15 range vs. 32-block chunk width). Block light still doesn't cross
+      chunk borders (only sky light does) — deliberately out of scope.
+- [x] Frustum culling + transparent second pass — landed 2026-09-27. New
+      header-only `inc/vb/render/frustum.hpp` (`build_frustum`/
+      `aabb_in_frustum`) culls chunks provably outside the camera's 6-plane
+      frustum before any draw call; `ChunkRenderer` now uploads separate
+      opaque/transparent `GpuMesh` slots per chunk (`split_transparent()`)
+      and draws transparent geometry in a back-to-front sorted second pass
+      with depth-mask disabled.

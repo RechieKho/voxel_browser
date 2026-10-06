@@ -335,8 +335,8 @@
       `ARCHITECTURE_SPEC.md` §18 row 5 for the writeup.
       `--singleplayer`'s in-process integrated server (`src/client/main.cpp`)
       was **not** wired to a `RegionStore` at all when this phase first
-      landed -- closed 2026-09-28 as its own follow-up, see `STATE.md`'s
-      "Current status" for the full writeup (`Singleplayer` now owns a
+      landed -- closed 2026-09-28 as its own follow-up, see `STATE.md`\'s
+      history (`state/changelog-*.md`) for the full writeup (`Singleplayer` now owns a
       `RegionStore` under a fixed `world_singleplayer/` directory, no
       `client.toml` toggle to disable it yet). A corrupt/unreadable
       region file is logged (`VB_WARN`) and treated as "chunk never saved"
@@ -353,3 +353,56 @@
       with no client ever connecting: confirmed no `world/` directory is
       created at all when nothing was ever edited (matches the "only persist
       edits" design, not a missed case).
+
+---
+
+### Moved from `REMAINING_TASKS.md`'s core (dream, 2026-10-06)
+
+> Verbatim text of the core file's "Remaining" list for this section at the
+> time of the move; the core now keeps a one-line summary.
+
+- [x] **7.1 — Engine-side loading screen with progress.** Landed 2026-09-22:
+      a new `AppState::kLoading`, entered right after a successful join and
+      left once the initial view-box of chunks has streamed in (or an
+      8-second deadline elapses). Stage 1 is a generic progress bar with no
+      data dependency; stage 2 overlays operator-level branding (motd text
+      only, no color knob) once `server.toml` config arrives. Not
+      Lua-driven — this covers the window before any pack content is even
+      guaranteed loaded.
+- [x] **7.2 — Distance fog, adjustable from Lua.** Landed 2026-09-22: a real
+      GLSL fog shader in `ChunkRenderer`, fog color always derived from the
+      current sky color (never independently Lua-settable), only start/end
+      distance is pack-overridable (`vb.render.set_fog{start=,end=}`,
+      protocol 16, `S2CFogParams`).
+- [x] **7.3 — Walkable liquid blocks: collision, underwater rendering,
+      generic region hook.** Landed 2026-09-23. Collision needed no change.
+      Underwater uses the same fog mechanism at a tighter distance. Two
+      same-day follow-up fixes: a pre-existing face-culling bug made
+      submerged terrain invisible (fixed by culling liquid neighbours only
+      against liquid current voxels), and water's alpha was bumped back to
+      opaque once that terrain started actually rendering. New
+      `BlockType::region` flag + `ServerSession::update_region_occupancy()`
+      fires `vb.on("region_enter"/"region_exit", ...)` on a single-point
+      crossing test — no flowing-liquid physics, out of scope per user
+      instruction.
+- [x] **7.4 — Wire `content/base`'s UI screens to a real trigger.** Landed
+      2026-09-23. Root cause was one level deeper than a keybind: nothing
+      mapped a *physical key* to a pack-registered custom keybind name. New
+      `kCustomKeybinds` hardcoded default table (Escape/E) plus
+      `content/base/keybinds.lua` opening pause/inventory on the rising edge.
+- [x] **7.5 — Underwater fog tint defaults to the liquid block's own color,
+      overridable from Lua.** Supersedes 7.2/7.3's "fog color never
+      independently settable" decision for the underwater case only.
+      Default (2026-09-23): real average pixel color of the liquid's synced
+      texture. Override (2026-09-27): `vb.render.set_fog{underwater_tint=
+      {r=,g=,b=}}`, protocol **23 -> 24**.
+- [x] **7.6 — World persistence: chunks survive a server restart.** Landed
+      2026-09-25, favoring flat per-region files over LMDB (reversing an
+      earlier direction note). New `vb::world::RegionStore` groups chunks
+      into one file per 16x16-chunk X/Z region; only *edited* chunks are
+      ever persisted (`Chunk::revision() == 0` means "regenerate is
+      equivalent"). Three new `server.toml` keys
+      (`persist_world`/`world_dir`/`autosave_interval_seconds`).
+      LZ4/zstd region-file framing and `--singleplayer`'s own `RegionStore`
+      wiring were both deliberately deferred, then closed 2026-09-28 (see
+      Cross-Cutting).

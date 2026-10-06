@@ -9,6 +9,9 @@
 > `architecture_spec/<topic>.md`, linked from each section below. Read this
 > file for the actionable rules and current status; open a linked file only
 > when you need the full reference behind a section.
+>
+> **Hard cap: 500 lines.** Over that, "dream": move inactive detail into
+> `architecture_spec/*.md` — see `DREAMING.md`.
 
 ---
 

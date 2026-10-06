@@ -8,6 +8,9 @@
 > own `remaining_tasks/phaseN.md`, linked from each phase section below. Read
 > this file for current status and what's actually left; open the linked file
 > only when you need the historical detail behind a specific `[x]` line.
+>
+> **Hard cap: 500 lines.** Over that (or after closing a phase), "dream":
+> move inactive detail into `remaining_tasks/*.md` — see `DREAMING.md`.
 
 ## Current State (baseline)
 
@@ -33,18 +36,9 @@ modules, `VB_HEADLESS`, CI workflows, project renamed to `voxel_browser`.
 Full detail: `remaining_tasks/phase0.md`.
 
 **Remaining:**
-- [x] First `git tag v0.0.1` so `git describe` yields a real version —
-      landed and pushed to `origin` 2026-09-28 (`git describe` now returns
-      `v0.0.1` instead of erroring with "No names found"). First real tag
-      on the repo, so this is also the first time CI's `bundle`/`publish`
-      steps will actually run against a real `git describe` version —
-      worth checking that run once it appears.
-- [x] doctest bumped `v2.4.11` -> `v2.5.3` (2026-09-30) — landed, but the
-      `CMAKE_POLICY_VERSION_MINIMUM=3.5` shim stays: lz4 `v1.9.4`
-      (`VB_WITH_COMPRESSION`) independently needs it too (`cmake_minimum_required
-      (VERSION 2.8.12)`), confirmed by actually removing the shim and watching
-      lz4's subbuild fail to configure under CMake >= 4. See
-      `remaining_tasks/phase0.md` for the full note.
+- [x] `git tag v0.0.1` (2026-09-28); doctest bumped to v2.5.3 (2026-09-30).
+      The `CMAKE_POLICY_VERSION_MINIMUM=3.5` shim stays — lz4 v1.9.4 still
+      needs it. Detail: `remaining_tasks/phase0.md`.
 - [ ] Explicit source lists instead of relying on re-running CMake (already
       explicit; keep it that way as modules grow).
 
@@ -61,34 +55,11 @@ end-to-end; verified with two live processes over real UDP.
 Full detail: `remaining_tasks/phase1.md`.
 
 **Remaining:**
-- [x] Surface `ENGINE_PROTOCOL_VERSION` mismatch in the client connect UI —
-      already fully wired by the time this was checked (2026-09-28), no code
-      change needed: `ClientHandshake::on_frame` (`src/net/handshake.cpp`)
-      fails with `"engine protocol version mismatch"` both when the client's
-      own check trips (`info->engine_protocol_version != kEngineProtocolVersion`)
-      and when a server-side rejection frame (`kProtocolMismatch`) arrives;
-      `src/client/main.cpp`'s `kConnecting` case (`client->failed() ?
-      client->failure_reason() : ...`) already routes that string into
-      `error_message` and `AppState::kError`, which `MainMenu::draw_error()`
-      (`src/render/main_menu.cpp`) renders as a real raygui label with a
-      "Back to menu" button — the Phase 5.3 main-menu error path this item
-      said it was waiting on has existed since that phase landed. Covered by
-      the existing `net_test.cpp` case "client rejects a protocol version
-      mismatch". This item's own text was stale, tracking a gap that closed
-      as a side effect of unrelated work rather than being picked up as its
-      own task.
-- [x] macOS CI now builds `VB_WITH_NET` — landed 2026-09-30 as a new
-      `build_net_deps` job in `build_macos.yml`: builds protobuf v21.12 and
-      OpenSSL 3.3.2 once per arch (arm64 native, x86_64 cross), `lipo`-merges
-      the resulting static libs into one universal install prefix, uploads
-      it as an artifact the `build` matrix downloads and feeds to
-      `-DCMAKE_PREFIX_PATH`/`-DOPENSSL_ROOT_DIR`. **Not yet verified by a
-      real GitHub Actions run** — this agent environment has no macOS
-      runner; see `STATE.md`'s "Current status" for the full reasoning and
-      what to check if the first real run fails.
-- [x] The two-client replication test runs over `LoopbackTransport` only;
-      re-run over `GnsTransport` — see "Current status" in `STATE.md` for
-      the full writeup (landed 2026-09-28).
+- [x] Protocol-version mismatch shown in the connect UI (already wired,
+      confirmed 2026-09-28); two-client replication re-run over
+      `GnsTransport` (2026-09-28).
+- [x] macOS CI builds `VB_WITH_NET` (2026-09-30, `build_net_deps` job in
+      `build_macos.yml`) — **not yet verified by a real Actions run**.
 
 ---
 
@@ -104,21 +75,9 @@ meshing is permanent).
 Full detail: `remaining_tasks/phase2.md`.
 
 **Remaining:**
-- [x] Horizontal cross-chunk light propagation — landed 2026-09-28, closing
-      this phase's last remaining item. `LightEngine::Neighbours`
-      (`inc/vb/world/lighting.hpp`) extends `relight_chunk`/`relight_column`
-      from vertical-only to all 4 horizontal neighbours, plus a `push`
-      parameter that reactively relights an already-stable neighbour when a
-      live edit opens a gap near a border (bounded to one hop by light's
-      0-15 range vs. 32-block chunk width). Block light still doesn't cross
-      chunk borders (only sky light does) — deliberately out of scope.
-- [x] Frustum culling + transparent second pass — landed 2026-09-27. New
-      header-only `inc/vb/render/frustum.hpp` (`build_frustum`/
-      `aabb_in_frustum`) culls chunks provably outside the camera's 6-plane
-      frustum before any draw call; `ChunkRenderer` now uploads separate
-      opaque/transparent `GpuMesh` slots per chunk (`split_transparent()`)
-      and draws transparent geometry in a back-to-front sorted second pass
-      with depth-mask disabled.
+- [x] Horizontal cross-chunk sky-light propagation (2026-09-28; block light
+      still doesn't cross chunk borders — deliberately out of scope);
+      frustum culling + sorted transparent pass (2026-09-27).
 
 ---
 
@@ -135,42 +94,9 @@ eyeballed live.
 Full detail: `remaining_tasks/phase3.md`.
 
 **Remaining:**
-- [x] System runner with explicit ordering (§7.2) — `vb::ecs::SystemRunner`
-      (2026-09-25); script entities (Phase 6.1) are now real registry
-      entities, giving it a genuine second consumer besides players. See
-      `remaining_tasks/phase3.md`.
-- [x] Client-side lightweight registry (2026-09-25) — `ClientSession`'s
-      remote-entity interpolation bookkeeping now lives in a real
-      `entt::registry` (`ecs::InterpBuffer`/`ecs::EntityKind`), not the old
-      ad hoc `RemoteSample` struct. See `remaining_tasks/phase3.md`.
-- [x] Per-player rate limit / flood guard — landed 2026-09-27 as
-      `ServerSession::set_max_messages_per_second(double)` /
-      `ServerConfig::max_messages_per_second` (`server.toml`, default 0 =
-      unlimited). Token bucket per playing connection, one token per
-      post-join message of any type, checked in `system_network_io()`;
-      also closes Phase 6.3's custom-keybind-flood item (keybind bits ride
-      the same `InputCmd`, same bucket). Exposed read-only via
-      `vb.config.get("max_messages_per_second")`.
-- [x] Step-up jerk: physics is exact but visually abrupt — landed 2026-09-28.
-      New `vb::render::EyeHeightSmoother` (`inc/vb/render/camera.hpp`)
-      exponentially eases the *rendered* eye Y toward the true feet+eye
-      target over 0.12s instead of snapping — collision/physics untouched,
-      only the drawn camera Y is smoothed; a jump past 2.0m (teleport/
-      respawn) still snaps immediately.
-- [x] Wall-clock `server_time_est` + smoothing on the client — landed
-      2026-09-28. New `Transport::round_trip_time_seconds(ConnId)`
-      (`GnsTransport` overrides it with real ping) feeds
-      `vb::net::ServerTimeEstimator` (`inc/vb/net/server_time_estimator.hpp`);
-      `interpolated_pos()` now targets this continuously-advancing estimate
-      instead of the last received tick, fixing a real pre-existing bug
-      where interpolation froze solid between snapshot arrivals.
-- [x] `SpriteVisual`-equivalent client state (atlas handle, `facings`,
-      per-clip frame lists) for entity kinds — landed 2026-09-25 as Phase
-      4's `visual = {...}` item below (`EntityRenderer`'s `KindVisual`/
-      `EntityVisualLayout`, entity-management follow-up).
-- [x] Real billboard art (atlas, per-clip frames) — `base:player`/
-      `base:dropped_item` now ship real checked-in spritesheets, see Phase
-      4's own "Real base-pack art" entry, landed 2026-09-25.
+- [x] All done: `SystemRunner`, client-side registry, per-player flood guard
+      (`max_messages_per_second`), step-up camera smoothing, wall-clock
+      `server_time_est`, sprite visual state and real billboard art.
 
 ---
 
@@ -187,52 +113,13 @@ Phase 5.1.
 Full detail: `remaining_tasks/phase4.md`.
 
 **Remaining:**
-- [x] Custom `require` over the pack's own virtual module filesystem +
-      per-callback wall-clock budget — landed 2026-09-27. In-memory
-      `path -> source text` map built from a recursive walk of the pack's
-      `.lua` files (except `ui/*.lua`), installed via `Vm::install_require()`;
-      cycle detection, `package.loaded`-style caching. `VmLimits` gains a
-      250ms `wall_clock_budget_ms` checked from the existing instruction hook
-      (`kHookPeriod` 1000), classified to the existing `kBudgetExceeded`.
-- [x] `EntityKind` tick/spawn/hit/death callbacks wired into real systems —
-      landed 2026-09-27, now that `SystemRunner` (Phase 3.1) exists.
-      `ServerSession::set_script_tick_hook` is a new `"script_tick"`
-      `SystemRunner` phase, so a script-driven entity move now reaches that
-      same tick's `sync_interest`/`broadcast_snapshots` instead of one tick
-      late.
-- [x] `register_entity`'s `visual = {...}` sub-table (variant/facings/clips)
-      for 3.5's `entity_renderer` — landed 2026-09-25 (protocol **19 -> 20**).
-      Client-side `entity_visual_layout.hpp` computes per-clip layout,
-      validated against the real decoded PNG; a mismatch falls back to the
-      flat placeholder rather than failing pack load.
-- [x] Per-instance `ScriptState.visual_override` (skins) — landed 2026-09-25
-      (protocol **20 -> 21**). `vb.world.spawn(kind, pos, {visual_override=})`
-      merges independently-optional fields over the kind's own `visual`;
-      fixed at spawn time only — no live-update/clear path yet.
-- [x] Real base-pack art for `base:player`/`base:dropped_item` — landed
-      2026-09-25 via a new `vb.register_entity{represents="player"|
-      "item_drop"}` field. **Follow-up (2026-09-27):** front/side/back poses
-      were too similar to tell apart; `base:player` swapped to debug-styled
-      F/R/B/L art plus a new `visual = {mirror = false}` option for a
-      distinct pose per facing (protocol 22 -> 23) — also fixed a real
-      pre-existing bug where a facings=4 kind was picking its pose with
-      hardcoded facings=8 sector math.
-- [x] Real texture/atlas system landed 2026-09-23: `vb.register_block{
-      texture=...}` -> `S2C_BlockRegistry` -> per-session `TextureAtlas` ->
-      real per-face UVs. Proved on `base:stone`/`base:water` only — a full
-      base-pack reskin (dirt/grass/sand/wood/leaves) is a separate follow-up.
-- [x] Manifest staleness: a pack writing `vb.storage` *after* startup used
-      to go stale for the server process's life — landed 2026-09-28. New
-      `PackRuntime::storage_revision()` counter, polled once/sec by
-      `src/server/main.cpp` to rebuild + atomically swap the asset manifest
-      via a new `ManifestHolder`. `--singleplayer` is out of scope (never
-      builds a manifest).
-- [x] Item grid widget for `UiRuntime` — landed 2026-09-28. A new generic
-      `icon` `WidgetType` draws one registered block/item id's real atlas
-      texture; `content/base/ui/inventory.lua` composes a real item grid out
-      of it plus `rect`/`text`.
-- [ ] `--singleplayer`'s registry-wiring gap is closed (Phase 5.1); no
-      remaining item here.
+- [x] All done: custom `require` + wall-clock budget, `EntityKind` callbacks
+      in `SystemRunner`, `visual = {...}` and per-instance `visual_override`
+      (spawn-time only — no live update/clear path), real base-pack art, the
+      texture atlas, manifest staleness fix (not for `--singleplayer`), and the
+      `icon` item-grid widget.
+- [ ] Follow-up: full base-pack reskin (dirt/grass/sand/wood/leaves) — only
+      `base:stone`/`base:water` use real textures so far.
 
 ---
 
@@ -248,31 +135,9 @@ platforms has not been run by a human yet.
 Full detail: `remaining_tasks/phase5.md`.
 
 **Remaining:**
-- [x] Player + dropped-item billboard sprite atlases (§11.3/3.5) — landed
-      2026-09-25, see Phase 4's "Real base-pack art" entry.
-- [x] Cross-chunk relight on edit (breaking a floor lets light into the chunk
-      below) — confirmed already closed 2026-09-28, no code change needed;
-      `WorldReplicator::apply_block_edit()` has called the cross-chunk
-      `relight_column` cascade (Phase 2) on every real edit since that
-      pass landed. New end-to-end regression test proves it, not just
-      re-reading the code. `relight_chunk()` still recomputes from scratch
-      each time (deliberate perf characteristic, not a gap).
-- [x] Per-block hardness/tool break-time variation — landed 2026-09-28.
-      `ServerSession::punch()`/`player:punch()` gained an optional
-      `block_damage` parameter (default 1); per-block hardness already
-      existed (`BlockType::max_damage`, 6.5) — this is the matching "tool"
-      half, a pack-side decision with no tool concept in the engine itself.
-- [x] Keybindings screen (5.3 Settings) — a new Settings -> Keybindings
-      raygui screen (`MainMenu::draw_keybindings`) lets a player rebind any
-      of the 6 `MovementBindings` axes to a physical key, persisted to
-      `client.toml`, applied live. Distinct from Phase 6.19's
-      `vb.register_keybind` name registry — the two compose.
-- [x] Connect-screen byte-progress bar — landed 2026-09-28 (was status-text
-      only). `ClientAssetCache::sync_total_bytes()`/`sync_received_bytes()`
-      derive real progress from the existing transfer map;
-      `MainMenu::draw_connecting()` draws a real `GuiProgressBar` once a
-      fraction is known. Phase 7.1's loading-screen entry named this as a
-      likely shared prerequisite — now closed.
+- [x] Done: sprite atlases, cross-chunk relight on edit, per-block tool
+      break time (`block_damage`), keybindings screen, connect-screen byte
+      progress bar.
 - [ ] Live two-window manual playtest (chat + crafting + seeing each other,
       all at once, across all 3 platforms) — not yet run.
 
@@ -301,78 +166,14 @@ surface (6.21 — `vb.action.set_params{reach=}`/`get_params()` and
 Full detail: `remaining_tasks/phase6.md`.
 
 **Remaining:**
-- [x] **6.22: fall damage** — landed 2026-09-27 as `net::ServerSession::
-      set_landed_hook(fn(NetId, impact_speed))`, firing once per player on
-      the tick a fall is arrested. `vb.on("player_landed", ...)` is the new
-      Lua event (opt-in, mechanism not policy); `content/base/
-      fall_damage.lua` is the reference policy (8 m/s safe threshold, 1 HP
-      per m/s above it).
-- [x] **PvP confirmed already real, not stale text** — checked 2026-09-28.
-      `ServerSession::punch()` already resolved player-vs-player hits and
-      `content/base/mechanics.lua` already dispatched them; what was
-      missing was proof, closed by a new `netcode_test.cpp` case driving 20
-      punches to a confirmed kill+respawn with `cause == "pvp"`.
-- [x] **Hunger primitive** — landed 2026-09-28. New `vb::ecs::Hunger`
-      component + `ServerSession::HungerParams` (decay/starvation rates,
-      both `0.0` by default), a new `"update_hunger"` `SystemRunner` phase,
-      and `vb.hunger.set_params{}`/`player:get_hunger()`/`add_hunger()`.
-      Server-side bookkeeping only, no client HUD/replication. Also fixed a
-      real pre-existing link-error gap: `effective_action_params()` (6.21)
-      had no `!VB_WITH_LUA` stub at all.
-- [x] **Mob damage** — landed 2026-09-28 as `content/base/entities/
-      zombie.lua`, a real hostile mob using existing damage primitives —
-      no new engine mechanism needed. **Found and worked around, not fixed,
-      a real engine bug while building this:** a `script::PlayerHandle`
-      stored across calls and read back from inside `vb.on("tick", ...)` or
-      an entity's own `on_tick` silently returns corrupted data (confirmed
-      with ASan) — see Cross-Cutting's own entry below for the full repro.
-      `zombie.lua` works around it by driving chase/attack from
-      `vb.on("player_input", ...)` instead, which always hands over a fresh
-      handle.
-- [x] Automatic despawn-on-health trigger for generic script entities —
-      landed 2026-09-25. Opt-in via `vb.register_entity{health=...}`;
-      `entity:damage()` now decrements real HP and auto-despawns at 0
-      instead of requiring the pack to track it and call `:remove()`.
-- [x] Client-side kind-specific rendering for script entities — landed
-      2026-09-25 (`EntityKind` id drives billboard width/height via
-      `S2C_EntityKindRegistry`, protocol 19). Real per-kind sprite art
-      landed the same day, see Phase 4's own entry.
-- [x] Per-connection rate limiting on custom-keybind events — closed
-      2026-09-27 as part of Phase 3's flood guard (same token bucket
-      already covers keybind bits riding inside `InputCmd`).
-- [x] Replicate block-damage *value* to nearby players — landed 2026-09-27.
-      `S2C_BlockDamage` (protocol 25) fans out every live punch-count
-      change; `client.break_progress()` (6.16) now reports a real fraction
-      instead of always `nullopt`, with a default darkening crack overlay.
-- [x] Real crack-stage texture art + `crack_texture` override — landed
-      2026-09-27, closing 6.5 in full (protocol **25 -> 26**). New
-      `vb::render::CrackAtlas`/`CrackOverlay` replace the flat overlay with
-      real per-stage texture art. Also fixed a real pre-existing bug: three
-      `BlockRegistryRecord` call sites were silently dropping `max_damage`
-      on every hop, so `break_progress()` was permanently `nullopt`.
-- [x] Movement/action key bindings extended into the 6.3 keybind registry
-      (6.19) — movement/primary/secondary are pre-registered by every
-      `PackRuntime`, so a pack reads them like any custom keybind.
-      Physical-key rebinding is Phase 5.3's separate keybindings screen.
-- [x] HUD widgets wired to `report_click`/`report_change`/`report_list_change`
-      — landed 2026-09-27.
-- [x] Player list / chat log / hotbar migrated off hardcoded C++ into
-      `ui.define_hud` — landed 2026-09-27. New `WidgetType::kText` (colored,
-      alignable) plus 6 new `client.*` read-only accessors; the chat input
-      box itself deliberately stays a plain `GuiTextBox`, never a widget.
-- [x] No punch-rate cooldown enforced engine-side — landed 2026-09-28 as
-      `PunchParams::punch_cooldown_seconds` (default `0.0`, opt-in). A whiff
-      arms the next cooldown just like a landed hit. Still open: no swing
-      animation, no PvP armor/knockback.
-- [x] Held item / hotbar selection — landed 2026-09-25, closing 6.20's own
-      gap. Protocol **21 -> 22**: `InputCmd` gains `u8 selected_slot`.
-      `player:get_selected_slot()`/`get_held_item()` let placing read what's
-      actually in hand instead of an infinite hardcoded stone dispenser.
-- [x] **6.21:** block-edit reach and punch reach unified into one
-      pack-overridable `net::ActionParams::reach`, replacing
-      `WorldReplicator`'s old hardcoded constant. New
-      `vb.action.set_params{reach=}`/`get_params()` and
-      `vb.physics.get_params()` (its own namespace, not `vb.combat`).
+- [x] Done since 6.21: fall damage (6.22, `player_landed`), PvP confirmed,
+      hunger primitive (server-side only, no HUD/replication), zombie mob,
+      health-based despawn, kind-specific rendering, keybind rate limit,
+      replicated block damage + crack textures, movement keybinds in the
+      registry (6.19), HUD click/change reporting, player list/chat/hotbar
+      moved to `ui.define_hud`, opt-in punch cooldown, held item / hotbar
+      selection, unified reach (6.21).
+- [ ] Still open: no swing animation, no PvP armor/knockback.
 
 ---
 
@@ -386,51 +187,12 @@ Full detail: `remaining_tasks/phase6.md`.
 > this yet" comments).
 Full detail: `remaining_tasks/phase7.md`.
 
-- [x] **7.1 — Engine-side loading screen with progress.** Landed 2026-09-22:
-      a new `AppState::kLoading`, entered right after a successful join and
-      left once the initial view-box of chunks has streamed in (or an
-      8-second deadline elapses). Stage 1 is a generic progress bar with no
-      data dependency; stage 2 overlays operator-level branding (motd text
-      only, no color knob) once `server.toml` config arrives. Not
-      Lua-driven — this covers the window before any pack content is even
-      guaranteed loaded.
-- [x] **7.2 — Distance fog, adjustable from Lua.** Landed 2026-09-22: a real
-      GLSL fog shader in `ChunkRenderer`, fog color always derived from the
-      current sky color (never independently Lua-settable), only start/end
-      distance is pack-overridable (`vb.render.set_fog{start=,end=}`,
-      protocol 16, `S2CFogParams`).
-- [x] **7.3 — Walkable liquid blocks: collision, underwater rendering,
-      generic region hook.** Landed 2026-09-23. Collision needed no change.
-      Underwater uses the same fog mechanism at a tighter distance. Two
-      same-day follow-up fixes: a pre-existing face-culling bug made
-      submerged terrain invisible (fixed by culling liquid neighbours only
-      against liquid current voxels), and water's alpha was bumped back to
-      opaque once that terrain started actually rendering. New
-      `BlockType::region` flag + `ServerSession::update_region_occupancy()`
-      fires `vb.on("region_enter"/"region_exit", ...)` on a single-point
-      crossing test — no flowing-liquid physics, out of scope per user
-      instruction.
-- [x] **7.4 — Wire `content/base`'s UI screens to a real trigger.** Landed
-      2026-09-23. Root cause was one level deeper than a keybind: nothing
-      mapped a *physical key* to a pack-registered custom keybind name. New
-      `kCustomKeybinds` hardcoded default table (Escape/E) plus
-      `content/base/keybinds.lua` opening pause/inventory on the rising edge.
-- [x] **7.5 — Underwater fog tint defaults to the liquid block's own color,
-      overridable from Lua.** Supersedes 7.2/7.3's "fog color never
-      independently settable" decision for the underwater case only.
-      Default (2026-09-23): real average pixel color of the liquid's synced
-      texture. Override (2026-09-27): `vb.render.set_fog{underwater_tint=
-      {r=,g=,b=}}`, protocol **23 -> 24**.
-- [x] **7.6 — World persistence: chunks survive a server restart.** Landed
-      2026-09-25, favoring flat per-region files over LMDB (reversing an
-      earlier direction note). New `vb::world::RegionStore` groups chunks
-      into one file per 16x16-chunk X/Z region; only *edited* chunks are
-      ever persisted (`Chunk::revision() == 0` means "regenerate is
-      equivalent"). Three new `server.toml` keys
-      (`persist_world`/`world_dir`/`autosave_interval_seconds`).
-      LZ4/zstd region-file framing and `--singleplayer`'s own `RegionStore`
-      wiring were both deliberately deferred, then closed 2026-09-28 (see
-      Cross-Cutting).
+- [x] 7.1 loading screen · 7.2 Lua-adjustable distance fog · 7.3 walkable
+      liquids, underwater fog and `region_enter`/`region_exit` (no
+      flowing-liquid physics — out of scope) · 7.4 base UI screens on
+      Escape/E · 7.5 underwater fog tint (liquid colour by default,
+      `underwater_tint` override) · 7.6 region-file persistence
+      (`RegionStore`; LZ4 framing and singleplayer wiring closed 2026-09-28).
 
 ---
 
@@ -465,188 +227,27 @@ surface and per-phase task lists: `architecture_spec/dev-cli.md` §11.
 
 ---
 
-## Phase 9 — In-Engine Authentication (`auth.lua`) — planned (2026-10-05)
+## Phase 9 — In-Engine Authentication (`auth.lua`) ✅ 9.0–9.9 done (2026-10-06)
 
 User-requested: a pack-level `auth.lua` declares the identity provider
 (generic OIDC, Keycloak, Firebase); its **presence makes authentication
-mandatory**. The engine signs the player in and verifies the ID token
-server-side during the handshake, before any asset/registry/chunk is sent.
-Pack scripts read verified login data via `player:get_login()`, which is
-`nil` exactly when the server isn't authenticating. Supersedes the
-2026-09-17 §18 Q6 "engine owns no auth concept" direction. Full design,
-protocol changes, security notes and per-step task lists:
-`architecture_spec/auth.md` §12.
+mandatory**, and the server verifies the ID token during the handshake before
+sending anything. Design: `architecture_spec/auth.md` §12; operator guide:
+`docs/auth.md`; Keycloak testing plan: `docs/auth-keycloak-testing.md`.
+Full detail: `remaining_tasks/phase9.md`.
 
-- [x] **9.0 — Decision & docs** (spec §17/§18, networking diagram) — done 2026-10-05.
-- [x] **9.1 — `auth.lua` loading & fail-closed startup** — done 2026-10-05:
-      `vb::auth::load_auth_lua` (`src/auth/`, new `vb_auth` lib; sandboxed
-      return-a-table VM with tight budgets, full validation, oidc/keycloak/
-      firebase presets), `server.toml [auth]` overrides, pack loader +
-      asset manifest skip root `auth.lua`, `VB_WITH_AUTH` option (refuse to
-      start without it), dev-only `--insecure-skip-auth` (compiled out under
-      `VB_DISTRIBUTION`), `content/base/auth.lua.example`. **Interim
-      fail-closed rule:** until the verifier exists
-      (`vb::auth::kVerifierAvailable`, flip it in 9.3) a server whose pack has
-      a valid `auth.lua` logs the redacted config and refuses to start unless
-      `--insecure-skip-auth`; singleplayer likewise skips such a pack until
-      9.7. Tests: `tests/unit/auth_config_test.cpp` plus manifest/loader/
-      config cases. `VB_WITH_AUTH` currently only gates this check (Mbed TLS
-      + curl arrive with 9.3).
-- [x] **9.2 — Protocol v29 + handshake plumbing** — done 2026-10-05
-      (v28 was already taken by `S2C_PlayerStatus`, so this is **v29**):
-      `AuthMode::kExternal`, `S2C_AuthChallenge`, `S2C_AuthResult.resolved_name`,
-      `C2S_Auth.token` 16 KiB cap, `S2C_ReauthRequest`/`C2S_Reauth` wire format
-      (used in 9.6), `ByteReader::string(max_len)`. Server FSM `kVerifyingAuth`
-      with `HandshakeServerHost::auth_challenge` / `begin_authenticate` →
-      `AuthTicket` polled each tick (`ServerHandshake::poll_auth`), per-state
-      `timeout_seconds()` (`auth_timeout_seconds`, default 300, age reset once
-      sign-in finishes), fail-closed when no challenge/verifier. Client FSM
-      `kAwaitingChallenge` + `HandshakeClientHost::obtain_token` (synchronous
-      until 9.5). Tests: protocol round-trip/bounds/truncation, FSM cases with
-      a fake verifier in `net_test.cpp`. **Not yet wired:** `server/main.cpp`
-      still never sets `auth_mode = kExternal` (9.3 supplies the real verifier);
-      a full loopback ServerSession join with the fake verifier is not
-      covered, only the FSMs.
-- [x] **9.3 — Server token verification** — done 2026-10-05: `VB_WITH_AUTH`
-      now pulls libcurl (hoisted from the CLI block) and **Mbed TLS 3.6.2**
-      (`vb_fetch`). `vb_auth` gains `jwt` (base64url, compact JWS),
-      `crypto` (RS256 ≥2048-bit / ES256 P-256 verify, SHA-256, OS entropy,
-      test-only `TestSigner`), `jwks` (RSA n/e + EC x/y, skips unusable keys),
-      `http` (`HttpFetcher` + curl impl, https/loopback only, 1 MiB cap),
-      `verifier` (`verify_id_token`, rules 1–7, `LoginInfo`, coarse
-      `public_reason`) and `service` (`AuthService`: OIDC discovery with
-      issuer check, JWKS prefetch thread with backoff, one in-flight fetch,
-      ≥60 s unknown-`kid` refresh limit, pollable `Pending` verification,
-      Firebase preset). `kVerifierAvailable = kBuiltWithAuth`; the server
-      now starts on an auth pack (`auth_mode = kExternal`, challenge nonce per
-      connection, ticket → verdict → pack join veto with the resolved name).
-      Tests (`auth_verifier_test.cpp`): every rule has pass + fail cases,
-      JWKS cache/refresh/rate-limit via a fake fetcher, mutation fuzz,
-      redaction. ~~Not verified: a real Keycloak token~~ — verified in 9.9
-      (Keycloak 26.7.5, 2026-10-06); libFuzzer targets (a deterministic mutation test stands in).
-      **Known gap until 9.4:** the verified `LoginInfo` is not yet kept on the
-      session, so `get_login()` and duplicate-subject handling don't exist yet.
-- [x] **9.4 — Lua exposure** — done 2026-10-05: `net::LoginData` (user data
-      only), `AuthOutcome::login`, FSM `finish_external_auth` →
-      `HandshakeServerHost::resolve_name` (session suffixes collisions:
-      `alex`/`alex#2`) → `join_veto` (the pack's `player_join(name, login)`,
-      frozen login table or `nil`). `ServerSession::player_login`,
-      duplicate `(issuer, subject)` kicks the older session right after the
-      newcomer verifies, `SessionPlayerJoined::login`. `PackRuntime`:
-      `player:get_login()` (frozen proxy, locked metatable, cached per
-      player, kept until after `player_leave` so every `Player` has a login),
-      `vb.auth.required()`, `set_auth_required()`. `docs/lua-api.md`
-      "Authentication". Tests: `tests/unit/auth_login_test.cpp` (loopback
-      server+clients with a fake verifier: frozen/non-nil login, plain pack ⇒
-      nil, rejected token ⇒ never joins, veto on claims, name suffixing,
-      duplicate kick). **Moved to 9.5:** `state.login` in the client UI VM
-      (the client only learns its own subject once it holds the token), and
-      a base-pack example script (the `lua-api.md` snippet covers it).
-- [x] **9.5 — Client sign-in** — done 2026-10-05 (UI compile-checked, not
-      run against a real IdP): `vb_auth` gains `oidc_client` (discovery with
-      issuer check, PKCE S256 per RFC 7636 incl. its test vector,
-      authorization URL, code exchange/refresh, redirect parsing with `state`
-      check, 127.0.0.1-only one-shot `LoopbackListener`, `oidc_browser_sign_in`,
-      shell-less `open_system_browser` for Linux/macOS/Windows), `firebase`
-      (Identity Toolkit password sign-in + refresh, coarse error mapping),
-      `SignInTask` (worker thread), `SignInCoordinator` (UI-facing state,
-      retryable failures, cancel) and `read_token_file`. `HttpFetcher::post`.
-      Handshake: `ClientHandshakeStatus::kSigningIn`, `TokenTicket` /
-      `HandshakeClientHost::begin_sign_in`, `ClientHandshake::poll()` /
-      `cancel_sign_in()`, `ClientSession::set_sign_in_provider()`.
-      Client: engine-drawn `MainMenu::draw_signing_in` (browser button,
-      firebase e-mail + masked password, provider host shown, Cancel),
-      connect deadline held off while signing in, `--auth-token-file`
-      (automation builds only, re-read per sign-in). Tests:
-      `auth_signin_test.cpp` (PKCE vector, URL, redirect/state, code exchange,
-      full browser flow over a real loopback socket incl. stray requests,
-      denial/timeout/cancel, Firebase, coordinator retry, token file).
-      **Not done / moved:** Firebase `google` sign-in (needs a Google OAuth
-      client id that `auth.lua`'s firebase preset has no key for; the screen
-      only offers `password`); `state.login` in the client UI VM; manual
-      sign-in against real Keycloak/Firebase on Linux/macOS/Windows; Windows
-      socket/ShellExecute code is written but unbuilt.
-- [x] **9.6 — Sessions, re-auth & revocation** — done 2026-10-05
-      (client UI compile-checked, not run against a real IdP).
-      Server: `ServerSession::system_reauth` — per-player jittered (±10%)
-      `S2C_ReauthRequest{nonce, grace}` every `reauth_interval_seconds`,
-      answer verified through the same verifier (`C2S_Reauth`, only accepted
-      for an outstanding request), same `(issuer, subject)` required (else
-      immediate kick), `iat ≥ request_sent − 60 s` (so a stale token can't
-      answer), kick with `kAuthFailed "sign-in expired or revoked"` when the
-      grace runs out, new `LoginData::issued_at/expires_at`,
-      `HandshakeServerConfig::reauth_*`, `HandshakeServerHost::unix_time`.
-      Changed allowlisted claims swap the login and fire
-      `vb.on("login_changed", function(player, login))` once
-      (`SessionLoginChanged`, `PackRuntime::dispatch_login_changed`). Client:
-      `SessionStore` (refresh tokens per `(issuer, client_id)` in
-      `user_config_dir()/auth/<sha256>.json`, created 0600, atomic write; trust
-      list per `(server, issuer)`), `SignInCoordinator` — first-use trust
-      prompt (nothing, not even a cached refresh token, goes to the IdP before
-      it), silent refresh at join, silent answer to re-auth requests, otherwise
-      a non-blocking "Your sign-in expired — Sign in again" banner + overlay
-      (browser/password, bound to the request nonce), dead refresh tokens are
-      forgotten; `ClientSession::set_reauth_provider`; main-menu "Signed in as
-      … / Sign out" (top-right). Tests: 6 server re-auth cases in
-      `auth_login_test.cpp` (success ×2 rounds, claim change fires once,
-      revoked ⇒ kicked after grace, stale iat, different subject, disabled),
-      store/trust/silent/dead-token/re-auth in `auth_signin_test.cpp`.
-      ~~Not verified: a real Keycloak admin logout kicking within interval +
-      grace~~ — verified in 9.9 against Keycloak 26.7.5 (admin logout, disabled
-      user, idle session, key and refresh-token rotation; `advance_reauth`
-      drives the re-auth timers).
-- [x] **9.7 — Singleplayer, `vb`, e2e** — done 2026-10-05 (client UI
-      compile-checked; e2e run result below).
-      Singleplayer with an auth pack now runs the real sign-in through the same
-      handshake (`vb::auth::install_external_auth` / `apply_external_auth` are
-      shared with the dedicated server; the integrated server ticks in real
-      time while the sign-in screen is up); `--insecure-skip-auth` on the
-      client for dev (compiled out under `VB_DISTRIBUTION`). `vb server config
-      <name> set auth.issuer|client_id|project_id|api_key` edits the `[auth]`
-      table (root keys are now always inserted above the first table). e2e:
-      `tests/e2e/vbtest/mock_idp.py` (stdlib OIDC provider: discovery, JWKS,
-      auth endpoint → loopback redirect, PKCE-checking token endpoint,
-      refresh grant; pure-Python RS256 with the test-only key in
-      `tests/e2e/fixtures/`), `tests/e2e/test_auth.py` (token-file join under
-      the verified name, login visible to pack scripts, 6 bad-token classes
-      never join, missing token / no auth support fail closed, duplicate
-      account kicks the older session, `alex`/`alex#2`, the browser flow with
-      PKCE over a real loopback redirect (headless client writes the
-      authorization URL to `VB_AUTH_URL_FILE`; automation builds only),
-      revoked login kicked after the grace), automation predicate
-      `player_login` + `players[].login` on the server.
-- [x] **9.8 — Hardening** — done 2026-10-05: per-IP sign-in rate limit
-      (`ServerSession::set_max_auth_attempts_per_minute_per_ip`, default 30/min,
-      tested with a fixed-IP transport decorator), single in-flight JWKS fetch
-      + backoff (9.3), security-table row, operator guide `docs/auth.md`.
-      **Not done:** libFuzzer targets (a deterministic mutation test covers
-      JWT/JWKS/verifier; the protocol decoders have truncation tests), OS
-      keychain storage for refresh tokens (0600 files today), Firebase
-      `google` sign-in (needs a Google OAuth client id key in `auth.lua`),
-      manual Keycloak/Firebase runs on Linux/macOS/Windows, Windows build of
-      the socket/ShellExecute code.
-- [x] **9.9 — Auth testing against a mock Keycloak** — done 2026-10-06
-      (plan, decisions and deviations: `docs/auth-keycloak-testing.md`).
-      `vbtest/mock_keycloak.py` is a stdlib Keycloak emulator (users, SSO
-      sessions, Keycloak claims and error bodies, RS256/ES256, key rotation,
-      login form, fault injection, request log), self-tested without game
-      binaries and **checked against a real Keycloak** (`--vb-idp=keycloak`,
-      `test_mock_keycloak_matches_real.py`, CI `auth_keycloak.yml`: auth PRs +
-      weekly canary); running the same `test_auth_keycloak.py` against Keycloak
-      26.7.5 closed the "not verified against a real Keycloak" gaps of 9.3/9.6.
-      Engine: **rule 1b** (`typ == "ID"` for the keycloak preset, `at+jwt`
-      refused everywhere, `VerifyError::kTokenType`), an IdP outage no longer
-      erases the stored refresh token or raises the banner at once (retryable
-      failures are retried every 5 s while the re-auth request is open),
-      automation `advance_reauth`, client `auth` snapshot + predicate, headless
-      singleplayer waits for a test-played sign-in, `re-auth ok` server log
-      line. Golden fixtures for C++ unit cases (`tests/unit/fixtures/keycloak/`,
-      `auth_keycloak_test.cpp`, `auth_keycloak_client_test.cpp`). Found against
-      real Keycloak: no `groups` claim for ungrouped users, `invalid_client` for a
-      bad client id, the ID token's `aud` stays the plain client id under an
-      audience mapper. **Not done:** first-use trust prompt at e2e level (a
-      headless client trusts automatically, and raygui cannot be clicked; the
-      unit test stands), Windows/macOS runs.
+- [x] 9.0–9.9: `auth.lua` loading + fail-closed startup, protocol v29
+      handshake, server JWT/JWKS verification (Mbed TLS + curl), Lua
+      `player:get_login()`, client sign-in (OIDC browser + PKCE, Firebase
+      password), re-auth / revocation + `SessionStore`, singleplayer / `vb` /
+      e2e, hardening (per-IP sign-in rate limit), mock-Keycloak testing
+      checked against real Keycloak 26.7.5.
+- [ ] Still open from 9.x: libFuzzer targets (a deterministic mutation test
+      stands in); OS keychain for refresh tokens (0600 files today); Firebase
+      `google` sign-in (needs a Google OAuth client id key in `auth.lua`);
+      `state.login` in the client UI VM; first-use trust prompt at e2e level;
+      manual sign-in runs and builds on Windows/macOS (socket/ShellExecute
+      code is unbuilt).
 
 ---
 
@@ -654,62 +255,24 @@ protocol changes, security notes and per-step task lists:
 
 Full detail: `remaining_tasks/cross_cutting.md`.
 
-- [~] **End-to-end multiplayer automation (dev-only)** — design in
-      `docs/e2e-automation.md`; phases E0–E6 below it. E0 (input seam) and
-      E1 (`ClientApp`) and E2 (flags, stdio host, predicate engine) E2b (handshake `client_flags`, protocol v27) E3 (client actions + server admin commands) E4 (pytest harness, `e2e` CTest/CI job) E5 (`--net-sim`, windowed clients, screenshots, trace viewer) and E6 (TCP attach, session recorder) have landed (all phases); still open: the CI job has never run on a runner, and Windows/macOS are unbuilt; the rest is open. Must stay compiled out of production builds
-      (`VB_WITH_AUTOMATION`, `VB_DISTRIBUTION`). Doc-upkeep checklist per phase:
-      `docs/e2e-automation.md` §11.
-
-- [x] **`script::PlayerHandle` stashed across ticks returning/crashing on
-      corrupted data** (found 2026-09-28 building
-      `content/base/entities/zombie.lua`, root-caused and fixed 2026-09-30).
-      Real cause: sol2 pushes a non-const lvalue reference to a registered
-      usertype as a raw pointer into the caller's own C++ stack frame, not a
-      copy, unless `SOL_FUNCTION_CALL_VALUE_SEMANTICS` is defined on — every
-      `PlayerHandle` dispatch call site constructs a named local and passes
-      it straight into the Lua call, so a pack script that stores that
-      argument beyond the call (a global, table field, upvalue — storage
-      location never mattered) holds a dangling stack pointer the instant a
-      *different* C++ call path reuses that address. Fixed by defining
-      `SOL_FUNCTION_CALL_VALUE_SEMANTICS=1` on the `sol2` target
-      (`cmake/Dependencies.cmake`) — `PlayerHandle` is the only usertype this
-      project registers and is a stateless proxy, so forcing copy semantics
-      is free. Full root-cause writeup, the empirical pointer-identity proof,
-      and verification detail in `remaining_tasks/cross_cutting.md`.
+- [~] **End-to-end multiplayer automation (dev-only)** — all phases E0–E6
+      landed (design `docs/e2e-automation.md`). Still open: the CI `e2e` job
+      has never run on a runner; Windows/macOS are unbuilt. Must stay
+      compiled out of production builds (`VB_WITH_AUTOMATION`,
+      `VB_DISTRIBUTION`). Doc-upkeep checklist: `docs/e2e-automation.md` §11.
+- [x] `PlayerHandle` stored across ticks read corrupted data — fixed
+      2026-09-30 with `SOL_FUNCTION_CALL_VALUE_SEMANTICS=1` on the `sol2`
+      target; don't remove that define.
 - [ ] Keep `ENGINE_PROTOCOL_VERSION` + `docs/protocol.md` in lockstep with every
       wire change.
 - [ ] Every new `vb/protocol` struct gets a round-trip + fuzz test.
-- [x] Sanitizer (ASan/UBSan) debug CI job; TSan job for the threaded
-      subsystems — landed 2026-09-28 on the Linux matrix only (MSVC has no
-      UBSan/TSan support; macOS CI doesn't build `VB_WITH_NET` yet). Not
-      verified by an actual GitHub Actions run — this agent environment
-      can't trigger one.
+- [x] Sanitizer CI jobs (ASan/UBSan, TSan; Linux only, never verified by a
+      real Actions run), soak test (`soak_test.cpp`), perf budget checks
+      (`perf_budget_test.cpp`; frame time left out — needs a GL context).
 - [ ] Determinism golden-value CI gate stays green across platforms.
-- [x] Soak test target (N simulated clients, random walk + edits) — landed
-      2026-09-28 as `tests/unit/soak_test.cpp`, folded into the normal
-      `vb_tests` run. 4 simulated clients over `LoopbackNetwork`
-      random-walk + break/place-edit for 150 ticks; asserts connection/edit-
-      queue/loaded-chunk counts all stay bounded rather than growing, and
-      that everything cleans up to 0 after disconnect. Deliberately kept
-      small (real fBm terrain generation dominates cost far more than the
-      sim logic being soaked).
-- [x] Perf budget checks: chunk mesh time, snapshot size — landed 2026-09-28
-      as `tests/unit/perf_budget_test.cpp`. Chunk mesh time asserts
-      `< 100ms` (measured ~21ms); snapshot size asserts a per-entity byte
-      budget (measured ~52 bytes/entity vs. a 90-byte budget). Frame time
-      deliberately left out — needs a live GL context this environment
-      doesn't have.
 - [ ] `--headless` stays functional for both binaries (CI + integration tests).
 - [ ] Address the remaining open item(s) in `ARCHITECTURE_SPEC.md` §18 as
-      their blocking phase arrives (renumbered from §19; every row is now
-      resolved or has a noted direction — Q4 chunk compression resolved
-      2026-09-28 (LZ4 wired generically into `frame_message()`, see that
-      row); Q5 persistence has region-file LZ4 framing resolved 2026-09-28
-      too (`RegionStore` format version 1 -> 2, see that row), and
-      `--singleplayer`'s `RegionStore` wiring is also now resolved
-      (2026-09-28, see "Current status" in `STATE.md`) — Q5 has no open sub-
-      item left; Q6 auth has a direction set but isn't implemented yet);
-      record decisions in that section.
+      their blocking phase arrives; record decisions in that section.
 
 ---
 

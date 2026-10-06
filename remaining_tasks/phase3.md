@@ -283,3 +283,46 @@ server-time estimation and the librg entity mapping (both need the real
 billboards are drawn and tested but haven't been eyeballed with two live
 players in one session yet.
 
+---
+
+### Moved from `REMAINING_TASKS.md`'s core (dream, 2026-10-06)
+
+> Verbatim text of the core file's "Remaining" list for this section at the
+> time of the move; the core now keeps a one-line summary.
+
+- [x] System runner with explicit ordering (§7.2) — `vb::ecs::SystemRunner`
+      (2026-09-25); script entities (Phase 6.1) are now real registry
+      entities, giving it a genuine second consumer besides players. See
+      `remaining_tasks/phase3.md`.
+- [x] Client-side lightweight registry (2026-09-25) — `ClientSession`'s
+      remote-entity interpolation bookkeeping now lives in a real
+      `entt::registry` (`ecs::InterpBuffer`/`ecs::EntityKind`), not the old
+      ad hoc `RemoteSample` struct. See `remaining_tasks/phase3.md`.
+- [x] Per-player rate limit / flood guard — landed 2026-09-27 as
+      `ServerSession::set_max_messages_per_second(double)` /
+      `ServerConfig::max_messages_per_second` (`server.toml`, default 0 =
+      unlimited). Token bucket per playing connection, one token per
+      post-join message of any type, checked in `system_network_io()`;
+      also closes Phase 6.3's custom-keybind-flood item (keybind bits ride
+      the same `InputCmd`, same bucket). Exposed read-only via
+      `vb.config.get("max_messages_per_second")`.
+- [x] Step-up jerk: physics is exact but visually abrupt — landed 2026-09-28.
+      New `vb::render::EyeHeightSmoother` (`inc/vb/render/camera.hpp`)
+      exponentially eases the *rendered* eye Y toward the true feet+eye
+      target over 0.12s instead of snapping — collision/physics untouched,
+      only the drawn camera Y is smoothed; a jump past 2.0m (teleport/
+      respawn) still snaps immediately.
+- [x] Wall-clock `server_time_est` + smoothing on the client — landed
+      2026-09-28. New `Transport::round_trip_time_seconds(ConnId)`
+      (`GnsTransport` overrides it with real ping) feeds
+      `vb::net::ServerTimeEstimator` (`inc/vb/net/server_time_estimator.hpp`);
+      `interpolated_pos()` now targets this continuously-advancing estimate
+      instead of the last received tick, fixing a real pre-existing bug
+      where interpolation froze solid between snapshot arrivals.
+- [x] `SpriteVisual`-equivalent client state (atlas handle, `facings`,
+      per-clip frame lists) for entity kinds — landed 2026-09-25 as Phase
+      4's `visual = {...}` item below (`EntityRenderer`'s `KindVisual`/
+      `EntityVisualLayout`, entity-management follow-up).
+- [x] Real billboard art (atlas, per-clip frames) — `base:player`/
+      `base:dropped_item` now ship real checked-in spritesheets, see Phase
+      4's own "Real base-pack art" entry, landed 2026-09-25.
