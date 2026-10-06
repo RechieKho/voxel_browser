@@ -630,7 +630,7 @@ protocol changes, security notes and per-step task lists:
       fault injection, admin logout/disable), self-test it, add C++ unit cases
       on Keycloak-shaped fixtures, add e2e sign-in / revocation / IdP-failure
       scenarios, and check the emulator against a real Keycloak in docker
-      (opt-in, nightly). Closes the "not verified against real Keycloak" and
+      (opt-in: auth PRs + weekly canary). Closes the "not verified against real Keycloak" and
       "admin logout kicks within interval + grace" gaps above. Phases K0–K6,
       tasks and open questions: `docs/auth-keycloak-testing.md`.
 

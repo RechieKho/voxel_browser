@@ -223,12 +223,15 @@ Keycloak; tests that need `mint()` or fault injection are marked `mock_only`.
 - [ ] **K4.1 Migrate fixtures.** `idp` and `auth_server` move to `conftest.py`; `auth_lua()`
       gains `alg`, `claims=("email","groups","realm_access")`, `audience` params.
       `test_auth.py` switches to the new admin method names.
-- [ ] **K4.2 Test-only re-auth floor.** The engine's 60 s minimum interval makes revocation
-      tests slow (≥ 70 s each). Add a server flag `--auth-test-min-reauth-seconds <n>` that
-      lowers the floor, **compiled only under `VB_WITH_AUTOMATION`** and refused under
-      `VB_DISTRIBUTION`, mirroring `--auth-token-file`. Cover the "refused in distribution"
-      side in `tests/unit/auth_config_test.cpp`. (Decision needed — §6 Q2. Without it, the
-      revocation tests below are all `slow`.)
+- [ ] **K4.2 Fast-forward re-auth (automation command).** Add a server automation command
+      `advance_reauth {seconds, player?}` that subtracts `seconds` from the player's re-auth
+      timer and, while a request is outstanding, from its grace countdown. The next tick then
+      runs the normal `system_reauth` path. The command lives in
+      `src/server/automation_endpoint.hpp`, so it is compiled out of distribution builds like
+      every other automation command. The `reauth_interval_seconds` floor in `auth.lua`
+      (60 s) is not touched. Keep exactly one wall-clock test (the existing
+      `test_revoked_login_is_kicked_after_the_grace_period`, marked `slow`) so the real timer
+      and jitter are still covered. See §6 Q2 for why this beats lowering the floor.
 - [ ] **K4.3 Sign-in scenarios**
 
   | Test | Setup | Expect |
@@ -243,7 +246,7 @@ Keycloak; tests that need `mint()` or fault injection are marked `mock_only`.
   | `first_use_trust_prompt` | fresh data dir, non-token-file client | nothing reaches the IdP until the trust prompt is accepted (assert empty request log, then accept through automation, then `/auth`) |
   | `redirect_uri_mismatch` | client registered with another pattern | IdP 400 page; client times out sign-in cleanly; no join |
 
-- [ ] **K4.4 Session & revocation scenarios** (use K4.2; else marked `slow`)
+- [ ] **K4.4 Session & revocation scenarios** (driven by `advance_reauth`, K4.2)
 
   | Test | Action mid-session | Expect |
   |---|---|---|
@@ -271,7 +274,7 @@ Keycloak; tests that need `mint()` or fault injection are marked `mock_only`.
 - [ ] **K4.6 Singleplayer.** Integrated server with an auth pack and the emulator: browser
       flow joins; `--insecure-skip-auth` gives `get_login() == nil`.
 
-*Run:* `$E2E -m "auth and not slow"` (target: under 3 min with K4.2) and `$E2E -m auth`
+*Run:* `$E2E -m "auth and not slow"` (target: under 3 min, using `advance_reauth`) and `$E2E -m auth`
 for the full set.
 
 ## K5 — Conformance against real Keycloak (M/L, opt-in)
@@ -311,32 +314,131 @@ Proves the emulator is honest and closes "not verified against a real Keycloak t
       everything. Upload `idp.requests.jsonl` with the existing failure artefacts.
 - [ ] **K6.2 Emulator self-tests everywhere.** K2 needs no binaries: add a cheap step to the
       lint workflow (`python3 -m pytest tests/e2e/test_mock_keycloak.py`).
-- [ ] **K6.3 Nightly real-Keycloak job.** New workflow `auth_keycloak.yml`
-      (`schedule` + `workflow_dispatch`, not on every PR): build the e2e config, start
-      Keycloak as a job `services:` container, run K5.3 + K5.4. Failure opens nothing
-      automatically; the run is the record.
+- [ ] **K6.3 Real-Keycloak workflow.** New workflow `auth_keycloak.yml` that builds the e2e
+      config, starts the **pinned** Keycloak image as a job `services:` container and runs
+      K5.3 + K5.4. Triggers: pull requests that touch `src/auth/**`, `inc/vb/auth/**`,
+      `src/net/session.cpp`, `tests/e2e/vbtest/*idp*`/`*keycloak*`, `tests/e2e/fixtures/**`
+      or the workflow itself; `workflow_dispatch`; and a weekly canary that runs the same
+      tests against Keycloak's newest release tag instead of the pinned one. The PR job
+      starts non-required and becomes a required check after ~2 weeks without a flake.
+      The canary opens or updates one tracking issue when it fails. See §6 Q3.
 - [ ] **K6.4 Docs.** `tests/e2e/README.md` "Authentication tests" section: the emulator, the
       markers, `--vb-idp`, how to run against docker Keycloak. `docs/auth.md` §7 points here.
-      `architecture_spec/auth.md` §10 "Manual: real Keycloak" becomes "nightly K5 job;
-      Firebase still manual".
+      `architecture_spec/auth.md` §10 "Manual: real Keycloak" becomes "K5 workflow (auth PRs +
+      weekly canary); Firebase still manual".
 - [ ] **K6.5 Bookkeeping.** Tick the closed "not verified" lines in `REMAINING_TASKS.md`
       9.3/9.6/9.8 and move the detail into `remaining_tasks/` per the file's convention.
 
-## 6. Open questions (decide before the task that needs it)
+## 6. Decisions and their trade-offs
 
-1. **`typ` claim (K3.3).** Keycloak puts `typ: "ID"` in ID tokens and `typ: "Bearer"` in
-   access tokens, both signed with the same key and `aud` can overlap. Reject a token whose
-   `typ` is present and not `ID`? Recommended: yes for the `keycloak` preset only (generic
-   OIDC IdPs don't set it). This is an engine change, so it gets its own commit with a
-   verifier rule and a unit test.
-2. **Test-only re-auth floor (K4.2).** Recommended: add it (automation builds only). The
-   alternative is ~10 tests at ≥ 70 s each, which pushes the e2e job past its 75-minute
-   timeout under ASan.
-3. **Docker in CI (K6.3).** GitHub's Ubuntu runners have docker; the plan keeps it to a
-   nightly job so a Keycloak image pull never blocks a PR.
-4. **Back-channel logout** stays out of scope (`architecture_spec/auth.md` §13 Q4); if it
-   lands later, the emulator gets a `backchannel_logout_uri` POST in K1.9 and K4.4 gets an
-   "instant kick" row.
+Each decision is needed before the task named in its heading. The options are listed with
+what they cost and what they buy; the recommendation comes last.
+
+### Q1. Check the `typ` claim? (engine change; blocks K3.3)
+
+**The problem.** The verifier (`src/auth/verifier.cpp`) checks `alg`, `kid`, the signature,
+`iss`, `aud`, `azp`, time and `nonce`, but not what *kind* of token it got. Keycloak signs
+three kinds of JWT with the realm key: ID tokens (`typ: "ID"`), access tokens
+(`typ: "Bearer"`) and logout tokens (`typ: "Logout"`); refresh tokens are `typ: "Refresh"` but
+HMAC-signed, so the `alg` allowlist already rejects them. By default a Keycloak access token
+has `aud: "account"` and fails our audience check, which is why this hasn't mattered. But
+`docs/auth.md` §2 and the K5.1 realm both suggest an **audience mapper**, and once a mapper
+adds `vb-e2e` to `aud`, an access token passes every rule we have: same issuer, same key,
+`azp` equals our client, fresh `iat`.
+
+Why that matters: access tokens are shared more widely than ID tokens. A pack's own web
+service, a bot or a resource server may receive the player's access token. Anything that
+holds one could present it as a login during its lifetime (5 min by default, up to
+`max_token_age_seconds`). The server nonce does not stop this on the refresh path (rule 6
+can't apply there), and some Keycloak versions also copy `nonce` into access tokens.
+
+| Option | Security | Compatibility risk | Cost |
+|---|---|---|---|
+| A. Do nothing; rely on `aud` | Gap opens whenever an operator adds an audience mapper, which our own docs recommend | None | None |
+| B. `keycloak` preset: require `typ == "ID"` (reject if missing) | Closes the gap for Keycloak | Breaks if a Keycloak version stops sending `typ`. It has sent it for many years, and the K5 drift test would catch a change before release | ~15 lines + unit cases |
+| C. `keycloak` preset: reject `typ` only if present and not `ID` | Same as B for real Keycloak tokens. Weaker in theory: a token without `typ` passes | None | Same as B |
+| D. All presets: also reject JWS header `typ: "at+jwt"` (RFC 9068 access tokens) | Covers IdPs that follow RFC 9068 and mark access tokens this way | Very low: no IdP issues ID tokens with that header | ~5 lines |
+| E. Change the docs: tell operators not to add the audience mapper | Partial: depends on operators reading the docs | None | Docs only |
+
+Who could break: real players can't, because the engine client only ever sends the
+`id_token` from the token response. Only `--auth-token-file` users who paste an access
+token by mistake would see a change, and for them a clear rejection is the right outcome.
+
+**Recommendation: B + D.** Strict `typ == "ID"` for the `keycloak` preset, and reject
+`at+jwt` headers for every preset. Log the exact reason on the server; the player still sees
+the coarse "not accepted by this server". It lands as its own commit, rule 1b in
+`architecture_spec/auth.md` §5.3, with unit cases from K3.1's fixtures. If you'd rather not
+change the engine during a testing phase, fall back to **C now, B later**. Avoid A: the
+K4.3 `audience_array_and_azp` test would then show the gap without catching it.
+
+### Q2. How to test re-auth without waiting for real time (blocks K4.2/K4.4)
+
+**The problem.** `auth.lua` requires `reauth_interval_seconds ≥ 60` and
+`reauth_grace_seconds ≥ 10`. A revocation test therefore waits interval ± 10% jitter +
+grace, about 70–80 s; a "silent re-auth works twice" test waits ~130 s. K4.4/K4.5 add about
+nine such tests, so roughly **12–15 min**. The whole e2e suite is **one serial CTest entry
+with a 900 s timeout** (`tests/CMakeLists.txt:190`) that already runs every other e2e test
+under ASan. The extra time alone uses most of that budget.
+
+Useful fact from the code: re-auth timers are counted in **tick time**, not wall-clock time.
+`system_reauth(dt)` (`src/net/session.cpp:1737`) subtracts `dt` from `timer` and from
+`remaining`. Only the stale-`iat` check uses wall-clock time (`host_.unix_time()`).
+
+| Option | Suite time | How real the test is | Production risk | Flakiness | Cost |
+|---|---|---|---|---|---|
+| A. Keep 60 s; mark the tests `slow` and run them elsewhere (separate CTest entry, nightly) | Main suite unchanged; +12–15 min in the slow job | Full: real timers, real jitter | None | Low (long margins) | A second CTest entry and CI job. Revocation bugs are found a day late |
+| B. Test-only flag that lowers the floor (e.g. interval 3 s, grace 2 s) | ~5–10 s per test | Real timers, but at a scale where ASan slowness (verification, refresh, a tick stall) is a large share of the interval | Adds a branch to operator-facing config validation, compiled out of distribution builds. One more `#ifdef` path to keep correct | **High**: ±10% of 3 s is 0.3 s; a slow JWKS fetch or an ASan pause can miss the window | Small: flag + validation + one unit test |
+| C. Automation command `advance_reauth {seconds}` that moves the tick-time timers forward | ~2–5 s per test | Same `system_reauth` code path; only "time passing" is simulated | None for config. Lives in `automation_endpoint.hpp` with the other automation commands that distribution builds already exclude | **Low**: deterministic, no race against a short timer | Small: one command + docs row in `docs/automation-protocol.md` |
+| D. Run e2e tests in parallel (pytest-xdist) | Wall time ÷ cores | Full | None | Medium: more processes under ASan on a 4-core runner, UDP port and CPU contention | Adds the harness's first dependency besides pytest; every test must be isolation-safe |
+| E. Fake the whole server clock (unix time and ticks) | Fast | Lowest: tokens minted by the IdP at real time look stale/future to a skewed server unless the mock follows the same clock | None | Medium | Large: clock plumbing through the server and the mock |
+
+C doesn't test that the timer fires on its own, or the jitter. One slow wall-clock test
+covers that; it already exists (`test_revoked_login_is_kicked_after_the_grace_period`).
+
+**Recommendation: C, plus one slow wall-clock test.** This replaces the floor flag (B)
+that the first draft of this plan recommended. B looks simpler, but it trades waiting for
+races: a 3 s interval under ASan is exactly the kind of timing test that fails 1 run in 50.
+It also changes validation of operator-facing config, which C leaves alone. Revisit A (a
+separate `e2e-slow` entry) only if the suite approaches the 900 s budget anyway (K0.2
+measures this).
+
+### Q3. When to run tests against real Keycloak (blocks K6.3)
+
+**The problem.** K5 needs docker, an image pull of several hundred MB, and 20–40 s for Keycloak to
+start and import the realm. Image pulls can fail for reasons that have nothing to do with
+the change (registry outage, rate limit). The point of K5 is to catch the mock drifting
+from real Keycloak, and a pinned image only changes when someone bumps the pin.
+
+That last point matters: with a pinned image, a nightly run re-tests code that only
+changed through PRs. It finds drift no sooner than a PR job would, just later and further
+from the change that caused it.
+
+| Option | Finds an engine/mock regression | Finds a new Keycloak release breaking us | Blocks PRs on infra trouble | CI cost | Who acts on failure |
+|---|---|---|---|---|---|
+| A. Every PR, required | Immediately | No (pinned) | **Yes**: an image-pull failure blocks unrelated merges | Every PR pays ~3–5 min + pull | PR author |
+| B. Nightly only (first draft) | Up to 24 h late, on main, author no longer in context | No (pinned) | No | Low | **Nobody by default.** A red nightly with no owner gets ignored |
+| C. PRs that touch auth paths, non-required at first, required once stable | Immediately, on the PRs that can cause it | No (pinned) | Only auth PRs, and only once required | Low: most PRs don't touch auth | PR author |
+| D. Weekly canary against Keycloak's **latest** release | No | **Yes**, before we bump the pin | No | Low | Tracking issue the canary opens |
+| E. Manual only (`workflow_dispatch`) | Only if someone remembers | Only if someone remembers | No | Lowest | Whoever runs it |
+
+Path filters have a known gap: a change outside the listed paths can still break auth
+(protocol code in `src/protocol/handshake.cpp`, a shared HTTP change). The default e2e job
+still runs the full mock suite on every PR, so the remaining risk is only "the mock and
+real Keycloak disagree in a way this PR exposes", which is narrow.
+
+**Recommendation: C + D, plus `workflow_dispatch`.** The path-filtered PR job is
+non-required for ~2 weeks, then required once it has run without a flake. The weekly
+canary runs against the latest Keycloak and keeps one tracking issue open/updated when it
+fails, so there is always a place to look. Pin bumps go through C because they touch the
+workflow file. Mitigate pull failures by caching the image (`docker save` into
+`actions/cache` keyed by the pinned digest) and by treating a failed pull as an
+infrastructure error in the job summary, not a test failure. This replaces the
+nightly-only plan from the first draft.
+
+### Q4. Back-channel logout (no decision needed now)
+
+Stays out of scope (`architecture_spec/auth.md` §13 Q4). If it lands later, the emulator
+gets a `backchannel_logout_uri` POST in K1.9 and K4.4 gets an "instant kick" row.
 
 ## 7. Baseline timings (filled by K0.2)
 
