@@ -251,6 +251,36 @@ Full detail: `remaining_tasks/phase9.md`.
 
 ---
 
+## Phase 10 — Developer Experience (pack authors & agents) — planned (2026-10-06)
+
+User-requested: make writing a content pack easy for people and agents —
+`npm init`-style scaffolding, a quick-reference for the Lua API with examples,
+editor type stubs, and markdown/JSON CLI docs agents can read. Single source of
+truth: hand-written LuaCATS stubs in `sdk/lua/`, with the reference generated
+from them and a runtime test that fails on undocumented bindings. Full design,
+layout, command surface and per-phase task lists:
+`architecture_spec/dev-experience.md` §5.
+
+- [ ] **10.A — API inventory + drift test**: walk the live `vb`/`ui` tables and
+      usertypes in a unit test, compare with `sdk/lua/api_index.txt`.
+- [ ] **10.B — LuaCATS stubs** for the server VM, UI VM, data scripts and
+      `auth.lua`, one example per function; `.luarc.json`; LuaLS check in CI.
+- [ ] **10.C — Generated quick reference**: `scripts/gen_lua_docs.py` →
+      `docs/lua-reference/` + one-line-per-function cheat sheet, `--check` in
+      CI, doc examples syntax-checked.
+- [ ] **10.D — Headless pack validation**: `voxel_browser_server --check-pack
+      <dir> [--json]` (`file:line` diagnostics) + `vb pack check`.
+- [ ] **10.E — Scaffolding**: `vb pack new`/`vb init` from templates embedded in
+      `vb` (README, AGENTS.md, `.luarc.json`, stubs), `vb pack types/info/dev`.
+- [ ] **10.F — CLI reference & agent docs**: richer command table → `vb help
+      <cmd>`, generated `docs/cli.md`, `vb help --json`; uniform
+      `error:`/`hint:`/`--json`/`--yes` contract; root `AGENTS.md`, `docs/llms.txt`.
+      Independent of B–E.
+- [ ] **10.G — Ship it**: `sdk/` and `docs/` in the release archive, `vb docs`,
+      README "Make your first pack", CONTRIBUTING "adding a binding".
+
+---
+
 ## Cross-Cutting / Continuous
 
 Full detail: `remaining_tasks/cross_cutting.md`.

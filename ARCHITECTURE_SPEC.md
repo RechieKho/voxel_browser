@@ -279,6 +279,11 @@ state-machine detail: see the scripting doc.
 Full API tables, the block-break-event-flow walkthrough, and the complete
 block-damage design: `architecture_spec/scripting.md`.
 
+**Planned (Phase 10):** `sdk/lua/` LuaCATS stubs become the source of truth
+for the Lua API surface (a unit test checks them against the live tables);
+the quick reference and pack scaffolding are generated from them —
+`architecture_spec/dev-experience.md`.
+
 ---
 
 ## 10. Rendering (Client)
