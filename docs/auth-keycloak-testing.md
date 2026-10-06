@@ -1,6 +1,6 @@
 # Testing authentication against a mock Keycloak — phased plan
 
-> Status: **planned (2026-10-06)**. Tracked as Phase 9.9 in `REMAINING_TASKS.md`.
+> Status: **planned (2026-10-06); decisions Q1–Q3 accepted 2026-10-06 (§6)**. Tracked as Phase 9.9 in `REMAINING_TASKS.md`.
 > Companion to `architecture_spec/auth.md` (design, §10 testing strategy) and
 > `docs/auth.md` (operator guide). Each task below is meant to be picked up on its own:
 > it lists the files it touches, what "done" means, and the command that proves it.
@@ -198,7 +198,7 @@ The unit suite should see the same bytes a real Keycloak sends, not hand-written
   - accept: real-shaped RS256 token; ES256 realm; `aud: ["vb-e2e","account"]` with
     `azp: "vb-e2e"`; refresh-derived token without `nonce`.
   - reject: `azp` set to another client; `aud` array without our client; `typ: "Bearer"`
-    access token offered as an ID token (decide: reject on `typ` if present — see §6 Q1);
+    access token offered as an ID token (rule from K3.4);
     token signed by a retired key after rotation; issuer with a trailing slash.
   - claims: `realm_access.roles` and full-path `groups` reach the allowlisted claims intact
     when listed in `claims`, and are dropped when not; a token with ~300 groups stays under
@@ -211,6 +211,14 @@ The unit suite should see the same bytes a real Keycloak sends, not hand-written
     token forgotten, user asked to sign in again; 5xx ⇒ retryable, token kept).
   - discovery: issuer mismatch, missing `jwks_uri`, `http://` non-loopback issuer ⇒ fail
     closed with a log line naming the cause.
+
+- [ ] **K3.4 Token-type rule (engine; decided §6 Q1).** In `src/auth/verifier.cpp` add
+      rule 1b: reject a JWS header `typ` of `at+jwt` (any case) for every preset, and for the
+      `keycloak` preset require the payload claim `typ == "ID"` (missing ⇒ reject). New
+      `VerifyError` value, exact cause in the server log, coarse reason to the player. Update
+      `architecture_spec/auth.md` §5.3 and `docs/auth.md` §4. Own commit, with accept/reject
+      cases built from the K3.1 fixtures (`typ: "Bearer"`, `"Logout"`, missing `typ`,
+      `at+jwt` header on an otherwise valid token).
 
 *Run:* `$UNIT -tc="*keycloak*"` and the full `ctest --test-dir build-e2e -R vb_tests`.
 
@@ -331,8 +339,9 @@ Proves the emulator is honest and closes "not verified against a real Keycloak t
 
 ## 6. Decisions and their trade-offs
 
-Each decision is needed before the task named in its heading. The options are listed with
-what they cost and what they buy; the recommendation comes last.
+**All three recommendations were accepted on 2026-10-06** (Q1: B + D; Q2: C plus one slow
+wall-clock test; Q3: C + D plus `workflow_dispatch`). The options and their costs stay
+below as the record of why.
 
 ### Q1. Check the `typ` claim? (engine change; blocks K3.3)
 
@@ -364,7 +373,7 @@ Who could break: real players can't, because the engine client only ever sends t
 `id_token` from the token response. Only `--auth-token-file` users who paste an access
 token by mistake would see a change, and for them a clear rejection is the right outcome.
 
-**Recommendation: B + D.** Strict `typ == "ID"` for the `keycloak` preset, and reject
+**Decided (2026-10-06): B + D.** Strict `typ == "ID"` for the `keycloak` preset, and reject
 `at+jwt` headers for every preset. Log the exact reason on the server; the player still sees
 the coarse "not accepted by this server". It lands as its own commit, rule 1b in
 `architecture_spec/auth.md` §5.3, with unit cases from K3.1's fixtures. If you'd rather not
@@ -395,7 +404,7 @@ Useful fact from the code: re-auth timers are counted in **tick time**, not wall
 C doesn't test that the timer fires on its own, or the jitter. One slow wall-clock test
 covers that; it already exists (`test_revoked_login_is_kicked_after_the_grace_period`).
 
-**Recommendation: C, plus one slow wall-clock test.** This replaces the floor flag (B)
+**Decided (2026-10-06): C, plus one slow wall-clock test.** This replaces the floor flag (B)
 that the first draft of this plan recommended. B looks simpler, but it trades waiting for
 races: a 3 s interval under ASan is exactly the kind of timing test that fails 1 run in 50.
 It also changes validation of operator-facing config, which C leaves alone. Revisit A (a
@@ -426,7 +435,7 @@ Path filters have a known gap: a change outside the listed paths can still break
 still runs the full mock suite on every PR, so the remaining risk is only "the mock and
 real Keycloak disagree in a way this PR exposes", which is narrow.
 
-**Recommendation: C + D, plus `workflow_dispatch`.** The path-filtered PR job is
+**Decided (2026-10-06): C + D, plus `workflow_dispatch`.** The path-filtered PR job is
 non-required for ~2 weeks, then required once it has run without a flake. The weekly
 canary runs against the latest Keycloak and keeps one tracking issue open/updated when it
 fails, so there is always a place to look. Pin bumps go through C because they touch the
@@ -437,7 +446,7 @@ nightly-only plan from the first draft.
 
 ### Q4. Back-channel logout (no decision needed now)
 
-Stays out of scope (`architecture_spec/auth.md` §13 Q4). If it lands later, the emulator
+Stays out of scope (`architecture_spec/auth.md` §13 item 7). If it lands later, the emulator
 gets a `backchannel_logout_uri` POST in K1.9 and K4.4 gets an "instant kick" row.
 
 ## 7. Baseline timings (filled by K0.2)

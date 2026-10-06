@@ -525,8 +525,20 @@ Decided 2026-10-05:
 3. **Revocation: yes**, via periodic live re-auth on by default
    (15 min + 2 min grace), with `login_changed` for claim updates (§5.6).
 
+Decided 2026-10-06 (Phase 9.9, `docs/auth-keycloak-testing.md` §6):
+
+4. **Token type check:** reject a JWS header `typ` of `at+jwt` for every
+   preset; the `keycloak` preset also requires the payload claim
+   `typ == "ID"`, so an access token with our client in `aud` can't be used
+   as a login (rule 1b in §5.3, lands with K3.4).
+5. **Re-auth in tests** is driven by an automation command
+   (`advance_reauth`) that advances the tick-time timers; the 60 s minimum
+   interval in `auth.lua` stays as it is.
+6. **Real Keycloak in CI:** pinned image on PRs touching auth paths, plus a
+   weekly canary against the latest Keycloak release.
+
 Still open:
 
-4. **Instant revocation** (Keycloak back-channel logout or token
+7. **Instant revocation** (Keycloak back-channel logout or token
    introspection). It needs an inbound HTTP endpoint or a confidential client
    secret on the server. Revisit if operators find interval + grace too slow.
