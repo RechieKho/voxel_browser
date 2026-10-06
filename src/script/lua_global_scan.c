@@ -7,12 +7,12 @@
  * else in the engine sees only the callback interface in global_scan.hpp. Lua 5.4. */
 #include <string.h>
 
-#include "lua.h"
 #include "lauxlib.h"
+#include "ldebug.h"
 #include "lobject.h"
 #include "lopcodes.h"
-#include "ldebug.h"
 #include "lstate.h"
+#include "lua.h"
 
 #if LUA_VERSION_NUM != 504
 #error "lua_global_scan.c is written against the Lua 5.4 bytecode"
