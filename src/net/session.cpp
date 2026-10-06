@@ -731,6 +731,21 @@ bool ServerSession::kick_player(core::NetId id, std::string_view reason) {
 	drop(conn, std::string(reason));
 	return true;
 }
+
+bool ServerSession::advance_reauth(core::NetId id, double seconds) {
+	const ConnId conn = conn_for_player(id);
+	if (conn == ConnId::kInvalid || seconds < 0.0) {
+		return false;
+	}
+	auto &c = conns_.at(conn);
+	if (!c.login) {
+		return false;
+	}
+	// Only the countdown in effect moves: a pending request's grace, else the timer.
+	// The reply still has to arrive in real time, so a slow IdP is not "fast-forwarded".
+	(c.reauth.pending ? c.reauth.remaining : c.reauth.timer) -= seconds;
+	return true;
+}
 #endif
 
 std::uint8_t ServerSession::selected_slot(core::NetId id) const {
@@ -1744,6 +1759,7 @@ void ServerSession::finish_reauth(ConnId conn, Conn &state, const AuthOutcome &o
 	fresh->name = old_login->name; // the in-game name is fixed for the session
 	const bool changed = fresh->claims_json != old_login->claims_json;
 	state.login = fresh;
+	VB_INFO("auth", "re-auth ok for '", fresh->name, "'", changed ? " (claims changed)" : "");
 	r.pending = false;
 	r.ticket = nullptr;
 	r.nonce.clear();

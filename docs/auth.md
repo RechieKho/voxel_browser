@@ -53,6 +53,8 @@ With the `vb` tool: `vb server config <name> set auth.issuer https://id.prod.exa
    port, RFC 8252). Advanced → *Proof Key for Code Exchange Code Challenge Method:* **S256**.
 4. Pick `name_claim` (`preferred_username` is the usual choice). For group-based logic add a
    *Group Membership* mapper (claim `groups`, *Add to ID token* ON) and list `"groups"` in `claims`.
+   Keycloak leaves the claim out entirely for a user who is in no group (and *Full group path*
+   decides between `admins` and `/admins`), so scripts should read it as `login.claims.groups or {}`.
 5. `issuer` is the realm URL, `https://<host>/realms/<realm>`.
 
 Revocation: *Sessions → Sign out* (or disabling the user) makes the IdP refuse the player's
@@ -82,7 +84,15 @@ disabling the account.
 Algorithm allowlist (RS256/ES256 only; `none`/`HS*` rejected), key by `kid` from the IdP's JWKS
 (one rate-limited refresh when an unknown `kid` shows up), signature, `iss`, `aud`/`azp`, `exp`
 (60 s skew), `iat` no older than `max_token_age_seconds`, the per-connection `nonce` when the token
-has one, a non-empty `sub`, and a usable name. Players are identified by `(issuer, subject)` —
+has one, a non-empty `sub`, and a usable name.
+
+It also checks **what kind of token** it was given. A JWS header `typ` of `at+jwt` (an RFC 9068
+access token) is refused for every provider preset, and for `provider = "keycloak"` the payload
+claim `typ` must be `"ID"`. Keycloak signs access tokens (`typ: "Bearer"`) and logout tokens with
+the same realm key; with an audience mapper an access token's `aud` contains your client id, so
+without this rule anything that holds a player's access token could present it as a login.
+Real players are unaffected (the client only ever sends the `id_token`); `--auth-token-file`
+users who paste an access token by mistake get a clear refusal in the server log. Players are identified by `(issuer, subject)` —
 **never by name**. Two accounts that want the same name get `alex` and `alex#2`; a second
 sign-in of the same account kicks the older session ("signed in elsewhere").
 
@@ -96,7 +106,10 @@ ID tokens cannot be revoked once issued; the IdP session behind them can. Every
 The client does this silently with its refresh token; if the IdP refuses (revoked, disabled,
 password changed), the player sees "Your sign-in expired — Sign in again" and the server kicks
 them when `reauth_grace_seconds` runs out. **Worst-case revocation latency = interval + grace**
-(default ≈ 17 minutes). Lower the interval if you need tighter revocation; instant push
+(default ≈ 17 minutes). An IdP *outage* is not a revocation: if Keycloak cannot be reached (or answers
+5xx) the client keeps its refresh token and retries every few seconds, and the player stays in as long
+as the IdP is back before the grace period ends; after that the server kicks (fail closed).
+Lower the interval if you need tighter revocation; instant push
 revocation (back-channel logout / introspection) is out of scope.
 
 Pack-side bans don't need this: a `player_join` veto keyed on `login.subject` keeps a banned
@@ -119,7 +132,11 @@ account out at the next join.
   distribution builds (`VB_DISTRIBUTION`).
 - `voxel_browser --auth-token-file <file>`: sign in with the ID token in that file (re-read for every
   sign-in and re-auth). Automation builds only.
-- `tests/e2e/test_auth.py` runs the whole thing against a mock IdP (`tests/e2e/vbtest/mock_idp.py`).
+- `tests/e2e/test_auth.py` (smoke) and `tests/e2e/test_auth_keycloak.py` run the whole thing against a
+  Keycloak emulator (`tests/e2e/vbtest/mock_keycloak.py`), and against a real Keycloak in docker with
+  `--vb-idp=keycloak` (CI: `.github/workflows/auth_keycloak.yml` on auth PRs, plus a weekly canary on
+  Keycloak's newest release). How it all fits together: `docs/auth-keycloak-testing.md`,
+  `tests/e2e/README.md` ("Authentication tests").
 
 ## 8. Operational notes
 

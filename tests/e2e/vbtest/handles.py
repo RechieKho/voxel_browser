@@ -44,6 +44,10 @@ class Server(_Base):
     def kick(self, player, reason="kicked by test"):
         return self.call("kick", player=_name(player), reason=reason)
 
+    def advance_reauth(self, player, seconds):
+        """Fast-forward the player's re-auth timer (or, once asked, its grace countdown)."""
+        return self.call("advance_reauth", player=_name(player), seconds=seconds)
+
     def run_lua(self, code):
         return self.call("run_lua", code=code)
 

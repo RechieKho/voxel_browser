@@ -19,12 +19,59 @@ def test_block_break_replicates(server, clients):
 
 ## Authentication tests
 
-`test_auth.py` runs a server whose pack ships an `auth.lua` pointing at `vbtest/mock_idp.py`, a
-stdlib-only OpenID Connect provider (discovery, JWKS, an authorization endpoint that redirects to
-the client's loopback `redirect_uri`, a PKCE-checking token endpoint). It signs RS256 tokens with
-the **test-only** key in `fixtures/idp_rsa.json`; never use that key for anything real. Clients sign
-in with `--auth-token-file`, or (browser flow) the test sets `VB_AUTH_URL_FILE` and plays the user's
-browser itself. One test waits ~70 s for the periodic re-auth (the engine's minimum interval is 60 s).
+Four files, one idea: a real server whose pack ships an `auth.lua`, real headless clients, and an
+identity provider behind the `IdpBackend` interface (`vbtest/idp.py`).
+
+| File | What | Needs |
+|---|---|---|
+| `test_auth.py` | the smoke suite: token-file sign-in, bad tokens, the browser flow, one wall-clock re-auth | emulator |
+| `test_auth_keycloak.py` | sign-in scenarios, revocation (admin logout, disabled user, idle session, key and refresh-token rotation), IdP outages and bad bodies, singleplayer | emulator, or real Keycloak for everything not `mock_only` |
+| `test_mock_keycloak.py` | self-tests of the emulator (crypto, protocol, faults); **no game binaries**, runs in seconds | nothing |
+| `test_mock_keycloak_matches_real.py` | emulator vs a real Keycloak: same discovery, JWKS, claims, error bodies | `--vb-idp=keycloak` |
+
+**The emulator** (`vbtest/mock_keycloak.py`, stdlib only) speaks Keycloak's URL layout, claims (`azp`,
+`typ`, `sid`, `realm_access.roles`, groups), error bodies, SSO sessions with idle/max lifespans,
+refresh-token rotation, RS256 and ES256 with key rotation, a login form, and fault injection
+(`idp.faults.latency/status/body/drop/discovery_issuer`). It signs with the **test-only** keys in
+`fixtures/` (`gen_keys.py` makes them); never use them for anything real. Every request it serves is in
+`idp.request_log()`, written to `idp.requests.jsonl` (and shown as a column in `trace.html`) when a test
+fails. It is checked against a real Keycloak by `test_mock_keycloak_matches_real.py`, so it cannot drift.
+
+**Markers:** `auth` (every auth test), `slow` (waits on a real clock: the 60 s re-auth interval, the
+60 s unknown-key refresh limit), `mock_only` (needs `mint()` or fault injection), `keycloak_real`
+(only with `--vb-idp=keycloak`), `realm(...)` (realm options for the `idp` fixture: `alg="ES256"`,
+`audience_mapper`, `extra_audience`, `group_paths`, `interactive`, `redirect_pattern`,
+`sso_session_idle_timeout`, ...; a backend that cannot do one skips the test).
+
+```bash
+python3 -m pytest tests/e2e/test_mock_keycloak.py                        # emulator self-tests, seconds
+python3 -m pytest tests/e2e -m "auth and not slow" --vb-build-dir build-e2e   # the fast auth suite
+python3 -m pytest tests/e2e -m auth --vb-build-dir build-e2e                   # + the wall-clock tests
+```
+
+**Time.** The periodic re-auth has a 60 s minimum interval, so tests do not wait for it: the server's
+automation command `advance_reauth {player, seconds}` fast-forwards the tick-time timers and the real
+`system_reauth` path runs (`reauth_round()` in `test_auth_keycloak.py` is the pattern). Only
+`test_revoked_login_is_kicked_after_the_grace_period` and `test_key_rotation_mid_session` wait on the clock.
+
+**Signing in.** `idp.obtain_tokens("alice", "pw")` returns a token-file token through the real code flow
+(no nonce, so it is bound by the freshness rule). A test that needs the client to hold a *refresh token*
+(anything re-authenticating against the IdP) plays the browser instead: `BrowserPlayer(idp, url_file,
+user, password)` waits for the URL the client writes to `VB_AUTH_URL_FILE`, signs in at the IdP and
+delivers the redirect, exactly what a player's browser does. `make_clients(server)(1, home="alice")`
+reuses one client data directory, i.e. "the same install" (saved sign-ins, trust).
+
+**Against a real Keycloak** (`--vb-idp=keycloak`, or `VB_IDP=keycloak`): needs `docker`, which starts the
+pinned image with `fixtures/keycloak/realm-e2e.json` imported and published on `127.0.0.1` only; or set
+`VB_KEYCLOAK_URL=http://127.0.0.1:8180` (plus `VB_KEYCLOAK_ADMIN` / `VB_KEYCLOAK_ADMIN_PASSWORD`) for one
+you started with `kc.sh start-dev --import-realm`. `VB_KEYCLOAK_IMAGE` picks another image. A recording
+proxy sits in front, so `idp.requests()` / `idp.grants()` work the same; the realm is reset between
+tests. In CI: `.github/workflows/auth_keycloak.yml` (auth PRs, manual, weekly canary on the newest
+release).
+
+```bash
+python3 -m pytest tests/e2e -m "keycloak_real or (auth and not mock_only)" --vb-idp=keycloak --vb-build-dir build-e2e
+```
 
 ## Running
 

@@ -51,6 +51,9 @@ public:
 	static const char *app_state_name(AppState s);
 	const vb::net::ClientSession *session() const { return client; }
 	const std::deque<std::string> &chat() const { return chat_log; }
+#if defined(VB_WITH_AUTH)
+	const vb::auth::SignInCoordinator *sign_in_state() const { return sign_in.get(); }
+#endif
 
 #if defined(VB_WITH_AUTOMATION)
 	// --- development-only automation access (docs/e2e-automation.md §5.1) ---

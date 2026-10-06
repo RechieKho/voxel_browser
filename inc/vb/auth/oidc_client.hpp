@@ -52,6 +52,7 @@ struct TokenResponse {
 	std::string id_token;
 	std::string refresh_token;
 	std::string error; // coarse and token-free
+	bool retryable = false; // transport failure, 5xx or 429: try again, the grant is not at fault
 };
 TokenResponse exchange_code(HttpFetcher &http, const OidcEndpoints &ep,
 		const std::string &client_id, const std::string &redirect_uri,

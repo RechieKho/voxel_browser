@@ -222,6 +222,30 @@ struct Eval {
 			}
 			return result(matched, json{ { "logins", seen } });
 		}
+		if (name == "auth") {
+			// Client only: the sign-in coordinator's view (needs a build with VB_WITH_AUTH).
+			// Every given field must match; `error_contains` is a substring of the last error.
+			if (!arg.is_object() || arg.empty()) {
+				return fail("auth: needs at least one of 'phase', 'needs_trust', 'reauth_prompt', 'error_contains'");
+			}
+			const json *f = state_field("auth");
+			if (f == nullptr || !f->is_object()) {
+				return result(false, json());
+			}
+			bool matched = true;
+			for (const char *key : { "phase", "needs_trust", "reauth_prompt" }) {
+				if (arg.contains(key)) {
+					matched = matched && f->value(key, json()) == arg[key];
+				}
+			}
+			if (arg.contains("error_contains")) {
+				if (!arg["error_contains"].is_string()) {
+					return fail("auth: 'error_contains' must be a string");
+				}
+				matched = matched && f->value("error", std::string()).find(arg["error_contains"].get<std::string>()) != std::string::npos;
+			}
+			return result(matched, *f);
+		}
 		if (name == "block_is") {
 			if (!arg.is_object() || !arg.contains("block") || !arg["block"].is_string()) {
 				return fail("block_is: needs 'pos' and 'block'");

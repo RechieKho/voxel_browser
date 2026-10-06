@@ -26,11 +26,7 @@ def start_server(server_bin, repo, artifact_dir, workdir, procs, config=None, ex
     Returns a connected `Server`."""
     cfg = dict(DEFAULT_SERVER_CONFIG, **(config or {}))
     workdir = pathlib.Path(workdir)
-    pack = workdir / "content" / "base"
-    if not pack.exists():
-        shutil.copytree(pathlib.Path(repo) / "content" / "base", pack)
-    for rel, text in (pack_files or {}).items():
-        (pack / rel).write_text(text)
+    pack = make_pack(repo, workdir, pack_files)
     last = None
     for _ in range(3):  # a free port can be taken between picking it and binding it
         port = free_udp_port()
@@ -55,6 +51,16 @@ def start_server(server_bin, repo, artifact_dir, workdir, procs, config=None, ex
     raise last
 
 
+def make_pack(repo, workdir, pack_files=None):
+    """A private copy of content/base under `workdir` with `pack_files` ({path: text}) written into it."""
+    pack = pathlib.Path(workdir) / "content" / "base"
+    if not pack.exists():
+        shutil.copytree(pathlib.Path(repo) / "content" / "base", pack)
+    for rel, text in (pack_files or {}).items():
+        (pack / rel).write_text(text)
+    return pack
+
+
 class ClientFactory:
     """`clients(n, names=...)`: real client processes, each with its own empty asset cache."""
 
@@ -65,11 +71,16 @@ class ClientFactory:
         self.allow_remote, self.skip, self._count = allow_remote, skip, 0
 
     def __call__(self, n=1, names=None, host="127.0.0.1", port=None, join=True, render_distance=2, windowed=False,
-                 via_menu=False, tcp=False, extra_args=()):
+                 via_menu=False, tcp=False, extra_args=(), home=None, singleplayer=None):
         """windowed=True opens a real window (needs a display, e.g. `xvfb-run -a pytest ...`);
         via_menu=True starts on the main menu instead of connecting (drive it with `menu_connect`).
         tcp=True drives the client over `--automation tcp` (loopback, token) instead of its stdio.
-        extra_args are appended to the client's command line (e.g. `--automation-record f.py`)."""
+        extra_args are appended to the client's command line (e.g. `--automation-record f.py`).
+        home="name" reuses one client data directory (config, cache, saved sign-ins) across several
+        spawns: a second client started with the same `home` is "the same install", e.g. one that
+        finds yesterday's refresh token.
+        singleplayer="<pack dir>" runs the integrated server on that content pack instead of
+        connecting to `server` (which may then be None); join/expect work the same."""
         check_host(host, self.allow_remote)  # §7.4: test bots never go near a real server
         if via_menu:
             windowed, join = True, False  # the menu only exists in a window
@@ -83,10 +94,10 @@ class ClientFactory:
             self._count += 1
             idx = self._count
             name = names[i] if names else "Player%d" % idx
-            home = self.workdir / ("client%d" % idx)
-            cache = home / "cache"
-            cache.mkdir(parents=True)
-            conf = home / "client.toml"
+            home_dir = self.workdir / (("home-" + home) if home else ("client%d" % idx))
+            cache = home_dir / "cache"
+            cache.mkdir(parents=True, exist_ok=bool(home))
+            conf = home_dir / "client.toml"
             # asset_cache_dir pinned explicitly (not left to vb::core::user_cache_dir()'s
             # own default) so this fixture's own `cache_dir` attribute is actually where
             # the client writes its cache on every platform -- the HOME/XDG_CACHE_HOME/
@@ -104,11 +115,16 @@ class ClientFactory:
                     # anything smaller here would just be a lie about what
                     # the client actually opens at.
                     ('window_width = 720\nwindow_height = 360\nvsync = false\n' if windowed else ""))
-            env = dict(os.environ, HOME=str(home), XDG_CACHE_HOME=str(cache), LOCALAPPDATA=str(cache),
+            env = dict(os.environ, HOME=str(home_dir), XDG_CACHE_HOME=str(cache), LOCALAPPDATA=str(cache),
+                       # saved sign-ins live under the config dir: never the real one, whatever the runner sets
+                       XDG_CONFIG_HOME=str(home_dir / "config"), APPDATA=str(home_dir / "config"),
                        # the client's own 10 s connect deadline, stretched like every other wait
                        VB_CONNECT_TIMEOUT_SECONDS=str(int(10 * timeout_scale())))
             argv = [str(self.client_bin)] + ([] if windowed else ["--headless"])
-            if not via_menu:  # --server connects straight away; without it a windowed client opens on the menu
+            if singleplayer:
+                argv += ["--singleplayer", "--content-pack", str(singleplayer), "--world-dir",
+                         str(home_dir / "world")]
+            elif not via_menu:  # --server connects straight away; without it a windowed client opens on the menu
                 argv += ["--server", host, "--port", str(port or self.server.port)]
             argv += ["--name", name, "--config", str(conf), "--render-distance", str(render_distance),
                      "--automation", "tcp" if tcp else "stdio"] + self.extra_args + list(extra_args)

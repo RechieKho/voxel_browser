@@ -85,8 +85,10 @@ SignInResult firebase_refresh(HttpFetcher &http, const std::string &api_key,
 			"application/x-www-form-urlencoded",
 			form_encode({ { "grant_type", "refresh_token" },
 					{ "refresh_token", refresh_token } }));
-	if (res.status == 0) {
-		return failure("Could not reach the sign-in service");
+	if (res.status == 0 || res.status >= 500 || res.status == 429) {
+		SignInResult r = failure("Could not reach the sign-in service");
+		r.retryable = true; // the refresh token is not at fault
+		return r;
 	}
 	const json doc = json::parse(res.body, nullptr, false);
 	if (res.status != 200 || !doc.is_object() || !doc.contains("id_token") ||

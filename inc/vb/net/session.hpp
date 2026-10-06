@@ -134,6 +134,11 @@ public:
 	void set_time_of_day(std::uint32_t ticks);
 	// Closes a playing connection with `reason`.
 	bool kick_player(core::NetId id, std::string_view reason);
+	// Simulates `seconds` of tick time passing for the player's periodic re-auth
+	// (auth.md §5.6): subtracts it from the timer until the next request and, while
+	// a request is outstanding, from its grace countdown. The next tick then runs the
+	// normal system_reauth path. False if `id` isn't a playing, signed-in connection.
+	bool advance_reauth(core::NetId id, double seconds);
 #endif
 
 	// Entity-management follow-up (held item / hotbar selection, Phase

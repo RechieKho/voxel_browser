@@ -1,0 +1,8 @@
+{
+  "_comment": "TEST-ONLY key for tests/e2e (vbtest/mock_keycloak.py). Public in git; never use it for anything real.",
+  "kid": "e2e-ec-1",
+  "crv": "P-256",
+  "x": "2abdc1c6bc041557b057c92153045aece6a545b2a3bd86455b8480fc39598fee",
+  "y": "8c594bfeebefae24c74a7ba98a1da7c4420517684d7655f1448f0a97c4c5390f",
+  "d": "63c7171b2b87f50443d879f2d5b5275524782a70c646d2ebc68b8f05486d25fe"
+}

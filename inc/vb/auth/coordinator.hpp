@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -56,6 +57,10 @@ public:
 		// Refresh-token cache + trust list. Null = no persistence, no prompt.
 		std::shared_ptr<SessionStore> store;
 		std::string server_id; // "host:port", the first-use trust key
+		// A silent re-auth refresh that failed for a transient reason (IdP down, 5xx) is
+		// retried this often while the server's request is open; the stored refresh
+		// token is kept. Tests shorten it.
+		std::chrono::milliseconds reauth_retry_interval = std::chrono::seconds(5);
 	};
 
 	explicit SignInCoordinator(Options options);
@@ -104,6 +109,11 @@ private:
 	bool needs_trust_ = false;
 	bool reauth_ = false; // a re-auth request (not the join sign-in) is active
 	bool silent_ = false; // the task in flight is a silent refresh
+	// Transient silent-refresh failures while a re-auth request is open (see
+	// Options::reauth_retry_interval). The prompt waits for a few of them.
+	int transient_failures_ = 0;
+	bool retry_pending_ = false;
+	std::chrono::steady_clock::time_point retry_at_{};
 	std::unique_ptr<SignInTask> task_;
 	// A cancelled task is parked (not joined under the lock, which could stall
 	// the UI behind a slow HTTP call) and joined when the coordinator dies.

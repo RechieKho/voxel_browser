@@ -117,6 +117,7 @@ world and replicate to clients like any other change.
 | `set_time` | `{ticks: 0..23999}` → all clients are told immediately |
 | `set_health` | `{player, value}`; lowering goes through the damage path (0 kills + respawns, cause `automation`) |
 | `kick` | `{player, reason?}` |
+| `advance_reauth` | `{player, seconds}`: simulates `seconds` of tick time for the player's periodic re-auth (auth.md §5.6): subtracts it from the timer until the next request or, while a request is outstanding, from its grace countdown; `not_signed_in` if the player has no external login. The next tick runs the normal re-auth path; the reply must still arrive in real time |
 | `run_lua` | `{code}` → `{}` or `lua_error`; runs in the pack VM after load: `vb.register_*` fails with `registry already frozen`; other APIs (e.g. `vb.world.*`) are callable, but world edits only stick in chunks that stay loaded (a player nearby) |
 
 Build the scene in loaded chunks (e.g. near spawn, or after teleporting a
@@ -214,7 +215,7 @@ Client: `app_state` (`menu|settings|keybindings|connecting|loading|playing|error
 lines), `chat_open`, `mouse_captured`, `selected_slot` (1-based),
 `health`/`max_health`/`hunger`/`max_hunger` (the player's own status, once the server's first
 `S2C_PlayerStatus` arrives; absent before), `inventory [{item,count}]` (item = block name), `entities [{net_id,name,pos}]`,
-`chunks_loaded`, `rtt_ms` (once measured; real connections only), `target_block {pos,normal,block}` (what the crosshair is on,
+`chunks_loaded`, `auth {phase: idle|choosing|working|finished, needs_trust, reauth_prompt, error}` (once a sign-in coordinator exists, i.e. after connecting; `reauth_prompt` is the "sign in again" banner), `rtt_ms` (once measured; real connections only), `target_block {pos,normal,block}` (what the crosshair is on,
 within reach; absent if nothing), `ui {name, widgets}` (only while a modal screen
 is open), `hud {widgets}`, `busy_actions` (in-flight multi-frame commands).
 Widgets are `{id, type, text, x, y, w, h}` (+ `items`, `list_index` for lists); `type` is
@@ -239,6 +240,7 @@ bad arguments is `bad_request`.
 | `entity_visible` | `{name}` | `entities` |
 | `entity_near` / `player_near` | `{name,pos,radius}` | `entities` / `players` |
 | `player_login` | `{subject, name?, provider?}` | `players[].login` (server): a connected player whose verified login has this subject |
+| `auth` | `{phase?, needs_trust?, reauth_prompt?, error_contains?}` (all given fields must match) | `auth` (client, builds with `VB_WITH_AUTH`): the sign-in coordinator's view |
 | `block_is` | `{pos,block}` (registry name, e.g. `"base:air"`) | the role's own block view; `false` if the chunk isn't loaded (both client and server, so an unloaded area never reads as air) |
 | `pos_near` | `{pos,radius}` | `feet` |
 | `health` | `{op,value}` (`< <= > >= == !=`) or a number | top-level `health` (client: the player's own, from `S2C_PlayerStatus`; the server's snapshot has no top-level `health`, use `players[].health`) |

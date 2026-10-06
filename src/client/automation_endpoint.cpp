@@ -534,6 +534,29 @@ json ClientAutomationEndpoint::state() {
 		{ "selected_slot", app_.selected_hotbar_slot() + 1 },
 		{ "busy_actions", tasks_.size() },
 	};
+#if defined(VB_WITH_AUTH)
+	if (const auto *si = app_.sign_in_state()) {
+		// What the sign-in screen / re-auth banner would show (docs/automation-protocol.md).
+		using Phase = vb::auth::SignInCoordinator::Phase;
+		const char *phase = "idle";
+		switch (si->phase()) {
+			case Phase::kIdle:
+				phase = "idle";
+				break;
+			case Phase::kChoosing:
+				phase = "choosing";
+				break;
+			case Phase::kWorking:
+				phase = "working";
+				break;
+			case Phase::kFinished:
+				phase = "finished";
+				break;
+		}
+		s["auth"] = json{ { "phase", phase }, { "needs_trust", si->needs_trust() },
+			{ "reauth_prompt", si->reauth_prompt_active() }, { "error", si->last_error() } };
+	}
+#endif
 	if (c == nullptr) {
 		return s;
 	}

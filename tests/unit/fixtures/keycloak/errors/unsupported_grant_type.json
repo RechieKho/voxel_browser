@@ -1,0 +1,7 @@
+{
+  "status": 400,
+  "body": {
+    "error": "unsupported_grant_type",
+    "error_description": "Unsupported grant_type"
+  }
+}

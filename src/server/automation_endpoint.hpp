@@ -205,6 +205,19 @@ public:
 			session_.kick_player(id, a.value("reason", std::string("kicked by automation")));
 			return Reply::success();
 		}
+		if (req.cmd == "advance_reauth") {
+			vb::core::NetId id;
+			if (auto err = find_player(a, id)) {
+				return err;
+			}
+			if (!a.contains("seconds") || !a["seconds"].is_number() || a["seconds"].get<double>() < 0.0) {
+				return bad("advance_reauth: needs numeric 'seconds' >= 0");
+			}
+			if (!session_.advance_reauth(id, a["seconds"].get<double>())) {
+				return Reply::error("not_signed_in", "player has no external login to re-authenticate");
+			}
+			return Reply::success();
+		}
 		if (req.cmd == "run_lua") {
 			if (!a.contains("code") || !a["code"].is_string()) {
 				return bad("run_lua: needs string 'code'");
