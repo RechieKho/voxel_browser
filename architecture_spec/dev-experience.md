@@ -20,7 +20,7 @@ it:
 
 **Goals**
 
-1. `vb pack new my_pack` (and `vb init` in an existing folder) produces a pack
+1. `vb pack init [dir]` (the `npm init` equivalent) produces a pack
    that loads, runs (`vb pack dev`), has editor completion, and explains itself
    to a human or an agent in its own `README.md`/`AGENTS.md`.
 2. **One source of truth for the Lua API** from which the stubs and the quick
@@ -75,7 +75,7 @@ sdk/lua/
     ui.lua              # client UI VM (`ui` table, widget tree types)
     data_script.lua     # what a pure data script may return (block tables)
     sandbox.lua         # documents what is NOT available (io, os, load, ...)
-  luarc.template.json   # copied to a pack's .luarc.json by `vb pack new`
+  luarc.template.json   # copied to a pack's .luarc.json by `vb pack init`
 ```
 
 Annotation conventions (checked by the generator, so the docs stay uniform):
@@ -198,9 +198,11 @@ side) leak across the boundary the same way.
 ### 3.5 `vb pack` command group
 
 ```
-vb pack new <dir> [--template minimal|ui|worldgen|base] [--name id] [--force] [--json]
-vb init [--template ...]          # = vb pack new . (refuses a non-empty dir
-                                  #   that already has pack.toml, unless --force)
+vb pack init [dir] [--template minimal|ui|worldgen|base] [--name id]
+             [--engine-req <range>] [--force] [--json]
+                                  # dir defaults to "."; created if missing;
+                                  #   refuses a dir that already has pack.toml
+                                  #   (or other files) unless --force
 vb pack check [dir] [--json] [--strict] [--version v]
 vb pack dev [dir] [--version v] [--port n] [--no-client]
                                   # vb host --pack dir --watch + vb launch --connect
@@ -210,15 +212,18 @@ vb pack info [dir] [--json]       # name/version/engine req, files, block/entity
 
 - **Non-interactive by default** (agents and CI): every value has a flag and
   a default; no prompts. `--json` prints what was created.
-- **Version pinning:** `pack.toml`'s existing `engine_version_req` (today
-  informational) is filled with `">=<installed default>"`. `vb pack
-  check/dev/types` pick the newest installed version satisfying it (or
-  `--version`), and explain how to `vb install` one if none does. The engine
-  itself keeps ignoring the field (see the comment in
-  `content/base/pack.toml`).
+- **One name, decided 2026-10-06:** `vb pack init` is the only scaffolding
+  command — no top-level `vb init`, no separate `vb pack new`. It works like
+  `npm init`/`cargo init` on the current directory, or on `dir` (created if
+  missing), which covers both cases.
+- **Version pinning:** `pack.toml`'s `engine_version_req` is filled with
+  `">=<selected version>"` (override with `--engine-req`). The engine
+  enforces it (§3.7); `vb pack check/dev/types` pick the newest installed
+  version satisfying it (or `--version`, which must also satisfy it), and
+  print the `vb install <v>` to run if none does.
 - **Templates** live in `templates/pack/<name>/` in the repo and are embedded
   into `vb` at build time (a CMake step generating a `.cpp` byte table, no new
-  dependency), so `vb pack new` works before any version is installed and
+  dependency), so `vb pack init` works before any version is installed and
   can't fail on a missing file. `{{name}}`, `{{version}}`, `{{engine_req}}`
   are the only substitutions. `--template base` instead copies
   `content/base` from the selected installed version (a full real pack).
@@ -285,6 +290,70 @@ survives `vb prune` and works when the pack is opened on another machine.
 5. **`docs/llms.txt`**: a one-screen index of the docs (title + one line +
    path each), following the llms.txt convention, linked from `README.md`.
 
+### 3.7 Enforcing `engine_version_req` (decided 2026-10-06)
+
+Today `pack.toml`'s `engine_version_req` is informational: nothing parses
+it (`content/base/pack.toml` says so). Decision: **the engine enforces it**,
+so a pack that needs a newer engine fails up front with a clear message
+instead of `attempt to call a nil value (field 'raycast')` mid-game.
+
+**Syntax** — a small Cargo-style subset, parsed by one function in `vb_core`
+(`vb::core::VersionReq`, shared by the engine and `vb`):
+
+| Form | Meaning |
+| --- | --- |
+| `*` | any version |
+| `>=0.5.0`, `>0.5.0`, `<=0.7`, `<0.7`, `=0.5.2` | comparator; missing minor/patch = 0 |
+| `>=0.5.0, <0.7.0` | comma = AND |
+| `^0.5.1` | `>=0.5.1, <0.6.0` (pre-1.0: minor is the breaking digit); `^1.2.3` = `>=1.2.3, <2.0.0` |
+| `~0.5.1` | `>=0.5.1, <0.6.0` |
+
+No OR, no pre-release identifiers. An unparseable value is an **error**
+(fail closed), never treated as `*`. A missing field is treated as `*` with a
+warning (existing packs keep loading); `--check-pack --strict` makes it an
+error.
+
+**Which version is "the engine's"** — `kVersionNumeric` (the newest
+reachable tag, `cmake/version.hpp.in`). A dev build some commits past `v0.5.0`
+counts as `0.5.0`; a build outside git counts as `0.0.0`. So an engine
+developer whose pack needs an untagged feature uses the dev-only override
+below rather than a special rule for dev builds.
+
+**Where it's checked**
+
+1. **Server, at pack load** (`load_content_pack`, before any Lua runs):
+   refuse to start, like the `auth.lua` fail-closed path:
+   `error: pack 'my_pack' requires engine >=0.6.0 (pack.toml engine_version_req); this server is 0.5.2` + `hint: vb install 0.6.0` when run
+   through `vb`.
+2. **Singleplayer** loads the pack through the same path, so it gets the
+   same check and shows the message in the main menu instead of crashing.
+3. **Client, on connect.** The pack's `ui/*.lua` runs on the *client's*
+   engine, and two releases can share a protocol version while having
+   different UI APIs. The server sends the requirement in the handshake
+   (new field on the existing server-info/handshake reply — a wire change:
+   protocol bump + `docs/protocol.md` + round-trip/fuzz test, per the
+   cross-cutting rules) and the client disconnects itself with
+   "this server's pack needs Voxel Browser >=0.6.0; you have 0.5.2 — run
+   `vb update`" before downloading assets.
+4. **`--check-pack`** reports a mismatch as an error diagnostic on
+   `pack.toml`'s line; **`vb`** uses the same `VersionReq` to choose a
+   version (§3.5) and to warn in `vb server start` before spawning.
+
+**Override** — `--ignore-engine-req` on the server (and for singleplayer on
+the client), dev-only and compiled out under `VB_DISTRIBUTION`, exactly
+like `--insecure-skip-auth`; logs a warning.
+
+**Bundled packs** (`content/base`, `content/examples/*`) ship with the engine
+and keep `"*"`; `vb pack init --template base` rewrites the copy's field to
+`">=<selected version>"`. The pack.toml comment and `content-pack-format.md`
+are updated to say the field is enforced.
+
+**Later, optional:** with `---@vb since <version>` on every stub (§3.1),
+`--check-pack` can warn when a pack calls an API newer than the lower bound
+of its own `engine_version_req` (`vb.world.raycast` is since 0.6.0, but the
+pack says `>=0.5.0`). Needs the static check to follow constant field chains
+(`vb.world.raycast`), not just the `vb` global; tracked in 10.D as a stretch.
+
 ## 4. Testing strategy
 
 | What | How |
@@ -293,9 +362,10 @@ survives `vb prune` and works when the pack is opened on another machine.
 | Docs up to date | `gen_lua_docs.py --check`, `vb help --markdown` diff, in `lint.yml` |
 | Doc examples compile | doctest loading every extracted example with `luaL_loadbuffer` |
 | Stubs are valid LuaCATS | CI runs `lua-language-server --check sdk/lua content/base` (pinned release download); zero warnings in `sdk/`, warnings in packs reported but not gating until §5 phase F |
-| Templates work | integration test: `vb pack new` each template into a temp dir, then `voxel_browser_server --check-pack` it |
+| Templates work | integration test: `vb pack init` each template into a temp dir, then `voxel_browser_server --check-pack` it |
 | `--check-pack` | unit/integration cases: clean pack, syntax error (file:line), runtime error in `init.lua`, bad `register_block` def, bad `ui/*.lua`, bad structure, `--json` shape |
 | Global-access check | `vb` read in `ui/` → error with line; `ui`/`client` in `init.lua` → error; `os.time` → error; `base_ui` shared across `ui/` files → clean, same global read in `init.lua` → error; unknown global → warning, error under `--strict`; `content/base` and `kitchen_sink` → clean |
+| `engine_version_req` | `VersionReq` parse/match table (every form above, bad syntax, missing field); server refuses a too-new pack and starts with `--ignore-engine-req`; client disconnects with the message on a mismatched handshake field; handshake round-trip + fuzz test |
 | `vb pack` / `vb help` | CLI tests in the existing `vb` test style (`VB_HOME` temp root, no network) |
 
 ## 5. Phased plan
@@ -335,7 +405,7 @@ phase (F) depends only on the command table and can run in parallel with B–D.
 - **Exit:** every bound function has a reference entry with an example, and
   CI fails if a stub change isn't regenerated.
 
-### 10.D — Headless pack validation (M)
+### 10.D — Headless pack validation + engine version enforcement (M–L)
 
 - [ ] `voxel_browser_server --check-pack <dir> [--json] [--strict]` (§3.4),
       including UI VM compile, structure validation and one-chunk worldgen.
@@ -343,18 +413,27 @@ phase (F) depends only on the command table and can run in parallel with B–D.
 - [ ] Diagnostics carry `file:line` (parse Lua error prefixes; registration
       errors report the calling chunk via `debug.traceback` level).
 - [ ] `vb pack check` + version resolution from `engine_version_req`.
-- **Exit:** a broken pack yields a precise, machine-readable error without
-  starting a game.
+- [ ] Enforce `engine_version_req` (§3.7): `vb::core::VersionReq` in `vb_core`;
+      server/singleplayer refuse a mismatched pack; handshake carries the
+      requirement and the client checks it (protocol bump, `docs/protocol.md`,
+      round-trip + fuzz test); `--ignore-engine-req` (dev-only);
+      `vb server start` warns; update `content/base/pack.toml`'s comment and
+      `content-pack-format.md`.
+- [ ] Stretch: warn when a pack uses an API whose `since` is newer than its
+      requirement's lower bound (§3.7, "Later").
+- **Exit:** a broken pack, or one that needs a newer engine, yields a
+  precise, machine-readable error without starting a game.
 
-### 10.E — Scaffolding: `vb pack new` / `vb init` (M–L)
+### 10.E — Scaffolding: `vb pack init` (M–L)
 
 - [ ] `templates/pack/{minimal,ui,worldgen}` + build-time embedding into `vb`.
-- [ ] `vb pack new`/`vb init`/`vb pack types`/`vb pack info`; `--template base`.
+- [ ] `vb pack init`/`vb pack types`/`vb pack info`; `--template base`;
+      `--engine-req` (default `>=<selected version>`).
 - [ ] Generated `README.md`, `AGENTS.md`, `.luarc.json`, `.gitignore` (+ the
       `ui/` multi-root setup if 10.B kept it).
 - [ ] `vb pack dev` (host `--watch` + client connect; `--no-client`).
 - [ ] Integration test: new → check for every template.
-- **Exit:** `vb init && vb pack dev` puts a player into a world running the
+- **Exit:** `vb pack init && vb pack dev` puts a player into a world running the
   new pack in under a minute, with editor completion working.
 
 ### 10.F — CLI reference & agent docs (M)
@@ -372,7 +451,7 @@ phase (F) depends only on the command table and can run in parallel with B–D.
 
 - [ ] `package_release.py`: include `sdk/` and `docs/` in the game archive.
 - [ ] `vb docs [topic] [--path]`.
-- [ ] README: "Make your first pack" section (`vb init` → `vb pack dev`),
+- [ ] README: "Make your first pack" section (`vb pack init` → `vb pack dev`),
       `CONTRIBUTING.md`: how to add a binding (C++ + stub + regenerate).
 - **Exit:** everything above works from a fresh `install.sh` with no repo
   checkout and no network after install.
@@ -382,9 +461,9 @@ phase (F) depends only on the command table and can run in parallel with B–D.
 1. ~~**Per-directory globals.**~~ Decided 2026-10-06: labelled stubs +
    static check in `vb pack check`; nested editor config only if it works
    (§3.4.1).
-2. **`vb init` vs `vb pack init`.** Plan: both, `vb init` being the short,
-   npm-like alias. Revisit if the top-level namespace gets crowded.
-3. **Should the engine enforce `engine_version_req`?** Out of scope here
-   (informational today); `vb` only uses it to pick a version.
+2. ~~**`vb init` vs `vb pack init`.**~~ Decided 2026-10-06: `vb pack init`
+   only (§3.5).
+3. ~~**Should the engine enforce `engine_version_req`?**~~ Decided
+   2026-10-06: yes — server, singleplayer and client (§3.7).
 4. **Example execution.** Syntax-checking is cheap; actually running examples
    needs a fixture world per example. Revisit after 10.C if doc examples rot.

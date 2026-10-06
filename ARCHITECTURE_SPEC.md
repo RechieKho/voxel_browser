@@ -281,8 +281,9 @@ block-damage design: `architecture_spec/scripting.md`.
 
 **Planned (Phase 10):** `sdk/lua/` LuaCATS stubs become the source of truth
 for the Lua API surface (a unit test checks them against the live tables);
-the quick reference and pack scaffolding are generated from them —
-`architecture_spec/dev-experience.md`.
+the quick reference and `vb pack init` scaffolding build on them, and
+`pack.toml`'s `engine_version_req` becomes enforced (server, singleplayer,
+client) — `architecture_spec/dev-experience.md`.
 
 ---
 
