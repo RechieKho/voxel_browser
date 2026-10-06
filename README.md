@@ -48,7 +48,7 @@ pin, what's blocking the swap).
 
 The server is the source of truth. It is responsible for:
 
-1. **World Generation:** Deterministic heightmap terrain today (`vb::worldgen`), driven by a server-defined seed; a Lua-driven pipeline with real biomes/carvers/decoration is planned (`REMAINING_TASKS.md` Phase 4.2).
+1. **World Generation:** Deterministic terrain (`vb::worldgen`) driven by a server-defined seed. A content pack can supply its own pipeline from Lua (`vb.worldgen.set_pipeline`: height field, Voronoi biomes, carvers, veins), and `content/base` does: forest and plains biomes with trees, bushes and boulders placed by rules that work across chunk borders (see the Structure editor below).
 2. **Game State:** Player movement, physics, and block edits are simulated by `ServerSession` through a per-connection EnTT registry entity; a generic system runner for non-player entities is planned but not required for anything shipped so far.
 3. **Modding & Asset Management:** Loading Lua scripts (`content/base` by default) and hashing/serving assets from the host's project directory over the Asset Sync protocol.
 4. **Network Replication:** Pushing chunk data, entity snapshots, chat, and required assets to connected clients over `GameNetworkingSockets`.
@@ -80,31 +80,36 @@ substitute for it.
 | 1 — Core foundation & networking (handshake, transport, interest/replication bootstrap) | ✅ Done |
 | 2 — World state & terrain generation (chunks, lighting, meshing, streaming) | ✅ Done |
 | 3 — ECS & physics (movement, prediction, remote entity billboards) | ✅ Substantially done — EnTT registry now backs player state (3.1); no generic system runner yet, not required so far |
-| 4 — The "Browser" engine (Lua scripting, Asset Sync, client UI VM) | ✅ Done (mechanism); a real Lua-driven worldgen pipeline is the main open item |
+| 4 — The "Browser" engine (Lua scripting, Asset Sync, client UI VM) | ✅ Done, including the Lua-driven worldgen pipeline (Phase 6.14), which `content/base` now uses |
 | 5 — Minimum playable base (content pack, block editing, main menu, chat/day-night/respawn, crafting) | ✅ Substantially done — see `REMAINING_TASKS.md` 5.5 for remaining docs/polish |
 
 Also landed since the phase list was written: world persistence (flat
 per-region files; dedicated servers and `--singleplayer` both save, the latter
 under `--world-dir`, default `world_singleplayer`), the `vb` developer CLI,
 the `content/base` HUD (health/hunger bars, hotbar, live inventory screen,
-crosshair), and a dev-only end-to-end automation harness (see below).
+crosshair), a dev-only end-to-end automation harness (see below), the
+structure editor with rule-based tree/rock placement (see below), and optional
+sign-in through an identity provider for packs that ship an `auth.lua`
+(`docs/auth.md`).
 
-Known gaps worth knowing about before diving in (full detail in
-`REMAINING_TASKS.md` and `STATE.md`): macOS CI wires in the real networking
-backend but that leg has not been verified on a real Actions run yet, and the
-automation/e2e CI job has likewise not run on GitHub yet.
+Known gaps worth knowing about before diving in are listed in
+`REMAINING_TASKS.md` and `STATE.md`.
 
 ---
 
 ## 🌲 Structure editor
 
 Biome decorations (trees, bushes, boulders, ruins) are data files in a
-content pack's `structures/` folder, placed by declarative per-biome rules that
-work across chunk borders. `vb_structure_editor` is a standalone voxel tool for
-making them (design and file format: `docs/structure-editor.md`):
+content pack's `structures/` folder, placed by declarative per-biome rules
+(what block they may stand on, spacing, clustering, slope, rotation) that work
+across chunk borders and stay deterministic for a given seed. `content/base`
+ships an oak, a birch, a bush and a boulder this way.
+`vb_structure_editor` is a standalone voxel tool for making more (design and
+file format: `docs/structure-editor.md`):
 
 ```bash
-# build it (on by default with the client and Lua: -DVB_WITH_LUA=ON)
+# build it (on by default when the client and Lua are built, i.e. -DVB_WITH_LUA=ON
+# and not VB_HEADLESS; switch: -DVB_BUILD_EDITOR)
 cmake --build build --target vb_structure_editor
 
 # open a pack by its block data script (a Lua file returning block tables)
@@ -212,6 +217,7 @@ Binaries land in `build/`:
 | ------------------------ | ------------------------------------------------ |
 | `voxel_browser`          | the client ("the browser")                        |
 | `voxel_browser_server`   | the authoritative, headless server                |
+| `vb_structure_editor`    | the structure editor (needs the client build and `VB_WITH_LUA`) |
 
 ```bash
 ./build/voxel_browser_server --config server.toml   # start a server
@@ -251,11 +257,13 @@ are saved on exit; pass `--world-dir <dir>` to choose where.
 | `VB_BUILD_CLIENT`       | `ON`    | build `voxel_browser` + `vb_render` (needs raylib)  |
 | `VB_BUILD_SERVER`       | `ON`    | build `voxel_browser_server`                        |
 | `VB_BUILD_CLI`          | `ON`    | build the developer CLI `vb`                        |
+| `VB_BUILD_EDITOR`       | `ON` with the client and `VB_WITH_LUA` (not `VB_HEADLESS`) | build the structure editor `vb_structure_editor` |
 | `VB_BUILD_TESTS`        | `ON`    | build `vb_tests` and register CTest tests           |
 | `VB_HEADLESS`           | `OFF`   | client build that never touches the GPU (CI/tests)  |
 | `VB_WARNINGS_AS_ERRORS` | `OFF`   | `-Werror` / `/WX` (CI turns this on)                |
 | `VB_ENABLE_ASAN` / `_UBSAN` / `_TSAN` | `OFF` | sanitizer builds                       |
 | `VB_WITH_NET` / `_WORLDGEN` / `_COMPRESSION` / `_LUA` | `OFF` | pull in the heavy dependency owned by each later phase |
+| `VB_WITH_AUTH` | `ON` | in-engine sign-in for packs that ship an `auth.lua` (`docs/auth.md`); `OFF` makes such a pack refuse to start |
 | `VB_WITH_REPLICATION` | `ON` | librg interest culling; `OFF` falls back to the hand-rolled linear scan |
 | `VB_WITH_AUTOMATION` | `OFF` | dev/test-only automation driver (`--automation stdio`, `--version` shows `+automation`); never enable for shipped builds — see `docs/e2e-automation.md`, `docs/automation-protocol.md` |
 | `VB_DISTRIBUTION` | `OFF` | set by every build whose binaries get uploaded; combining it with `VB_WITH_AUTOMATION` is a configure error |
@@ -284,5 +292,5 @@ comment in `cmake/Dependencies.cmake`):
 
 `ARCHITECTURE_SPEC.md` (design) · `REMAINING_TASKS.md` (backlog) · `STATE.md`
 (gotchas) · `CONTRIBUTING.md` · `docs/lua-api.md` (scripting API) ·
-`docs/protocol.md` · `docs/structure-editor.md` (structures and their editor) ·
+`docs/protocol.md` · `docs/auth.md` (player sign-in) · `docs/structure-editor.md` (structures and their editor) ·
 `architecture_spec/content-pack-format.md`.
