@@ -27,8 +27,8 @@ constexpr double kDropHalfSize = 0.15; // drop centre -> its bottom face
 bool fall(ItemDrop &drop, double dt, const BlockSolidQuery &world) {
 	const auto solid_below = [&](double y) {
 		return world.solid_at({ static_cast<int>(std::floor(drop.pos.x)),
-			static_cast<int>(std::floor(y - kDropHalfSize)),
-			static_cast<int>(std::floor(drop.pos.z)) });
+				static_cast<int>(std::floor(y - kDropHalfSize)),
+				static_cast<int>(std::floor(drop.pos.z)) });
 	};
 	if (drop.vel_y == 0.0 && solid_below(drop.pos.y - 0.02)) {
 		return false; // resting
@@ -46,9 +46,12 @@ bool fall(ItemDrop &drop, double dt, const BlockSolidQuery &world) {
 
 // Distance from `p` to the vertical segment [feet, feet + height].
 double distance_to_body(core::Vec3d p, core::Vec3d feet, double height) {
-	const double dy = p.y < feet.y ? feet.y - p.y
-			: p.y > feet.y + height ? p.y - (feet.y + height)
-									: 0.0;
+	double dy = 0.0;
+	if (p.y < feet.y) {
+		dy = feet.y - p.y;
+	} else if (p.y > feet.y + height) {
+		dy = p.y - (feet.y + height);
+	}
 	const double dx = p.x - feet.x;
 	const double dz = p.z - feet.z;
 	return std::sqrt(dx * dx + dy * dy + dz * dz);

@@ -1609,13 +1609,15 @@ void ServerSession::broadcast_snapshots() {
 			if (const auto *e = interest_.get(id)) {
 				const auto ov_it = script_entity_visual_overrides_.find(id);
 				const auto drop_it = item_drops_.drops().find(id);
-				snap.entered.push_back(to_record(*e,
-						ov_it != script_entity_visual_overrides_.end() ? &ov_it->second
-																	   : nullptr,
-						drop_it != item_drops_.drops().end()
-								? std::optional<std::uint16_t>(
-										static_cast<std::uint16_t>(drop_it->second.item))
-								: std::nullopt));
+				const protocol::EntityVisualOverride *visual_override = nullptr;
+				if (ov_it != script_entity_visual_overrides_.end()) {
+					visual_override = &ov_it->second;
+				}
+				std::optional<std::uint16_t> item;
+				if (drop_it != item_drops_.drops().end()) {
+					item = static_cast<std::uint16_t>(drop_it->second.item);
+				}
+				snap.entered.push_back(to_record(*e, visual_override, item));
 			}
 		}
 		for (core::NetId id : d.stayed) {
