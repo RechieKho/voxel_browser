@@ -1,7 +1,7 @@
 #!/bin/sh
 # Bootstrap `vb`, the Voxel Browser developer CLI (Linux / macOS).
 #
-#   curl -fsSL https://github.com/RechieKho/voxel_browser/releases/latest/download/install.sh | sh
+#   curl -fsSL https://github.com/VoxelBrowser/voxel_browser/releases/latest/download/install.sh | sh
 #
 # Downloads the newest vb for this machine, verifies its SHA-256 against the
 # release's release.toml, puts it in <data>/bin, adds that directory to your
@@ -10,7 +10,7 @@
 #
 # Environment:
 #   VB_HOME=<dir>          keep everything under <dir> (portable / CI)
-#   VB_REPO=owner/repo     release repository   (default RechieKho/voxel_browser)
+#   VB_REPO=owner/repo     release repository   (default VoxelBrowser/voxel_browser)
 #   VB_BASE_URL=<url>      GitHub-compatible host (default https://github.com)
 #   VB_RELEASE_DIR=<dir>   take release.toml + zips from a local directory instead
 #   VB_PUBLIC_KEY_B64=...  base64 Ed25519 public key (SPKI DER) the release must be signed with
@@ -24,7 +24,7 @@ set -eu
 # empty, signatures are not checked by this script.
 DEFAULT_PUBLIC_KEY_B64=""
 
-REPO="${VB_REPO:-RechieKho/voxel_browser}"
+REPO="${VB_REPO:-VoxelBrowser/voxel_browser}"
 BASE_URL="${VB_BASE_URL:-https://github.com}"
 
 say() { printf '%s\n' "$*"; }
@@ -180,7 +180,7 @@ if [ "${VB_SKIP_INSTALL:-0}" != 1 ]; then
 			src="dir:$VB_RELEASE_DIR"
 		elif [ "$BASE_URL" != "https://github.com" ]; then
 			src="$REPO@$BASE_URL"
-		elif [ "$REPO" != "RechieKho/voxel_browser" ]; then
+		elif [ "$REPO" != "VoxelBrowser/voxel_browser" ]; then
 			src="$REPO"
 		fi
 	fi

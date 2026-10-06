@@ -21,7 +21,7 @@ namespace fs = std::filesystem;
 
 namespace {
 
-constexpr const char *kDefaultSource = "RechieKho/voxel_browser";
+constexpr const char *kDefaultSource = "VoxelBrowser/voxel_browser";
 constexpr std::size_t kMaxManifestBytes = 1u << 20;
 
 // ---------------------------------------------------------------- DirSource
