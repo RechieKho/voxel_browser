@@ -2,7 +2,7 @@
 
     python3 -m vbtest.traceview tests/e2e/artifacts/<test>      # writes <test>/trace.html
 
-One column per process (server, each client), rows in wall-clock order, so "Alice did X but
+One column per process (server, each client, and an IdP column when the test had one), rows in wall-clock order, so "Alice did X but
 Bob never saw it" is a matter of reading across. Requests are blue, replies green, errors red,
 unsolicited events grey. Stdlib only; everything is HTML-escaped (traces contain game text).
 """
@@ -46,6 +46,17 @@ def _describe(ev):
     return "raw", "%s %s" % (direction, _short(msg))
 
 
+def _describe_idp(entry):
+    """One identity-provider request (vbtest/mock_keycloak.py's request log)."""
+    status = entry.get("status")
+    params = entry.get("params") or {}
+    text = "%s %s -> %s%s %s" % (entry.get("method"), entry.get("endpoint") or entry.get("path"), status,
+                                  " [FAULT %s]" % entry["fault"] if entry.get("fault") else "",
+                                  _short(params) if params else "")
+    bad = not isinstance(status, int) or status >= 400 or entry.get("fault")
+    return ("err" if bad else "ok"), text
+
+
 def build(artifact_dir):
     """The HTML for every *.trace.jsonl in `artifact_dir`."""
     procs = sorted(os.path.basename(p)[:-len(".trace.jsonl")] for p in glob.glob(os.path.join(artifact_dir, "*.trace.jsonl")))
@@ -53,6 +64,11 @@ def build(artifact_dir):
     for name in procs:
         for ev in _load(os.path.join(artifact_dir, name + ".trace.jsonl")):
             rows.append((ev.get("ts", 0.0), name, ev))
+    idp_path = os.path.join(artifact_dir, "idp.requests.jsonl")
+    if os.path.exists(idp_path):
+        procs.append("IdP")
+        for entry in _load(idp_path):
+            rows.append((entry.get("t", 0.0), "IdP", {"idp": entry}))
     rows.sort(key=lambda r: r[0])
     t0 = rows[0][0] if rows else 0.0
 
@@ -68,7 +84,7 @@ def build(artifact_dir):
            "<h1>%s</h1>" % html.escape(os.path.basename(os.path.abspath(artifact_dir))),
            "<table><tr><th>+ms</th>%s</tr>" % "".join("<th>%s</th>" % html.escape(p) for p in procs)]
     for ts, name, ev in rows:
-        cls, text = _describe(ev)
+        cls, text = _describe_idp(ev["idp"]) if "idp" in ev else _describe(ev)
         cells = "".join("<td class=%s>%s</td>" % (cls, html.escape(text)) if p == name else "<td></td>" for p in procs)
         out.append("<tr><td class=t>%d</td>%s</tr>" % (round((ts - t0) * 1000), cells))
     out.append("</table>")

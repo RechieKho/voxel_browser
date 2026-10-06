@@ -1,7 +1,7 @@
 """In-engine authentication end to end (architecture_spec/auth.md, Phase 9.7).
 
 A real server whose pack ships an `auth.lua` pointing at a mock OpenID Connect provider
-(vbtest/mock_idp.py), and real headless clients that sign in with `--auth-token-file` or, for
+(vbtest/mock_keycloak.py), and real headless clients that sign in with `--auth-token-file` or, for
 the browser flow, a test that plays the user's browser. The mock IdP signs with a TEST-ONLY
 key from tests/e2e/fixtures/.
 """
@@ -12,32 +12,6 @@ import urllib.request
 import pytest
 
 from vbtest import ProcessDied, expect
-from vbtest.mock_idp import MockIdp, auth_lua
-from vbtest.stack import ClientFactory, start_server
-
-REPO = __import__("pathlib").Path(__file__).resolve().parents[2]
-
-
-@pytest.fixture
-def idp():
-    p = MockIdp().start()
-    yield p
-    p.stop()
-
-
-@pytest.fixture
-def auth_server(binaries, artifact_dir, tmp_path, _procs, idp):
-    def make(**auth_kw):
-        return start_server(binaries["server"], REPO, artifact_dir, tmp_path, _procs,
-                            pack_files={"auth.lua": auth_lua(idp, **auth_kw)})
-    return make
-
-
-@pytest.fixture
-def make_clients(binaries, artifact_dir, tmp_path, _procs):
-    def make(server):
-        return ClientFactory(binaries["client"], server, artifact_dir, tmp_path, _procs)
-    return make
 
 
 def token_file(tmp_path, token, name="token.txt"):
@@ -128,7 +102,7 @@ def test_two_people_called_alex_get_unique_names(idp, auth_server, make_clients,
     expect(server).to_have_player_login("sub-2", name="alex#2")
 
 
-def test_browser_flow_with_pkce_over_a_loopback_redirect(idp, auth_server, make_clients, tmp_path):
+def test_browser_flow_with_pkce_over_a_loopback_redirect(idp, auth_server, make_clients, tmp_path, monkeypatch):
     """No token file: the client runs the real Authorization Code + PKCE flow. The engine writes
     the authorization URL to VB_AUTH_URL_FILE instead of opening a browser; this test is the browser."""
     idp.next_user = {"subject": "sub-dave", "name": "dave", "claims": {"email": "d@example.com"}}
@@ -149,12 +123,8 @@ def test_browser_flow_with_pkce_over_a_loopback_redirect(idp, auth_server, make_
     t = threading.Thread(target=play_browser, daemon=True)
     t.start()
     factory = make_clients(server)
-    import os
-    os.environ["VB_AUTH_URL_FILE"] = str(url_file)
-    try:
-        (dave,) = factory(1)
-    finally:
-        del os.environ["VB_AUTH_URL_FILE"]
+    monkeypatch.setenv("VB_AUTH_URL_FILE", str(url_file))
+    (dave,) = factory(1)
     t.join(10)
     assert visited.get("status") == 200 and "Signed in" in visited["body"], visited
     expect(server).to_have_player_login("sub-dave", name="dave")
@@ -165,6 +135,7 @@ def test_browser_flow_with_pkce_over_a_loopback_redirect(idp, auth_server, make_
     assert idp.token_requests[-1]["code_verifier"]
 
 
+@pytest.mark.slow
 def test_revoked_login_is_kicked_after_the_grace_period(idp, auth_server, make_clients, tmp_path):
     """Periodic live re-auth (auth.md §5.6): the client re-reads its token file for every
     re-auth, so withholding it models an IdP that no longer issues tokens (a revoked session)."""
