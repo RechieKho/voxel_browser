@@ -84,6 +84,8 @@ TEST_CASE("keycloak: aud as an array with azp set to our client is accepted") {
 	CHECK(claims["azp"] == tokens().client_id());
 	const auto r = verify("id_audience_array", keys_from("jwks_rs256.json"));
 	REQUIRE_MESSAGE(r.ok(), r.detail);
+	// a plain ID token's aud is just the client id (Keycloak; the mapper only reaches it with another audience)
+	CHECK(tokens().claims("id_rs256")["aud"] == tokens().client_id());
 }
 
 TEST_CASE("keycloak: a refresh-derived token has no nonce and is accepted with any expected nonce") {
@@ -166,7 +168,7 @@ TEST_CASE("typ rule: at+jwt in the JWS header is refused for every preset, any c
 
 TEST_CASE("keycloak: realm_access.roles and full-path groups reach Lua intact when allowlisted") {
 	const KeySet keys = keys_from("jwks_rs256.json");
-	const auto r = verify("id_audience_array", keys, keycloak_config({ "groups", "realm_access", "email" }));
+	const auto r = verify("id_full_path_groups", keys, keycloak_config({ "groups", "realm_access", "email" }));
 	REQUIRE_MESSAGE(r.ok(), r.detail);
 	const json exposed = json::parse(r.login.claims_json);
 	CHECK(exposed["groups"] == json::array({ "/admins", "/players" }));
@@ -175,7 +177,7 @@ TEST_CASE("keycloak: realm_access.roles and full-path groups reach Lua intact wh
 	CHECK(exposed["email"] == "alice@example.test");
 
 	// not listed => dropped
-	const auto bare = verify("id_audience_array", keys, keycloak_config({ "email" }));
+	const auto bare = verify("id_full_path_groups", keys, keycloak_config({ "email" }));
 	REQUIRE(bare.ok());
 	const json only = json::parse(bare.login.claims_json);
 	CHECK(only.size() == 1);

@@ -2,6 +2,6 @@
   "status": 400,
   "body": {
     "error": "invalid_grant",
-    "error_description": "PKCE verification failed: Invalid code verifier"
+    "error_description": "PKCE verification failed: Code mismatch"
   }
 }

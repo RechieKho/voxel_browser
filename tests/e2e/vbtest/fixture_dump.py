@@ -132,7 +132,7 @@ def dump(out):
 
         err("code_not_valid", rs.exchange(rs.code_flow()[:-1] + "x"))
         err("pkce_failed", rs.exchange(rs.code_flow(), verifier="x" * 43))
-        err("unauthorized_client", _http(rs.oidc("token"), {"grant_type": "refresh_token", "client_id": "nope", "refresh_token": "x"}))
+        err("invalid_client", _http(rs.oidc("token"), {"grant_type": "refresh_token", "client_id": "nope", "refresh_token": "x"}))
         err("invalid_refresh_token", rs.refresh("not-a-token"))
         t = rs.tokens("bob")
         rs.idp.disable_user("bob")
@@ -163,11 +163,17 @@ def dump(out):
     au = Realm(audience_mapper=True, group_paths=True)
     try:
         t = au.tokens()
-        tokens["id_audience_array"] = ("audience mapper on: aud is [client, account]; full-path groups", t["id_token"])
-        tokens["access_token_with_audience"] = ("the access token of that realm: typ Bearer, but aud contains our client "
+        tokens["id_full_path_groups"] = ("full-path groups (/admins, /players); the ID token's aud is still just the client id", t["id_token"])
+        tokens["access_token_with_audience"] = ("audience mapper for our own client: the access token's aud is [client, account] "
                                                 "and azp is ours, so only the typ rule stops it", t["access_token"])
     finally:
         au.stop()
+    ex = Realm(extra_audience="billing-api")
+    try:
+        tokens["id_audience_array"] = ("a mapper adds another audience: aud is [client, billing-api], azp is the client",
+                                       ex.tokens()["id_token"])
+    finally:
+        ex.stop()
 
     write("tokens.json", {"now": NOW, "issuer": ISSUER_BASE + "/realms/e2e", "client_id": "vb-e2e", "nonce": NONCE,
                           "tokens": {k: {"note": v[0], "token": v[1]} for k, v in tokens.items()}})

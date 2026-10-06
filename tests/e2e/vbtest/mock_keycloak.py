@@ -169,21 +169,16 @@ class _Session:
         self.id, self.user_id, self.created, self.last_refresh, self.active = sid, user_id, now, now, True
 
 
-class _Redirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *a, **kw):  # never follow: the caller wants to see the Location
-        return None
-
-
 class MockKeycloak(IdpBackend):
     def __init__(self, client_id="vb-e2e", realm="e2e", alg="RS256", audience_mapper=False,
                  group_paths=False, interactive=False, redirect_pattern="http://127.0.0.1/*",
-                 pkce_required=True, sso_session_idle_timeout=1800, sso_session_max_lifespan=36000,
+                 pkce_required=True, extra_audience=None, sso_session_idle_timeout=1800, sso_session_max_lifespan=36000,
                  access_token_lifespan=300, revoke_refresh_token=False, include_enc_key=True,
                  clock=None, seed=None, issuer_base=None):
         self.client_id, self.realm, self.alg = client_id, realm, alg
         self.issuer_base = issuer_base  # advertised host for golden fixtures (--dump-fixtures); the server is still local
         self.audience_mapper, self.group_paths, self.interactive = audience_mapper, group_paths, interactive
-        self.redirect_pattern, self.pkce_required = redirect_pattern, pkce_required
+        self.redirect_pattern, self.pkce_required, self.extra_audience = redirect_pattern, pkce_required, extra_audience
         self.settings = {"sso_session_idle_timeout": sso_session_idle_timeout,
                          "sso_session_max_lifespan": sso_session_max_lifespan,
                          "access_token_lifespan": access_token_lifespan,
@@ -302,6 +297,9 @@ class MockKeycloak(IdpBackend):
     def _user_by_id(self, uid):
         return next((u for u in list(self.users.values()) + list(self._legacy.values()) if u.id == uid), None)
 
+    def user_id(self, username):
+        return self._user_named(username).id
+
     def disable_user(self, username):
         self._user_named(username).enabled = False
 
@@ -375,9 +373,14 @@ class MockKeycloak(IdpBackend):
         return [g.split("/")[-1] for g in u.groups]
 
     def _aud(self, access=False):
-        if self.audience_mapper:
-            return [self.client_id, "account"]
-        return "account" if access else self.client_id
+        """KC (verified on 26.7): the ID token's aud is the client id. An audience mapper for our own
+        client changes only the access token ([client, "account"]); one for another audience
+        (`extra_audience`) adds it to both."""
+        if self.extra_audience:
+            return [self.extra_audience, "account"] if access else [self.client_id, self.extra_audience]
+        if access:
+            return [self.client_id, "account"] if self.audience_mapper else "account"
+        return self.client_id
 
     def _payload(self, u, sess, nonce=None, iat=None, access=False, at_hash=None):
         iat = self.now() if iat is None else iat
@@ -393,7 +396,8 @@ class MockKeycloak(IdpBackend):
         p["realm_access"] = {"roles": ["default-roles-" + self.realm, "offline_access", "uma_authorization"] + u.roles}
         p["email_verified"] = u.email_verified
         p["name"] = u.name
-        p["groups"] = self._groups_claim(u)
+        if u.groups:  # KC: a user in no group has no `groups` claim at all (verified against Keycloak 26.7)
+            p["groups"] = self._groups_claim(u)
         p["preferred_username"] = u.username
         if u.email is not None:
             p["email"] = u.email
@@ -592,14 +596,19 @@ class MockKeycloak(IdpBackend):
         if not self._redirect_ok(uri):
             return self._page(h, 400, "We are sorry...", "Invalid parameter: redirect_uri")
 
-        def back(error, description):
-            params = {"error": error, "error_description": description, "state": q.get("state", "")}
+        def back(error, description=None):
+            params = {"error": error}
+            if description:
+                params["error_description"] = description
+            params.update(state=q.get("state", ""), iss=self.issuer)
             self._redirect(h, uri + "?" + urllib.parse.urlencode(params))
 
         if q.get("response_type") != "code":
-            return back("unsupported_response_type", "Unsupported response type")  # KC: wording unverified
-        if self.pkce_required and q.get("code_challenge_method") != "S256":
+            return back("unsupported_response_type")  # KC: no description
+        if self.pkce_required and not q.get("code_challenge_method"):
             return back("invalid_request", "Missing parameter: code_challenge_method")
+        if self.pkce_required and q.get("code_challenge_method") != "S256":
+            return back("invalid_request", "Invalid parameter: code challenge method is not matching the configured one")
         with self.lock:
             for e in list(self._login_errors):
                 if e[2] is not None and e[2] <= 0:
@@ -639,7 +648,15 @@ class MockKeycloak(IdpBackend):
     def _login_form(self, h, session_code, cookie, error=None):
         action = "%s/login-actions/authenticate?%s" % (self.local_url, urllib.parse.urlencode(
             {"session_code": session_code, "client_id": self.client_id, "tab_id": "t" + session_code[:6]}))
-        err = '<span id="input-error" class="kc-feedback-text">%s</span>' % html.escape(error) if error else ""
+        # KC (v2 theme): a wrong password is helper text under the field, a disabled account an alert above the form.
+        if error and "disabled" in error:
+            err = ('<div class="pf-v5-c-alert pf-m-inline pf-v5-u-mb-md pf-m-danger"><span class="pf-v5-c-alert__title '
+                   'kc-feedback-text">%s</span></div>' % html.escape(error))
+        elif error:
+            err = ('<div class="pf-v5-c-helper-text__item pf-m-error" id="input-error-username"><span class="'
+                   'pf-v5-c-helper-text__item-text pf-m-error kc-feedback-text">%s</span></div>' % html.escape(error))
+        else:
+            err = ""
         page = ('<html><head><title>Sign in to %s</title></head><body><div id="kc-header">%s</div>%s'
                 '<form id="kc-form-login" action="%s" method="post">'
                 '<input id="username" name="username" type="text" autofocus>'
@@ -647,7 +664,8 @@ class MockKeycloak(IdpBackend):
                 '<input name="credentialId" type="hidden"><input id="kc-login" type="submit" value="Sign In">'
                 '</form></body></html>') % (self.realm, self.realm, err, html.escape(action))
         self._send(h, 200, page, "text/html; charset=utf-8",
-                   {"Set-Cookie": "AUTH_SESSION_ID=%s; Path=/realms/%s/; HttpOnly" % (cookie, self.realm)})
+                   {"Set-Cookie": "AUTH_SESSION_ID=%s;Version=1;Path=/realms/%s/;Secure;HttpOnly;SameSite=None"  # KC: even on http
+                    % (cookie, self.realm)})
 
     def _ep_login(self, h, method, q, f):
         entry = self.auth_sessions.get(q.get("session_code", ""))
@@ -671,7 +689,7 @@ class MockKeycloak(IdpBackend):
             return self._error(h, 405, "invalid_request", "HTTP method not allowed")
         self.token_requests.append(f)
         if f.get("client_id") != self.client_id:
-            return self._error(h, 401, "unauthorized_client", "Invalid client or Invalid client credentials")
+            return self._error(h, 401, "invalid_client", "Invalid client or Invalid client credentials")
         grant = f.get("grant_type")
         if grant == "authorization_code":
             return self._grant_code(h, f)
@@ -690,10 +708,12 @@ class MockKeycloak(IdpBackend):
             return self._error(h, 400, "invalid_grant", "Incorrect redirect_uri")
         if entry["challenge"]:
             verifier = f.get("code_verifier")
-            if not verifier:
+            if verifier is None:
                 return self._error(h, 400, "invalid_grant", "PKCE code verifier not specified")
-            if b64u(hashlib.sha256(verifier.encode()).digest()) != entry["challenge"]:
+            if not re.fullmatch(r"[A-Za-z0-9\-._~]{43,128}", verifier):  # RFC 7636 4.1
                 return self._error(h, 400, "invalid_grant", "PKCE verification failed: Invalid code verifier")
+            if b64u(hashlib.sha256(verifier.encode()).digest()) != entry["challenge"]:
+                return self._error(h, 400, "invalid_grant", "PKCE verification failed: Code mismatch")
         user, sess = self._user_by_id(entry["user"]), self.sessions[entry["sid"]]
         with self.lock:
             rt = self._new_refresh_token(sess)
@@ -702,7 +722,7 @@ class MockKeycloak(IdpBackend):
     def _grant_refresh(self, h, f):
         token = f.get("refresh_token")
         if not token:
-            return self._error(h, 400, "invalid_request", "Missing form parameter: refresh_token")
+            return self._error(h, 400, "invalid_request", "No refresh token")
         with self.lock:
             rt = self.refresh.get(token)
             if rt is None:
@@ -764,47 +784,10 @@ class MockKeycloak(IdpBackend):
         self._send(h, 200, {k: claims[k] for k in keep if k in claims})
 
     def _ep_introspect(self, h, method, q, f):
-        token = f.get("token", "")
-        try:
-            claims = json.loads(jc.b64u_decode(token.split(".")[1]))
-            sess = self.sessions.get(claims.get("sid"))
-            active = bool(sess and sess.active and claims.get("exp", 0) >= self.now())
-        except (IndexError, ValueError):
-            return self._send(h, 200, {"active": False})
-        self._send(h, 200, dict(claims, active=True, client_id=self.client_id) if active else {"active": False})
+        # KC: introspection is for confidential clients; our client is public.
+        return self._error(h, 403, "invalid_request", "Client not allowed.")
 
-    # -- IdpBackend: the browser -----------------------------------------------------------------
-    def browser_login(self, auth_url, username, password):
-        jar = http.cookiejar.CookieJar()
-        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar), _Redirect)
-
-        def go(request):
-            try:
-                with opener.open(request, timeout=10) as r:
-                    return r.status, dict(r.headers), r.read().decode()
-            except urllib.error.HTTPError as e:
-                return e.code, dict(e.headers), e.read().decode()
-
-        status, headers, page = go(auth_url)
-        if status == 302 and "login-actions" not in headers.get("Location", ""):
-            return self._login_result(headers["Location"])
-        if status == 200 and "kc-form-login" in page:
-            action = html.unescape(re.search(r'id="kc-form-login"[^>]*action="([^"]+)"', page).group(1))
-            data = urllib.parse.urlencode({"username": username, "password": password, "credentialId": ""}).encode()
-            status, headers, page = go(urllib.request.Request(action, data=data, method="POST"))
-            if status == 302:
-                return self._login_result(headers["Location"])
-            m = re.search(r'id="input-error"[^>]*>([^<]*)<', page)
-            raise LoginRefused(html.unescape(m.group(1)) if m else "sign-in failed (HTTP %d)" % status)
-        m = re.search(r'class="instruction">([^<]*)<', page)
-        raise LoginRefused(html.unescape(m.group(1)) if m else "sign-in failed (HTTP %d)" % status)
-
-    def _login_result(self, location):
-        q = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(location).query))
-        if "error" in q:
-            raise LoginRefused("%s: %s" % (q["error"], q.get("error_description", "")))
-        return location
-
+    # -- IdpBackend: the browser (browser_login / obtain_tokens come from the base class) ------------------
     def obtain_tokens(self, username, password):
         if not self.interactive:  # /auth signs in whoever is "at the browser": make that this user
             user = self.users.get(username)
@@ -812,25 +795,10 @@ class MockKeycloak(IdpBackend):
                 raise LoginRefused("Invalid username or password.")
             previous, self.next_username = self.next_username, username
             try:
-                return self._obtain(username, password)
+                return super().obtain_tokens(username, password)
             finally:
                 self.next_username = previous
-        return self._obtain(username, password)
-
-    def _obtain(self, username, password):
-        verifier = b64u(secrets.token_bytes(32))
-        redirect = "http://127.0.0.1:9/obtain"  # never contacted: we read the Location, not follow it
-        oidc = self.local_url + "/protocol/openid-connect"
-        auth_url = oidc + "/auth?" + urllib.parse.urlencode({
-            "client_id": self.client_id, "response_type": "code", "scope": "openid", "redirect_uri": redirect,
-            "state": "s", "nonce": b64u(secrets.token_bytes(8)),
-            "code_challenge": b64u(hashlib.sha256(verifier.encode()).digest()), "code_challenge_method": "S256"})
-        location = self.browser_login(auth_url, username, password)
-        code = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(location).query))["code"]
-        data = urllib.parse.urlencode({"grant_type": "authorization_code", "client_id": self.client_id,
-                                       "code": code, "redirect_uri": redirect, "code_verifier": verifier}).encode()
-        with urllib.request.urlopen(urllib.request.Request(oidc + "/token", data=data), timeout=10) as r:
-            return json.loads(r.read())
+        return super().obtain_tokens(username, password)
 
 
 def main(argv=None):

@@ -109,7 +109,7 @@ bool wait_until(Pred pred, int ms = 3000) {
 
 TEST_CASE("keycloak client: every error body maps to 'sign in again', and none of it leaks") {
 	const char *permanent[] = { "session_not_active", "token_not_active", "invalid_refresh_token", "user_disabled",
-		"refresh_reuse_exceeded", "code_not_valid", "pkce_failed", "unauthorized_client", "unsupported_grant_type" };
+		"refresh_reuse_exceeded", "code_not_valid", "pkce_failed", "invalid_client", "unsupported_grant_type" };
 	for (const char *name : permanent) {
 		CAPTURE(name);
 		KeycloakFixtureFetcher http;

@@ -190,12 +190,17 @@ class TestCodeFlow:
     def test_wrong_verifier_fails_and_burns_the_code(self, realm):
         code, verifier, _ = sign_in(realm)
         status, body = exchange(realm, code, "w" * 43)
-        assert (status, body["error_description"]) == (400, "PKCE verification failed: Invalid code verifier")
+        assert (status, body["error_description"]) == (400, "PKCE verification failed: Code mismatch")
         assert exchange(realm, code, verifier)[1]["error_description"] == "Code not valid"
 
     def test_missing_verifier_and_wrong_redirect_uri(self, realm):
         code, verifier, _ = sign_in(realm)
-        assert exchange(realm, code, None, code_verifier="")[1]["error_description"] == "PKCE code verifier not specified"
+        assert exchange(realm, code, None, code_verifier="x")[1]["error_description"] == \
+            "PKCE verification failed: Invalid code verifier"   # not 43..128 unreserved characters
+        code, verifier, _ = sign_in(realm)
+        form = {"grant_type": "authorization_code", "code": code, "redirect_uri": REDIRECT}
+        assert token(realm, **form)[1]["error_description"] == "PKCE code verifier not specified"  # absent
+        code, verifier, _ = sign_in(realm)
         code, verifier, _ = sign_in(realm)
         assert exchange(realm, code, verifier, redirect_uri="http://127.0.0.1:1/other")[1]["error_description"] == \
             "Incorrect redirect_uri"
@@ -203,11 +208,12 @@ class TestCodeFlow:
     def test_wrong_client_is_unauthorized(self, realm):
         code, verifier, _ = sign_in(realm)
         status, body = exchange(realm, code, verifier, client_id="someone-else")
-        assert status == 401 and body["error"] == "unauthorized_client"
+        assert status == 401 and body["error"] == "invalid_client"
 
     def test_unknown_and_missing_grants(self, realm):
         assert token(realm, grant_type="password")[1]["error"] == "unsupported_grant_type"
         assert token(realm)[1]["error"] == "invalid_request"
+        assert token(realm, grant_type="refresh_token")[1] == {"error": "invalid_request", "error_description": "No refresh token"}
 
     def test_redirect_uri_not_matching_the_clients_pattern_is_a_400_page_not_a_redirect(self, realm):
         _, challenge = pkce()
@@ -224,6 +230,10 @@ class TestCodeFlow:
     def test_missing_pkce_is_rejected_by_redirect(self, realm):
         status, headers, _ = http(auth_url(realm, None, code_challenge_method=None))
         assert status == 302 and code_from(headers["Location"])["error"] == "invalid_request"
+        q = code_from(http(auth_url(realm, "x", code_challenge_method="plain"))[1]["Location"])
+        assert "not matching the configured one" in q["error_description"] and q["iss"] == realm.issuer
+        q = code_from(http(auth_url(realm, "x", response_type="bogus"))[1]["Location"])
+        assert q["error"] == "unsupported_response_type" and "error_description" not in q
 
     def test_user_cancels(self, realm):
         realm.cancel_logins("access_denied", "User cancelled")
@@ -305,7 +315,7 @@ class TestRefresh:
     def test_group_changes_show_up_in_the_next_token(self, realm):
         t = self.tokens(realm)
         realm.set_groups("alice", [])
-        assert claims(self.refresh(realm, t["refresh_token"])[1]["id_token"])["groups"] == []
+        assert "groups" not in claims(self.refresh(realm, t["refresh_token"])[1]["id_token"])  # as Keycloak: absent, not []
 
     def test_refresh_token_rotation(self, realm):
         realm.set_realm(revoke_refresh_token=True)
@@ -327,11 +337,11 @@ class TestRefresh:
         t = self.tokens(realm)
         auth = {"Authorization": "Bearer " + t["access_token"]}
         assert json.loads(http(realm.issuer + "/protocol/openid-connect/userinfo", headers=auth)[2])["preferred_username"] == "alice"
-        intro = realm.issuer + "/protocol/openid-connect/token/introspect"
-        assert json.loads(http(intro, data={"token": t["access_token"]})[2])["active"] is True
         realm.admin_logout("alice")
         assert http(realm.issuer + "/protocol/openid-connect/userinfo", headers=auth)[0] == 401
-        assert json.loads(http(intro, data={"token": t["access_token"]})[2]) == {"active": False}
+        # KC: token introspection is for confidential clients; ours is public
+        status, _, body = http(realm.issuer + "/protocol/openid-connect/token/introspect", data={"token": t["access_token"]})
+        assert (status, json.loads(body)) == (403, {"error": "invalid_request", "error_description": "Client not allowed."})
 
 
 class TestKeys:
@@ -353,15 +363,26 @@ class TestKeys:
         old, new = idp.active_kid, idp.rotate_keys()
         assert old != new and len([k for k in idp.jwks()["keys"] if k["use"] == "sig"]) == 2
 
-    def test_audience_mapper_and_group_paths(self):
+    def test_audience_mappers_and_group_paths(self):
         idp = MockKeycloak(audience_mapper=True, group_paths=True).start()
         try:
             idp.add_user("alice", "pw", groups=["admins", "/team/a"])
             code, verifier, _ = sign_in(idp)
             body = exchange(idp, code, verifier)[1]
             idt, at = claims(body["id_token"]), claims(body["access_token"])
-            assert idt["aud"] == ["vb-e2e", "account"] and at["aud"] == ["vb-e2e", "account"]  # the Q1 gap
+            assert idt["aud"] == "vb-e2e"                      # the ID token's aud is the client id, as on Keycloak
+            assert at["aud"] == ["vb-e2e", "account"]          # the Q1 gap: the access token now names our client
             assert idt["groups"] == ["/admins", "/team/a"] and idt["typ"] == "ID" and at["typ"] == "Bearer"
+        finally:
+            idp.stop()
+        idp = MockKeycloak(extra_audience="billing-api").start()
+        try:
+            idp.add_user("alice", "pw")
+            idp.login_as("alice")
+            code, verifier, _ = sign_in(idp)
+            body = exchange(idp, code, verifier)[1]
+            assert claims(body["id_token"])["aud"] == ["vb-e2e", "billing-api"]
+            assert claims(body["id_token"])["azp"] == "vb-e2e"
         finally:
             idp.stop()
 
