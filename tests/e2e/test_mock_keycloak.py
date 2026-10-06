@@ -547,3 +547,21 @@ def test_a_thread_per_request_server_survives_parallel_clients(idp):
     [t.start() for t in threads]
     [t.join() for t in threads]
     assert results == [200] * 20 and len(idp.request_log()) == 20
+
+
+def test_the_committed_unit_fixtures_are_what_the_emulator_dumps(tmp_path):
+    """tests/unit/fixtures/keycloak/ is generated, deterministically; a change to the emulator that
+    alters what it says must come with regenerated fixtures (the reviewer sees the diff)."""
+    import filecmp
+    import pathlib
+    from vbtest import fixture_dump
+    committed = pathlib.Path(__file__).resolve().parents[1] / "unit" / "fixtures" / "keycloak"
+    fixture_dump.dump(tmp_path)
+    cmp = filecmp.dircmp(committed, tmp_path)
+    def differences(c, prefix=""):
+        out = [prefix + n for n in c.diff_files + c.left_only + c.right_only]
+        for name, sub in c.subdirs.items():
+            out += differences(sub, prefix + name + "/")
+        return out
+    assert not differences(cmp), ("regenerate: cd tests/e2e && python3 -m vbtest.mock_keycloak --dump-fixtures "
+                                  "../unit/fixtures/keycloak; differs: %s" % differences(cmp))

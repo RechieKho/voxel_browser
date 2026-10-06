@@ -53,6 +53,8 @@ With the `vb` tool: `vb server config <name> set auth.issuer https://id.prod.exa
    port, RFC 8252). Advanced → *Proof Key for Code Exchange Code Challenge Method:* **S256**.
 4. Pick `name_claim` (`preferred_username` is the usual choice). For group-based logic add a
    *Group Membership* mapper (claim `groups`, *Add to ID token* ON) and list `"groups"` in `claims`.
+   Keycloak leaves the claim out entirely for a user who is in no group (and *Full group path*
+   decides between `admins` and `/admins`), so scripts should read it as `login.claims.groups or {}`.
 5. `issuer` is the realm URL, `https://<host>/realms/<realm>`.
 
 Revocation: *Sessions → Sign out* (or disabling the user) makes the IdP refuse the player's
