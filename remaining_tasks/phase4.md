@@ -433,7 +433,7 @@ Lua-defined UI.
       `content/base/ui/inventory.lua` composes a real item grid out of it
       plus `rect`/`text` (slot background/border, count label) — the same
       "compose it in Lua" posture Phase 6.16 already gave the hold-to-break
-      progress bar out of `rect`. See "Current status" in `STATE.md` for the
+      progress bar out of `rect`. See `STATE.md` history (`state/changelog-*.md`) for the
       full writeup.
 - [x] Real texture/atlas system landed 2026-09-23 (see
       `state/changelog-recent.md`): `vb.register_block{texture=...}` ->
@@ -452,3 +452,56 @@ screen") is content, not mechanism: there is no `content/base` pack yet
 (Phase 5.1) for a real server to load, so nothing calls `vb.register_block`/
 `ui.define`/etc. outside of tests today.
 
+---
+
+### Moved from `REMAINING_TASKS.md`'s core (dream, 2026-10-06)
+
+> Verbatim text of the core file's "Remaining" list for this section at the
+> time of the move; the core now keeps a one-line summary.
+
+- [x] Custom `require` over the pack's own virtual module filesystem +
+      per-callback wall-clock budget — landed 2026-09-27. In-memory
+      `path -> source text` map built from a recursive walk of the pack's
+      `.lua` files (except `ui/*.lua`), installed via `Vm::install_require()`;
+      cycle detection, `package.loaded`-style caching. `VmLimits` gains a
+      250ms `wall_clock_budget_ms` checked from the existing instruction hook
+      (`kHookPeriod` 1000), classified to the existing `kBudgetExceeded`.
+- [x] `EntityKind` tick/spawn/hit/death callbacks wired into real systems —
+      landed 2026-09-27, now that `SystemRunner` (Phase 3.1) exists.
+      `ServerSession::set_script_tick_hook` is a new `"script_tick"`
+      `SystemRunner` phase, so a script-driven entity move now reaches that
+      same tick's `sync_interest`/`broadcast_snapshots` instead of one tick
+      late.
+- [x] `register_entity`'s `visual = {...}` sub-table (variant/facings/clips)
+      for 3.5's `entity_renderer` — landed 2026-09-25 (protocol **19 -> 20**).
+      Client-side `entity_visual_layout.hpp` computes per-clip layout,
+      validated against the real decoded PNG; a mismatch falls back to the
+      flat placeholder rather than failing pack load.
+- [x] Per-instance `ScriptState.visual_override` (skins) — landed 2026-09-25
+      (protocol **20 -> 21**). `vb.world.spawn(kind, pos, {visual_override=})`
+      merges independently-optional fields over the kind's own `visual`;
+      fixed at spawn time only — no live-update/clear path yet.
+- [x] Real base-pack art for `base:player`/`base:dropped_item` — landed
+      2026-09-25 via a new `vb.register_entity{represents="player"|
+      "item_drop"}` field. **Follow-up (2026-09-27):** front/side/back poses
+      were too similar to tell apart; `base:player` swapped to debug-styled
+      F/R/B/L art plus a new `visual = {mirror = false}` option for a
+      distinct pose per facing (protocol 22 -> 23) — also fixed a real
+      pre-existing bug where a facings=4 kind was picking its pose with
+      hardcoded facings=8 sector math.
+- [x] Real texture/atlas system landed 2026-09-23: `vb.register_block{
+      texture=...}` -> `S2C_BlockRegistry` -> per-session `TextureAtlas` ->
+      real per-face UVs. Proved on `base:stone`/`base:water` only — a full
+      base-pack reskin (dirt/grass/sand/wood/leaves) is a separate follow-up.
+- [x] Manifest staleness: a pack writing `vb.storage` *after* startup used
+      to go stale for the server process's life — landed 2026-09-28. New
+      `PackRuntime::storage_revision()` counter, polled once/sec by
+      `src/server/main.cpp` to rebuild + atomically swap the asset manifest
+      via a new `ManifestHolder`. `--singleplayer` is out of scope (never
+      builds a manifest).
+- [x] Item grid widget for `UiRuntime` — landed 2026-09-28. A new generic
+      `icon` `WidgetType` draws one registered block/item id's real atlas
+      texture; `content/base/ui/inventory.lua` composes a real item grid out
+      of it plus `rect`/`text`.
+- [ ] `--singleplayer`'s registry-wiring gap is closed (Phase 5.1); no
+      remaining item here.

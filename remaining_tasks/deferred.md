@@ -8,7 +8,7 @@
   LZ4/zstd framing yet (RLE only).~~ **Resolved 2026-09-28** — see
   `ARCHITECTURE_SPEC.md` §18 row 5. ~~`--singleplayer`'s integrated server
   has no `RegionStore` wired in.~~ **Resolved 2026-09-28** — see
-  `STATE.md`'s "Current status" for the full writeup: `Singleplayer`
+  `STATE.md`\'s history (`state/changelog-*.md`) for the full writeup: `Singleplayer`
   (`src/client/main.cpp`) now owns its own `RegionStore` under a fixed
   `world_singleplayer/` directory, wired into its `WorldReplicator` exactly
   like the dedicated server's own `region_store`, with a matching 60s

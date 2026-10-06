@@ -350,7 +350,7 @@ Goal: a small, coherent, playable multiplayer sandbox.
       pack-side decision (e.g. from `player:get_held_item()`) with no tool/
       hardness concept added to the engine itself. PvP damage is unaffected
       — that stays `vb.combat.set_params`'s own `player_damage`. See
-      "Current status" in `STATE.md` for the full writeup.
+      `STATE.md` history (`state/changelog-*.md`) for the full writeup.
 
 ### 5.2 status (2026-09-16): playable over loopback, Lua veto now wired,
 hold-to-break landed. `voxel_browser --singleplayer` can break (after a short
@@ -677,3 +677,35 @@ manually earlier in the project (see `STATE.md`'s Phase 1 notes) — what
 hasn't specifically been re-verified live is the *combination*: two real
 windows, chatting, crafting, and seeing each other, all at once.
 
+---
+
+### Moved from `REMAINING_TASKS.md`'s core (dream, 2026-10-06)
+
+> Verbatim text of the core file's "Remaining" list for this section at the
+> time of the move; the core now keeps a one-line summary.
+
+- [x] Player + dropped-item billboard sprite atlases (§11.3/3.5) — landed
+      2026-09-25, see Phase 4's "Real base-pack art" entry.
+- [x] Cross-chunk relight on edit (breaking a floor lets light into the chunk
+      below) — confirmed already closed 2026-09-28, no code change needed;
+      `WorldReplicator::apply_block_edit()` has called the cross-chunk
+      `relight_column` cascade (Phase 2) on every real edit since that
+      pass landed. New end-to-end regression test proves it, not just
+      re-reading the code. `relight_chunk()` still recomputes from scratch
+      each time (deliberate perf characteristic, not a gap).
+- [x] Per-block hardness/tool break-time variation — landed 2026-09-28.
+      `ServerSession::punch()`/`player:punch()` gained an optional
+      `block_damage` parameter (default 1); per-block hardness already
+      existed (`BlockType::max_damage`, 6.5) — this is the matching "tool"
+      half, a pack-side decision with no tool concept in the engine itself.
+- [x] Keybindings screen (5.3 Settings) — a new Settings -> Keybindings
+      raygui screen (`MainMenu::draw_keybindings`) lets a player rebind any
+      of the 6 `MovementBindings` axes to a physical key, persisted to
+      `client.toml`, applied live. Distinct from Phase 6.19's
+      `vb.register_keybind` name registry — the two compose.
+- [x] Connect-screen byte-progress bar — landed 2026-09-28 (was status-text
+      only). `ClientAssetCache::sync_total_bytes()`/`sync_received_bytes()`
+      derive real progress from the existing transfer map;
+      `MainMenu::draw_connecting()` draws a real `GuiProgressBar` once a
+      fraction is known. Phase 7.1's loading-screen entry named this as a
+      likely shared prerequisite — now closed.

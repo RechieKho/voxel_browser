@@ -199,3 +199,38 @@ done: re-running the multi-client Loopback tests over `GnsTransport` (the raw
 transport has its own real-UDP test instead), hostname resolution, and macOS
 CI (see 1.2's notes).
 
+---
+
+### Moved from `REMAINING_TASKS.md`'s core (dream, 2026-10-06)
+
+> Verbatim text of the core file's "Remaining" list for this section at the
+> time of the move; the core now keeps a one-line summary.
+
+- [x] Surface `ENGINE_PROTOCOL_VERSION` mismatch in the client connect UI —
+      already fully wired by the time this was checked (2026-09-28), no code
+      change needed: `ClientHandshake::on_frame` (`src/net/handshake.cpp`)
+      fails with `"engine protocol version mismatch"` both when the client's
+      own check trips (`info->engine_protocol_version != kEngineProtocolVersion`)
+      and when a server-side rejection frame (`kProtocolMismatch`) arrives;
+      `src/client/main.cpp`'s `kConnecting` case (`client->failed() ?
+      client->failure_reason() : ...`) already routes that string into
+      `error_message` and `AppState::kError`, which `MainMenu::draw_error()`
+      (`src/render/main_menu.cpp`) renders as a real raygui label with a
+      "Back to menu" button — the Phase 5.3 main-menu error path this item
+      said it was waiting on has existed since that phase landed. Covered by
+      the existing `net_test.cpp` case "client rejects a protocol version
+      mismatch". This item's own text was stale, tracking a gap that closed
+      as a side effect of unrelated work rather than being picked up as its
+      own task.
+- [x] macOS CI now builds `VB_WITH_NET` — landed 2026-09-30 as a new
+      `build_net_deps` job in `build_macos.yml`: builds protobuf v21.12 and
+      OpenSSL 3.3.2 once per arch (arm64 native, x86_64 cross), `lipo`-merges
+      the resulting static libs into one universal install prefix, uploads
+      it as an artifact the `build` matrix downloads and feeds to
+      `-DCMAKE_PREFIX_PATH`/`-DOPENSSL_ROOT_DIR`. **Not yet verified by a
+      real GitHub Actions run** — this agent environment has no macOS
+      runner; see `STATE.md`\'s history (`state/changelog-*.md`) for the full reasoning and
+      what to check if the first real run fails.
+- [x] The two-client replication test runs over `LoopbackTransport` only;
+      re-run over `GnsTransport` — see `STATE.md` history (`state/changelog-*.md`) for
+      the full writeup (landed 2026-09-28).

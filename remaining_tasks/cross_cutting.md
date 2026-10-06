@@ -300,3 +300,67 @@
       has no GUI. Verified: full `vb_tests` 415/415 green (2 new cases),
       clean `-Werror` build of `vb_tests`/`voxel_browser`/
       `voxel_browser_server`.
+
+---
+
+### Moved from `REMAINING_TASKS.md`'s core (dream, 2026-10-06)
+
+> Verbatim text of the core file's "Remaining" list for this section at the
+> time of the move; the core now keeps a one-line summary.
+
+- [~] **End-to-end multiplayer automation (dev-only)** — design in
+      `docs/e2e-automation.md`; phases E0–E6 below it. E0 (input seam) and
+      E1 (`ClientApp`) and E2 (flags, stdio host, predicate engine) E2b (handshake `client_flags`, protocol v27) E3 (client actions + server admin commands) E4 (pytest harness, `e2e` CTest/CI job) E5 (`--net-sim`, windowed clients, screenshots, trace viewer) and E6 (TCP attach, session recorder) have landed (all phases); still open: the CI job has never run on a runner, and Windows/macOS are unbuilt; the rest is open. Must stay compiled out of production builds
+      (`VB_WITH_AUTOMATION`, `VB_DISTRIBUTION`). Doc-upkeep checklist per phase:
+      `docs/e2e-automation.md` §11.
+
+- [x] **`script::PlayerHandle` stashed across ticks returning/crashing on
+      corrupted data** (found 2026-09-28 building
+      `content/base/entities/zombie.lua`, root-caused and fixed 2026-09-30).
+      Real cause: sol2 pushes a non-const lvalue reference to a registered
+      usertype as a raw pointer into the caller's own C++ stack frame, not a
+      copy, unless `SOL_FUNCTION_CALL_VALUE_SEMANTICS` is defined on — every
+      `PlayerHandle` dispatch call site constructs a named local and passes
+      it straight into the Lua call, so a pack script that stores that
+      argument beyond the call (a global, table field, upvalue — storage
+      location never mattered) holds a dangling stack pointer the instant a
+      *different* C++ call path reuses that address. Fixed by defining
+      `SOL_FUNCTION_CALL_VALUE_SEMANTICS=1` on the `sol2` target
+      (`cmake/Dependencies.cmake`) — `PlayerHandle` is the only usertype this
+      project registers and is a stateless proxy, so forcing copy semantics
+      is free. Full root-cause writeup, the empirical pointer-identity proof,
+      and verification detail in `remaining_tasks/cross_cutting.md`.
+- [ ] Keep `ENGINE_PROTOCOL_VERSION` + `docs/protocol.md` in lockstep with every
+      wire change.
+- [ ] Every new `vb/protocol` struct gets a round-trip + fuzz test.
+- [x] Sanitizer (ASan/UBSan) debug CI job; TSan job for the threaded
+      subsystems — landed 2026-09-28 on the Linux matrix only (MSVC has no
+      UBSan/TSan support; macOS CI doesn't build `VB_WITH_NET` yet). Not
+      verified by an actual GitHub Actions run — this agent environment
+      can't trigger one.
+- [ ] Determinism golden-value CI gate stays green across platforms.
+- [x] Soak test target (N simulated clients, random walk + edits) — landed
+      2026-09-28 as `tests/unit/soak_test.cpp`, folded into the normal
+      `vb_tests` run. 4 simulated clients over `LoopbackNetwork`
+      random-walk + break/place-edit for 150 ticks; asserts connection/edit-
+      queue/loaded-chunk counts all stay bounded rather than growing, and
+      that everything cleans up to 0 after disconnect. Deliberately kept
+      small (real fBm terrain generation dominates cost far more than the
+      sim logic being soaked).
+- [x] Perf budget checks: chunk mesh time, snapshot size — landed 2026-09-28
+      as `tests/unit/perf_budget_test.cpp`. Chunk mesh time asserts
+      `< 100ms` (measured ~21ms); snapshot size asserts a per-entity byte
+      budget (measured ~52 bytes/entity vs. a 90-byte budget). Frame time
+      deliberately left out — needs a live GL context this environment
+      doesn't have.
+- [ ] `--headless` stays functional for both binaries (CI + integration tests).
+- [ ] Address the remaining open item(s) in `ARCHITECTURE_SPEC.md` §18 as
+      their blocking phase arrives (renumbered from §19; every row is now
+      resolved or has a noted direction — Q4 chunk compression resolved
+      2026-09-28 (LZ4 wired generically into `frame_message()`, see that
+      row); Q5 persistence has region-file LZ4 framing resolved 2026-09-28
+      too (`RegionStore` format version 1 -> 2, see that row), and
+      `--singleplayer`'s `RegionStore` wiring is also now resolved
+      (2026-09-28, see `STATE.md` history (`state/changelog-*.md`)) — Q5 has no open sub-
+      item left; Q6 auth has a direction set but isn't implemented yet);
+      record decisions in that section.
