@@ -28,6 +28,7 @@
 #include "vb/cli/completions.hpp"
 #include "vb/cli/installer.hpp"
 #include "vb/cli/instance.hpp"
+#include "vb/cli/pack.hpp"
 #include "vb/cli/process.hpp"
 #include "vb/cli/release_manifest.hpp"
 #include "vb/cli/self_update.hpp"
@@ -1665,6 +1666,13 @@ int cmd_complete_helper(const Ctx &c, const std::vector<std::string> &args) {
 	return kExitUsage;
 }
 
+int cmd_pack(const Ctx &c, const std::vector<std::string> &args) {
+	PackHooks hooks;
+	hooks.host = [&c](const std::vector<std::string> &a) { return cmd_host(c, a); };
+	hooks.launch = [&c](const std::vector<std::string> &a) { return cmd_launch(c, a); };
+	return run_pack_command(c.layout, c.out, c.err, args, hooks);
+}
+
 const std::map<std::string, Command> &commands() {
 	static const std::map<std::string, Command> table = {
 		{ "install",
@@ -1708,6 +1716,9 @@ const std::map<std::string, Command> &commands() {
 		{ "structure",
 				{ "structure <new|edit|validate> ...", "author decorative structures (new, edit in the editor, validate)",
 						cmd_structure } },
+		{ "pack",
+				{ "pack <init|check|dev|types|info> ...", "create, validate and run a content pack",
+						cmd_pack } },
 		{ "self",
 				{ "self update [--check] [--force]", "update vb itself to the latest release",
 						[](const Ctx &c, const std::vector<std::string> &a) { return cmd_self(c, a); } } },

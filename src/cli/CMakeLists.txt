@@ -1,7 +1,16 @@
 # vb — developer CLI (architecture_spec/dev-cli.md). `vb_cli_lib` holds all the
 # logic so vb_tests can exercise it without spawning the binary.
 
+include(${CMAKE_SOURCE_DIR}/cmake/EmbedFiles.cmake)
+set(_vb_embedded_cpp "${CMAKE_BINARY_DIR}/generated/vb_embedded_files.cpp")
+vb_embed_files("${_vb_embedded_cpp}"
+  ROOT "${CMAKE_SOURCE_DIR}"
+  GLOBS "templates/pack/*" "sdk/lua/library/*.lua" "sdk/lua/luarc.template.json")
+
 add_library(vb_cli_lib STATIC
+  ${_vb_embedded_cpp}
+  embedded.cpp
+  pack.cpp
   commands.cpp
   compat.cpp
   completions.cpp
