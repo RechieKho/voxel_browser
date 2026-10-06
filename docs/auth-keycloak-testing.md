@@ -510,3 +510,7 @@ predicate, a headless singleplayer client that waits for a test-played sign-in, 
   checked against the emulator (`test_the_committed_unit_fixtures_are_what_the_emulator_dumps`).
 - K6.3: a job `services:` container cannot take `start-dev --import-realm`, so the harness starts the
   pinned container itself (image cached with `docker save` in `actions/cache`, keyed by tag).
+
+**CI budget.** Under ASan+UBSan the whole e2e CTest entry took 817 s of its 900 s timeout (unit tests 219 s),
+so the `slow` tests moved to a second entry, `e2e_wallclock` (`ctest -L wallclock`, 600 s), selected
+with `-m slow`; `e2e` runs `-m "not slow"`. Q2's fallback A, for the wall-clock tests only.

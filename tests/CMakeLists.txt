@@ -199,15 +199,25 @@ if(VB_WITH_AUTOMATION AND VB_WITH_NET AND VB_WITH_LUA AND VB_WITH_COMPRESSION
       RESULT_VARIABLE _vb_pytest_rc OUTPUT_QUIET ERROR_QUIET)
     if(_vb_pytest_rc EQUAL 0)
       add_test(NAME e2e
-        COMMAND ${Python3_EXECUTABLE} -m pytest -p no:cacheprovider -q
+        COMMAND ${Python3_EXECUTABLE} -m pytest -p no:cacheprovider -q -m "not slow"
                 ${CMAKE_SOURCE_DIR}/tests/e2e
                 --vb-build-dir ${CMAKE_BINARY_DIR}
                 --vb-artifacts ${CMAKE_BINARY_DIR}/e2e-artifacts
                 --junitxml=${CMAKE_BINARY_DIR}/e2e.xml)
       set_tests_properties(e2e PROPERTIES LABELS e2e TIMEOUT 900)
+      # The tests that wait on a real clock (marker `slow`: the 60 s re-auth interval, the 60 s
+      # unknown-key refresh limit) get their own entry so neither run nears its timeout. Its label
+      # is not "e2e" on purpose: `ctest -L e2e` (a regex) must still select exactly one test.
+      add_test(NAME e2e_wallclock
+        COMMAND ${Python3_EXECUTABLE} -m pytest -p no:cacheprovider -q -m slow
+                ${CMAKE_SOURCE_DIR}/tests/e2e
+                --vb-build-dir ${CMAKE_BINARY_DIR}
+                --vb-artifacts ${CMAKE_BINARY_DIR}/e2e-artifacts
+                --junitxml=${CMAKE_BINARY_DIR}/e2e-wallclock.xml)
+      set_tests_properties(e2e_wallclock PROPERTIES LABELS wallclock TIMEOUT 600)
       # Sanitizer builds run several times slower; vbtest scales every wait by this.
       if(VB_ENABLE_ASAN OR VB_ENABLE_UBSAN OR VB_ENABLE_TSAN)
-        set_property(TEST e2e APPEND PROPERTY ENVIRONMENT VB_E2E_TIMEOUT_SCALE=3)
+        set_property(TEST e2e e2e_wallclock APPEND PROPERTY ENVIRONMENT VB_E2E_TIMEOUT_SCALE=3)
       endif()
     else()
       message(STATUS "e2e tests not registered: ${Python3_EXECUTABLE} cannot import pytest "
