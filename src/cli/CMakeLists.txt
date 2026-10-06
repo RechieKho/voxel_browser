@@ -34,6 +34,13 @@ add_library(vb_cli_lib STATIC
   zip.cpp
 )
 
+# GCC 13 reports -Wmaybe-uninitialized from inside libstdc++'s <regex> (std::function in
+# _State) under ASan at -O2; with -Werror that fails the asan CI build. A false positive in a
+# system header, so silence just that warning for just this file (same as src/automation).
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  set_source_files_properties(pack.cpp PROPERTIES COMPILE_OPTIONS "-Wno-maybe-uninitialized")
+endif()
+
 target_include_directories(vb_cli_lib PUBLIC "${CMAKE_SOURCE_DIR}/inc")
 
 target_link_libraries(vb_cli_lib

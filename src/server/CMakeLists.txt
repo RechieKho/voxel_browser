@@ -10,6 +10,13 @@ if(VB_WITH_LUA)
   target_include_directories(vb_pack_check PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 endif()
 
+# GCC 13 reports -Wmaybe-uninitialized from inside libstdc++'s <regex> (std::function in
+# _State) under ASan at -O2; with -Werror that fails the asan CI build. A false positive in a
+# system header, so silence just that warning for just this file (same as src/automation).
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  set_source_files_properties(check_pack.cpp PROPERTIES COMPILE_OPTIONS "-Wno-maybe-uninitialized")
+endif()
+
 target_link_libraries(voxel_browser_server
   PRIVATE
     vb_core
