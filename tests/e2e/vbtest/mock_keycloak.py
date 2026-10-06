@@ -179,8 +179,9 @@ class MockKeycloak(IdpBackend):
                  group_paths=False, interactive=False, redirect_pattern="http://127.0.0.1/*",
                  pkce_required=True, sso_session_idle_timeout=1800, sso_session_max_lifespan=36000,
                  access_token_lifespan=300, revoke_refresh_token=False, include_enc_key=True,
-                 clock=None, seed=None):
+                 clock=None, seed=None, issuer_base=None):
         self.client_id, self.realm, self.alg = client_id, realm, alg
+        self.issuer_base = issuer_base  # advertised host for golden fixtures (--dump-fixtures); the server is still local
         self.audience_mapper, self.group_paths, self.interactive = audience_mapper, group_paths, interactive
         self.redirect_pattern, self.pkce_required = redirect_pattern, pkce_required
         self.settings = {"sso_session_idle_timeout": sso_session_idle_timeout,
@@ -240,8 +241,13 @@ class MockKeycloak(IdpBackend):
             self._server = None
 
     @property
-    def issuer(self):
+    def local_url(self):
+        """Where this server actually listens (differs from `issuer` only with `issuer_base`)."""
         return "http://127.0.0.1:%d/realms/%s" % (self.port, self.realm)
+
+    @property
+    def issuer(self):
+        return "%s/realms/%s" % (self.issuer_base, self.realm) if self.issuer_base else self.local_url
 
     @property
     def _oidc(self):
@@ -631,7 +637,7 @@ class MockKeycloak(IdpBackend):
         self._redirect(h, q["redirect_uri"] + "?" + urllib.parse.urlencode(params), headers)
 
     def _login_form(self, h, session_code, cookie, error=None):
-        action = "%s/login-actions/authenticate?%s" % (self.issuer, urllib.parse.urlencode(
+        action = "%s/login-actions/authenticate?%s" % (self.local_url, urllib.parse.urlencode(
             {"session_code": session_code, "client_id": self.client_id, "tab_id": "t" + session_code[:6]}))
         err = '<span id="input-error" class="kc-feedback-text">%s</span>' % html.escape(error) if error else ""
         page = ('<html><head><title>Sign in to %s</title></head><body><div id="kc-header">%s</div>%s'
@@ -814,7 +820,8 @@ class MockKeycloak(IdpBackend):
     def _obtain(self, username, password):
         verifier = b64u(secrets.token_bytes(32))
         redirect = "http://127.0.0.1:9/obtain"  # never contacted: we read the Location, not follow it
-        auth_url = self._oidc + "/auth?" + urllib.parse.urlencode({
+        oidc = self.local_url + "/protocol/openid-connect"
+        auth_url = oidc + "/auth?" + urllib.parse.urlencode({
             "client_id": self.client_id, "response_type": "code", "scope": "openid", "redirect_uri": redirect,
             "state": "s", "nonce": b64u(secrets.token_bytes(8)),
             "code_challenge": b64u(hashlib.sha256(verifier.encode()).digest()), "code_challenge_method": "S256"})
@@ -822,7 +829,7 @@ class MockKeycloak(IdpBackend):
         code = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(location).query))["code"]
         data = urllib.parse.urlencode({"grant_type": "authorization_code", "client_id": self.client_id,
                                        "code": code, "redirect_uri": redirect, "code_verifier": verifier}).encode()
-        with urllib.request.urlopen(urllib.request.Request(self._oidc + "/token", data=data), timeout=10) as r:
+        with urllib.request.urlopen(urllib.request.Request(oidc + "/token", data=data), timeout=10) as r:
             return json.loads(r.read())
 
 
