@@ -269,7 +269,9 @@ layout, command surface and per-phase task lists:
       `docs/lua-reference/` + one-line-per-function cheat sheet, `--check` in
       CI, doc examples syntax-checked.
 - [ ] **10.D — Headless pack validation**: `voxel_browser_server --check-pack
-      <dir> [--json]` (`file:line` diagnostics) + `vb pack check`.
+      <dir> [--json]` (`file:line` diagnostics) + `vb pack check`, including a
+      static per-environment global check (`vb` in `ui/*.lua`, `ui` on the
+      server, sandbox-removed builtins).
 - [ ] **10.E — Scaffolding**: `vb pack new`/`vb init` from templates embedded in
       `vb` (README, AGENTS.md, `.luarc.json`, stubs), `vb pack types/info/dev`.
 - [ ] **10.F — CLI reference & agent docs**: richer command table → `vb help

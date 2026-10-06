@@ -150,6 +150,51 @@ Living in the server binary (rather than in `vb`) keeps one loader and makes
 the check match whatever engine version will host the pack. `vb pack check`
 resolves the version (§3.5) and runs it.
 
+### 3.4.1 Per-environment globals (decided 2026-10-06)
+
+A pack's files run in four different environments, but LuaLS applies one set
+of globals to the whole workspace:
+
+| Files | Environment | Engine globals |
+| --- | --- | --- |
+| `init.lua`, `blocks/`, `entities/`, `biomes/`, other root `*.lua` | server pack VM (`PackRuntime`) | `vb` |
+| `ui/*.lua` | client UI VM (`UiRuntime`) | `ui`, `client` |
+| `data/*.lua` data scripts | bare state (`eval_data_script`) | none (`vb.*` raises) |
+| `auth.lua` | auth VM (`load_auth_lua`) | none; returns a table |
+
+So stubs that declare both `vb` and `ui` let `vb.world.get_block` complete
+silently in `ui/hud.lua` (nil at runtime — and inside an `on_click` handler
+only when clicked), and `ui.define` in `init.lua`. Pack-defined cross-file
+globals (`base_ui` in `content/base/ui/_style.lua`, `base_*_id` on the server
+side) leak across the boundary the same way.
+
+**Decision:** the editor is best-effort, `vb pack check` is the enforcement.
+
+1. Stubs declare every engine global; each carries `---@vb context` and its
+   description starts with the environment ("Server pack VM only." /
+   "Client UI VM only."), so hover makes the boundary visible.
+2. `--check-pack` runs a **static global-access check**: compile every file
+   (full Lua library, outside the sandbox), walk the function prototypes'
+   bytecode for `_ENV` reads/writes (what `luac -l` lists as
+   `GETTABUP/SETTABUP _ENV "name"`) and compare against the file's
+   environment:
+   - allowed = Lua builtins left by the sandbox + that environment's engine
+     globals + globals *assigned* by any file of the same environment
+     (so `base_ui` is fine in `ui/`, an error in `init.lua`);
+   - a read of another environment's engine global is an **error**
+     (`ui/hud.lua:42: 'vb' is not available in the client UI VM (server-only)`);
+   - a read of a sandbox-removed builtin (`os`, `io`, `load`, …) is an error;
+   - any other unknown global read is a **warning** (likely typo; `--strict`
+     fails on it).
+   Line numbers come from the prototype's line info, so diagnostics are
+   `file:line` like every other check.
+3. Optional, only if it proves reliable in 10.B: a generated VS Code
+   multi-root `.code-workspace` with a nested `ui/.luarc.json` that drops the
+   server stubs, giving real editor warnings in `ui/`. Not generated for
+   editors where it doesn't work; no LuaLS plugin (too LuaLS-specific to
+   maintain).
+4. The template `AGENTS.md` states the rule in its first screen.
+
 ### 3.5 `vb pack` command group
 
 ```
@@ -229,8 +274,9 @@ survives `vb prune` and works when the pack is opened on another machine.
      load order, the two VMs and which files run where, sandbox limits, the
      edit → `vb pack check --json` → `vb pack dev` loop, where the stubs and
      reference are (`.vb/lua/`, `vb docs`), and common mistakes (registration
-     after freeze, block id order is saved in worlds, UI files can't touch
-     `vb`).
+     after freeze, block id order is saved in worlds, and — stated up front —
+     files in `ui/` can't touch `vb` and server files can't touch `ui`/`client`,
+     §3.4.1).
 4. **Offline docs: `vb docs`.** The release archive ships `docs/` (at least
    `lua-reference/`, `cli.md`, `lua-api.md`, `structure-editor.md`, `auth.md`).
    `vb docs` lists topics, `vb docs vb.world.raycast` prints that section,
@@ -249,6 +295,7 @@ survives `vb prune` and works when the pack is opened on another machine.
 | Stubs are valid LuaCATS | CI runs `lua-language-server --check sdk/lua content/base` (pinned release download); zero warnings in `sdk/`, warnings in packs reported but not gating until §5 phase F |
 | Templates work | integration test: `vb pack new` each template into a temp dir, then `voxel_browser_server --check-pack` it |
 | `--check-pack` | unit/integration cases: clean pack, syntax error (file:line), runtime error in `init.lua`, bad `register_block` def, bad `ui/*.lua`, bad structure, `--json` shape |
+| Global-access check | `vb` read in `ui/` → error with line; `ui`/`client` in `init.lua` → error; `os.time` → error; `base_ui` shared across `ui/` files → clean, same global read in `init.lua` → error; unknown global → warning, error under `--strict`; `content/base` and `kitchen_sink` → clean |
 | `vb pack` / `vb help` | CLI tests in the existing `vb` test style (`VB_HOME` temp root, no network) |
 
 ## 5. Phased plan
@@ -268,9 +315,12 @@ phase (F) depends only on the command table and can run in parallel with B–D.
 ### 10.B — LuaCATS stubs (L)
 
 - [ ] Stubs for the server VM (`vb.*`, sub-tables, usertypes, definition
-      classes, `vb.on` overloads per event), the UI VM (`ui`, widget tree,
-      `state`), data scripts and `auth.lua`'s returned table.
-- [ ] One example per function; context tags; `sandbox.lua`.
+      classes, `vb.on` overloads per event), the UI VM (`ui`, `client`, widget
+      tree, `state`), data scripts and `auth.lua`'s returned table.
+- [ ] One example per function; context tags plus an environment line at the
+      start of every engine global's description (§3.4.1); `sandbox.lua`.
+- [ ] Try the multi-root / nested `ui/.luarc.json` setup in VS Code and
+      Neovim; keep it for 10.E only where it gives correct warnings.
 - [ ] `luarc.template.json`; `content/base` and `kitchen_sink` get a
       `.luarc.json` so the repo dogfoods it.
 - [ ] CI: LuaLS `--check` on `sdk/lua`; drift test gates.
@@ -289,6 +339,7 @@ phase (F) depends only on the command table and can run in parallel with B–D.
 
 - [ ] `voxel_browser_server --check-pack <dir> [--json] [--strict]` (§3.4),
       including UI VM compile, structure validation and one-chunk worldgen.
+- [ ] Static global-access check per environment (§3.4.1).
 - [ ] Diagnostics carry `file:line` (parse Lua error prefixes; registration
       errors report the calling chunk via `debug.traceback` level).
 - [ ] `vb pack check` + version resolution from `engine_version_req`.
@@ -299,7 +350,8 @@ phase (F) depends only on the command table and can run in parallel with B–D.
 
 - [ ] `templates/pack/{minimal,ui,worldgen}` + build-time embedding into `vb`.
 - [ ] `vb pack new`/`vb init`/`vb pack types`/`vb pack info`; `--template base`.
-- [ ] Generated `README.md`, `AGENTS.md`, `.luarc.json`, `.gitignore`.
+- [ ] Generated `README.md`, `AGENTS.md`, `.luarc.json`, `.gitignore` (+ the
+      `ui/` multi-root setup if 10.B kept it).
 - [ ] `vb pack dev` (host `--watch` + client connect; `--no-client`).
 - [ ] Integration test: new → check for every template.
 - **Exit:** `vb init && vb pack dev` puts a player into a world running the
@@ -327,10 +379,9 @@ phase (F) depends only on the command table and can run in parallel with B–D.
 
 ## 6. Open questions
 
-1. **Per-directory globals.** `ui/*.lua` sees `ui` but not `vb`; LuaLS applies
-   one config per workspace. Options: a nested `ui/.luarc.json` (LuaLS
-   multi-root), or `---@diagnostic` in the template files only. Decide in
-   10.B after testing what VS Code / Neovim actually honour.
+1. ~~**Per-directory globals.**~~ Decided 2026-10-06: labelled stubs +
+   static check in `vb pack check`; nested editor config only if it works
+   (§3.4.1).
 2. **`vb init` vs `vb pack init`.** Plan: both, `vb init` being the short,
    npm-like alias. Revisit if the top-level namespace gets crowded.
 3. **Should the engine enforce `engine_version_req`?** Out of scope here
