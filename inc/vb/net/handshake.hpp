@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <ctime>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -11,6 +12,7 @@
 #include "vb/assetsync/manifest.hpp" // assetsync::Manifest
 #include "vb/core/ids.hpp"
 #include "vb/core/math.hpp"
+#include "vb/net/login.hpp"
 #include "vb/protocol/assetsync.hpp" // AssetEntryRecord, S2CAssetData
 #include "vb/protocol/compression.hpp"
 #include "vb/protocol/handshake.hpp"
@@ -40,6 +42,7 @@ struct OutgoingFrame {
 enum class ServerHandshakeState : std::uint8_t {
 	kAwaitingHello,
 	kAwaitingAuth,
+	kVerifyingAuth, // external auth: token received, verifier ticket pending (auth.md §5.2)
 	kAwaitingAssetManifestRequest, // spec §9: sent AuthResult(ok), awaiting C2S_AssetManifestRequest
 	kAwaitingAssetRequest, // sent S2C_AssetManifest, awaiting C2S_AssetRequest
 	kStreamingAssets, // sending S2C_AssetData across ticks; no frame expected here
@@ -60,6 +63,17 @@ struct HandshakeServerConfig {
 	protocol::AuthMode auth_mode = protocol::AuthMode::kNone;
 	std::uint32_t max_players = 16;
 	double handshake_timeout_seconds = 10.0;
+	// auth_mode == kExternal only: how long a client may spend signing in and
+	// being verified (kAwaitingAuth / kVerifyingAuth) before it is dropped.
+	// The player is in a browser here, so this is far longer than the
+	// handshake timeout that covers every other state.
+	double auth_timeout_seconds = 300.0;
+	// External auth: periodic live re-authentication (auth.md §5.6). Every
+	// `reauth_interval_seconds` (±10% per player) a playing player is asked to
+	// re-prove their login; no valid answer within `reauth_grace_seconds` kicks
+	// them. 0 disables (the login is trusted until disconnect).
+	std::uint32_t reauth_interval_seconds = 0;
+	std::uint32_t reauth_grace_seconds = 120;
 	std::uint64_t world_seed = 0; // used for JoinAccept when the host grant is 0
 	// Whether to accept clients that set protocol::kClientFlagAutomation in
 	// C2SHello. Defaults to "only if this binary itself was built with
@@ -74,8 +88,19 @@ struct HandshakeServerConfig {
 
 struct AuthOutcome {
 	bool ok = true;
-	std::string reason;
+	std::string reason; // shown to the player; keep coarse
+	// Name the server will use for the player. Empty = use C2SAuth's
+	// player_name (auth_mode none/token); external auth sets it from the
+	// verified name_claim.
+	std::string resolved_name;
+	// External auth only: the verified identity (user data, no token). Set by
+	// the verifier host on success; the FSM keeps it for the session.
+	std::shared_ptr<const LoginData> login;
 };
+
+// A pending token verification (external auth). Polled once per server tick;
+// nullopt = still working (e.g. waiting on a JWKS fetch), a value = final.
+using AuthTicket = std::function<std::optional<AuthOutcome>()>;
 
 struct JoinGrant {
 	core::NetId net_id = core::NetId::kInvalid;
@@ -91,10 +116,35 @@ struct HandshakeServerHost {
 			authenticate =
 					[](std::string_view name, std::string_view) -> AuthOutcome {
 		if (name.empty() || name.size() > 32) {
-			return { false, "invalid player name" };
+			return { false, "invalid player name", {}, {} };
 		}
-		return { true, {} };
+		return { true, {}, {}, {} };
 	};
+	// auth_mode == kExternal only. `auth_challenge` builds the S2C_AuthChallenge
+	// for a new connection (including a fresh random nonce); `nullopt` means
+	// the server cannot authenticate right now and the join fails closed.
+	// `begin_authenticate` starts verifying `token` against that nonce and
+	// returns a ticket the FSM polls (the fast path returns a ticket that is
+	// already resolved). When unset, `authenticate` above is used
+	// synchronously, which is exactly the auth_mode none/token behaviour.
+	std::function<std::optional<protocol::S2CAuthChallenge>()> auth_challenge =
+			[] { return std::optional<protocol::S2CAuthChallenge>{}; };
+	std::function<AuthTicket(std::string_view token, std::string_view nonce)>
+			begin_authenticate;
+	// External auth only, called by the FSM once the token verified, before the
+	// player is admitted: `resolve_name` picks the final in-game name (the
+	// session suffixes collisions: alex -> alex#2); `join_veto` is the pack's
+	// `player_join(name, login)` veto. Defaults admit under the verified name.
+	// Wall clock (unix seconds) for re-auth freshness checks; tests override.
+	std::function<std::int64_t()> unix_time = [] {
+		return static_cast<std::int64_t>(std::time(nullptr));
+	};
+	std::function<std::string(std::string_view name, const LoginData &login)>
+			resolve_name = [](std::string_view name, const LoginData &) {
+		return std::string(name);
+	};
+	std::function<bool(std::string_view name, const LoginData *login)> join_veto =
+			[](std::string_view, const LoginData *) { return true; };
 	std::function<JoinGrant(std::string_view name)> on_ready =
 			[](std::string_view) { return JoinGrant{}; };
 
@@ -190,6 +240,9 @@ public:
 
 	ServerHandshakeState state() const { return state_; }
 	const std::string &player_name() const { return player_name_; }
+	// External auth: the verified identity once the token was accepted (null
+	// under auth_mode none/token, and before verification completes).
+	const std::shared_ptr<const LoginData> &login() const { return login_; }
 	// Valid once state() == kPlaying: the grant sent in S2C_JoinAccept.
 	const JoinGrant &grant() const { return grant_; }
 
@@ -198,6 +251,14 @@ public:
 
 	// Call when `elapsed_seconds` since connect exceeds the timeout.
 	ServerHandshakeStep on_timeout();
+
+	// Seconds the connection may sit in its current state before on_timeout()
+	// should be called (measured from the last state change).
+	double timeout_seconds() const;
+
+	// Call once per tick while state() == kVerifyingAuth: resolves the pending
+	// ticket. A no-op step in any other state or while the ticket is pending.
+	ServerHandshakeStep poll_auth();
 
 	// Call once per tick (not just when a frame arrives) while
 	// state() == kStreamingAssets: sends up to `max_chunks` more
@@ -209,11 +270,17 @@ public:
 private:
 	ServerHandshakeStep fail(protocol::DisconnectReason reason,
 			const std::string &human_message);
+	ServerHandshakeStep finish_auth(const AuthOutcome &outcome);
+	ServerHandshakeStep finish_external_auth(AuthOutcome outcome);
 
 	HandshakeServerConfig config_;
 	HandshakeServerHost host_;
 	ServerHandshakeState state_ = ServerHandshakeState::kAwaitingHello;
 	std::string player_name_;
+	std::string requested_name_; // C2SAuth::player_name, used when resolved_name is empty
+	std::string auth_nonce_; // external auth: nonce sent in S2C_AuthChallenge
+	AuthTicket auth_ticket_;
+	std::shared_ptr<const LoginData> login_;
 	JoinGrant grant_;
 
 	std::shared_ptr<const assetsync::Manifest> manifest_;
@@ -234,6 +301,8 @@ private:
 
 enum class ClientHandshakeStatus : std::uint8_t {
 	kConnecting, // sent Hello, awaiting ServerInfo
+	kAwaitingChallenge, // external auth: awaiting S2C_AuthChallenge
+	kSigningIn, // external auth: the player is signing in (async; poll())
 	kAuthenticating, // sent Auth, awaiting AuthResult
 	kAwaitingAssetManifest, // sent C2S_AssetManifestRequest, awaiting S2C_AssetManifest
 	kSyncingAssets, // sent C2S_AssetRequest, receiving S2C_AssetData frames
@@ -241,6 +310,16 @@ enum class ClientHandshakeStatus : std::uint8_t {
 	kJoined,
 	kFailed,
 };
+
+// Result of polling an asynchronous sign-in (client, external auth).
+// `done == false` = still in progress. When done, a non-empty `error` (or an
+// empty `token`) means the sign-in failed or was cancelled.
+struct TokenPoll {
+	bool done = false;
+	std::string token;
+	std::string error;
+};
+using TokenTicket = std::function<TokenPoll()>;
 
 // Asset-sync side of the client handshake (parallel to HandshakeServerHost).
 // ClientHandshake has no filesystem access itself -- these hooks push the
@@ -260,6 +339,17 @@ struct HandshakeClientHost {
 	std::function<bool(const protocol::S2CAssetData &)> on_asset_chunk =
 			[](const protocol::S2CAssetData &) { return true; };
 	std::function<bool()> assets_all_received = [] { return true; };
+
+	// auth_mode == kExternal only: turns the server's challenge into an ID
+	// token (the nonce must be bound into the sign-in request). Returning
+	// nullopt/empty cancels the join. When unset, HandshakeClientConfig::token is used.
+	// Synchronous for now; Phase 9.5 adds the interactive sign-in screen.
+	std::function<std::optional<std::string>(const protocol::S2CAuthChallenge &)>
+			obtain_token;
+	// Preferred over obtain_token when set: starts an asynchronous sign-in
+	// (browser round trip, a form, a token file) and returns a ticket the
+	// handshake polls once per tick (ClientHandshakeStatus::kSigningIn).
+	std::function<TokenTicket(const protocol::S2CAuthChallenge &)> begin_sign_in;
 };
 
 struct HandshakeClientConfig {
@@ -292,21 +382,43 @@ public:
 
 	ClientHandshakeStep on_frame(const protocol::Frame &frame);
 
+	// Call once per tick: resolves a pending sign-in (kSigningIn). A no-op in
+	// every other status.
+	ClientHandshakeStep poll();
+	// Aborts a pending sign-in: the join fails with "sign-in cancelled".
+	ClientHandshakeStep cancel_sign_in();
+	// Installs the async sign-in hook after construction (the challenge only
+	// arrives once connected, so any time before connect works).
+	void set_sign_in_provider(
+			std::function<TokenTicket(const protocol::S2CAuthChallenge &)> provider) {
+		host_.begin_sign_in = std::move(provider);
+	}
+	const std::optional<protocol::S2CAuthChallenge> &auth_challenge() const {
+		return challenge_;
+	}
+
 	const std::optional<protocol::S2CServerInfo> &server_info() const {
 		return server_info_;
 	}
 	const std::optional<protocol::S2CJoinAccept> &join_accept() const {
 		return join_accept_;
 	}
+	// Name the server accepted (S2C_AuthResult.resolved_name); empty if it
+	// did not override the requested one.
+	const std::string &resolved_name() const { return resolved_name_; }
 
 private:
 	ClientHandshakeStep fail(std::string reason);
+	ClientHandshakeStep send_auth(std::string token);
 
 	HandshakeClientConfig config_;
 	HandshakeClientHost host_;
 	ClientHandshakeStatus status_ = ClientHandshakeStatus::kConnecting;
 	std::optional<protocol::S2CServerInfo> server_info_;
 	std::optional<protocol::S2CJoinAccept> join_accept_;
+	std::string resolved_name_;
+	std::optional<protocol::S2CAuthChallenge> challenge_;
+	TokenTicket sign_in_ticket_;
 };
 
 // Payloads smaller than this never get LZ4-framed even when

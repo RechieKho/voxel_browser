@@ -4,7 +4,15 @@
 // `while (!window.should_close())` body; behavior is unchanged.
 #pragma once
 
+#include <filesystem>
+#include <optional>
+
 #include "session_host.hpp"
+
+#if defined(VB_WITH_AUTH)
+#include "vb/auth/coordinator.hpp"
+#include "vb/auth/http.hpp"
+#endif
 
 namespace vb::client {
 
@@ -23,7 +31,8 @@ public:
 	ClientApp(vb::core::ClientConfig config, std::string config_path,
 			vb::render::Window &window, const std::string &cli_server, int cli_port,
 			int configured_view_distance, std::optional<bool> auto_connect,
-			bool render = true);
+			bool render = true,
+			std::optional<std::filesystem::path> auth_token_file = std::nullopt);
 
 	// Headless only (render == false): blocks until the pending connection
 	// joined or failed -- same fixed-tick / 10s-wall-clock waits the old
@@ -191,6 +200,23 @@ private:
 	static constexpr std::chrono::seconds kLoadingHardTimeout{ 30 };
 
 	std::unique_ptr<Singleplayer> sp;
+#if defined(VB_WITH_AUTH)
+	// External authentication (auth.md §7). Declared before `remote` so it is
+	// destroyed after it: the session's sign-in ticket points back here.
+	std::optional<std::filesystem::path> auth_token_file_;
+	std::unique_ptr<vb::auth::SignInCoordinator> sign_in;
+	std::shared_ptr<vb::auth::SessionStore> auth_store;
+	bool reauth_panel_open = false; // the in-game "sign in again" overlay
+	int menu_frames = 0;
+	void install_sign_in(vb::net::ClientSession &session, const std::string &server_id);
+#if defined(VB_WITH_AUTOMATION)
+	bool headless_browser_started_ = false;
+	void headless_sign_in_step();
+#endif
+	void draw_sign_in();
+	void draw_reauth_prompt();
+	void refresh_signed_in_label();
+#endif
 	std::unique_ptr<RemoteConnection> remote;
 	vb::net::ClientSession *client = nullptr;
 	vb::core::Vec3d spawn{ 0.0, 72.0, 0.0 };

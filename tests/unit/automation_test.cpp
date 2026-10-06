@@ -122,6 +122,15 @@ TEST_CASE("automation: leaf predicates") {
 	CHECK(eval({ { "entity_near", { { "name", "B" }, { "pos", { 4, 70, 5 } }, { "radius", 2 } } } }, st));
 	CHECK_FALSE(eval({ { "entity_near", { { "name", "B" }, { "pos", { 40, 70, 5 } }, { "radius", 2 } } } }, st));
 	CHECK(eval({ { "player_near", { { "name", "A" }, { "pos", { 0, 70, 0 } }, { "radius", 1 } } } }, st));
+	{
+		json authed = { { "players", json::array({ { { "name", "alice" }, { "login", { { "provider", "keycloak" }, { "subject", "sub-a" } } } },
+								   { { "name", "bob" } } }) } };
+		CHECK(eval({ { "player_login", { { "subject", "sub-a" } } } }, authed));
+		CHECK(eval({ { "player_login", { { "subject", "sub-a" }, { "name", "alice" }, { "provider", "keycloak" } } } }, authed));
+		CHECK_FALSE(eval({ { "player_login", { { "subject", "sub-a" }, { "name", "bob" } } } }, authed));
+		CHECK_FALSE(eval({ { "player_login", { { "subject", "sub-x" } } } }, authed));
+		CHECK_FALSE(eval({ { "player_login", { { "subject", "sub-a" } } } }, json{ { "players", json::array({ { { "name", "alice" } } }) } }));
+	}
 	CHECK(eval({ { "block_is", { { "pos", { 4, 70, 4 } }, { "block", "base:stone" } } } }, st));
 	CHECK_FALSE(eval({ { "block_is", { { "pos", { 4, 70, 4 } }, { "block", "base:air" } } } }, st));
 	CHECK_FALSE(eval({ { "block_is", { { "pos", { 9, 9, 9 } }, { "block", "base:air" } } } }, st));

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <map>
 #include <optional>
@@ -57,6 +58,15 @@ struct SessionPlayerJoined {
 	ConnId conn = ConnId::kInvalid;
 	core::NetId net_id = core::NetId::kInvalid;
 	std::string name;
+	// External auth: the verified identity (null when the server isn't
+	// authenticating). User data only; the token never reaches here.
+	std::shared_ptr<const LoginData> login;
+};
+
+// Periodic re-auth succeeded and an allowlisted claim changed (auth.md §5.6).
+struct SessionLoginChanged {
+	core::NetId net_id = core::NetId::kInvalid;
+	std::shared_ptr<const LoginData> login; // the new login (same name as before)
 };
 
 struct SessionPlayerLeft {
@@ -74,6 +84,7 @@ public:
 
 	std::vector<SessionPlayerJoined> take_joins();
 	std::vector<SessionPlayerLeft> take_leaves();
+	std::vector<SessionLoginChanged> take_login_changes();
 
 	std::size_t player_count() const { return playing_; }
 	std::size_t pending_count() const { return conns_.size() - playing_; }
@@ -156,6 +167,9 @@ public:
 
 	// Display name of a playing net id ("" if not found/not playing).
 	std::string_view player_name(core::NetId id) const;
+	// Verified identity of a playing player; null when the server isn't
+	// authenticating (or the player is gone).
+	std::shared_ptr<const LoginData> player_login(core::NetId id) const;
 
 	// Optional: attach world replication (chunk streaming). Without it the
 	// session only replicates entities.
@@ -207,6 +221,12 @@ public:
 	// effectively a no-op over loopback/singleplayer regardless of the
 	// configured value; it only bites over a real GnsTransport.
 	void set_max_connections_per_ip(int n) { max_connections_per_ip_ = n; }
+	// External auth (auth.md §8): at most `n` sign-in attempts (C2S_Auth) per
+	// peer IP per minute, so a client cannot use the server as a free token-
+	// verification/JWKS-refresh oracle. `0` = unlimited. Like the connection
+	// cap it needs Transport::remote_address(), so it only bites on a real
+	// network transport. Default 30.
+	void set_max_auth_attempts_per_minute_per_ip(int n) { max_auth_attempts_per_minute_ = n; }
 
 	// Per-connection message-rate flood guard (§8.3 hardening, tracked in
 	// REMAINING_TASKS' "per-player rate limit / flood guard" item): defense
@@ -561,6 +581,17 @@ private:
 		// Last S2C_PlayerStatus sent to this player; nullopt until the first
 		// one (sent the tick after join), then re-sent only on change.
 		std::optional<protocol::S2CPlayerStatus> last_status;
+		// External auth: the live login (replaced by each successful re-auth)
+		// and the periodic re-auth exchange (auth.md §5.6).
+		std::shared_ptr<const LoginData> login;
+		struct Reauth {
+			double timer = 0.0; // seconds until the next S2C_ReauthRequest
+			bool pending = false; // a request is outstanding
+			double remaining = 0.0; // grace seconds left to answer it
+			std::string nonce;
+			std::int64_t sent_at = 0; // unix seconds when the request went out
+			AuthTicket ticket; // verification of the C2S_Reauth, once received
+		} reauth;
 	};
 
 	void drop(ConnId conn, const std::string &reason);
@@ -601,6 +632,12 @@ private:
 	void build_systems();
 	void system_network_io(double dt_seconds);
 	void system_handshake_timeouts(double dt_seconds);
+	void kick_duplicate_login(ConnId newcomer);
+	void system_reauth(double dt_seconds);
+	void finish_reauth(ConnId conn, Conn &state, const AuthOutcome &outcome);
+	double reauth_interval_for(core::NetId id) const;
+	void kick_with_message(ConnId conn, protocol::DisconnectReason reason,
+			const std::string &message);
 	void system_advance_time_of_day(double dt_seconds);
 	void system_sync_interest();
 
@@ -676,6 +713,9 @@ private:
 	double time_of_day_broadcast_accum_ = 0.0;
 	double void_kill_y_ = -64.0;
 	int max_connections_per_ip_ = 0; // 0 = unlimited
+	int max_auth_attempts_per_minute_ = 30; // 0 = unlimited
+	double uptime_seconds_ = 0.0; // advanced by tick(); the rate limiter's clock
+	std::unordered_map<std::string, std::deque<double>> auth_attempts_; // ip -> attempt times
 	double max_messages_per_second_ = 0.0; // 0 = unlimited
 	std::function<RespawnDecision(core::NetId, std::string_view, float)>
 			on_respawn_;
@@ -691,6 +731,7 @@ private:
 	std::vector<TransportEvent> scratch_;
 	std::vector<SessionPlayerJoined> joins_;
 	std::vector<SessionPlayerLeft> leaves_;
+	std::vector<SessionLoginChanged> login_changes_;
 };
 
 // --- client --------------------------------------------------------------
@@ -715,6 +756,30 @@ public:
 				!failure_reason_.empty();
 	}
 	const std::string &failure_reason() const { return failure_reason_; }
+
+	// External auth (auth.md §7). The hook is called with the server's
+	// challenge and returns a ticket polled each tick (status() ==
+	// kSigningIn while pending). Set before the first tick().
+	void set_sign_in_provider(
+			std::function<TokenTicket(const protocol::S2CAuthChallenge &)> provider) {
+		handshake_.set_sign_in_provider(std::move(provider));
+	}
+	const std::optional<protocol::S2CAuthChallenge> &auth_challenge() const {
+		return handshake_.auth_challenge();
+	}
+	// Name the server accepted (external auth: the verified name_claim).
+	const std::string &resolved_name() const { return handshake_.resolved_name(); }
+	// Abort a pending sign-in; the join fails with "sign-in cancelled".
+	void cancel_sign_in();
+	// Periodic live re-auth (auth.md §5.6): on S2C_ReauthRequest the hook starts
+	// a (usually silent) sign-in and returns a ticket; once it yields a token
+	// it goes to the server as C2S_Reauth. A ticket that ends in an error just
+	// drops the request -- the server kicks when its grace period runs out.
+	void set_reauth_provider(
+			std::function<TokenTicket(const protocol::S2CReauthRequest &)> provider) {
+		reauth_provider_ = std::move(provider);
+	}
+	bool reauth_pending() const { return static_cast<bool>(reauth_ticket_); }
 
 	const std::optional<protocol::S2CServerInfo> &server_info() const {
 		return handshake_.server_info();
@@ -977,6 +1042,8 @@ private:
 	Transport &transport_;
 	ConnId conn_;
 	ClientHandshake handshake_;
+	std::function<TokenTicket(const protocol::S2CReauthRequest &)> reauth_provider_;
+	TokenTicket reauth_ticket_;
 	bool started_ = false;
 	std::string failure_reason_;
 	std::vector<TransportEvent> scratch_;

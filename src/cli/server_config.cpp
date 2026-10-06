@@ -16,6 +16,8 @@ namespace fs = std::filesystem;
 
 namespace {
 
+bool is_auth_key(const std::string &key) { return key.rfind("auth.", 0) == 0; }
+
 const ConfigKey *find_key(const std::string &name) {
 	for (const ConfigKey &k : server_config_keys()) {
 		if (k.name == name) {
@@ -40,6 +42,14 @@ std::string number_text(double v) {
 }
 
 std::string effective_value(const vb::core::ServerConfig &c, const std::string &key) {
+	if (key == "auth.issuer")
+		return c.auth.issuer;
+	if (key == "auth.client_id")
+		return c.auth.client_id;
+	if (key == "auth.project_id")
+		return c.auth.project_id;
+	if (key == "auth.api_key")
+		return c.auth.api_key.empty() ? std::string() : std::string("(set)"); // never echo the key
 	if (key == "bind_address")
 		return c.bind_address;
 	if (key == "port")
@@ -235,6 +245,13 @@ const std::vector<ConfigKey> &server_config_keys() {
 		{ "world_dir", ConfigType::String },
 		{ "autosave_interval_seconds", ConfigType::Number },
 		{ "chunk_send_budget_bytes_per_tick", ConfigType::Integer },
+		// Deployment overrides for the pack's auth.lua (architecture_spec/auth.md
+		// §4): they live in the [auth] table. They can change where identity is
+		// checked, never whether.
+		{ "auth.issuer", ConfigType::String },
+		{ "auth.client_id", ConfigType::String },
+		{ "auth.project_id", ConfigType::String },
+		{ "auth.api_key", ConfigType::String },
 	};
 	return keys;
 }
@@ -268,10 +285,49 @@ std::optional<std::string> dump_server_config(const fs::path &file, std::string 
 	std::string out;
 	for (const ConfigKey &k : server_config_keys()) {
 		const std::string v = effective_value(*loaded, k.name);
+		if (is_auth_key(k.name) && v.empty()) {
+			continue; // unset deployment overrides are noise
+		}
 		out += k.name + " = " + (k.type == ConfigType::String ? quote(v) : v) + "\n";
 	}
 	return out;
 }
+
+namespace {
+
+bool is_table_header(const std::string &line) {
+	const std::size_t i = line.find_first_not_of(" \t");
+	return i != std::string::npos && line[i] == '[';
+}
+
+// Index of the first `[table]` header line, or lines.size() if there is none.
+// Root keys must stay above it, or TOML would read them as part of the table.
+std::size_t first_table(const std::vector<std::string> &lines) {
+	for (std::size_t i = 0; i < lines.size(); ++i) {
+		if (is_table_header(lines[i])) {
+			return i;
+		}
+	}
+	return lines.size();
+}
+
+// [begin, end) of the lines inside `[auth]` (header excluded), or false.
+bool auth_section(const std::vector<std::string> &lines, std::size_t &begin, std::size_t &end) {
+	for (std::size_t i = 0; i < lines.size(); ++i) {
+		const std::size_t p = lines[i].find_first_not_of(" \t");
+		if (p != std::string::npos && lines[i].compare(p, 6, "[auth]") == 0) {
+			begin = i + 1;
+			end = begin;
+			while (end < lines.size() && !is_table_header(lines[end])) {
+				++end;
+			}
+			return true;
+		}
+	}
+	return false;
+}
+
+} // namespace
 
 Status set_server_config_value(const fs::path &file, const std::string &key,
 		const std::string &value) {
@@ -285,17 +341,45 @@ Status set_server_config_value(const fs::path &file, const std::string &key,
 	}
 	std::vector<std::string> lines;
 	read_lines(file, lines);
+	if (is_auth_key(key)) {
+		const std::string leaf = key.substr(5);
+		const std::string assignment = leaf + " = " + literal;
+		std::size_t begin = 0;
+		std::size_t end = 0;
+		if (auth_section(lines, begin, end)) {
+			bool replaced = false;
+			for (std::size_t i = begin; i < end; ++i) {
+				if (assigns(lines[i], leaf)) {
+					lines[i] = assignment;
+					replaced = true;
+					break;
+				}
+			}
+			if (!replaced) {
+				lines.insert(lines.begin() + static_cast<std::ptrdiff_t>(begin), assignment);
+			}
+		} else {
+			if (!lines.empty() && !lines.back().empty()) {
+				lines.push_back("");
+			}
+			lines.push_back("[auth]");
+			lines.push_back(assignment);
+		}
+		return commit_validated(file, lines);
+	}
 	const std::string assignment = key + " = " + literal;
+	const std::size_t root_end = first_table(lines);
 	bool replaced = false;
-	for (std::string &l : lines) {
-		if (assigns(l, key)) {
-			l = assignment; // inline comments on this one line are not kept
+	for (std::size_t i = 0; i < root_end; ++i) {
+		if (assigns(lines[i], key)) {
+			lines[i] = assignment; // inline comments on this one line are not kept
 			replaced = true;
 			break;
 		}
 	}
 	if (!replaced) {
-		lines.push_back(assignment);
+		// Root keys go above the first [table], never after it.
+		lines.insert(lines.begin() + static_cast<std::ptrdiff_t>(root_end), assignment);
 	}
 	return commit_validated(file, lines);
 }
@@ -306,9 +390,25 @@ Status unset_server_config_key(const fs::path &file, const std::string &key) {
 	}
 	std::vector<std::string> lines;
 	read_lines(file, lines);
-	const auto it = std::remove_if(lines.begin(), lines.end(),
-			[&](const std::string &l) { return assigns(l, key); });
-	lines.erase(it, lines.end());
+	if (is_auth_key(key)) {
+		const std::string leaf = key.substr(5);
+		std::size_t begin = 0;
+		std::size_t end = 0;
+		if (auth_section(lines, begin, end)) {
+			for (std::size_t i = end; i > begin; --i) {
+				if (assigns(lines[i - 1], leaf)) {
+					lines.erase(lines.begin() + static_cast<std::ptrdiff_t>(i - 1));
+				}
+			}
+		}
+		return commit_validated(file, lines);
+	}
+	const std::size_t root_end = first_table(lines);
+	for (std::size_t i = root_end; i > 0; --i) {
+		if (assigns(lines[i - 1], key)) {
+			lines.erase(lines.begin() + static_cast<std::ptrdiff_t>(i - 1));
+		}
+	}
 	return commit_validated(file, lines);
 }
 

@@ -5,6 +5,7 @@ add_executable(voxel_browser_server main.cpp)
 target_link_libraries(voxel_browser_server
   PRIVATE
     vb_core
+    vb_auth
     vb_warnings
     vb_sanitizers
 )

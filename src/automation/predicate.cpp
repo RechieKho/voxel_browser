@@ -194,6 +194,34 @@ struct Eval {
 			return named_near("entity_near", "entities", arg);
 		if (name == "player_near")
 			return named_near("player_near", "players", arg);
+		if (name == "player_login") {
+			// Server only (auth.md §9.7): a connected player `name` whose verified
+			// login has this `subject` (and `provider`, if given). A player with
+			// no login -- the server isn't authenticating -- never matches.
+			if (!arg.is_object() || !arg.contains("subject") || !arg["subject"].is_string()) {
+				return fail("player_login: needs 'subject' (and optionally 'name', 'provider')");
+			}
+			const json want_name = arg.value("name", json());
+			json seen = json::array();
+			bool matched = false;
+			if (const json *list = state_field("players"); list != nullptr && list->is_array()) {
+				for (const json &e : *list) {
+					const json login = e.value("login", json());
+					seen.push_back(login);
+					if (!login.is_object() || login.value("subject", json()) != arg["subject"]) {
+						continue;
+					}
+					if (arg.contains("provider") && login.value("provider", json()) != arg["provider"]) {
+						continue;
+					}
+					if (!want_name.is_null() && e.value("name", json()) != want_name) {
+						continue;
+					}
+					matched = true;
+				}
+			}
+			return result(matched, json{ { "logins", seen } });
+		}
 		if (name == "block_is") {
 			if (!arg.is_object() || !arg.contains("block") || !arg["block"].is_string()) {
 				return fail("block_is: needs 'pos' and 'block'");

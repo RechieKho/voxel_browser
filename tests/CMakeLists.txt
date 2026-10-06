@@ -3,6 +3,10 @@
 
 add_executable(vb_tests
   main.cpp
+  unit/auth_config_test.cpp
+  unit/auth_verifier_test.cpp
+  unit/auth_login_test.cpp
+  unit/auth_signin_test.cpp
   unit/assetsync_cache_test.cpp
   unit/assetsync_manifest_test.cpp
   unit/biome_selector_test.cpp
@@ -63,10 +67,15 @@ target_link_libraries(vb_tests
   PRIVATE
     vb_core
     vb_editor_model
+    vb_auth
     doctest::doctest
     vb_warnings
     vb_sanitizers
 )
+
+if(VB_WITH_AUTH)
+  target_link_libraries(vb_tests PRIVATE nlohmann_json::nlohmann_json)
+endif()
 
 if(VB_BUILD_CLI)
   target_sources(vb_tests PRIVATE unit/dev_cli_test.cpp)
@@ -167,6 +176,10 @@ if(NOT VB_WITH_AUTOMATION)
     add_test(NAME client_rejects_automation_record
       COMMAND voxel_browser --automation-record ${CMAKE_BINARY_DIR}/never.py --headless --frames 1)
     set_tests_properties(client_rejects_automation_record PROPERTIES WILL_FAIL TRUE)
+    # Auth sign-in via a file is a dev/CI shortcut around the sign-in screen (auth.md §7).
+    add_test(NAME client_rejects_auth_token_file
+      COMMAND voxel_browser --auth-token-file ${CMAKE_BINARY_DIR}/never.txt --headless --frames 1)
+    set_tests_properties(client_rejects_auth_token_file PROPERTIES WILL_FAIL TRUE)
   endif()
 endif()
 

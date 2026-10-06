@@ -134,4 +134,28 @@ TEST_CASE("build_manifest enforces per-file and total size caps") {
 	std::filesystem::remove_all(pack);
 }
 
+TEST_CASE("build_manifest never advertises the pack-root auth.lua") {
+	const auto pack = make_pack("auth_lua");
+	{
+		std::ofstream f(pack / "auth.lua", std::ios::binary);
+		f << "return { provider = 'oidc' }";
+	}
+	// Only the pack ROOT file is server-only config; a same-named file in a
+	// subdirectory is ordinary content.
+	{
+		std::ofstream f(pack / "scripts" / "auth.lua", std::ios::binary);
+		f << "print('not the declaration')";
+	}
+	const auto m = build_manifest(pack);
+	REQUIRE(m);
+	bool saw_root = false, saw_nested = false;
+	for (const auto &e : m->entries) {
+		saw_root = saw_root || e.path == "auth.lua";
+		saw_nested = saw_nested || e.path == "scripts/auth.lua";
+	}
+	CHECK_FALSE(saw_root);
+	CHECK(saw_nested);
+	std::filesystem::remove_all(pack);
+}
+
 #endif // VB_WITH_COMPRESSION

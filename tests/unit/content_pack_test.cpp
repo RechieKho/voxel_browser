@@ -235,6 +235,27 @@ TEST_CASE("load_content_pack fails on a pack directory with a broken Lua file") 
 	std::filesystem::remove_all(broken);
 }
 
+TEST_CASE("load_content_pack never runs the pack-root auth.lua as pack code") {
+	const auto pack = std::filesystem::temp_directory_path() / "vb_content_pack_test_auth_lua";
+	std::error_code ec;
+	std::filesystem::remove_all(pack, ec);
+	std::filesystem::create_directories(pack);
+	{
+		// Would fail the whole pack load if the walk executed it.
+		std::ofstream f(pack / "auth.lua", std::ios::binary);
+		f << "error('auth.lua must not run in the pack VM')";
+	}
+	{
+		std::ofstream f(pack / "init.lua", std::ios::binary);
+		f << "assert(not pcall(require, 'auth'))";
+	}
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("auth_lua"));
+	CHECK(vb::script::load_content_pack(rt, pack));
+	std::filesystem::remove_all(pack, ec);
+}
+
 #if VB_WITH_COMPRESSION
 
 // Regression for the 2026-09-18 bug: src/server/main.cpp's real sequence is

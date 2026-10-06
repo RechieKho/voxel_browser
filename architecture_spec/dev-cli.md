@@ -494,6 +494,11 @@ Nothing can be downloaded reliably until this lands.
     TOML's signed 64-bit integers. `vb` shows it only while fresh (< 20 s old
     and `running = true`); an older server without the flag just shows no
     player list.
+  - `auth.issuer`, `auth.client_id`, `auth.project_id`, `auth.api_key` set the
+    `[auth]` overrides for a pack's `auth.lua` (so one pack works against
+    staging and production realms): `vb server config <name> set auth.issuer
+    https://id.example/realms/prod`. They live in an `[auth]` table (root keys
+    are always kept above the first table); `get` never prints the API key.
   - `server config` edits are textual: one `key = value` line is replaced,
     appended or removed, so comments and layout survive; values are type
     checked (the engine's loader silently ignores wrong-typed keys) and the

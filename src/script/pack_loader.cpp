@@ -84,6 +84,11 @@ std::unordered_map<std::string, std::string> collect_requirable_modules(
 		if (ec || rel.empty() || rel.begin()->generic_string() == "ui") {
 			continue;
 		}
+		// auth.lua is declarative config read by vb::auth in its own minimal
+		// VM (architecture_spec/auth.md §4); it must never run as pack code.
+		if (rel.generic_string() == "auth.lua") {
+			continue;
+		}
 		std::ifstream in(entry.path(), std::ios::binary);
 		if (!in) {
 			continue;
@@ -117,7 +122,7 @@ bool load_content_pack(PackRuntime &rt, const std::filesystem::path &content_pac
 	// separately below (it's always loaded last, even if a future pack adds
 	// other root-level files that sort after "init.lua" alphabetically).
 	for (const auto &file : sorted_lua_files(content_pack)) {
-		if (file.filename() == "init.lua") {
+		if (file.filename() == "init.lua" || file.filename() == "auth.lua") {
 			continue;
 		}
 		if (!load_one(rt, content_pack, file, scripting_disabled_logged)) {

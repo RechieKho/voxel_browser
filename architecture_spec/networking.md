@@ -47,6 +47,8 @@ Client                                        Server
   │           pack_version, engine_version,       │
   │           tick_rate, motd, auth_mode }        │
   │ ◀─────────────────────────────────────────── │
+  │  (auth_mode=External, planned v28: S2C_AuthChallenge │
+  │   first — see auth.md §5.2)                  │
   │  C2S_Auth{ player_name, token? }              │
   │ ───────────────────────────────────────────▶ │
   │           S2C_AuthResult{ ok, reason }        │

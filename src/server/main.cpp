@@ -19,6 +19,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <random>
 #include <sstream>
 #include <string>
@@ -26,6 +27,10 @@
 #include <thread>
 
 #include "vb/assetsync/manifest.hpp"
+#include "vb/auth/config.hpp"
+#include "vb/auth/http.hpp"
+#include "vb/auth/server_glue.hpp"
+#include "vb/auth/service.hpp"
 #include "vb/core/build_info.hpp"
 #include "vb/core/cli.hpp"
 #include "vb/core/config.hpp"
@@ -104,6 +109,10 @@ void print_usage() {
 				 "  --automation-token <t>   fixed token for tcp (default: random)\n"
 				 "  --automation-info <file> write {host,port,token,pid} here for tcp (default: print to stderr)\n"
 				 "  --net-sim <spec>      fake lag/jitter/loss on sent packets, e.g. lag_ms=100,loss_pct=2 (dev builds only)\n"
+#endif
+#if !defined(VB_DISTRIBUTION)
+				 "  --insecure-skip-auth  DEV ONLY: ignore the pack's auth.lua and admit unauthenticated\n"
+				 "                        players (get_login() returns nil); not in distribution builds\n"
 #endif
 				 "  --version             print build info and exit\n"
 				 "  --help                show this help\n";
@@ -224,6 +233,53 @@ int main(int argc, char **argv) {
 	vb::core::ServerConfig config = *loaded;
 	vb::core::apply_cli_overrides(config, args);
 
+	// In-engine authentication (architecture_spec/auth.md §4): a pack-root
+	// auth.lua makes authentication mandatory. Fail closed -- any problem
+	// here ends startup, never a silent downgrade to no-auth.
+	std::optional<vb::auth::AuthConfig> active_auth;
+	{
+		vb::auth::AuthOverrides overrides;
+		overrides.issuer = config.auth.issuer;
+		overrides.client_id = config.auth.client_id;
+		overrides.project_id = config.auth.project_id;
+		overrides.api_key = config.auth.api_key;
+		const vb::auth::AuthLoad auth =
+				vb::auth::load_auth_lua(config.content_pack, overrides);
+		const bool skip_auth = args.has("insecure-skip-auth");
+#if defined(VB_DISTRIBUTION)
+		if (skip_auth) {
+			std::cerr << "server: --insecure-skip-auth is not available in this build\n";
+			return EXIT_FAILURE;
+		}
+#endif
+		if (!auth.present) {
+			if (skip_auth) {
+				std::cerr << "server: --insecure-skip-auth given but the content pack declares "
+							 "no auth.lua; nothing to skip\n";
+			}
+		} else if (skip_auth) {
+			VB_WARN("auth", "*** --insecure-skip-auth: '", config.content_pack,
+					"' declares auth.lua but authentication is DISABLED; every player is "
+					"admitted unverified and get_login() returns nil. Development only. ***");
+		} else if (!auth.error.empty()) {
+			std::cerr << "server: " << config.content_pack << ": " << auth.error << '\n';
+			return EXIT_FAILURE;
+		} else if (!vb::auth::kBuiltWithAuth) {
+			std::cerr << "server: content pack '" << config.content_pack
+					  << "' requires authentication (auth.lua); rebuild with VB_WITH_AUTH\n";
+			return EXIT_FAILURE;
+		} else {
+			VB_INFO("auth", "authentication required: ", vb::auth::describe(*auth.config));
+			if (!vb::auth::kVerifierAvailable) {
+				std::cerr << "server: content pack '" << config.content_pack
+						  << "' requires authentication, but this build has no token "
+							 "verifier; refusing to start\n";
+				return EXIT_FAILURE;
+			}
+			active_auth = *auth.config;
+		}
+	}
+
 	const long long max_ticks = args.int_or("ticks", 0);
 	// Empty = disabled. A stale file from a previous run is the launcher's to
 	// remove (`vb` does) -- deleting it here would make "stop requested" and
@@ -261,6 +317,7 @@ int main(int argc, char **argv) {
 	// Phase 6.13: read-only vb.config.get(key) -- set before load_content_pack
 	// so it's already visible to registration-time (module-scope) pack code.
 	pack_runtime.set_server_config(config);
+	pack_runtime.set_auth_required(active_auth.has_value());
 	if (!vb::script::load_content_pack(pack_runtime, config.content_pack)) {
 		std::cerr << "server: content pack '" << config.content_pack
 				  << "' failed to load, aborting\n";
@@ -340,6 +397,12 @@ int main(int argc, char **argv) {
 	hs_config.view_distance = config.view_distance;
 	hs_config.motd = config.motd;
 	hs_config.auth_mode = static_cast<vb::protocol::AuthMode>(config.auth_mode);
+	if (active_auth) {
+		// Derived from auth.lua's presence, never configured (auth.md §4).
+#if defined(VB_WITH_AUTH)
+		vb::auth::apply_external_auth(hs_config, *active_auth);
+#endif
+	}
 	hs_config.max_players = config.max_players;
 	hs_config.world_seed = seed;
 
@@ -439,6 +502,17 @@ int main(int argc, char **argv) {
 	pack_runtime.install_keybind_registry(host); // before ServerSession copies `host` in
 	pack_runtime.install_entity_kind_registry(host); // before ServerSession copies `host` in
 	pack_runtime.install_join_veto(host); // before ServerSession copies `host` in
+#if defined(VB_WITH_AUTH)
+	// External authentication (auth.md §5): the key set loads in the
+	// background (failure is logged and retried; joins fail closed until a key
+	// set exists); the handshake polls a ticket per connection. Name
+	// collisions and the pack's join veto then run in the handshake FSM.
+	std::shared_ptr<vb::auth::AuthService> auth_service;
+	if (active_auth) {
+		auth_service = vb::auth::install_external_auth(host, *active_auth,
+				std::shared_ptr<vb::auth::HttpFetcher>(vb::auth::make_curl_fetcher()));
+	}
+#endif
 
 	vb::net::ServerSession session(transport, hs_config, host);
 	auto replicator = std::make_unique<vb::net::WorldReplicator>(world, pool,
@@ -563,6 +637,8 @@ int main(int argc, char **argv) {
 	// at start, every kStatusIntervalSeconds, and once more at shutdown
 	// (running = false), always atomically.
 	constexpr double kStatusIntervalSeconds = 5.0;
+	// Ticks of lag the loop may replay back to back before it resyncs to the clock.
+	constexpr int kMaxTickCatchUp = 5;
 	std::map<std::uint32_t, std::string> online;
 	const auto status_started = std::chrono::steady_clock::now();
 	auto window_start = status_started;
@@ -644,6 +720,9 @@ int main(int argc, char **argv) {
 			std::cout << "server: '" << joined.name << "' joined (net id "
 					  << static_cast<std::uint32_t>(joined.net_id) << ")\n";
 		}
+		for (const auto &changed : session.take_login_changes()) {
+			pack_runtime.dispatch_login_changed(changed);
+		}
 		for (const auto &left : session.take_leaves()) {
 			online.erase(static_cast<std::uint32_t>(left.net_id));
 #if defined(VB_WITH_AUTOMATION)
@@ -676,6 +755,14 @@ int main(int argc, char **argv) {
 		}
 
 		next += tick_dt;
+		// Bound the catch-up after a stall (or while ticks cost more than a tick period):
+		// otherwise the loop replays the whole backlog back to back, and everything that
+		// counts simulated time -- handshake timeouts above all -- sees seconds pass in
+		// milliseconds, dropping clients that are in fact fine. Falling behind just means
+		// the simulation runs slower than real time, which is the honest outcome.
+		if (const auto now = std::chrono::steady_clock::now(); now - next > kMaxTickCatchUp * tick_dt) {
+			next = now;
+		}
 		std::this_thread::sleep_until(next);
 	}
 

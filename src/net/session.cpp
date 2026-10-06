@@ -111,6 +111,43 @@ ServerSession::ServerSession(Transport &transport, HandshakeServerConfig config,
 	host_.current_player_count = [this] {
 		return static_cast<std::uint32_t>(playing_);
 	};
+	// External auth: two different people may both be "alex"; the later one
+	// becomes "alex#2" (auth.md §5.5). Same-subject sessions are skipped, since
+	// the older one is about to be kicked (kick_duplicate_login).
+	auto user_resolve = host_.resolve_name;
+	host_.resolve_name = [this, user_resolve](std::string_view name,
+								 const LoginData &login) {
+		const std::string base = user_resolve ? user_resolve(name, login) : std::string(name);
+		auto taken = [&](const std::string &candidate) {
+			for (const auto &[c, other] : conns_) {
+				(void)c;
+				const auto &ol = other.handshake.login();
+				if (ol && ol->issuer == login.issuer && ol->subject == login.subject) {
+					continue;
+				}
+				if (!other.handshake.player_name().empty() &&
+						other.handshake.player_name() == candidate) {
+					return true;
+				}
+			}
+			return false;
+		};
+		if (!taken(base)) {
+			return base;
+		}
+		for (int n = 2; n < 10000; ++n) {
+			const std::string suffix = "#" + std::to_string(n);
+			std::string stem = base;
+			if (stem.size() + suffix.size() > 32) {
+				stem.resize(32 - suffix.size());
+			}
+			std::string candidate = stem + suffix;
+			if (!taken(candidate)) {
+				return candidate;
+			}
+		}
+		return base;
+	};
 	// Keep the caller's grant logic, then fill in a net id / seed if it didn't.
 	auto user_on_ready = host_.on_ready;
 	host_.on_ready = [this, user_on_ready](std::string_view name) {
@@ -725,6 +762,16 @@ ConnId ServerSession::conn_for_player(core::NetId id) const {
 	return ConnId::kInvalid;
 }
 
+std::shared_ptr<const LoginData> ServerSession::player_login(core::NetId id) const {
+	for (const auto &[conn, state] : conns_) {
+		(void)conn;
+		if (state.playing && state.net_id == id) {
+			return state.login ? state.login : state.handshake.login();
+		}
+	}
+	return nullptr;
+}
+
 std::string_view ServerSession::player_name(core::NetId id) const {
 	for (const auto &[conn, state] : conns_) {
 		(void)conn;
@@ -834,6 +881,18 @@ void ServerSession::system_network_io(double dt_seconds) {
 						handle_chat(it->second, *frame);
 						break;
 					}
+					if (frame->header.type == protocol::MessageType::kC2SReauth) {
+						// Only an answer to an outstanding request counts; an
+						// unsolicited or repeated one is ignored (no free
+						// verification work for a client).
+						auto &r = it->second.reauth;
+						if (r.pending && !r.ticket && host_.begin_authenticate) {
+							if (auto m = protocol::C2SReauth::decode(frame->payload)) {
+								r.ticket = host_.begin_authenticate(m->token, r.nonce);
+							}
+						}
+						break;
+					}
 					if (frame->header.type ==
 							protocol::MessageType::kC2SBlockBreakBegin) {
 						handle_block_break_begin(ev.conn, it->second, *frame);
@@ -848,14 +907,42 @@ void ServerSession::system_network_io(double dt_seconds) {
 					// ignore unknown types rather than dropping.
 					break;
 				}
+				if (max_auth_attempts_per_minute_ > 0 && it->second.remote_address &&
+						config_.auth_mode == protocol::AuthMode::kExternal &&
+						it->second.handshake.state() == ServerHandshakeState::kAwaitingAuth &&
+						frame->header.type == protocol::MessageType::kC2SAuth) {
+					auto &attempts = auth_attempts_[*it->second.remote_address];
+					while (!attempts.empty() && attempts.front() < uptime_seconds_ - 60.0) {
+						attempts.pop_front();
+					}
+					if (static_cast<int>(attempts.size()) >= max_auth_attempts_per_minute_) {
+						VB_WARN("auth", "too many sign-in attempts from ",
+								*it->second.remote_address, "; dropping");
+						kick_with_message(ev.conn, protocol::DisconnectReason::kAuthFailed,
+								"too many sign-in attempts, try again later");
+						break;
+					}
+					attempts.push_back(uptime_seconds_);
+				}
+				const ServerHandshakeState prev_state = it->second.handshake.state();
 				auto step = it->second.handshake.on_frame(*frame);
 				send_frames(transport_, ev.conn, step.send);
+				// The (long) external sign-in window is over: the remaining
+				// states get a fresh handshake-timeout budget.
+				if (prev_state == ServerHandshakeState::kAwaitingAuth &&
+						it->second.handshake.state() ==
+								ServerHandshakeState::kAwaitingAssetManifestRequest) {
+					it->second.age = 0.0;
+					kick_duplicate_login(ev.conn);
+				}
 				if (step.completed) {
 					it->second.playing = true;
 					++playing_;
 					const JoinGrant &g = it->second.handshake.grant();
 					it->second.net_id = g.net_id;
 					it->second.spawn_pos = g.spawn_pos;
+					it->second.login = it->second.handshake.login();
+					it->second.reauth.timer = reauth_interval_for(g.net_id);
 					it->second.entity = registry_.create();
 					registry_.emplace<ecs::Position>(it->second.entity, g.spawn_pos);
 					registry_.emplace<ecs::Velocity>(it->second.entity);
@@ -876,7 +963,8 @@ void ServerSession::system_network_io(double dt_seconds) {
 							g.net_id,
 							player_visual_kind_.value_or(core::EntityKindId::kInvalid),
 							g.spawn_pos, {}, {} });
-					joins_.push_back({ ev.conn, g.net_id, step.player_name });
+					joins_.push_back({ ev.conn, g.net_id, step.player_name,
+							it->second.handshake.login() });
 					VB_INFO("net", "player '", step.player_name, "' joined as net id ",
 							static_cast<std::uint32_t>(g.net_id));
 
@@ -933,8 +1021,20 @@ void ServerSession::system_network_io(double dt_seconds) {
 }
 
 void ServerSession::system_handshake_timeouts(double dt_seconds) {
+	uptime_seconds_ += dt_seconds;
+	// Forget IPs whose last attempt is over a minute old (bounded memory).
+	if (!auth_attempts_.empty()) {
+		for (auto it = auth_attempts_.begin(); it != auth_attempts_.end();) {
+			if (it->second.empty() || it->second.back() < uptime_seconds_ - 60.0) {
+				it = auth_attempts_.erase(it);
+			} else {
+				++it;
+			}
+		}
+	}
 	// Handshake timeouts + asset-stream pacing.
 	std::vector<std::pair<ConnId, std::string>> to_drop;
+	std::vector<ConnId> verified; // external auth just succeeded (async path)
 	for (auto &[conn, state] : conns_) {
 		if (state.playing) {
 			continue;
@@ -947,15 +1047,52 @@ void ServerSession::system_handshake_timeouts(double dt_seconds) {
 				continue;
 			}
 		}
+		if (state.handshake.state() == ServerHandshakeState::kVerifyingAuth) {
+			auto step = state.handshake.poll_auth();
+			send_frames(transport_, conn, step.send);
+			if (step.disconnect) {
+				to_drop.emplace_back(conn, "sign-in rejected");
+				continue;
+			}
+			if (state.handshake.state() ==
+					ServerHandshakeState::kAwaitingAssetManifestRequest) {
+				state.age = 0.0;
+				verified.push_back(conn);
+			}
+		}
 		state.age += dt_seconds;
-		if (state.age > config_.handshake_timeout_seconds) {
+		if (state.age > state.handshake.timeout_seconds()) {
 			auto step = state.handshake.on_timeout();
 			send_frames(transport_, conn, step.send);
 			to_drop.emplace_back(conn, "handshake timeout");
 		}
 	}
+	for (const ConnId conn : verified) {
+		kick_duplicate_login(conn);
+	}
 	for (const auto &[conn, reason] : to_drop) {
 		drop(conn, reason);
+	}
+}
+
+void ServerSession::kick_duplicate_login(ConnId newcomer) {
+	const auto nit = conns_.find(newcomer);
+	if (nit == conns_.end() || !nit->second.handshake.login()) {
+		return;
+	}
+	const auto &login = nit->second.handshake.login();
+	// The newcomer is never refused: a ghost session left by a crash or a
+	// dropped link must not lock its owner out (auth.md §5.5).
+	for (auto &[conn, other] : conns_) {
+		if (conn == newcomer) {
+			continue;
+		}
+		const auto &ol = other.handshake.login();
+		if (ol && ol->issuer == login->issuer && ol->subject == login->subject) {
+			VB_INFO("auth", "kicking older session of '", other.handshake.player_name(),
+					"': signed in elsewhere");
+			drop(conn, "signed in elsewhere");
+		}
 	}
 }
 
@@ -1022,6 +1159,9 @@ void ServerSession::build_systems() {
 			[this](entt::registry &, const ecs::TickContext &ctx) {
 				system_handshake_timeouts(ctx.dt_seconds);
 			});
+	systems_.add("reauth", [this](entt::registry &, const ecs::TickContext &ctx) {
+		system_reauth(ctx.dt_seconds);
+	});
 	systems_.add("advance_time_of_day",
 			[this](entt::registry &, const ecs::TickContext &ctx) {
 				system_advance_time_of_day(ctx.dt_seconds);
@@ -1531,6 +1671,126 @@ std::vector<SessionPlayerJoined> ServerSession::take_joins() {
 	return std::exchange(joins_, {});
 }
 
+std::vector<SessionLoginChanged> ServerSession::take_login_changes() {
+	std::vector<SessionLoginChanged> out;
+	out.swap(login_changes_);
+	return out;
+}
+
+double ServerSession::reauth_interval_for(core::NetId id) const {
+	if (config_.reauth_interval_seconds == 0) {
+		return 0.0;
+	}
+	// Per-player jitter of ±10% so a server full of players who joined together
+	// does not re-prove all at once (auth.md §5.6).
+	const std::uint32_t h = static_cast<std::uint32_t>(id) * 2654435761u;
+	const double j = 0.9 + 0.2 * (static_cast<double>(h % 1000u) / 1000.0);
+	return static_cast<double>(config_.reauth_interval_seconds) * j;
+}
+
+void ServerSession::kick_with_message(ConnId conn, protocol::DisconnectReason reason,
+		const std::string &message) {
+	protocol::S2CDisconnect msg;
+	msg.reason = reason;
+	msg.message = message;
+	send_message(transport_, conn, msg);
+	drop(conn, message);
+}
+
+void ServerSession::finish_reauth(ConnId conn, Conn &state, const AuthOutcome &outcome) {
+	auto &r = state.reauth;
+	const auto old_login = state.login;
+	auto kick = [&](const char *why) {
+		VB_INFO("auth", "re-auth failed for '", old_login ? old_login->name : std::string(),
+				"': ", why);
+		kick_with_message(conn, protocol::DisconnectReason::kAuthFailed,
+				"sign-in expired or revoked");
+	};
+	if (!outcome.ok || !outcome.login || !old_login) {
+		kick(outcome.ok ? "no identity" : "token rejected");
+		return;
+	}
+	if (outcome.login->issuer != old_login->issuer ||
+			outcome.login->subject != old_login->subject) {
+		kick("a different account answered");
+		return;
+	}
+	// A refresh-derived token carries no nonce, so freshness is the binding: it
+	// must have been issued after this request went out (minus clock skew).
+	if (outcome.login->issued_at < r.sent_at - 60) {
+		kick("stale token");
+		return;
+	}
+	auto fresh = std::make_shared<LoginData>(*outcome.login);
+	fresh->name = old_login->name; // the in-game name is fixed for the session
+	const bool changed = fresh->claims_json != old_login->claims_json;
+	state.login = fresh;
+	r.pending = false;
+	r.ticket = nullptr;
+	r.nonce.clear();
+	r.timer = reauth_interval_for(state.net_id);
+	if (changed) {
+		login_changes_.push_back({ state.net_id, fresh });
+	}
+}
+
+void ServerSession::system_reauth(double dt_seconds) {
+	if (config_.reauth_interval_seconds == 0 ||
+			config_.auth_mode != protocol::AuthMode::kExternal) {
+		return;
+	}
+	struct Kick {
+		ConnId conn;
+	};
+	std::vector<Kick> kicks;
+	for (auto &[conn, c] : conns_) {
+		if (!c.playing || !c.login) {
+			continue;
+		}
+		auto &r = c.reauth;
+		if (!r.pending) {
+			r.timer -= dt_seconds;
+			if (r.timer > 0.0) {
+				continue;
+			}
+			const auto challenge = host_.auth_challenge();
+			if (!challenge || challenge->nonce.empty()) {
+				r.timer = 10.0; // cannot issue a nonce right now; try again soon
+				continue;
+			}
+			r.nonce = challenge->nonce;
+			r.pending = true;
+			r.remaining = static_cast<double>(config_.reauth_grace_seconds);
+			r.sent_at = host_.unix_time();
+			r.ticket = nullptr;
+			protocol::S2CReauthRequest req;
+			req.nonce = r.nonce;
+			req.grace_seconds = static_cast<std::uint16_t>(
+					std::min<std::uint32_t>(config_.reauth_grace_seconds, 65535u));
+			send_message(transport_, conn, req);
+			continue;
+		}
+		r.remaining -= dt_seconds;
+		if (r.ticket) {
+			if (const auto outcome = r.ticket()) {
+				const AuthOutcome result = *outcome;
+				// May kick (and so touch `conns_` state only via transport
+				// close, which defers erasure to the disconnect event).
+				finish_reauth(conn, c, result);
+				continue;
+			}
+		}
+		if (r.remaining <= 0.0) {
+			VB_INFO("auth", "re-auth deadline passed for '", c.login->name, "'");
+			kicks.push_back({ conn });
+		}
+	}
+	for (const Kick &k : kicks) {
+		kick_with_message(k.conn, protocol::DisconnectReason::kAuthFailed,
+				"sign-in expired or revoked");
+	}
+}
+
 std::vector<SessionPlayerLeft> ServerSession::take_leaves() {
 	return std::exchange(leaves_, {});
 }
@@ -1570,12 +1830,41 @@ ClientSession::virtual_pack_fs() const {
 	return asset_cache_ != nullptr ? asset_cache_->virtual_fs() : kEmpty;
 }
 
+void ClientSession::cancel_sign_in() {
+	auto step = handshake_.cancel_sign_in();
+	if (step.failed) {
+		failure_reason_ = step.failure_reason;
+	}
+}
+
 void ClientSession::tick(double dt_seconds) {
 	// Keep the wall-clock server-time estimate progressing every tick, even
 	// one with no snapshot in it -- see ServerTimeEstimator's own header
 	// comment for why this is what fixes interpolated_pos()'s old
 	// "frozen until the next packet" staircase.
 	server_time_.advance(dt_seconds);
+
+	// An asynchronous sign-in (browser, form, token file) resolves between
+	// frames; the server sends nothing while it waits.
+	if (handshake_.status() == ClientHandshakeStatus::kSigningIn) {
+		auto step = handshake_.poll();
+		send_frames(transport_, conn_, step.send);
+		if (step.failed) {
+			failure_reason_ = step.failure_reason;
+			return;
+		}
+	}
+
+	if (reauth_ticket_) {
+		TokenPoll p = reauth_ticket_();
+		if (p.done) {
+			reauth_ticket_ = nullptr;
+			if (p.error.empty() && !p.token.empty() &&
+					p.token.size() <= protocol::kMaxAuthTokenBytes) {
+				send_message(transport_, conn_, protocol::C2SReauth{ std::move(p.token) });
+			}
+		}
+	}
 
 	scratch_.clear();
 	transport_.poll(scratch_);
@@ -1661,6 +1950,15 @@ void ClientSession::tick(double dt_seconds) {
 					} else {
 						VB_ERROR("net", "malformed S2C_FogParams: ",
 								core::message(m.error()));
+					}
+					break;
+				}
+				if (frame->header.type == protocol::MessageType::kS2CReauthRequest &&
+						handshake_.status() == ClientHandshakeStatus::kJoined) {
+					if (auto m = protocol::S2CReauthRequest::decode(frame->payload)) {
+						if (reauth_provider_) {
+							reauth_ticket_ = reauth_provider_(*m);
+						}
 					}
 					break;
 				}

@@ -53,6 +53,71 @@ ServerHandshakeStep ServerHandshake::on_timeout() {
 	return fail(DisconnectReason::kTimeout, "handshake timed out");
 }
 
+double ServerHandshake::timeout_seconds() const {
+	if (config_.auth_mode == protocol::AuthMode::kExternal &&
+			(state_ == ServerHandshakeState::kAwaitingAuth ||
+					state_ == ServerHandshakeState::kVerifyingAuth)) {
+		return config_.auth_timeout_seconds;
+	}
+	return config_.handshake_timeout_seconds;
+}
+
+ServerHandshakeStep ServerHandshake::poll_auth() {
+	if (state_ != ServerHandshakeState::kVerifyingAuth || !auth_ticket_) {
+		return {};
+	}
+	const std::optional<AuthOutcome> outcome = auth_ticket_();
+	if (!outcome) {
+		return {};
+	}
+	auth_ticket_ = nullptr;
+	return finish_external_auth(*outcome);
+}
+
+ServerHandshakeStep ServerHandshake::finish_external_auth(AuthOutcome outcome) {
+	if (outcome.ok) {
+		if (!outcome.login) {
+			// A verifier that says "ok" without an identity is a bug; never
+			// admit an anonymous player on an authenticating server.
+			return finish_auth({ false, "authentication failed", {}, {} });
+		}
+		std::string name = host_.resolve_name(
+				outcome.resolved_name.empty() ? outcome.login->name : outcome.resolved_name,
+				*outcome.login);
+		// The pack sees the final in-game name in both `name` and `login.name`.
+		auto login = std::make_shared<LoginData>(*outcome.login);
+		login->name = name;
+		if (!host_.join_veto(name, login.get())) {
+			return finish_auth({ false, "denied by pack", {}, {} });
+		}
+		login_ = std::move(login);
+		outcome.resolved_name = std::move(name);
+	}
+	return finish_auth(outcome);
+}
+
+ServerHandshakeStep ServerHandshake::finish_auth(const AuthOutcome &outcome) {
+	ServerHandshakeStep step;
+	protocol::S2CAuthResult result;
+	result.ok = outcome.ok;
+	result.reason = outcome.reason;
+	result.resolved_name = outcome.ok && !outcome.resolved_name.empty()
+			? outcome.resolved_name
+			: requested_name_;
+	step.send.push_back(frame_message(result));
+	if (!outcome.ok) {
+		step.send.push_back(disconnect_frame(DisconnectReason::kAuthFailed,
+				outcome.reason.empty() ? "authentication failed" : outcome.reason));
+		step.disconnect = true;
+		step.disconnect_reason = DisconnectReason::kAuthFailed;
+		state_ = ServerHandshakeState::kClosed;
+		return step;
+	}
+	player_name_ = result.resolved_name;
+	state_ = ServerHandshakeState::kAwaitingAssetManifestRequest;
+	return step;
+}
+
 ServerHandshakeStep ServerHandshake::pump_assets(int max_chunks) {
 	ServerHandshakeStep step;
 	if (state_ != ServerHandshakeState::kStreamingAssets) {
@@ -148,9 +213,21 @@ ServerHandshakeStep ServerHandshake::on_frame(const Frame &frame) {
 			info.motd = config_.motd;
 			info.auth_mode = config_.auth_mode;
 
-			state_ = ServerHandshakeState::kAwaitingAuth;
 			ServerHandshakeStep step;
-			step.send.push_back(frame_message(info));
+			if (config_.auth_mode == protocol::AuthMode::kExternal) {
+				auto challenge = host_.auth_challenge();
+				if (!challenge || challenge->nonce.empty()) {
+					// Fail closed: never fall back to unauthenticated play.
+					return fail(DisconnectReason::kAuthFailed,
+							"server cannot authenticate players right now");
+				}
+				auth_nonce_ = challenge->nonce;
+				step.send.push_back(frame_message(info));
+				step.send.push_back(frame_message(*challenge));
+			} else {
+				step.send.push_back(frame_message(info));
+			}
+			state_ = ServerHandshakeState::kAwaitingAuth;
 			return step;
 		}
 
@@ -166,27 +243,27 @@ ServerHandshakeStep ServerHandshake::on_frame(const Frame &frame) {
 				return fail(DisconnectReason::kServerFull, "server is full");
 			}
 
-			const AuthOutcome outcome =
-					host_.authenticate(auth->player_name, auth->token);
-			ServerHandshakeStep step;
-			protocol::S2CAuthResult result;
-			result.ok = outcome.ok;
-			result.reason = outcome.reason;
-			step.send.push_back(frame_message(result));
-			if (!outcome.ok) {
-				step.send.push_back(disconnect_frame(DisconnectReason::kAuthFailed,
-						outcome.reason.empty() ? "authentication failed"
-											   : outcome.reason));
-				step.disconnect = true;
-				step.disconnect_reason = DisconnectReason::kAuthFailed;
-				state_ = ServerHandshakeState::kClosed;
-				return step;
+			requested_name_ = auth->player_name;
+			if (config_.auth_mode == protocol::AuthMode::kExternal) {
+				if (!host_.begin_authenticate) {
+					return fail(DisconnectReason::kAuthFailed,
+							"server cannot authenticate players right now");
+				}
+				auth_ticket_ = host_.begin_authenticate(auth->token, auth_nonce_);
+				if (!auth_ticket_) {
+					return fail(DisconnectReason::kAuthFailed,
+							"server cannot authenticate players right now");
+				}
+				state_ = ServerHandshakeState::kVerifyingAuth;
+				return poll_auth(); // resolves immediately on the fast path
 			}
-
-			player_name_ = auth->player_name;
-			state_ = ServerHandshakeState::kAwaitingAssetManifestRequest;
-			return step;
+			return finish_auth(host_.authenticate(auth->player_name, auth->token));
 		}
+
+		case ServerHandshakeState::kVerifyingAuth:
+			// The verdict is still pending; the client must wait for it.
+			return fail(DisconnectReason::kBadHandshake,
+					"unexpected message while verifying sign-in");
 
 		case ServerHandshakeState::kAwaitingAssetManifestRequest: {
 			if (type != MessageType::kC2SAssetManifestRequest) {
@@ -317,6 +394,42 @@ ClientHandshakeStep ClientHandshake::fail(std::string reason) {
 	return step;
 }
 
+ClientHandshakeStep ClientHandshake::send_auth(std::string token) {
+	if (token.size() > protocol::kMaxAuthTokenBytes) {
+		return fail("sign-in token too large");
+	}
+	protocol::C2SAuth auth;
+	auth.player_name = config_.player_name;
+	auth.token = std::move(token);
+	status_ = ClientHandshakeStatus::kAuthenticating;
+	ClientHandshakeStep step;
+	step.send.push_back(frame_message(auth));
+	return step;
+}
+
+ClientHandshakeStep ClientHandshake::poll() {
+	if (status_ != ClientHandshakeStatus::kSigningIn || !sign_in_ticket_) {
+		return {};
+	}
+	TokenPoll p = sign_in_ticket_();
+	if (!p.done) {
+		return {};
+	}
+	sign_in_ticket_ = nullptr;
+	if (!p.error.empty() || p.token.empty()) {
+		return fail(p.error.empty() ? "sign-in cancelled" : p.error);
+	}
+	return send_auth(std::move(p.token));
+}
+
+ClientHandshakeStep ClientHandshake::cancel_sign_in() {
+	if (status_ != ClientHandshakeStatus::kSigningIn) {
+		return {};
+	}
+	sign_in_ticket_ = nullptr; // destroys the ticket, which cancels its task
+	return fail("sign-in cancelled");
+}
+
 ClientHandshakeStep ClientHandshake::start() {
 	protocol::C2SHello hello;
 	hello.engine_protocol_version = kEngineProtocolVersion;
@@ -355,6 +468,11 @@ ClientHandshakeStep ClientHandshake::on_frame(const Frame &frame) {
 			}
 			server_info_ = std::move(*info);
 
+			if (server_info_->auth_mode == protocol::AuthMode::kExternal) {
+				status_ = ClientHandshakeStatus::kAwaitingChallenge;
+				return {};
+			}
+
 			protocol::C2SAuth auth;
 			auth.player_name = config_.player_name;
 			auth.token = config_.token;
@@ -364,6 +482,39 @@ ClientHandshakeStep ClientHandshake::on_frame(const Frame &frame) {
 			step.send.push_back(frame_message(auth));
 			return step;
 		}
+
+		case ClientHandshakeStatus::kAwaitingChallenge: {
+			if (type != MessageType::kS2CAuthChallenge) {
+				return fail("expected AuthChallenge");
+			}
+			auto challenge = protocol::S2CAuthChallenge::decode(frame.payload);
+			if (!challenge) {
+				return fail("malformed AuthChallenge");
+			}
+			challenge_ = *challenge;
+			if (host_.begin_sign_in) {
+				sign_in_ticket_ = host_.begin_sign_in(*challenge);
+				if (!sign_in_ticket_) {
+					return fail("sign-in is unavailable");
+				}
+				status_ = ClientHandshakeStatus::kSigningIn;
+				return poll(); // a token file resolves on the first poll
+			}
+			std::optional<std::string> token;
+			if (host_.obtain_token) {
+				token = host_.obtain_token(*challenge);
+			} else if (!config_.token.empty()) {
+				token = config_.token;
+			}
+			if (!token || token->empty()) {
+				return fail("sign-in required but cancelled or unavailable");
+			}
+			return send_auth(std::move(*token));
+		}
+
+		case ClientHandshakeStatus::kSigningIn:
+			// The server sends nothing while the player signs in.
+			return fail("unexpected message while signing in");
 
 		case ClientHandshakeStatus::kAuthenticating: {
 			if (type != MessageType::kS2CAuthResult) {
@@ -378,6 +529,7 @@ ClientHandshakeStep ClientHandshake::on_frame(const Frame &frame) {
 												   : result->reason);
 			}
 
+			resolved_name_ = result->resolved_name;
 			status_ = ClientHandshakeStatus::kAwaitingAssetManifest;
 			ClientHandshakeStep step;
 			protocol::C2SAssetManifestRequest req;

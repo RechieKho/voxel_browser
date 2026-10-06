@@ -67,6 +67,29 @@ TEST_CASE("server config: values are read from TOML") {
 	CHECK(c->motd == "hi");
 }
 
+TEST_CASE("server config: [auth] overrides parse; absent table leaves them empty") {
+	auto none = parse_server_config("");
+	REQUIRE(none);
+	CHECK(none->auth.issuer.empty());
+	CHECK(none->auth.client_id.empty());
+
+	auto c = parse_server_config(R"(
+		[auth]
+		issuer = "https://staging.example.com/realms/game"
+		client_id = "voxel-staging"
+		project_id = "p"
+		api_key = "k"
+		bogus = 1
+	)");
+	REQUIRE(c);
+	CHECK(c->auth.issuer == "https://staging.example.com/realms/game");
+	CHECK(c->auth.client_id == "voxel-staging");
+	CHECK(c->auth.project_id == "p");
+	CHECK(c->auth.api_key == "k");
+	// auth_mode stays independent: the wire mode is derived from auth.lua.
+	CHECK(c->auth_mode == ConfigAuthMode::kNone);
+}
+
 TEST_CASE("server config: day_length_seconds defaults to 1200 (Phase 6.8)") {
 	auto c = parse_server_config("");
 	REQUIRE(c);

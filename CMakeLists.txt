@@ -84,6 +84,10 @@ option(VB_DISTRIBUTION   "Set by every build whose binaries get uploaded/release
 if(VB_DISTRIBUTION AND VB_WITH_AUTOMATION)
   message(FATAL_ERROR "VB_WITH_AUTOMATION must be OFF in distribution builds")
 endif()
+if(VB_DISTRIBUTION)
+  # Compiles out dev-only escape hatches (the server's --insecure-skip-auth).
+  add_compile_definitions(VB_DISTRIBUTION=1)
+endif()
 
 option(VB_ENABLE_ASAN    "Enable AddressSanitizer"                            OFF)
 option(VB_ENABLE_UBSAN   "Enable UndefinedBehaviorSanitizer"                  OFF)
@@ -94,6 +98,7 @@ option(VB_WITH_NET       "GameNetworkingSockets transport (Phase 1)"          OF
 option(VB_WITH_REPLICATION "librg replication (Phase 1); OFF uses the hand-rolled linear-scan interest backend instead" ON)
 option(VB_WITH_LUA       "Lua 5.4 + sol2 scripting (Phase 4)"                 OFF)
 option(VB_WITH_WORLDGEN  "FastNoise2 world generation (Phase 2)"              OFF)
+option(VB_WITH_AUTH      "In-engine authentication via a pack-level auth.lua (architecture_spec/auth.md); OFF = a pack that declares auth.lua refuses to start" ON)
 option(VB_WITH_COMPRESSION "LZ4 + xxHash chunk/asset codecs (Phase 2/4)"      OFF)
 
 # The structure editor needs the renderer (client) and Lua (data scripts).

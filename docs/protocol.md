@@ -4,7 +4,26 @@
 > as any change to a struct in `inc/vb/protocol/`, and bump
 > `kEngineProtocolVersion` in `cmake/version.hpp.in`.
 
-Current `ENGINE_PROTOCOL_VERSION`: **28**.
+Current `ENGINE_PROTOCOL_VERSION`: **29**.
+
+- **29** — External authentication plumbing (Phase 9.2; design:
+  `architecture_spec/auth.md` §5.2). `AuthMode` gains `kExternal = 2`.
+  New `S2C_AuthChallenge` (8, lane `kControl`), sent right after
+  `S2C_ServerInfo` only when `auth_mode == kExternal`: `string provider`,
+  `string display_name`, `string issuer`, `string client_id`, `varint n` +
+  `n × string scope` (n ≤ 16), `varint n` + `n × (string key, string value)`
+  params (n ≤ 16), `string nonce` (≤ 256 bytes, server-random, bound into the
+  sign-in so a token cannot be replayed on another connection); every string
+  except the nonce ≤ 2048 bytes. `S2C_AuthResult` gains a trailing `string
+  resolved_name` (the name the server will use; for external auth, the
+  verified `name_claim`). `C2S_Auth.token` is capped at 16 KiB
+  (`kMaxAuthTokenBytes`; longer ⇒ `kLengthExceeded`). Wire format only, not yet
+  sent: `S2C_ReauthRequest` (9: `string nonce`, `u16 grace_seconds`) and
+  `C2S_Reauth` (10: `string token`), used from Phase 9.6. Server handshake
+  gains `kVerifyingAuth` (token received, verdict pending; no other client
+  message is accepted) and a separate `auth_timeout_seconds` (default 300)
+  for the sign-in window. A rejected or unavailable verifier closes the
+  connection before `S2C_AssetManifest`.
 
 - **28** — `S2C_PlayerStatus` (108, lane `kControl`) payload defined:
   `f32 health`, `f32 max_health`, `f32 hunger`, `f32 max_hunger`. Sent to
@@ -357,8 +376,11 @@ buffered, and yields `consumed` so a stream reader can advance.
 | ------------------------ | -------------------------------------------------------------------- |
 | `C2S_Hello` (1)          | `u16 engine_protocol_version`, `u64 client_nonce`, `string client_version` `u8 client_flags` (v27+; bit 0 = `kClientFlagAutomation`, set by `VB_WITH_AUTOMATION` builds; a server not built with automation refuses it with `kBadHandshake`, see `docs/e2e-automation.md` §7.4; unknown bits ignored) |
 | `S2C_ServerInfo` (2)     | `string pack_name`, `string pack_version`, `u16 engine_protocol_version`, `u16 tick_rate`, `string motd`, `u8 auth_mode` |
-| `C2S_Auth` (3)           | `string player_name`, `string token` (empty when `auth_mode = none`)   |
-| `S2C_AuthResult` (4)     | `bool ok`, `string reason`                                             |
+| `C2S_Auth` (3)           | `string player_name`, `string token` (empty when `auth_mode = none`; ≤ 16 KiB) |
+| `S2C_AuthResult` (4)     | `bool ok`, `string reason`, `string resolved_name` (v29+)              |
+| `S2C_AuthChallenge` (8)  | v29+, only when `auth_mode = external`: `string provider, display_name, issuer, client_id`, `string[] scopes` (≤16), `(string,string)[] params` (≤16), `string nonce` |
+| `S2C_ReauthRequest` (9)  | v29+, wire format only until Phase 9.6: `string nonce`, `u16 grace_seconds` |
+| `C2S_Reauth` (10)        | v29+, wire format only until Phase 9.6: `string token` (≤ 16 KiB)      |
 | `C2S_Ready` (5)          | *(empty)*                                                              |
 | `S2C_JoinAccept` (6)     | `u32 net_id`, `f64×3 spawn_pos`, `u64 world_seed`, `u32 time_of_day`   |
 | `S2C_Disconnect` (7)     | `u8 reason`, `string message`                                          |
