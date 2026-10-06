@@ -60,6 +60,9 @@ struct HandshakeServerConfig {
 	// per-pack override; there's no opt-in pattern to mirror here.
 	std::uint32_t view_distance = 8;
 	std::string motd;
+	// Sent verbatim as S2CServerInfo::engine_version_req (pack.toml's
+	// engine_version_req; empty = no requirement).
+	std::string engine_version_req;
 	protocol::AuthMode auth_mode = protocol::AuthMode::kNone;
 	std::uint32_t max_players = 16;
 	double handshake_timeout_seconds = 10.0;

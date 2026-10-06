@@ -235,6 +235,12 @@ public:
 	void report_hud_change(const std::string &widget_id, std::string_view text_value);
 	void report_hud_list_change(const std::string &widget_id, int new_index);
 
+	// Dotted names of the `ui.*`/`client.*` surface (API drift test).
+	std::vector<std::string> describe_api();
+
+	// Names of the Lua globals that exist now (see PackRuntime::global_names).
+	std::vector<std::string> global_names();
+
 	struct Impl;
 
 private:

@@ -145,12 +145,28 @@ core::Result<Manifest, core::AssetSyncError> build_manifest(
 			}
 		}
 
+		// Developer-tooling files are never served to clients: dot-entries
+		// (`.vb/` editor stubs, `.luarc.json`, `.gitignore`) -- directories are
+		// not descended into -- and the pack-root README.md/AGENTS.md written
+		// by `vb pack init` (architecture_spec/dev-experience.md).
+		if (entry.path().filename().generic_string().rfind('.', 0) == 0) {
+			if (entry.is_directory(ec)) {
+				it.disable_recursion_pending();
+			}
+			continue;
+		}
 		const bool regular = entry.is_regular_file(ec);
 		if (ec) {
 			return Err{ core::AssetSyncError::kIoError };
 		}
 		if (!regular) {
 			continue;
+		}
+		if (entry.path().parent_path() == pack_root) {
+			const std::string fname = entry.path().filename().generic_string();
+			if (fname == "README.md" || fname == "AGENTS.md") {
+				continue;
+			}
 		}
 		// Pack-root auth.lua is server-only declarative config
 		// (architecture_spec/auth.md §4): no client needs it, so it is never

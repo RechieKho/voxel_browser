@@ -1,0 +1,8 @@
+name = "{{name}}"
+version = "0.1.0"
+# Enforced by the engine: a server refuses to load this pack on an older (or newer) engine than
+# this range, and clients refuse to join. Cargo-style: ">=0.6.0", ">=0.6.0, <0.7.0", "^0.6.1", "*".
+engine_version_req = "{{engine_req}}"
+# Informational. Load order is fixed: blocks/*.lua, entities/*.lua, biomes/*.lua, other root *.lua,
+# then init.lua. Files in ui/ run separately, in the client UI VM.
+entry = "init.lua"

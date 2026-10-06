@@ -1,0 +1,14 @@
+---@meta
+-- Data scripts (e.g. `data/blocks.lua`): pure-data Lua files evaluated in a bare state by tools such
+-- as the structure editor. They `return` data and must not call `vb.*` (it raises).
+--
+-- ```lua
+-- return {
+--   { name = "mypack:ruby", solid = true, opaque = true, texture = "textures/ruby.png" },
+-- }
+-- ```
+-- A block data script returns `BlockDef[]` in registration order; the pack registers them with
+-- `vb.register_block` from `init.lua`. Fields the engine does not know (e.g. `drops`) are ignored.
+-- Environment: bare state (full Lua standard library minus the sandbox-removed functions); no `vb`, `ui`, `client`.
+
+---@alias BlockDataScript BlockDef[]

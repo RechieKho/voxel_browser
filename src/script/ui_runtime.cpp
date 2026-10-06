@@ -19,6 +19,8 @@ ScriptResult UiRuntime::load_pack_file(std::string_view, std::string_view) {
 		"scripting disabled (built without VB_WITH_LUA)" };
 }
 void UiRuntime::attach_session(net::ClientSession &) {}
+std::vector<std::string> UiRuntime::describe_api() { return {}; }
+std::vector<std::string> UiRuntime::global_names() { return {}; }
 void UiRuntime::open(std::string_view, std::string_view) {}
 void UiRuntime::close() {}
 bool UiRuntime::is_open() const { return false; }
@@ -62,6 +64,7 @@ void UiRuntime::report_hud_list_change(const std::string &, int) {}
 #include <nlohmann/json.hpp>
 
 #include "vb/core/log.hpp"
+#include "vb/script/api_surface.hpp"
 #include "vb/script/vm_internal.hpp"
 
 namespace vb::script {
@@ -559,6 +562,14 @@ ScriptResult UiRuntime::load_pack_file(std::string_view code,
 
 void UiRuntime::attach_session(net::ClientSession &session) {
 	impl_->session = &session;
+}
+
+std::vector<std::string> UiRuntime::global_names() {
+	return list_lua_globals(impl_->vm);
+}
+
+std::vector<std::string> UiRuntime::describe_api() {
+	return describe_lua_surface(impl_->vm, { "ui", "client" });
 }
 
 void UiRuntime::open(std::string_view name, std::string_view ctx_json) {

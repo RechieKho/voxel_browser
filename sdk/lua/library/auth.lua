@@ -1,0 +1,28 @@
+---@meta
+-- `auth.lua` in a pack root: declarative, read once at server startup in its own tiny sandbox.
+-- It must `return` a table of this shape (no `vb`, no loops, no I/O). No client secrets (PKCE only).
+-- A malformed file stops the server from starting.
+
+---@class AuthConfig
+---@field provider "oidc"|"keycloak"|"firebase"
+---@field display_name? string Shown on the sign-in screen.
+---@field issuer? string https URL (http only for localhost). oidc/keycloak.
+---@field client_id? string Public client id. oidc/keycloak.
+---@field scopes? string[] Must include "openid". oidc/keycloak.
+---@field project_id? string Firebase project id.
+---@field api_key? string Firebase web API key (public by design).
+---@field sign_in? string[] Firebase methods, e.g. `{"password", "google"}`.
+---@field name_claim? string Claim that becomes the in-game name.
+---@field claims? string[] Claims scripts may read from `Login.claims`.
+---@field max_token_age_seconds? integer Default 300.
+---@field reauth_interval_seconds? integer Default 900; 0 disables periodic re-auth.
+---@field reauth_grace_seconds? integer Default 120.
+
+-- ```lua
+-- return {
+--   provider = "keycloak", issuer = "https://id.example.com/realms/game", client_id = "voxel-browser",
+--   scopes = { "openid", "profile" }, name_claim = "preferred_username", claims = { "email" },
+-- }
+-- ```
+---@type AuthConfig
+local config

@@ -102,6 +102,7 @@ void print_usage() {
 #endif
 #if !defined(VB_DISTRIBUTION)
 				 "  --insecure-skip-auth  DEV ONLY: --singleplayer ignores the pack's auth.lua (no sign-in)\n"
+				 "  --ignore-engine-req   DEV ONLY: --singleplayer loads the pack despite its engine_version_req\n"
 #endif
 				 "  --version        print build info and exit\n"
 				 "  --help           show this help\n"
@@ -218,6 +219,16 @@ int main(int argc, char **argv) {
 #else
 		// Dev only: --singleplayer ignores the pack's auth.lua (get_login() is nil).
 		kSingleplayerSkipAuth = true;
+#endif
+	}
+
+	if (args.has("ignore-engine-req")) {
+#if defined(VB_DISTRIBUTION)
+		std::cerr << "client: --ignore-engine-req is not available in this build\n";
+		return EXIT_FAILURE;
+#else
+		// Dev only: --singleplayer loads the pack despite its engine_version_req.
+		kSingleplayerIgnoreEngineReq = true;
 #endif
 	}
 

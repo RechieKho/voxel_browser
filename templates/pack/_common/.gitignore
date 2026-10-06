@@ -1,0 +1,6 @@
+# Editor stubs copied by `vb pack types` (re-create with that command).
+.vb/
+# Runtime state written by the server while the pack runs.
+storage.json
+db/
+world/

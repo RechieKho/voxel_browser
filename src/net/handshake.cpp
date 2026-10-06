@@ -5,6 +5,7 @@
 
 #include "vb/core/log.hpp"
 #include "vb/core/version.hpp"
+#include "vb/core/version_req.hpp"
 #include "vb/protocol/input.hpp" // S2CKeybindRegistry
 
 namespace vb::net {
@@ -212,6 +213,7 @@ ServerHandshakeStep ServerHandshake::on_frame(const Frame &frame) {
 			info.view_distance = config_.view_distance;
 			info.motd = config_.motd;
 			info.auth_mode = config_.auth_mode;
+			info.engine_version_req = config_.engine_version_req;
 
 			ServerHandshakeStep step;
 			if (config_.auth_mode == protocol::AuthMode::kExternal) {
@@ -465,6 +467,25 @@ ClientHandshakeStep ClientHandshake::on_frame(const Frame &frame) {
 			}
 			if (info->engine_protocol_version != kEngineProtocolVersion) {
 				return fail("engine protocol version mismatch");
+			}
+			if (!info->engine_version_req.empty()) {
+				// A pack's ui/*.lua runs on *this* engine, and two releases can
+				// share a protocol version while differing in the UI API, so the
+				// requirement is checked before any asset is downloaded. An
+				// unparseable requirement fails closed.
+				std::string req_error;
+				const auto req = core::VersionReq::parse(info->engine_version_req, &req_error);
+				const core::SemVer mine = core::engine_version();
+				if (!req) {
+					return fail("this server's pack has an invalid engine_version_req (" +
+							req_error + ")");
+				}
+				if (!req->matches(mine)) {
+					const auto lower = req->lower_bound();
+					return fail("this server's pack needs Voxel Browser " + req->to_string() +
+							"; you have " + core::to_string(mine) +
+							(lower ? " -- run `vb update`" : ""));
+				}
 			}
 			server_info_ = std::move(*info);
 

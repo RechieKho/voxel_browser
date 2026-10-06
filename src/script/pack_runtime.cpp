@@ -79,6 +79,8 @@ void PackRuntime::dispatch_ui_event(core::NetId, const protocol::C2SUiEvent &) {
 bool PackRuntime::storage_dirty() const { return false; }
 void PackRuntime::flush_storage() {}
 std::uint64_t PackRuntime::storage_revision() const { return 0; }
+std::vector<std::string> PackRuntime::describe_api() { return {}; }
+std::vector<std::string> PackRuntime::global_names() { return {}; }
 
 } // namespace vb::script
 
@@ -100,6 +102,7 @@ std::uint64_t PackRuntime::storage_revision() const { return 0; }
 #include "vb/protocol/chat.hpp"
 #include "vb/protocol/input.hpp"
 #include "vb/protocol/inventory.hpp"
+#include "vb/script/api_surface.hpp"
 #include "vb/script/block_def.hpp"
 #include "vb/script/db.hpp"
 #include "vb/script/structure_def.hpp"
@@ -3309,6 +3312,30 @@ void PackRuntime::flush_storage() { impl_->flush_storage(); }
 
 std::uint64_t PackRuntime::storage_revision() const {
 	return impl_->storage_revision_counter;
+}
+
+std::vector<std::string> PackRuntime::global_names() {
+	return list_lua_globals(impl_->vm);
+}
+
+std::vector<std::string> PackRuntime::describe_api() {
+	std::vector<std::string> names = describe_lua_surface(impl_->vm, { "vb" });
+	for (auto &n : names) {
+		// The C++ class is PlayerHandle; scripts know it as `Player`.
+		if (n.rfind("PlayerHandle:", 0) == 0) {
+			n = "Player" + n.substr(sizeof("PlayerHandle") - 1);
+		}
+	}
+	// `self` in a vb.register_entity callback: a per-instance table whose
+	// metatable __index is this shared method table (Phase 6.1), unreachable
+	// from the globals, so list it explicitly.
+	for (const auto &kv : impl_->entity_methods) {
+		if (kv.first.is<std::string>()) {
+			names.push_back("Entity:" + kv.first.as<std::string>());
+		}
+	}
+	std::sort(names.begin(), names.end());
+	return names;
 }
 
 } // namespace vb::script

@@ -32,6 +32,7 @@ add_executable(vb_tests
   unit/gns_transport_test.cpp
   unit/item_drops_test.cpp
   unit/kitchen_sink_pack_test.cpp
+  unit/lua_api_surface_test.cpp
   unit/lighting_test.cpp
   unit/mesher_test.cpp
   unit/netcode_test.cpp
@@ -54,6 +55,7 @@ add_executable(vb_tests
   unit/soak_test.cpp
   unit/ui_runtime_test.cpp
   unit/world_replication_test.cpp
+  unit/version_req_test.cpp
   unit/world_test.cpp
   unit/worldgen_test.cpp
 )
@@ -77,6 +79,11 @@ target_link_libraries(vb_tests
 
 if(VB_WITH_AUTH)
   target_link_libraries(vb_tests PRIVATE nlohmann_json::nlohmann_json)
+endif()
+
+if(VB_WITH_LUA AND TARGET vb_pack_check)
+  target_sources(vb_tests PRIVATE unit/check_pack_test.cpp)
+  target_link_libraries(vb_tests PRIVATE vb_pack_check)
 endif()
 
 if(VB_BUILD_CLI)

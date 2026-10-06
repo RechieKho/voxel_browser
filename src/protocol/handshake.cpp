@@ -47,6 +47,7 @@ void S2CServerInfo::encode(std::vector<std::byte> &out) const {
 	w.u32(view_distance);
 	w.string(motd);
 	w.u8(static_cast<std::uint8_t>(auth_mode));
+	w.string(engine_version_req);
 }
 
 Decoded<S2CServerInfo> S2CServerInfo::decode(std::span<const std::byte> in) {
@@ -61,6 +62,10 @@ Decoded<S2CServerInfo> S2CServerInfo::decode(std::span<const std::byte> in) {
 	m.auth_mode = static_cast<AuthMode>(r.u8());
 	if (!r.failed() && !valid(m.auth_mode)) {
 		r.fail(ProtocolError::kBadEnum);
+	}
+	m.engine_version_req = r.string();
+	if (!r.failed() && m.engine_version_req.size() > kMaxEngineVersionReqBytes) {
+		r.fail(ProtocolError::kLengthExceeded);
 	}
 	return finish(r, std::move(m));
 }

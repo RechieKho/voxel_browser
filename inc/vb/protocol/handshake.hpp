@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <span>
 #include <string>
@@ -73,6 +74,9 @@ struct C2SHello {
 	static Decoded<C2SHello> decode(std::span<const std::byte> in);
 };
 
+// Cap on S2CServerInfo::engine_version_req (a short comparator list).
+inline constexpr std::size_t kMaxEngineVersionReqBytes = 128;
+
 struct S2CServerInfo {
 	static constexpr MessageType kType = MessageType::kS2CServerInfo;
 	std::string pack_name;
@@ -88,6 +92,10 @@ struct S2CServerInfo {
 	std::uint32_t view_distance = 8;
 	std::string motd;
 	AuthMode auth_mode = AuthMode::kNone;
+	// The pack's `engine_version_req` (pack.toml; protocol v30+), e.g. ">=0.6.0".
+	// Empty = no requirement. The client refuses to continue when its own
+	// version does not satisfy it, before downloading any asset.
+	std::string engine_version_req;
 
 	void encode(std::vector<std::byte> &out) const;
 	static Decoded<S2CServerInfo> decode(std::span<const std::byte> in);

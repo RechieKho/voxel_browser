@@ -1,0 +1,3 @@
+# Bound names that are deliberately left out of the stubs (one dotted name per line,
+# `Type:method` for usertype methods). Internal helpers only; everything a pack author
+# can call belongs in sdk/lua/library/. See tests/unit/lua_api_surface_test.cpp.

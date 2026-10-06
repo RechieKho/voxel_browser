@@ -9,6 +9,7 @@ add_library(vb_core STATIC
   log.cpp
   paths.cpp
   sha256.cpp
+  version_req.cpp
 )
 add_library(vb::core ALIAS vb_core)
 

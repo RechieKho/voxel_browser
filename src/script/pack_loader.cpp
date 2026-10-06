@@ -84,6 +84,10 @@ std::unordered_map<std::string, std::string> collect_requirable_modules(
 		if (ec || rel.empty() || rel.begin()->generic_string() == "ui") {
 			continue;
 		}
+		// Editor tooling (`.vb/lua` stubs from `vb pack types`) is not pack code.
+		if (rel.begin()->generic_string().rfind('.', 0) == 0) {
+			continue;
+		}
 		// auth.lua is declarative config read by vb::auth in its own minimal
 		// VM (architecture_spec/auth.md §4); it must never run as pack code.
 		if (rel.generic_string() == "auth.lua") {

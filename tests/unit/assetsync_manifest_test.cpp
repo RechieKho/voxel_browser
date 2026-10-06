@@ -134,6 +134,29 @@ TEST_CASE("build_manifest enforces per-file and total size caps") {
 	std::filesystem::remove_all(pack);
 }
 
+TEST_CASE("build_manifest skips developer tooling files (.vb/, dotfiles, root README/AGENTS)") {
+	const auto pack = make_pack("devfiles");
+	std::filesystem::create_directories(pack / ".vb" / "lua");
+	for (const char *rel : { ".vb/lua/vb.lua", ".luarc.json", ".gitignore", "README.md", "AGENTS.md",
+				 "scripts/README.md" }) {
+		std::ofstream f(pack / rel, std::ios::binary);
+		f << "x";
+	}
+	const auto m = build_manifest(pack);
+	REQUIRE(m);
+	for (const auto &e : m->entries) {
+		CHECK(e.path.rfind(".", 0) != 0);
+		CHECK(e.path != "README.md");
+		CHECK(e.path != "AGENTS.md");
+	}
+	bool nested_readme = false;
+	for (const auto &e : m->entries) {
+		nested_readme = nested_readme || e.path == "scripts/README.md";
+	}
+	CHECK(nested_readme); // only the pack-root docs are skipped
+	std::filesystem::remove_all(pack);
+}
+
 TEST_CASE("build_manifest never advertises the pack-root auth.lua") {
 	const auto pack = make_pack("auth_lua");
 	{
