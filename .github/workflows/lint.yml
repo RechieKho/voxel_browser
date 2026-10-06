@@ -40,3 +40,20 @@ jobs:
 
       - name: Run the emulator self-tests
         run: python3 -m pytest -p no:cacheprovider -q tests/e2e/test_mock_keycloak.py
+
+  # The generated Lua reference (docs/lua-reference/, sdk/lua/api_index.txt) must match the stubs in
+  # sdk/lua/library/ (architecture_spec/dev-experience.md §3.3). The runtime-vs-stub drift check is the
+  # lua_api_surface_test doctest in the normal builds.
+  lua-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check the generated Lua docs are up to date
+        run: python3 scripts/gen_lua_docs.py --check

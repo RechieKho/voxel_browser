@@ -1,8 +1,9 @@
 name = "base"
 version = "0.1.0"
-# Informational only (spec §14: "pack_version string is informational; the
-# block registry is always sent in full, so old clients cannot desync on
-# content"). Nothing in the engine parses or enforces this field yet.
+# Enforced (architecture_spec/dev-experience.md §3.7): the server, singleplayer and
+# joining clients refuse a pack whose requirement the engine does not satisfy.
+# Cargo-style: "*", ">=0.6.0", ">=0.6.0, <0.7.0", "^0.6.1", "~0.6.1". Bundled packs
+# ship with the engine and keep "*".
 engine_version_req = "*"
 
 # Not read by the engine today: src/script/pack_loader.cpp loads

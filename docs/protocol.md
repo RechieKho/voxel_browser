@@ -4,7 +4,16 @@
 > as any change to a struct in `inc/vb/protocol/`, and bump
 > `kEngineProtocolVersion` in `cmake/version.hpp.in`.
 
-Current `ENGINE_PROTOCOL_VERSION`: **29**.
+Current `ENGINE_PROTOCOL_VERSION`: **30**.
+
+- **30** — `S2C_ServerInfo` gains a trailing `string engine_version_req` (≤ 128
+  bytes, `kMaxEngineVersionReqBytes`; longer ⇒ `kLengthExceeded`): the pack's
+  `pack.toml` `engine_version_req` (Cargo-style comparators such as
+  `>=0.6.0, <0.7.0`; empty = no requirement). The client parses it with
+  `vb::core::VersionReq` and disconnects itself ("this server's pack needs Voxel
+  Browser >=0.6.0; you have 0.5.2 -- run `vb update`") before any asset is
+  downloaded; an unparseable value also disconnects (fail closed). Design:
+  `architecture_spec/dev-experience.md` §3.7.
 
 - **29** — External authentication plumbing (Phase 9.2; design:
   `architecture_spec/auth.md` §5.2). `AuthMode` gains `kExternal = 2`.
@@ -375,7 +384,7 @@ buffered, and yields `consumed` so a stream reader can advance.
 | Type (id)                | Fields                                                                 |
 | ------------------------ | -------------------------------------------------------------------- |
 | `C2S_Hello` (1)          | `u16 engine_protocol_version`, `u64 client_nonce`, `string client_version` `u8 client_flags` (v27+; bit 0 = `kClientFlagAutomation`, set by `VB_WITH_AUTOMATION` builds; a server not built with automation refuses it with `kBadHandshake`, see `docs/e2e-automation.md` §7.4; unknown bits ignored) |
-| `S2C_ServerInfo` (2)     | `string pack_name`, `string pack_version`, `u16 engine_protocol_version`, `u16 tick_rate`, `string motd`, `u8 auth_mode` |
+| `S2C_ServerInfo` (2)     | `string pack_name`, `string pack_version`, `u16 engine_protocol_version`, `u16 tick_rate`, `string motd`, `u8 auth_mode`, `string engine_version_req` (v30+) |
 | `C2S_Auth` (3)           | `string player_name`, `string token` (empty when `auth_mode = none`; ≤ 16 KiB) |
 | `S2C_AuthResult` (4)     | `bool ok`, `string reason`, `string resolved_name` (v29+)              |
 | `S2C_AuthChallenge` (8)  | v29+, only when `auth_mode = external`: `string provider, display_name, issuer, client_id`, `string[] scopes` (≤16), `(string,string)[] params` (≤16), `string nonce` |

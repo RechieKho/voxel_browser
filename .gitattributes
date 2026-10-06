@@ -1,0 +1,6 @@
+# Generated or byte-compared files must be LF on every platform: Windows
+# checkouts default to CRLF (core.autocrlf), which breaks tests and the
+# generator `--check`s that compare them against freshly generated output.
+docs/cli.md text eol=lf
+docs/lua-reference/** text eol=lf
+sdk/lua/** text eol=lf

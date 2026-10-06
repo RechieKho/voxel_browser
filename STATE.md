@@ -390,3 +390,21 @@ Anything **not** listed above and not inline in this file no longer exists
 in `STATE.md`'s history — if you're looking for something and can't find
 it here, check `git log -- STATE.md` for when it might have been removed,
 or `REMAINING_TASKS.md`/`ARCHITECTURE_SPEC.md` for design-level context.
+
+## Phase 10 (developer experience) gotchas — 2026-10-06
+
+- The Lua API has **three** things to keep in step: the C++ binding, its stub in `sdk/lua/library/`, and the
+  regenerated `docs/lua-reference/` + `sdk/lua/api_index.txt` (`python3 scripts/gen_lua_docs.py`).
+  `lua_api_surface_test` (needs `VB_WITH_LUA`) fails on any mismatch; the `lua-docs` lint job on stale output.
+- `vb help --markdown > docs/cli.md` after touching the command table or `src/cli/help.cpp`
+  (`dev_cli_help_test` checks it).
+- `kEngineProtocolVersion` is 30: `S2CServerInfo` ends with `engine_version_req`. Aggregate-initialised
+  `S2CServerInfo{...}` in tests must now list it (or use member assignment).
+- `src/script/lua_global_scan.c` reads Lua 5.4 internals (`#error` on another version). Bumping the pinned Lua
+  means re-checking it.
+- `vb.noise.value`/`cellular` take a **number** (frequency); a table argument is silently ignored (sol2
+  `optional<double>`), which is what `content/examples/kitchen_sink/worldgen.lua` does today.
+- The asset manifest skips dot-entries and pack-root README.md/AGENTS.md; a pack file that must reach clients
+  cannot start with a dot.
+- Local tooling: CI's clang-format is the newest pip release (23.x); Ubuntu's 18.x disagrees on existing
+  files. Use `pip install clang-format` and run it on the files you touched.

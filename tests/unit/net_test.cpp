@@ -694,3 +694,38 @@ TEST_CASE("external auth: client without a token source cancels the join") {
 	REQUIRE(p2);
 	CHECK(client.on_frame(*p2).failed);
 }
+
+namespace {
+
+// Feeds one S2C_ServerInfo carrying `req` to a fresh client handshake.
+vb::net::ClientHandshakeStep server_info_with_req(vb::net::ClientHandshake &client, const std::string &req) {
+	client.start();
+	proto::S2CServerInfo info;
+	info.engine_protocol_version = vb::kEngineProtocolVersion;
+	info.auth_mode = proto::AuthMode::kNone;
+	info.engine_version_req = req;
+	std::vector<std::byte> payload, frame;
+	info.encode(payload);
+	proto::write_frame(frame, proto::MessageType::kS2CServerInfo, payload);
+	std::size_t consumed = 0;
+	auto p = proto::read_frame(span_of(frame), consumed);
+	return client.on_frame(*p);
+}
+
+} // namespace
+
+TEST_CASE("client disconnects when the pack's engine_version_req is not satisfied") {
+	ClientHandshake too_new(HandshakeClientConfig{});
+	auto step = server_info_with_req(too_new, ">=999.0.0");
+	CHECK(step.failed);
+	CHECK(step.failure_reason.find("needs Voxel Browser >=999.0.0") != std::string::npos);
+	CHECK(step.failure_reason.find("vb update") != std::string::npos);
+
+	ClientHandshake garbage(HandshakeClientConfig{});
+	CHECK(server_info_with_req(garbage, "newer please").failed); // fail closed
+
+	ClientHandshake ok(HandshakeClientConfig{});
+	CHECK_FALSE(server_info_with_req(ok, ">=0.0.0").failed);
+	ClientHandshake any(HandshakeClientConfig{});
+	CHECK_FALSE(server_info_with_req(any, "").failed);
+}

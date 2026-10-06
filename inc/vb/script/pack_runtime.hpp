@@ -5,6 +5,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 #include <string_view>
 #include <unordered_map>
 
@@ -245,6 +246,14 @@ public:
 	// file speculatively every tick -- see REMAINING_TASKS.md's "Manifest
 	// staleness" item.
 	std::uint64_t storage_revision() const;
+
+	// Dotted names of the `vb.*` surface plus every registered usertype
+	// method (`Player:give`), for the API drift test (sdk/lua/api_index.txt).
+	std::vector<std::string> describe_api();
+
+	// Names of the Lua globals that exist now (after the pack loaded), so `--check-pack` can
+	// tell run-time-defined globals (`_G[name] = ...`) from typos.
+	std::vector<std::string> global_names();
 
 	struct Impl;
 

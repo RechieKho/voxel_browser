@@ -279,6 +279,14 @@ state-machine detail: see the scripting doc.
 Full API tables, the block-break-event-flow walkthrough, and the complete
 block-damage design: `architecture_spec/scripting.md`.
 
+**Implemented (Phase 10, 2026-10-06):** `sdk/lua/` LuaCATS stubs are the source
+of truth for the Lua API surface (`lua_api_surface_test` checks them against the
+live tables); `docs/lua-reference/` is generated from them; `vb pack
+init|check|dev|types|info` scaffolds and validates packs (`voxel_browser_server
+--check-pack`); `pack.toml`'s `engine_version_req` is enforced by the server,
+singleplayer and the client (`S2C_ServerInfo.engine_version_req`, protocol 30) —
+`architecture_spec/dev-experience.md`.
+
 ---
 
 ## 10. Rendering (Client)

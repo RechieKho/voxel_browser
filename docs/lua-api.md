@@ -1,5 +1,13 @@
 # Voxel Browser — Lua Content API Reference
 
+> **Looking something up?** Use the generated quick reference,
+> [`lua-reference/README.md`](lua-reference/README.md): every function with its
+> signature, one example and a context badge. It is generated from the LuaCATS
+> stubs in `sdk/lua/library/` (the source of truth, also what editors read), and
+> `lua_api_surface_test` fails when a binding and its stub disagree. This file is
+> the **narrative/design guide**: why things work the way they do, load order,
+> phase history.
+
 > **Status: implemented and demonstrated.** The server content API
 > (`ARCHITECTURE_SPEC.md` §10.3) and the client UI API (§10.4) are both real,
 > and `content/base` (`content/base/`) is the worked, runnable example this

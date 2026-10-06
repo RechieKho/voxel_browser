@@ -118,8 +118,9 @@ TEST_CASE("handshake structs round-trip") {
 	CHECK(round_trip(flagged).client_flags == kClientFlagAutomation);
 
 	S2CServerInfo info{ "base", "1.0.0", vb::kEngineProtocolVersion, 20, 6, "hello!",
-		AuthMode::kNone };
+		AuthMode::kNone, ">=0.6.0, <0.7.0" };
 	auto i2 = round_trip(info);
+	CHECK(i2.engine_version_req == ">=0.6.0, <0.7.0");
 	CHECK(i2.pack_name == "base");
 	CHECK(i2.tick_rate == 20);
 	CHECK(i2.view_distance == 6);
@@ -631,10 +632,27 @@ TEST_CASE("external-auth messages round-trip and enforce their bounds") {
 	}
 }
 
+TEST_CASE("S2CServerInfo engine_version_req is length-capped and survives truncation") {
+	S2CServerInfo info{ "p", "v", 1, 20, 8, "m", AuthMode::kNone, std::string(vb::protocol::kMaxEngineVersionReqBytes + 1, '>') };
+	std::vector<std::byte> bytes;
+	info.encode(bytes);
+	auto over = S2CServerInfo::decode(as_span(bytes));
+	CHECK_FALSE(over);
+	CHECK(over.error() == vb::core::ProtocolError::kLengthExceeded);
+
+	info.engine_version_req = ">=0.5.0";
+	bytes.clear();
+	info.encode(bytes);
+	for (std::size_t n = 0; n < bytes.size(); ++n) {
+		CHECK_FALSE(S2CServerInfo::decode(std::span<const std::byte>(bytes.data(), n)));
+	}
+	CHECK(S2CServerInfo::decode(as_span(bytes)));
+}
+
 TEST_CASE("decode rejects a bad enum and trailing bytes") {
 	std::vector<std::byte> bytes;
-	S2CServerInfo{ "p", "v", 1, 20, 8, "m", AuthMode::kNone }.encode(bytes);
-	bytes.back() = std::byte{ 0x7F }; // clobber auth_mode
+	S2CServerInfo{ "p", "v", 1, 20, 8, "m", AuthMode::kNone, "" }.encode(bytes);
+	bytes[bytes.size() - 2] = std::byte{ 0x7F }; // clobber auth_mode (before the empty engine_version_req)
 	auto bad = S2CServerInfo::decode(as_span(bytes));
 	CHECK_FALSE(bad);
 	CHECK(bad.error() == vb::core::ProtocolError::kBadEnum);

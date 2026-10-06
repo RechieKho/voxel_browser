@@ -35,11 +35,13 @@
 #include "vb/core/cli.hpp"
 #include "vb/core/config.hpp"
 #include "vb/core/log.hpp"
+#include "vb/core/version_req.hpp"
 #include "vb/net/gns_transport.hpp"
 #include "vb/net/session.hpp"
 #include "vb/net/world_replicator.hpp"
 #include "vb/physics/movement.hpp"
 #include "vb/script/pack_loader.hpp"
+#include "vb/script/pack_manifest.hpp"
 #include "vb/script/pack_runtime.hpp"
 #include "vb/world/block.hpp"
 #include "vb/world/region_store.hpp"
@@ -47,6 +49,9 @@
 #include "vb/worldgen/generator.hpp"
 #include "vb/worldgen/worker_pool.hpp"
 
+#if VB_WITH_LUA
+#include "check_pack.hpp"
+#endif
 #if defined(VB_WITH_AUTOMATION)
 #include "automation_endpoint.hpp"
 #include "vb/automation/host.hpp"
@@ -113,6 +118,13 @@ void print_usage() {
 #if !defined(VB_DISTRIBUTION)
 				 "  --insecure-skip-auth  DEV ONLY: ignore the pack's auth.lua and admit unauthenticated\n"
 				 "                        players (get_login() returns nil); not in distribution builds\n"
+#endif
+				 "  --check-pack <dir>     load the pack headless (no socket), print file:line diagnostics\n"
+				 "                        and exit 0 (clean) / 1 (errors); add --json for machine output and\n"
+				 "                        --strict to fail on warnings\n"
+#if !defined(VB_DISTRIBUTION)
+				 "  --ignore-engine-req   DEV ONLY: start (or --check-pack) even when pack.toml's\n"
+				 "                        engine_version_req does not match this build\n"
 #endif
 				 "  --version             print build info and exit\n"
 				 "  --help                show this help\n";
@@ -192,6 +204,29 @@ int main(int argc, char **argv) {
 		return EXIT_SUCCESS;
 	}
 
+	if (args.has("check-pack")) {
+#if VB_WITH_LUA
+		vb::server::CheckOptions options;
+		options.strict = args.has("strict");
+#if !defined(VB_DISTRIBUTION)
+		options.ignore_engine_req = args.has("ignore-engine-req");
+#endif
+		const std::string dir = args.value_or("check-pack", "");
+		if (dir.empty() || dir == "true") {
+			std::cerr << "server: --check-pack needs a pack directory\n";
+			return 2;
+		}
+		const vb::server::CheckReport report = vb::server::check_pack(dir, options);
+		std::cout << (args.has("json") ? vb::server::format_json(report, options.strict)
+									   : vb::server::format_human(report, options.strict))
+				  << '\n';
+		return report.ok(options.strict) ? EXIT_SUCCESS : EXIT_FAILURE;
+#else
+		std::cerr << "server: --check-pack needs a build with VB_WITH_LUA\n";
+		return EXIT_FAILURE;
+#endif
+	}
+
 #if defined(VB_WITH_AUTOMATION)
 	std::unique_ptr<vb::automation::Host> automation;
 	if (args.has("automation")) {
@@ -232,6 +267,29 @@ int main(int argc, char **argv) {
 	}
 	vb::core::ServerConfig config = *loaded;
 	vb::core::apply_cli_overrides(config, args);
+
+	// pack.toml's engine_version_req is enforced (architecture_spec/dev-experience.md
+	// §3.7): a pack that needs a newer engine fails here with a clear message rather
+	// than mid-game with "attempt to call a nil value". Fail closed on a bad value.
+	const vb::script::PackManifest pack_manifest = vb::script::read_pack_manifest(config.content_pack);
+	{
+		const vb::core::EngineReqCheck req = vb::script::check_pack_engine_req(pack_manifest, vb::core::engine_version());
+#if defined(VB_DISTRIBUTION)
+		const bool ignore_req = false;
+#else
+		const bool ignore_req = args.has("ignore-engine-req");
+#endif
+		if (!req.ok && ignore_req) {
+			VB_WARN("script", "*** --ignore-engine-req: ", req.message, " (continuing; development only) ***");
+		} else if (!req.ok) {
+			std::cerr << "server: " << req.message << '\n';
+			std::cerr << "hint: install a matching engine (`vb install`), or fix engine_version_req in "
+					  << config.content_pack << "/pack.toml\n";
+			return EXIT_FAILURE;
+		} else if (req.warning) {
+			VB_WARN("script", req.message);
+		}
+	}
 
 	// In-engine authentication (architecture_spec/auth.md §4): a pack-root
 	// auth.lua makes authentication mandatory. Fail closed -- any problem
@@ -396,6 +454,7 @@ int main(int argc, char **argv) {
 	hs_config.tick_rate = static_cast<std::uint16_t>(config.tick_rate);
 	hs_config.view_distance = config.view_distance;
 	hs_config.motd = config.motd;
+	hs_config.engine_version_req = pack_manifest.engine_version_req.value_or("");
 	hs_config.auth_mode = static_cast<vb::protocol::AuthMode>(config.auth_mode);
 	if (active_auth) {
 		// Derived from auth.lua's presence, never configured (auth.md §4).

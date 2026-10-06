@@ -26,8 +26,10 @@
 
 #include "vb/cli/compat.hpp"
 #include "vb/cli/completions.hpp"
+#include "vb/cli/help.hpp"
 #include "vb/cli/installer.hpp"
 #include "vb/cli/instance.hpp"
+#include "vb/cli/pack.hpp"
 #include "vb/cli/process.hpp"
 #include "vb/cli/release_manifest.hpp"
 #include "vb/cli/self_update.hpp"
@@ -67,12 +69,12 @@ struct Command {
 };
 
 int usage_error(const Ctx &c, const std::string &msg) {
-	c.err << "vb: " << msg << "\nTry `vb --help`.\n";
+	c.err << "error: " << msg << "\nhint: run `vb help` (or `vb help <command>`)\n";
 	return kExitUsage;
 }
 
 int failure(const Ctx &c, const std::string &msg) {
-	c.err << "vb: " << msg << "\n";
+	c.err << "error: " << msg << "\n";
 	return kExitFailure;
 }
 
@@ -394,7 +396,7 @@ InstallResult do_install(const Ctx &c, const std::string &version, InstallOption
 	std::string trust_warning;
 	opts.trust = load_trust_policy(c.layout, &trust_warning);
 	if (!trust_warning.empty()) {
-		c.err << "vb: warning: " << trust_warning << "\n";
+		c.err << "warning: " << trust_warning << "\n";
 	}
 	c.out << "installing " << version << " from " << source->describe() << "\n";
 	InstallResult r = install_release(c.layout, *source, version, opts);
@@ -404,11 +406,28 @@ InstallResult do_install(const Ctx &c, const std::string &version, InstallOption
 	return r;
 }
 
-int cmd_install(const Ctx &c, const std::vector<std::string> &args) {
+int cmd_install(const Ctx &c, const std::vector<std::string> &raw_args) {
+	std::vector<std::string> args = raw_args;
+	const bool as_json = take_flag(args, "--json");
 	InstallArgs ia;
 	std::string msg;
 	if (!parse_install_args(args, true, ia, msg)) {
 		return usage_error(c, msg);
+	}
+	if (as_json) {
+		// Machine mode: no progress bar or chatter, one JSON object at the end.
+		std::ostringstream quiet;
+		const Ctx q{ c.layout, quiet, c.err };
+		const InstallResult r = do_install(q, ia.version, ia.opts);
+		if (!r.status) {
+			return failure(c, r.status.error);
+		}
+		bool default_set = false;
+		if (!r.already_installed && !read_default_version(c.layout)) {
+			default_set = static_cast<bool>(write_default_version(c.layout, r.version));
+		}
+		print_json(c, { { "version", r.version }, { "already_installed", r.already_installed }, { "default_set", default_set } });
+		return kExitOk;
 	}
 	const InstallResult r = do_install(c, ia.version, ia.opts);
 	if (!r.status) {
@@ -505,33 +524,47 @@ int cmd_prune(const Ctx &c, const std::vector<std::string> &args) {
 }
 
 int cmd_doctor(const Ctx &c, const std::vector<std::string> &args) {
-	if (!args.empty()) {
-		return usage_error(c, "`doctor` takes no arguments");
+	std::vector<std::string> rest = args;
+	const bool as_json = take_flag(rest, "--json");
+	if (!rest.empty()) {
+		return usage_error(c, "usage: vb doctor [--json]");
 	}
 	int problems = 0;
+	json checks = json::array();
+	// One line per check: [ok]/[FAIL] results, [info]/[warn] notes -- or the same as JSON items.
+	const auto note = [&](const char *level, const std::string &text) {
+		if (as_json) {
+			checks.push_back({ { "level", level }, { "text", text } });
+		} else {
+			c.out << "[" << level << "] " << text << "\n";
+		}
+	};
 	const auto report = [&](bool ok, const std::string &text) {
-		c.out << (ok ? "[ok]   " : "[FAIL] ") << text << "\n";
+		if (as_json) {
+			checks.push_back({ { "level", ok ? "ok" : "fail" }, { "text", text } });
+		} else {
+			c.out << (ok ? "[ok]   " : "[FAIL] ") << text << "\n";
+		}
 		if (!ok) {
 			++problems;
 		}
 	};
 	const std::string platform = current_platform();
 	report(!platform.empty(), "platform: " + (platform.empty() ? std::string("unsupported") : platform));
-	c.out << "[info] data: " << c.layout.data().string() << "\n"
-		  << "[info] config: " << c.layout.config().string() << "\n"
-		  << "[info] source: " << configured_source_spec(c.layout) << "\n";
+	note("info", "data: " + c.layout.data().string());
+	note("info", "config: " + c.layout.config().string());
+	note("info", "source: " + configured_source_spec(c.layout));
 	{
 		std::string warning;
 		const TrustPolicy policy = load_trust_policy(c.layout, &warning);
 		if (policy.keys.empty()) {
-			c.out << "[info] release signatures: not enforced (no trusted key; see release_keys.txt "
-					 "and `trusted_keys` in cli.toml)\n";
+			note("info", "release signatures: not enforced (no trusted key; see release_keys.txt "
+						 "and `trusted_keys` in cli.toml)");
 		} else {
-			c.out << "[info] release signatures: " << (policy.require ? "required" : "checked when present")
-				  << ", " << policy.keys.size() << " trusted key(s)\n";
+			note("info", std::string("release signatures: ") + (policy.require ? "required" : "checked when present") + ", " + std::to_string(policy.keys.size()) + " trusted key(s)");
 		}
 		if (!warning.empty()) {
-			c.out << "[warn] " << warning << "\n";
+			note("warn", warning);
 		}
 	}
 	std::string why;
@@ -565,7 +598,7 @@ int cmd_doctor(const Ctx &c, const std::vector<std::string> &args) {
 		report(resolve_entry(c.layout, *def, &w).has_value(),
 				w.empty() ? "default version " + *def : "default version: " + w);
 	} else {
-		c.out << "[info] no default version set\n";
+		note("info", "no default version set");
 	}
 	int stale = 0;
 	for (std::filesystem::directory_iterator it(c.layout.versions_dir(), ec), end; !ec && it != end;
@@ -573,7 +606,10 @@ int cmd_doctor(const Ctx &c, const std::vector<std::string> &args) {
 		stale += it->path().filename().string().rfind(".staging-", 0) == 0 ? 1 : 0;
 	}
 	if (stale > 0) {
-		c.out << "[warn] " << stale << " leftover staging dir(s); `vb prune` removes them\n";
+		note("warn", std::to_string(stale) + " leftover staging dir(s); `vb prune` removes them");
+	}
+	if (as_json) {
+		print_json(c, { { "ok", problems == 0 }, { "problems", problems }, { "checks", checks } });
 	}
 	return problems == 0 ? kExitOk : kExitFailure;
 }
@@ -619,7 +655,7 @@ int cmd_launch(const Ctx &c, const std::vector<std::string> &raw) {
 		// Only a warning: the launch goes ahead (the client's own handshake is
 		// the authority), but a mismatch with a server we manage is worth a line.
 		if (const std::string warning = protocol_warning(c.layout, *e, *connect); !warning.empty()) {
-			c.err << "vb: warning: " << warning << "\n";
+			c.err << "warning: " << warning << "\n";
 		}
 		const auto has = [&](const char *name) {
 			return std::any_of(passthrough.begin(), passthrough.end(), [&](const std::string &a) {
@@ -1479,7 +1515,7 @@ int structure_validate(const Ctx &c, const std::vector<std::string> &args) {
 			  << " structure files\n";
 		return kExitOk;
 	}
-	c.err << "vb: " << report.issues.size() << " problem(s) found\n";
+	c.err << "error: " << report.issues.size() << " problem(s) found\n";
 	return kExitFailure;
 }
 
@@ -1550,7 +1586,7 @@ int cmd_self(const Ctx &c, std::vector<std::string> args) {
 	std::string trust_warning;
 	opts.trust = load_trust_policy(c.layout, &trust_warning);
 	if (!trust_warning.empty()) {
-		c.err << "vb: warning: " << trust_warning << "\n";
+		c.err << "warning: " << trust_warning << "\n";
 	}
 	std::string why;
 	const auto source = make_source(configured_source_spec(c.layout), &why);
@@ -1665,6 +1701,213 @@ int cmd_complete_helper(const Ctx &c, const std::vector<std::string> &args) {
 	return kExitUsage;
 }
 
+// ---- docs ---------------------------------------------------------------
+
+std::optional<std::filesystem::path> docs_dir_of(const Entry &e) {
+	for (const std::filesystem::path &base : { e.root, e.root.parent_path() }) {
+		std::error_code ec;
+		if (std::filesystem::is_directory(base / "docs", ec)) {
+			return base / "docs";
+		}
+	}
+	return std::nullopt;
+}
+
+std::string read_whole(const std::filesystem::path &p) {
+	std::ifstream in(p, std::ios::binary);
+	std::ostringstream ss;
+	ss << in.rdbuf();
+	return ss.str();
+}
+
+// "vb.world.raycast" -> docs/lua-reference/vb.world.md, "## vb.world.raycast" section.
+std::optional<std::string> lua_reference_section(const std::filesystem::path &docs, const std::string &name) {
+	const std::size_t cut = name.find_last_of(".:");
+	if (cut == std::string::npos) {
+		return std::nullopt;
+	}
+	const std::filesystem::path file = docs / "lua-reference" / (name.substr(0, cut) + ".md");
+	std::error_code ec;
+	if (!std::filesystem::is_regular_file(file, ec)) {
+		return std::nullopt;
+	}
+	const std::string text = read_whole(file);
+	const std::string head = "## " + name + "\n";
+	std::size_t at = text.rfind("\n" + head);
+	at = text.rfind(head, 0) == 0 ? 0 : (at == std::string::npos ? at : at + 1);
+	if (at == std::string::npos) {
+		return std::nullopt;
+	}
+	const std::size_t end = text.find("\n## ", at + head.size());
+	return text.substr(at, end == std::string::npos ? std::string::npos : end - at + 1);
+}
+
+int cmd_docs(const Ctx &c, std::vector<std::string> args) {
+	std::string version;
+	if (!take_version_flag(args, version)) {
+		return usage_error(c, "--version needs a value");
+	}
+	const bool path_only = take_flag(args, "--path");
+	if (args.size() > 1) {
+		return usage_error(c, "usage: vb docs [<topic>] [--path] [--version <v>]");
+	}
+	std::string why;
+	const auto entry = resolve_entry(c.layout, version, &why);
+	if (!entry) {
+		return failure(c, why);
+	}
+	const auto dir = docs_dir_of(*entry);
+	if (!dir) {
+		return failure(c, entry->name + " ships no docs directory (" + entry->root.string() + "/docs)");
+	}
+	if (path_only) {
+		c.out << dir->string() << "\n";
+		return kExitOk;
+	}
+	if (args.empty()) {
+		c.out << "documentation for " << entry->name << " (" << dir->string() << "):\n";
+		std::vector<std::string> names;
+		std::error_code ec;
+		for (auto it = std::filesystem::recursive_directory_iterator(*dir, ec); it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
+			if (it->is_regular_file(ec) && it->path().extension() == ".md") {
+				names.push_back(std::filesystem::relative(it->path(), *dir, ec).generic_string());
+			}
+		}
+		std::sort(names.begin(), names.end());
+		for (const auto &n : names) {
+			c.out << "  " << n << "\n";
+		}
+		c.out << "\nopen one with `vb docs <file>`, or a Lua function with `vb docs vb.world.raycast`\n";
+		return kExitOk;
+	}
+	const std::string &topic = args[0];
+	std::error_code ec;
+	for (const std::filesystem::path &cand : { *dir / topic, *dir / (topic + ".md"), *dir / "lua-reference" / topic, *dir / "lua-reference" / (topic + ".md") }) {
+		if (std::filesystem::is_regular_file(cand, ec)) {
+			c.out << read_whole(cand);
+			return kExitOk;
+		}
+	}
+	if (const auto section = lua_reference_section(*dir, topic)) {
+		c.out << *section;
+		return kExitOk;
+	}
+	return failure(c, "no documentation topic '" + topic + "'");
+}
+
+// ---- help ---------------------------------------------------------------
+
+std::string flatten_usage(const std::string &usage) {
+	return "vb " + usage;
+}
+
+void print_command_help(std::ostream &out, const std::string &name, const Command &cmd) {
+	out << flatten_usage(cmd.usage) << "\n\n"
+		<< cmd.summary << "\n";
+	const CommandDoc *doc = find_command_doc(name);
+	if (doc == nullptr) {
+		return;
+	}
+	if (!doc->details.empty()) {
+		out << "\n"
+			<< doc->details << "\n";
+	}
+	if (!doc->subs.empty()) {
+		out << "\nsubcommands:\n";
+		for (const DocSub &sub : doc->subs) {
+			out << "  vb " << sub.usage << "\n      " << sub.summary << "\n";
+		}
+	}
+	if (!doc->flags.empty()) {
+		out << "\noptions:\n";
+		for (const DocFlag &f : doc->flags) {
+			out << "  " << f.flag << std::string(f.flag.size() < 24 ? 24 - f.flag.size() : 2, ' ') << f.text << "\n";
+		}
+	}
+	if (!doc->examples.empty()) {
+		out << "\nexamples:\n";
+		for (const DocExample &e : doc->examples) {
+			out << "  " << e.command << (e.explanation.empty() ? "" : "    # " + e.explanation) << "\n";
+		}
+	}
+	if (doc->json) {
+		out << "\nSupports --json (machine-readable output).\n";
+	}
+}
+
+const char *kContract =
+		"## Conventions for scripts and agents\n\n"
+		"- **Exit codes:** `0` success, `1` the operation failed, `2` bad command line.\n"
+		"- **Errors** go to stderr as `error: <what went wrong>`, followed by `hint: <what to do>` when one exists. "
+		"Non-fatal notes are `warning: ...`.\n"
+		"- **`--json`** on every command that reports state (`list`, `which`, `paths`, `doctor`, `install`, `update`, "
+		"`server list|status`, `structure validate`, `pack *`) prints one JSON document on stdout and nothing else.\n"
+		"- **No prompts.** Nothing asks a question; destructive actions refuse unless given `--yes` or `--force`.\n"
+		"- **Environment:** `VB_HOME=<dir>` keeps everything under one directory (portable/CI); "
+		"`VB_SOURCE=<src>` selects the release source (`owner/repo[@base-url]` or `dir:/path`).\n";
+
+std::string render_markdown() {
+	std::ostringstream out;
+	out << "# `vb` command reference\n\n"
+		   "<!-- Generated by `vb help --markdown`; do not edit. Regenerate: `vb help --markdown > docs/cli.md`. -->\n\n"
+		   "`vb` manages and runs Voxel Browser (user-scoped, no admin rights). `vb help <command>` prints the same "
+		   "information for one command; `vb help --json` prints this whole table as JSON.\n\n"
+		<< kContract << "\n## Commands\n\n";
+	for (const auto &[name, cmd] : commands()) {
+		out << "| `vb " << cmd.usage << "` | " << cmd.summary << " |\n";
+	}
+	// The table needs a header row to render.
+	std::string table = out.str();
+	const std::size_t first = table.find("| `vb ");
+	table.insert(first, "| Command | What it does |\n| --- | --- |\n");
+	std::ostringstream full;
+	full << table << "\n";
+	for (const auto &[name, cmd] : commands()) {
+		full << "## `vb " << name << "`\n\n```\n";
+		std::ostringstream body;
+		print_command_help(body, name, cmd);
+		full << body.str() << "```\n\n";
+	}
+	std::string text = full.str();
+	while (text.size() > 1 && text[text.size() - 1] == '\n' && text[text.size() - 2] == '\n') {
+		text.pop_back();
+	}
+	return text;
+}
+
+json render_json() {
+	json cmds = json::array();
+	for (const auto &[name, cmd] : commands()) {
+		json j = { { "name", name }, { "usage", "vb " + std::string(cmd.usage) }, { "summary", cmd.summary } };
+		if (const CommandDoc *d = find_command_doc(name)) {
+			j["details"] = d->details;
+			j["json"] = d->json;
+			j["flags"] = json::array();
+			for (const DocFlag &f : d->flags) {
+				j["flags"].push_back({ { "flag", f.flag }, { "text", f.text } });
+			}
+			j["examples"] = json::array();
+			for (const DocExample &e : d->examples) {
+				j["examples"].push_back({ { "command", e.command }, { "explanation", e.explanation } });
+			}
+			j["subcommands"] = json::array();
+			for (const DocSub &s : d->subs) {
+				j["subcommands"].push_back({ { "usage", "vb " + s.usage }, { "summary", s.summary } });
+			}
+		}
+		cmds.push_back(j);
+	}
+	return { { "program", "vb" }, { "exit_codes", { { "0", "success" }, { "1", "operation failed" }, { "2", "bad command line" } } },
+		{ "errors", "stderr: `error: <message>` then optional `hint: <next step>`" }, { "commands", cmds } };
+}
+
+int cmd_pack(const Ctx &c, const std::vector<std::string> &args) {
+	PackHooks hooks;
+	hooks.host = [&c](const std::vector<std::string> &a) { return cmd_host(c, a); };
+	hooks.launch = [&c](const std::vector<std::string> &a) { return cmd_launch(c, a); };
+	return run_pack_command(c.layout, c.out, c.err, args, hooks);
+}
+
 const std::map<std::string, Command> &commands() {
 	static const std::map<std::string, Command> table = {
 		{ "install",
@@ -1708,6 +1951,12 @@ const std::map<std::string, Command> &commands() {
 		{ "structure",
 				{ "structure <new|edit|validate> ...", "author decorative structures (new, edit in the editor, validate)",
 						cmd_structure } },
+		{ "docs",
+				{ "docs [<topic>] [--path] [--version v]", "print the documentation shipped with a version",
+						[](const Ctx &c, const std::vector<std::string> &a) { return cmd_docs(c, a); } } },
+		{ "pack",
+				{ "pack <init|check|dev|types|info> ...", "create, validate and run a content pack",
+						cmd_pack } },
 		{ "self",
 				{ "self update [--check] [--force]", "update vb itself to the latest release",
 						[](const Ctx &c, const std::vector<std::string> &a) { return cmd_self(c, a); } } },
@@ -1726,15 +1975,37 @@ const std::map<std::string, Command> &commands() {
 
 void print_help(std::ostream &out) {
 	out << "vb -- manage and run Voxel Browser (user-scoped, no admin rights)\n\n"
-		   "usage: vb <command> [args]\n\ncommands:\n";
+		   "usage: vb <command> [args]       (vb help <command> for details and examples)\n\ncommands:\n";
 	for (const auto &[name, cmd] : commands()) {
 		out << "  " << cmd.usage;
 		const std::size_t pad = std::string(cmd.usage).size();
 		out << std::string(pad < 44 ? 44 - pad : 2, ' ') << cmd.summary << "\n";
 	}
-	out << "\noptions:\n  -h, --help     show this help\n  -V, --version  print the vb build\n"
+	out << "\noptions:\n  -h, --help     show this help (also: vb <command> --help, vb help --markdown, vb help --json)\n"
+		   "  -V, --version  print the vb build\n"
 		   "\nenvironment:\n  VB_HOME=<dir>    keep everything under <dir> (portable/CI)\n"
 		   "  VB_SOURCE=<src>  release source: owner/repo[@base-url] or dir:/path (default: the project's GitHub)\n";
+}
+
+int cmd_help(const Ctx &c, std::vector<std::string> args) {
+	if (take_flag(args, "--markdown")) {
+		c.out << render_markdown() << "\n";
+		return kExitOk;
+	}
+	if (take_flag(args, "--json")) {
+		print_json(c, render_json());
+		return kExitOk;
+	}
+	if (args.empty()) {
+		print_help(c.out);
+		return kExitOk;
+	}
+	const auto it = commands().find(args[0]);
+	if (it == commands().end()) {
+		return usage_error(c, "unknown command '" + args[0] + "'");
+	}
+	print_command_help(c.out, it->first, it->second);
+	return kExitOk;
 }
 
 } // namespace
@@ -1747,7 +2018,10 @@ int run_cli(const std::vector<std::string> &args, const Layout &layout, std::ost
 		return kExitUsage;
 	}
 	const std::string &first = args.front();
-	if (first == "-h" || first == "--help" || first == "help") {
+	if (first == "help") {
+		return cmd_help(ctx, std::vector<std::string>(args.begin() + 1, args.end()));
+	}
+	if (first == "-h" || first == "--help") {
 		print_help(out);
 		return kExitOk;
 	}
@@ -1761,6 +2035,12 @@ int run_cli(const std::vector<std::string> &args, const Layout &layout, std::ost
 	const auto it = commands().find(first);
 	if (it == commands().end()) {
 		return usage_error(ctx, "unknown command '" + first + "'");
+	}
+	// `vb <command> --help` (only before a `--` passthrough, which belongs to the child).
+	const auto pass = std::find(args.begin(), args.end(), "--");
+	if (std::any_of(args.begin() + 1, pass, [](const std::string &a) { return a == "--help" || a == "-h"; })) {
+		print_command_help(out, it->first, it->second);
+		return kExitOk;
 	}
 	return it->second.run(ctx, std::vector<std::string>(args.begin() + 1, args.end()));
 }

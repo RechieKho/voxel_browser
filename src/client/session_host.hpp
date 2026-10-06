@@ -35,6 +35,7 @@
 #include "vb/core/config.hpp"
 #include "vb/core/ids.hpp" // kChunkDim
 #include "vb/core/paths.hpp"
+#include "vb/core/version_req.hpp"
 #include "vb/net/gns_transport.hpp"
 #include "vb/net/loopback.hpp"
 #include "vb/net/session.hpp"
@@ -52,6 +53,7 @@
 #include "vb/render/ui_renderer.hpp"
 #include "vb/render/window.hpp"
 #include "vb/script/pack_loader.hpp"
+#include "vb/script/pack_manifest.hpp"
 #include "vb/script/pack_runtime.hpp"
 #include "vb/script/ui_runtime.hpp"
 #include "vb/world/block.hpp"
@@ -153,6 +155,10 @@ inline std::string kSingleplayerWorldDir = "world_singleplayer";
 // singleplayer admits the local player unverified and get_login() is nil.
 inline bool kSingleplayerSkipAuth = false;
 
+// Dev only (compiled out under VB_DISTRIBUTION): load the singleplayer pack even when its
+// pack.toml engine_version_req does not match this build.
+inline bool kSingleplayerIgnoreEngineReq = false;
+
 // `auth_out` is set iff the pack declares a valid auth.lua (and auth is not
 // skipped): singleplayer then runs the real sign-in, same as a dedicated server.
 inline vb::script::PackRuntime make_singleplayer_pack_runtime(
@@ -165,6 +171,20 @@ inline vb::script::PackRuntime make_singleplayer_pack_runtime(
 	// build without the verifier, falls back to the hardcoded base set exactly
 	// like a pack that failed to load, never to an unauthenticated pack.
 	bool pack_blocked = false;
+	// pack.toml's engine_version_req is enforced here too (dev-experience.md §3.7): a pack
+	// that needs a newer engine falls back to the base set, like any other blocked pack.
+	{
+		const vb::core::EngineReqCheck req = vb::script::check_pack_engine_req(
+				vb::script::read_pack_manifest(kSingleplayerContentPack), vb::core::engine_version());
+		if (!req.ok && kSingleplayerIgnoreEngineReq) {
+			std::cerr << "client: *** --ignore-engine-req: " << req.message
+					  << " (continuing; development only) ***\n";
+		} else if (!req.ok) {
+			std::cerr << "client: singleplayer content pack '" << kSingleplayerContentPack << "': " << req.message
+					  << " -- running with the hardcoded base block set only\n";
+			pack_blocked = true;
+		}
+	}
 	const vb::auth::AuthLoad auth = vb::auth::load_auth_lua(kSingleplayerContentPack);
 	if (auth.present && kSingleplayerSkipAuth) {
 		std::cerr << "client: *** --insecure-skip-auth: '" << kSingleplayerContentPack

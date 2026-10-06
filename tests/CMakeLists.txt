@@ -32,6 +32,7 @@ add_executable(vb_tests
   unit/gns_transport_test.cpp
   unit/item_drops_test.cpp
   unit/kitchen_sink_pack_test.cpp
+  unit/lua_api_surface_test.cpp
   unit/lighting_test.cpp
   unit/mesher_test.cpp
   unit/netcode_test.cpp
@@ -54,6 +55,7 @@ add_executable(vb_tests
   unit/soak_test.cpp
   unit/ui_runtime_test.cpp
   unit/world_replication_test.cpp
+  unit/version_req_test.cpp
   unit/world_test.cpp
   unit/worldgen_test.cpp
 )
@@ -79,6 +81,11 @@ if(VB_WITH_AUTH)
   target_link_libraries(vb_tests PRIVATE nlohmann_json::nlohmann_json)
 endif()
 
+if(VB_WITH_LUA AND TARGET vb_pack_check)
+  target_sources(vb_tests PRIVATE unit/check_pack_test.cpp)
+  target_link_libraries(vb_tests PRIVATE vb_pack_check)
+endif()
+
 if(VB_BUILD_CLI)
   target_sources(vb_tests PRIVATE unit/dev_cli_test.cpp)
   target_sources(vb_tests PRIVATE unit/dev_cli_install_test.cpp)
@@ -86,6 +93,8 @@ if(VB_BUILD_CLI)
   target_sources(vb_tests PRIVATE unit/dev_cli_polish_test.cpp)
   target_sources(vb_tests PRIVATE unit/dev_cli_hardening_test.cpp)
   target_sources(vb_tests PRIVATE unit/dev_cli_structure_test.cpp)
+  target_sources(vb_tests PRIVATE unit/dev_cli_pack_test.cpp)
+  target_sources(vb_tests PRIVATE unit/dev_cli_help_test.cpp)
   target_compile_definitions(vb_tests PRIVATE VB_TEST_VB_EXE="$<TARGET_FILE:vb>")
   add_dependencies(vb_tests vb)
   if(VB_BUILD_SERVER)

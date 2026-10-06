@@ -251,6 +251,55 @@ Full detail: `remaining_tasks/phase9.md`.
 
 ---
 
+## Phase 10 — Developer Experience (pack authors & agents) ✅ 10.A–10.G done (2026-10-06)
+
+User-requested: make writing a content pack easy for people and agents —
+`npm init`-style scaffolding, a quick-reference for the Lua API with examples,
+editor type stubs, and markdown/JSON CLI docs agents can read. Single source of
+truth: hand-written LuaCATS stubs in `sdk/lua/`, with the reference generated
+from them and a runtime test that fails on undocumented bindings. Full design,
+layout, command surface and per-phase task lists:
+`architecture_spec/dev-experience.md` §5; what was built differently: §7.
+
+- [x] **10.A — API inventory + drift test**: walk the live `vb`/`ui` tables and
+      usertypes in a unit test, compare with `sdk/lua/api_index.txt`.
+- [x] **10.B — LuaCATS stubs** for the server VM, UI VM, data scripts and
+      `auth.lua`, one example per function; `.luarc.json`; LuaLS check in CI.
+- [x] **10.C — Generated quick reference**: `scripts/gen_lua_docs.py` →
+      `docs/lua-reference/` + one-line-per-function cheat sheet, `--check` in
+      CI, doc examples syntax-checked.
+- [x] **10.D — Headless pack validation + version enforcement**:
+      `voxel_browser_server --check-pack <dir> [--json]` (`file:line`
+      diagnostics) + `vb pack check`, including a static per-environment
+      global check (`vb` in `ui/*.lua`, `ui` on the server, sandbox-removed
+      builtins); the engine enforces `pack.toml`'s `engine_version_req`
+      (server, singleplayer, and the client via a handshake field — protocol
+      bump).
+- [x] **10.E — Scaffolding**: `vb pack init [dir]` from templates embedded in
+      `vb` (README, AGENTS.md, `.luarc.json`, stubs, `engine_version_req`),
+      `vb pack types/info/dev`.
+- [x] **10.F — CLI reference & agent docs**: richer command table → `vb help
+      <cmd>`, generated `docs/cli.md`, `vb help --json`; uniform
+      `error:`/`hint:`/`--json`/`--yes` contract; root `AGENTS.md`, `docs/llms.txt`.
+      Independent of B–E.
+- [x] **10.G — Ship it**: `sdk/` and `docs/` in the release archive, `vb docs`,
+      README "Make your first pack", CONTRIBUTING "adding a binding".
+
+---
+
+Follow-ups:
+
+- [ ] LuaLS `--check` job in CI (pin a LuaLS release; zero warnings in `sdk/lua`), and try a nested
+      `ui/.luarc.json` for real per-environment editor warnings.
+- [ ] `--check-pack` warnings: block without a texture, unknown keys in `def` tables; `since`-aware
+      "API newer than your `engine_version_req`" warning (§3.7 "Later").
+- [ ] Singleplayer should show an `engine_version_req` mismatch in the main menu (today: stderr + base set).
+- [ ] `vb.noise.value{frequency=...}` ignores a table argument (the binding takes a number, so
+      `content/examples/kitchen_sink` silently gets the default); make it accept both or fix the example.
+- [ ] `vb pack dev` is untested end to end (needs a real server + client); only argument handling is covered.
+
+---
+
 ## Cross-Cutting / Continuous
 
 Full detail: `remaining_tasks/cross_cutting.md`.
