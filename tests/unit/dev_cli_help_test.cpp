@@ -1,6 +1,7 @@
 // Phase 10.F: `vb help`, generated docs/cli.md, the error/--json contract, `vb docs`.
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <random>
@@ -56,7 +57,11 @@ TEST_CASE("docs/cli.md is exactly `vb help --markdown`") {
 	std::ifstream in(fs::path(VB_PROJECT_SOURCE_DIR) / "docs" / "cli.md", std::ios::binary);
 	std::ostringstream committed;
 	committed << in.rdbuf();
-	CHECK_MESSAGE(committed.str() == r.out, "docs/cli.md is stale: run `vb help --markdown > docs/cli.md`");
+	// A Windows checkout may have turned LF into CRLF (.gitattributes pins this file to LF,
+	// but don't make the freshness check depend on git's line-ending settings).
+	std::string text = committed.str();
+	text.erase(std::remove(text.begin(), text.end(), '\r'), text.end());
+	CHECK_MESSAGE(text == r.out, "docs/cli.md is stale: run `vb help --markdown > docs/cli.md`");
 }
 
 TEST_CASE("every command has long-form docs and answers --help") {
