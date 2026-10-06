@@ -36,6 +36,8 @@ std::optional<std::string> read_token_file(const std::filesystem::path &path) {
 
 namespace {
 
+constexpr int kPromptAfterTransientFailures = 3;
+
 std::string param(const protocol::S2CAuthChallenge &c, const char *key) {
 	for (const auto &[k, v] : c.params) {
 		if (k == key) {
@@ -65,14 +67,18 @@ SignInResult silent_sign_in(HttpFetcher &http, const protocol::S2CAuthChallenge 
 		std::string err;
 		const auto ep = oidc_discover(http, challenge.issuer, &err);
 		if (!ep) {
+			// Discovery failing says nothing about the refresh token: keep it.
 			r.error = "Could not reach the identity provider";
+			r.retryable = true;
 			return r;
 		}
 		const TokenResponse t = refresh_id_token(http, *ep, challenge.client_id, refresh_token);
 		r.ok = t.ok;
 		r.id_token = t.id_token;
 		r.refresh_token = t.refresh_token;
-		r.error = t.ok ? std::string() : "Sign in again";
+		r.retryable = !t.ok && t.retryable;
+		r.error = t.ok ? std::string()
+					   : (t.retryable ? "Could not reach the identity provider" : "Sign in again");
 	} else {
 		r.error = "Sign in again";
 	}
@@ -143,6 +149,8 @@ SignInCoordinator::reauth_provider() {
 			std::lock_guard lock(mu_);
 			active_nonce_ = req.nonce;
 			reauth_ = true;
+			retry_pending_ = false;
+			transient_failures_ = 0;
 			phase_ = Phase::kChoosing;
 			error_.clear();
 			token_.clear();
@@ -187,6 +195,11 @@ void SignInCoordinator::save_session_locked(const SignInResult &r) {
 }
 
 void SignInCoordinator::update_locked() {
+	if (!task_ && retry_pending_ && reauth_ && !cancelled_ &&
+			std::chrono::steady_clock::now() >= retry_at_) {
+		retry_pending_ = false;
+		begin_silent_locked();
+	}
 	if (!task_) {
 		return;
 	}
@@ -199,11 +212,26 @@ void SignInCoordinator::update_locked() {
 	silent_ = false;
 	if (r.ok) {
 		save_session_locked(r);
+		transient_failures_ = 0;
+		retry_pending_ = false;
 		token_ = r.id_token;
 		token_ready_ = true;
 		phase_ = Phase::kFinished;
 		reauth_ = false;
+	} else if (was_silent && r.retryable) {
+		// The IdP could not be reached (or answered 5xx): the cached refresh token may
+		// well be fine, so keep it and, for a re-auth, quietly try again until the
+		// server's grace runs out.
+		error_ = r.error;
+		phase_ = Phase::kChoosing;
+		if (reauth_) {
+			++transient_failures_;
+			retry_pending_ = true;
+			retry_at_ = std::chrono::steady_clock::now() + options_.reauth_retry_interval;
+		}
 	} else {
+		retry_pending_ = false;
+		transient_failures_ = 0;
 		if (was_silent && options_.store && challenge_) {
 			// The cached refresh token is no good (expired, revoked): forget it
 			// and fall back to an interactive sign-in.
@@ -266,7 +294,11 @@ void SignInCoordinator::trust() {
 bool SignInCoordinator::reauth_prompt_active() const {
 	std::lock_guard lock(mu_);
 	const_cast<SignInCoordinator *>(this)->update_locked();
-	return reauth_ && !cancelled_ && phase_ != Phase::kFinished && !(silent_ && task_);
+	// Quietly retrying a transient failure is not "your sign-in expired": the prompt
+	// waits for a few misses in a row.
+	const bool quietly_retrying = retry_pending_ && transient_failures_ < kPromptAfterTransientFailures;
+	return reauth_ && !cancelled_ && phase_ != Phase::kFinished && !(silent_ && task_) &&
+			!quietly_retrying;
 }
 
 bool SignInCoordinator::supports_browser() const {

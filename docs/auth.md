@@ -104,7 +104,10 @@ ID tokens cannot be revoked once issued; the IdP session behind them can. Every
 The client does this silently with its refresh token; if the IdP refuses (revoked, disabled,
 password changed), the player sees "Your sign-in expired — Sign in again" and the server kicks
 them when `reauth_grace_seconds` runs out. **Worst-case revocation latency = interval + grace**
-(default ≈ 17 minutes). Lower the interval if you need tighter revocation; instant push
+(default ≈ 17 minutes). An IdP *outage* is not a revocation: if Keycloak cannot be reached (or answers
+5xx) the client keeps its refresh token and retries every few seconds, and the player stays in as long
+as the IdP is back before the grace period ends; after that the server kicks (fail closed).
+Lower the interval if you need tighter revocation; instant push
 revocation (back-channel logout / introspection) is out of scope.
 
 Pack-side bans don't need this: a `player_join` veto keyed on `login.subject` keeps a banned

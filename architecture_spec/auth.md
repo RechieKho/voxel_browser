@@ -304,6 +304,15 @@ Server                                         Client
   `login.subject` keeps a banned account out at the next join.
 - `--auth-token-file` (headless/automation) is re-read for each re-auth, so
   tests can rotate or withhold the token.
+- **An IdP outage is not a revocation.** If the client's silent refresh fails
+  for a transient reason (IdP unreachable, 5xx, 429, discovery failing) the
+  stored refresh token is **kept** and the refresh is retried every 5 s while
+  the request is open (`SignInCoordinator::Options::reauth_retry_interval`);
+  the "sign in again" banner waits for three misses in a row. Only an answer
+  that condemns the token (`invalid_grant`: "Session not active", "Token is
+  not active", "Invalid refresh token", ...) forgets it. The server's grace
+  period is the bound either way: an IdP down for longer than the grace
+  period kicks (fail closed).
 
 ## 6. Lua surface (server pack VM)
 

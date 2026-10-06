@@ -20,6 +20,9 @@ struct SignInResult {
 	std::string id_token;
 	std::string refresh_token; // may be empty
 	std::string error; // player-facing, token-free
+	// A transient failure (IdP unreachable, 5xx, 429): the stored refresh token is
+	// not to blame and must be kept. Always false when ok.
+	bool retryable = false;
 };
 
 class SignInTask {

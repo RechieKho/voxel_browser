@@ -194,6 +194,12 @@ TokenResponse parse_token_response(const HttpResult &res) {
 	TokenResponse out;
 	if (res.status == 0) {
 		out.error = "could not reach the identity provider";
+		out.retryable = true;
+		return out;
+	}
+	if (res.status >= 500 || res.status == 429) {
+		out.error = "the identity provider is unavailable";
+		out.retryable = true;
 		return out;
 	}
 	const json doc = json::parse(res.body, nullptr, false);
