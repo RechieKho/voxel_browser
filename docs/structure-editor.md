@@ -1,6 +1,6 @@
 # Structure editor — design and phased plan
 
-> Status: **In progress: S0–S3 done, S4–S7 planned.** Plans the "dedicated external structure
+> Status: **In progress: S0–S4 done, S5–S7 planned.** Plans the "dedicated external structure
 > tool" that `architecture_spec/worldgen.md` §6 stage 6 and
 > `remaining_tasks/deferred.md` ("Rule-based decorative structure
 > placement") left for after the Lua worldgen pipeline. Phase 6.14 shipped
@@ -552,18 +552,18 @@ integrates and documents.
 
 ### S4 — Interactive editing
 
-- [ ] `Command` interface plus `UndoStack` in the model. Commands for
+- [x] `Command` interface plus `UndoStack` in the model. Commands for
       setting cells, box fill, line, flood replace, paste, resize, and
       re-anchor. Unit tests for apply, undo, and redo of each.
-- [ ] Viewport raycast to a cell or face, with hover highlight. Place,
+- [x] Viewport raycast to a cell or face, with hover highlight. Place,
       remove, paint, and eyedropper on mouse buttons and modifiers.
-- [ ] Palette panel: icons from the atlas, search, and the Keep/Air
+- [x] Palette panel: icons from the atlas, search, and the Keep/Air
       pseudo-blocks.
-- [ ] Box, line, and flood tools. Selection with copy, paste, and move.
+- [x] Box, line, and flood tools. Selection with copy, paste, and move.
       Live mirror symmetry on X and Z.
-- [ ] Layer-slice slider, keep/air ghost rendering, and a dirty flag with a
+- [x] Layer-slice slider, keep/air ghost rendering, and a dirty flag with a
       save prompt on exit.
-- [ ] New structure dialog (name with the pack-name prefix prefilled, size,
+- [x] New structure dialog (name with the pack-name prefix prefilled, size,
       anchor). Save and save-as into `<pack>/structures/`, which also
       regenerates `structures/all.lua`.
 

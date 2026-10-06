@@ -16,7 +16,8 @@ core::BlockId VolumeView::id_for(const StructureDoc &doc, Cell cell) const {
 	return catalog_.render_id(doc.names.name(cell));
 }
 
-void VolumeView::rebuild(const StructureDoc &doc, std::size_t variant) {
+void VolumeView::rebuild(const StructureDoc &doc, std::size_t variant, int max_y) {
+	max_y_ = max_y;
 	store_ = world::ClientChunkStore(catalog_.registry());
 	if (variant >= doc.variants.size()) {
 		return;
@@ -45,7 +46,7 @@ void VolumeView::rebuild(const StructureDoc &doc, std::size_t variant) {
 							const core::IVec3 cell_pos{ cx * world::kChunkDim + lx - kVolumeOrigin.x,
 								cy * world::kChunkDim + ly - kVolumeOrigin.y,
 								cz * world::kChunkDim + lz - kVolumeOrigin.z };
-							if (!volume.in_bounds(cell_pos)) {
+							if (!volume.in_bounds(cell_pos) || cell_pos.y > max_y_) {
 								continue;
 							}
 							const core::BlockId id = id_for(doc, volume.get(cell_pos));
@@ -57,7 +58,7 @@ void VolumeView::rebuild(const StructureDoc &doc, std::size_t variant) {
 				}
 				protocol::S2CChunkAdd add;
 				add.coord = chunk.coord();
-				add.revision = 1;
+				add.revision = ++epoch_;
 				add.payload = world::encode_chunk_payload(chunk);
 				(void)store_.apply_add(add);
 			}
@@ -66,8 +67,7 @@ void VolumeView::rebuild(const StructureDoc &doc, std::size_t variant) {
 }
 
 void VolumeView::set_cell(const StructureDoc &doc, core::IVec3 cell_pos, Cell cell) {
-	(void)doc.variants; // only the name table is needed
-	store_.edit_block(to_world(cell_pos), id_for(doc, cell));
+	store_.edit_block(to_world(cell_pos), cell_pos.y > max_y_ ? core::BlockId::kAir : id_for(doc, cell));
 }
 
 } // namespace vb::editor

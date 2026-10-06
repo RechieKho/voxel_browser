@@ -23,8 +23,11 @@ class VolumeView {
 public:
 	explicit VolumeView(const BlockCatalog &catalog);
 
-	// Replaces the contents with variant `variant` of `doc`.
-	void rebuild(const StructureDoc &doc, std::size_t variant);
+	// Replaces the contents with variant `variant` of `doc`. Cells above layer
+	// `max_y` are left out (the layer-slice slider).
+	void rebuild(const StructureDoc &doc, std::size_t variant, int max_y = kNoSlice);
+
+	static constexpr int kNoSlice = 1 << 20;
 
 	// Updates one cell in place (the single-voxel edit path, which relights
 	// and re-meshes only what changed). `doc` supplies the name behind `cell`.
@@ -42,6 +45,10 @@ private:
 
 	const BlockCatalog &catalog_;
 	world::ClientChunkStore store_;
+	int max_y_ = kNoSlice;
+	// Chunk revisions must keep rising across rebuilds so the renderer sees a
+	// rebuilt chunk as changed.
+	std::uint64_t epoch_ = 0;
 };
 
 } // namespace vb::editor

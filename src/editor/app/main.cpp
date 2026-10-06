@@ -15,7 +15,7 @@ namespace {
 
 void usage(const char *argv0) {
 	std::cerr << "usage: " << argv0 << " <block-data-script> [--open <structure>]\n"
-			  << "         [--check] [--screenshot <png> [--frames <n>]]\n"
+			  << "         [--check] [--screenshot <png> [--frames <n>] [--script <cmds>]]\n"
 			  << "  <block-data-script>  a Lua file returning a list of block tables, e.g.\n"
 			  << "                       content/base/data/blocks.lua\n"
 			  << "  --open <structure>   open a structure by name or file name on start\n"
@@ -44,6 +44,8 @@ int main(int argc, char **argv) {
 			options.screenshot = value("--screenshot");
 		} else if (arg == "--frames") {
 			options.frames = std::atoi(value("--frames"));
+		} else if (arg == "--script") {
+			options.script = value("--script");
 		} else if (arg == "--check") {
 			check_only = true;
 		} else if (arg == "-h" || arg == "--help") {

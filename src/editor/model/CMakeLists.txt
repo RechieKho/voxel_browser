@@ -1,5 +1,8 @@
 add_library(vb_editor_model STATIC
   block_catalog.cpp
+  commands.cpp
+  edit_session.cpp
+  pick.cpp
   structure_doc.cpp
   structure_writer.cpp
   volume_view.cpp
