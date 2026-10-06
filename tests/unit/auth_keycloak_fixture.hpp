@@ -2,12 +2,14 @@
 
 // Serves the golden Keycloak fixtures (tests/unit/fixtures/keycloak/, fixtures.md) as an
 // HttpFetcher, so unit tests see the same bytes a real Keycloak sends instead of hand-written JSON.
-// It can be told to fail, delay or swap a document mid-test.
+// It can be told to fail, delay or swap a document mid-test. A sign-in runs on a worker thread
+// while the test thread polls and reconfigures it, so every member is guarded by one mutex.
 
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -75,11 +77,19 @@ public:
 
 	// Swap what a route serves, mid-test. A file is relative to the fixture directory; an
 	// `errors/*.json` file is {status, body} and is served with that status.
-	void set_jwks(const std::string &file) { jwks_file_ = file; }
-	void set_discovery(const std::string &file) { discovery_file_ = file; discovery_body_.reset(); }
+	void set_jwks(const std::string &file) {
+		std::lock_guard<std::mutex> lock(mu_);
+		jwks_file_ = file;
+	}
+	void set_discovery(const std::string &file) {
+		std::lock_guard<std::mutex> lock(mu_);
+		discovery_file_ = file;
+		discovery_body_.reset();
+	}
 	// Serve this text as the discovery document instead (an edited copy, an HTML error page, ...);
 	// an empty string goes back to the fixture file.
 	void set_discovery_body(std::string body) {
+		std::lock_guard<std::mutex> lock(mu_);
 		if (body.empty()) {
 			discovery_body_.reset();
 		} else {
@@ -87,33 +97,65 @@ public:
 		}
 	}
 	void reply_fixture(Route route, const std::string &file) {
+		HttpResult r;
 		if (file.rfind("errors/", 0) == 0) {
 			const auto doc = fixture_json(file);
-			replies_[route] = reply(doc["status"].get<int>(), doc["body"].dump());
+			r = reply(doc["status"].get<int>(), doc["body"].dump());
 		} else {
-			replies_[route] = reply(200, read_fixture(file));
+			r = reply(200, read_fixture(file));
 		}
+		std::lock_guard<std::mutex> lock(mu_);
+		replies_[route] = std::move(r);
 	}
-	void reply_raw(Route route, int status, std::string body) { replies_[route] = reply(status, std::move(body)); }
+	void reply_raw(Route route, int status, std::string body) {
+		std::lock_guard<std::mutex> lock(mu_);
+		replies_[route] = reply(status, std::move(body));
+	}
 
 	// The next `times` requests to `route` fail with `status` (0 = transport failure), then it
 	// goes back to normal.
-	void fail(Route route, int status, int times = 1000000) { failures_[route] = { status, times }; }
-	void heal(Route route) { failures_.erase(route); }
-	void delay(Route route, std::chrono::milliseconds d) { delays_[route] = d; }
+	void fail(Route route, int status, int times = 1000000) {
+		std::lock_guard<std::mutex> lock(mu_);
+		failures_[route] = { status, times };
+	}
+	void heal(Route route) {
+		std::lock_guard<std::mutex> lock(mu_);
+		failures_.erase(route);
+	}
+	void delay(Route route, std::chrono::milliseconds d) {
+		std::lock_guard<std::mutex> lock(mu_);
+		delays_[route] = d;
+	}
 
 	int requests(Route route) const {
+		std::lock_guard<std::mutex> lock(mu_);
 		const auto it = counts_.find(route);
 		return it == counts_.end() ? 0 : it->second;
 	}
-	const std::vector<std::string> &token_posts() const { return posts_; }
+	// A copy: the worker thread keeps appending while a test inspects it.
+	std::vector<std::string> token_posts() const {
+		std::lock_guard<std::mutex> lock(mu_);
+		return posts_;
+	}
 
 	HttpResult get(const std::string &url) override {
 		if (url == discovery_url()) {
-			return serve(Route::kDiscovery, reply(200, discovery_body_ ? *discovery_body_ : read_fixture(discovery_file_)));
+			std::string file;
+			std::optional<std::string> body;
+			{
+				std::lock_guard<std::mutex> lock(mu_);
+				file = discovery_file_;
+				body = discovery_body_;
+			}
+			return serve(Route::kDiscovery, reply(200, body ? *body : read_fixture(file)));
 		}
 		if (url == jwks_url()) {
-			return serve(Route::kJwks, reply(200, read_fixture(jwks_file_)));
+			std::string file;
+			{
+				std::lock_guard<std::mutex> lock(mu_);
+				file = jwks_file_;
+			}
+			return serve(Route::kJwks, reply(200, read_fixture(file)));
 		}
 		HttpResult r;
 		r.error = "no fixture route for " + url;
@@ -127,8 +169,13 @@ public:
 			r.error = "no fixture route for " + url;
 			return r;
 		}
-		posts_.push_back(body);
-		return serve(Route::kToken, replies_[Route::kToken]);
+		HttpResult normal;
+		{
+			std::lock_guard<std::mutex> lock(mu_);
+			posts_.push_back(body);
+			normal = replies_[Route::kToken];
+		}
+		return serve(Route::kToken, std::move(normal));
 	}
 
 private:
@@ -139,22 +186,31 @@ private:
 		return r;
 	}
 	HttpResult serve(Route route, HttpResult normal) {
-		++counts_[route];
-		if (const auto d = delays_.find(route); d != delays_.end()) {
-			std::this_thread::sleep_for(d->second);
+		std::chrono::milliseconds wait{ 0 };
+		std::optional<HttpResult> failed;
+		{
+			std::lock_guard<std::mutex> lock(mu_);
+			++counts_[route];
+			if (const auto d = delays_.find(route); d != delays_.end()) {
+				wait = d->second;
+			}
+			if (auto f = failures_.find(route); f != failures_.end() && f->second.second > 0) {
+				--f->second.second;
+				HttpResult r;
+				r.status = f->second.first;
+				r.error = r.status == 0 ? "connection refused (fixture)" : std::string();
+				r.body = r.status == 0 ? std::string() : R"({"error":"server_error"})";
+				failed = std::move(r);
+			}
 		}
-		if (auto f = failures_.find(route); f != failures_.end() && f->second.second > 0) {
-			--f->second.second;
-			HttpResult r;
-			r.status = f->second.first;
-			r.error = r.status == 0 ? "connection refused (fixture)" : std::string();
-			r.body = r.status == 0 ? std::string() : R"({"error":"server_error"})";
-			return r;
+		if (wait.count() > 0) {
+			std::this_thread::sleep_for(wait); // outside the lock: other requests must not queue behind it
 		}
-		return normal;
+		return failed ? std::move(*failed) : std::move(normal);
 	}
 
 	std::string issuer_;
+	mutable std::mutex mu_;
 	std::string jwks_file_, discovery_file_;
 	std::optional<std::string> discovery_body_;
 	std::map<Route, HttpResult> replies_;
