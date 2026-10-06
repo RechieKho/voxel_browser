@@ -80,7 +80,7 @@ std::vector<StructurePlacement> WorldGenerator::structure_placements(
 
 			for (int gz = floor_div(z0 - spacing, cell); gz <= floor_div(z1, cell); ++gz) {
 				for (int gx = floor_div(x0 - spacing, cell); gx <= floor_div(x1, cell); ++gx) {
-					DetRng rng{ core::noise::hash3(params_.seed, gx, gz, salt) };
+					DetRng rng{ core::noise::hash3(params_.seed, gx, gz, static_cast<std::int64_t>(salt)) };
 					const int ax = gx * cell + static_cast<int>(rng.next_index(spacing + 1));
 					const int az = gz * cell + static_cast<int>(rng.next_index(spacing + 1));
 					const double keep_roll = rng.next01();

@@ -1,7 +1,7 @@
 #include "vb/editor/structure_writer.hpp"
 
-#include <charconv>
 #include <cstdio>
+#include <cstdlib>
 
 namespace vb::editor {
 
@@ -26,10 +26,23 @@ std::string quote(const std::string &s) {
 	return out;
 }
 
+// Shortest %g form that parses back to the same double. Not std::to_chars:
+// the floating-point overload needs macOS 13.3, above our 11.0 target.
 std::string number(double v) {
-	char buf[32];
-	const auto res = std::to_chars(buf, buf + sizeof buf, v);
-	return std::string(buf, res.ptr);
+	char buf[40];
+	for (int precision = 1; precision <= 17; ++precision) {
+		std::snprintf(buf, sizeof buf, "%.*g", precision, v);
+		if (std::strtod(buf, nullptr) == v || precision == 17) {
+			break;
+		}
+	}
+	std::string out = buf;
+	for (char &c : out) {
+		if (c == ',') { // a decimal-comma locale must not leak into the Lua file
+			c = '.';
+		}
+	}
+	return out;
 }
 
 std::string vec3(const char *name, core::IVec3 v) {
