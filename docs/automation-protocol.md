@@ -117,6 +117,7 @@ world and replicate to clients like any other change.
 | `set_time` | `{ticks: 0..23999}` → all clients are told immediately |
 | `set_health` | `{player, value}`; lowering goes through the damage path (0 kills + respawns, cause `automation`) |
 | `kick` | `{player, reason?}` |
+| `advance_reauth` | `{player, seconds}`: simulates `seconds` of tick time for the player's periodic re-auth (auth.md §5.6): subtracts it from the timer until the next request or, while a request is outstanding, from its grace countdown; `not_signed_in` if the player has no external login. The next tick runs the normal re-auth path; the reply must still arrive in real time |
 | `run_lua` | `{code}` → `{}` or `lua_error`; runs in the pack VM after load: `vb.register_*` fails with `registry already frozen`; other APIs (e.g. `vb.world.*`) are callable, but world edits only stick in chunks that stay loaded (a player nearby) |
 
 Build the scene in loaded chunks (e.g. near spawn, or after teleporting a
