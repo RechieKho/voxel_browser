@@ -632,6 +632,8 @@ int main(int argc, char **argv) {
 	// at start, every kStatusIntervalSeconds, and once more at shutdown
 	// (running = false), always atomically.
 	constexpr double kStatusIntervalSeconds = 5.0;
+	// Ticks of lag the loop may replay back to back before it resyncs to the clock.
+	constexpr int kMaxTickCatchUp = 5;
 	std::map<std::uint32_t, std::string> online;
 	const auto status_started = std::chrono::steady_clock::now();
 	auto window_start = status_started;
@@ -748,6 +750,14 @@ int main(int argc, char **argv) {
 		}
 
 		next += tick_dt;
+		// Bound the catch-up after a stall (or while ticks cost more than a tick period):
+		// otherwise the loop replays the whole backlog back to back, and everything that
+		// counts simulated time -- handshake timeouts above all -- sees seconds pass in
+		// milliseconds, dropping clients that are in fact fine. Falling behind just means
+		// the simulation runs slower than real time, which is the honest outcome.
+		if (const auto now = std::chrono::steady_clock::now(); now - next > kMaxTickCatchUp * tick_dt) {
+			next = now;
+		}
 		std::this_thread::sleep_until(next);
 	}
 
