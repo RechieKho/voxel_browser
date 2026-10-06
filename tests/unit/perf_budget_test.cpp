@@ -57,7 +57,7 @@ vb::protocol::EntityRecord make_entity(std::uint32_t i) {
 	return { NetId{ i }, EntityKindId{ 1 },
 		Vec3d{ static_cast<double>(i), 64.0, 0.0 },
 		Vec2f{ 90.0f, 0.0f }, Vec3f{ 1.0f, 0.0f, 0.0f },
-		/*flags*/ 1, std::nullopt };
+		/*flags*/ 1, std::nullopt, std::nullopt };
 }
 
 } // namespace
