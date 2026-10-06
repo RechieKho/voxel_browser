@@ -12,9 +12,22 @@ GlobalScan scan_globals(std::string_view, const std::string &) {
 
 #else
 
+// Lua's own headers (lauxlib.h's LUAL_BUFFERSIZE) use C-style casts that trip
+// -Wold-style-cast under Clang with -Werror; they come in via -I, not as
+// SYSTEM headers (sol2 is the only other Lua consumer and wraps them itself).
+#if defined(__clang__) || defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wold-style-cast"
+#endif
 extern "C" {
 #include <lauxlib.h>
 #include <lua.h>
+}
+#if defined(__clang__) || defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+
+extern "C" {
 
 using VbGlobalCb = void (*)(void *ud, const char *name, int line, int is_write);
 void vb_scan_chunk_globals(lua_State *L, VbGlobalCb cb, void *ud);
