@@ -20,3 +20,23 @@ jobs:
           fi
           echo "$files"
           pipx run clang-format --style=file:.clang-format --dry-run --Werror $files
+
+  # The Keycloak emulator the auth e2e tests rely on (docs/auth-keycloak-testing.md K2). Needs no game
+  # binaries, so it runs here in seconds: an emulator bug should show up as one, not as an engine
+  # failure ten minutes into the sanitizer builds.
+  emulator-selftests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pytest
+        run: python3 -m pip install -r tests/e2e/requirements.txt
+
+      - name: Run the emulator self-tests
+        run: python3 -m pytest -p no:cacheprovider -q tests/e2e/test_mock_keycloak.py

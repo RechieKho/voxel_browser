@@ -132,7 +132,11 @@ account out at the next join.
   distribution builds (`VB_DISTRIBUTION`).
 - `voxel_browser --auth-token-file <file>`: sign in with the ID token in that file (re-read for every
   sign-in and re-auth). Automation builds only.
-- `tests/e2e/test_auth.py` runs the whole thing against a mock IdP (`tests/e2e/vbtest/mock_idp.py`).
+- `tests/e2e/test_auth.py` (smoke) and `tests/e2e/test_auth_keycloak.py` run the whole thing against a
+  Keycloak emulator (`tests/e2e/vbtest/mock_keycloak.py`), and against a real Keycloak in docker with
+  `--vb-idp=keycloak` (CI: `.github/workflows/auth_keycloak.yml` on auth PRs, plus a weekly canary on
+  Keycloak's newest release). How it all fits together: `docs/auth-keycloak-testing.md`,
+  `tests/e2e/README.md` ("Authentication tests").
 
 ## 8. Operational notes
 

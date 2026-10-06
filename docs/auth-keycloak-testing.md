@@ -1,6 +1,8 @@
 # Testing authentication against a mock Keycloak — phased plan
 
-> Status: **planned (2026-10-06); decisions Q1–Q3 accepted 2026-10-06 (§6)**. Tracked as Phase 9.9 in `REMAINING_TASKS.md`.
+> Status: **done (2026-10-06); decisions Q1–Q3 accepted 2026-10-06 (§6); what changed on the way is in §8**.
+> Tracked as Phase 9.9 in `REMAINING_TASKS.md`. The checklists below say what was asked for; §8 says where
+> reality differed, and the table in §2 says where each piece landed.
 > Companion to `architecture_spec/auth.md` (design, §10 testing strategy) and
 > `docs/auth.md` (operator guide). Each task below is meant to be picked up on its own:
 > it lists the files it touches, what "done" means, and the command that proves it.
@@ -65,14 +67,14 @@ E2E='python3 -m pytest tests/e2e --vb-build-dir build-e2e'
 
 Goal: know what we have before changing it, and make the slow parts selectable.
 
-- [ ] **K0.1 Register markers.** In `tests/e2e/conftest.py` add the `auth` marker (every test
+- [x] **K0.1 Register markers.** In `tests/e2e/conftest.py` add the `auth` marker (every test
       in `test_auth*.py`), `slow` (anything waiting on a real re-auth interval, ≥ 60 s) and
       `keycloak_real` (K5 only; skipped unless `--vb-idp=keycloak`).
       *Done when:* `$E2E -m "auth and not slow" --co` lists every current auth test except
       `test_revoked_login_is_kicked_after_the_grace_period`.
-- [ ] **K0.2 Record timings.** Run `$E2E -m auth --durations=0` three times and note the
+- [x] **K0.2 Record timings.** Run `$E2E -m auth --durations=0` three times and note the
       numbers in this file (§7). That gives the budget K4 must stay inside.
-- [ ] **K0.3 Fix the env leak.** `test_browser_flow_with_pkce_over_a_loopback_redirect`
+- [x] **K0.3 Fix the env leak.** `test_browser_flow_with_pkce_over_a_loopback_redirect`
       edits `os.environ` by hand. Switch to `monkeypatch.setenv("VB_AUTH_URL_FILE", ...)` so a
       failure can't leak into later tests.
       *Done when:* `$E2E -m auth` passes, and so does a run that puts the browser-flow test
@@ -86,7 +88,7 @@ New module `tests/e2e/vbtest/mock_keycloak.py`. `mock_idp.py` stays as a thin co
 wrapper (`MockIdp = MockKeycloak` with the old defaults) so `test_auth.py` keeps passing
 unchanged throughout K1.
 
-- [ ] **K1.1 Backend interface.** Define an `IdpBackend` protocol in
+- [x] **K1.1 Backend interface.** Define an `IdpBackend` protocol in
       `tests/e2e/vbtest/idp.py` that both the emulator and the real-Keycloak adapter (K5)
       implement. Tests only use this interface:
       `issuer`, `client_id`, `add_user(username, password, *, email, groups, roles, enabled)`,
@@ -96,7 +98,7 @@ unchanged throughout K1.
       password)` (returns the final redirect), `request_log()`.
       An `idp` fixture in `conftest.py` picks the backend from `--vb-idp=mock|keycloak`
       (default `mock`).
-- [ ] **K1.2 Keycloak-shaped discovery.** Serve
+- [x] **K1.2 Keycloak-shaped discovery.** Serve
       `/realms/<realm>/.well-known/openid-configuration` with the fields Keycloak 26 returns
       that a client might read: `issuer`, `authorization_endpoint`
       (`.../protocol/openid-connect/auth`), `token_endpoint`, `jwks_uri` (`.../certs`),
@@ -104,13 +106,13 @@ unchanged throughout K1.
       `response_types_supported`, `id_token_signing_alg_values_supported`,
       `code_challenge_methods_supported: ["plain","S256"]`, `grant_types_supported`.
       Move the paths to Keycloak's real `/protocol/openid-connect/*` layout.
-- [ ] **K1.3 Users and SSO sessions.** In-memory realm model: users (id = UUID `sub`,
+- [x] **K1.3 Users and SSO sessions.** In-memory realm model: users (id = UUID `sub`,
       username, password, email, `email_verified`, enabled, groups, realm roles), SSO sessions
       (`sid`, user, created, last refresh) with realm settings `sso_session_idle_timeout`
       and `sso_session_max_lifespan` (Keycloak defaults 30 min / 10 h; tests can shrink them).
       Refresh tokens are bound to a session; a dead or logged-out session makes the refresh
       grant fail exactly like Keycloak (K1.5).
-- [ ] **K1.4 Keycloak ID-token claims.** Tokens carry `iss`, `sub`, `aud` (string by default,
+- [x] **K1.4 Keycloak ID-token claims.** Tokens carry `iss`, `sub`, `aud` (string by default,
       `["vb-e2e","account"]` when the realm is configured with an audience mapper), `azp`,
       `typ: "ID"`, `exp`, `iat`, `auth_time`, `sid`, `nonce` (code flow only — refresh-derived
       tokens omit it, as Keycloak does), `at_hash`, `preferred_username`, `email`,
@@ -118,7 +120,7 @@ unchanged throughout K1.
       `realm_access.roles`. Lifetimes follow realm settings (default access/ID token 300 s).
       `mint(...)` keeps every override the bad-token tests rely on (`iat`, `exp`, `aud`,
       `iss`, `alg`, `kid`, `tamper`) and adds `azp`, `typ`, `drop=[claims]`.
-- [ ] **K1.5 Keycloak error bodies.** Return what Keycloak returns, so the client's error
+- [x] **K1.5 Keycloak error bodies.** Return what Keycloak returns, so the client's error
       mapping is tested against real shapes:
       `400 {"error":"invalid_grant","error_description":"Code not valid"}` (reused or unknown
       code), `"Session not active"` (logged out), `"Token is not active"` (expired refresh),
@@ -129,30 +131,30 @@ unchanged throughout K1.
       test says the user cancels, and rejects a `redirect_uri` that does not match the
       client's pattern (`http://127.0.0.1/*`) with Keycloak's "Invalid parameter:
       redirect_uri" page (HTTP 400, no redirect).
-- [ ] **K1.6 Optional real login form.** By default `/auth` logs `next_user` in and redirects
+- [x] **K1.6 Optional real login form.** By default `/auth` logs `next_user` in and redirects
       straight away (current behaviour, keeps tests fast). With `interactive=True` it serves a
       minimal Keycloak-style form (`<form id="kc-form-login" action="...login-actions/
       authenticate?...">`) that needs a `username`/`password` POST and a session cookie. Tests
       play the browser through `IdpBackend.browser_login`, which is the same code path K5 uses
       against real Keycloak.
-- [ ] **K1.7 Keys: RS256, ES256, rotation.** Add a test-only P-256 key to
+- [x] **K1.7 Keys: RS256, ES256, rotation.** Add a test-only P-256 key to
       `tests/e2e/fixtures/idp_ec.json` and a second RSA key `idp_rsa_2.json` (generate once
       with a script `tests/e2e/fixtures/gen_keys.py`; header comment: TEST ONLY). Pure-Python
       ES256 signing (P-256 point arithmetic, RFC 6979 deterministic `k`, raw `r||s` JWS
       encoding). The realm has an active key and passive keys; `rotate_keys()` makes a new key
       active and keeps the old one in the JWKS (Keycloak behaviour), `retire_key(kid)` removes
       it. The realm's signing algorithm is a constructor argument (`alg="RS256"|"ES256"`).
-- [ ] **K1.8 Fault injection.** A small `faults` API applied per endpoint:
+- [x] **K1.8 Fault injection.** A small `faults` API applied per endpoint:
       `latency(endpoint, seconds)`, `status(endpoint, code, times=n)`,
       `body(endpoint, raw_bytes)` (malformed JSON, oversized > 1 MiB), `drop(endpoint)`
       (close the socket), `discovery_issuer(other)` (issuer mismatch). Each fault is visible in
       the request log so a failure says which fault was active.
-- [ ] **K1.9 Admin operations.** Python methods (and, for K5 parity, the same names on the
+- [x] **K1.9 Admin operations.** Python methods (and, for K5 parity, the same names on the
       real backend): `admin_logout(username)` ends all SSO sessions,
       `disable_user`/`enable_user`, `set_groups`, `set_roles`, `set_realm(**timeouts)`,
       `rotate_keys`. These replace the current `revoke_all`/`set_claims`, which stay as aliases
       until `test_auth.py` is migrated (K4.1).
-- [ ] **K1.10 Request log and failure artefact.** Every request (method, path, form/query
+- [x] **K1.10 Request log and failure artefact.** Every request (method, path, form/query
       with secrets redacted to their first 4 chars, status, fault applied) goes into
       `request_log()`. On test failure the `idp` fixture writes it to
       `<artifacts>/idp.requests.jsonl`, and `vbtest.traceview` gets an "IdP" column.
@@ -167,14 +169,14 @@ New `tests/e2e/test_mock_keycloak.py`, marked `auth`, needs no game binaries (sk
 `binaries` fixture), so it runs in seconds and catches emulator bugs before they look like
 engine bugs.
 
-- [ ] **K2.1 Crypto.** RS256 and ES256 tokens verify with independent pure-Python verify code
+- [x] **K2.1 Crypto.** RS256 and ES256 tokens verify with independent pure-Python verify code
       (RSA `pow(s, e, n)` + PKCS#1 v1.5 padding check; ECDSA verify). RFC 6979 test vector for
       P-256/SHA-256 (RFC 6979 §A.2.5) gives the exact `r, s`.
-- [ ] **K2.2 Protocol.** Discovery fields match K1.2; code flow with PKCE succeeds once and a
+- [x] **K2.2 Protocol.** Discovery fields match K1.2; code flow with PKCE succeeds once and a
       reused code fails with "Code not valid"; wrong verifier fails; refresh after
       `admin_logout` fails with "Session not active"; refresh after idle timeout fails with
       "Token is not active"; `rotate_keys` keeps the old `kid` in the JWKS until retired.
-- [ ] **K2.3 Faults.** Each fault in K1.8 produces the documented response and is recorded.
+- [x] **K2.3 Faults.** Each fault in K1.8 produces the documented response and is recorded.
 
 *Run:* `python3 -m pytest tests/e2e/test_mock_keycloak.py -q` (< 10 s).
 
@@ -182,7 +184,7 @@ engine bugs.
 
 The unit suite should see the same bytes a real Keycloak sends, not hand-written JSON.
 
-- [ ] **K3.1 Golden fixtures.** `tests/unit/fixtures/keycloak/`: `discovery.json`,
+- [x] **K3.1 Golden fixtures.** `tests/unit/fixtures/keycloak/`: `discovery.json`,
       `jwks_rs256.json`, `jwks_es256.json`, `jwks_rotated.json`, `token_response.json`,
       `errors/*.json` (every body from K1.5), and a set of ID tokens with known claims plus a
       `fixtures.md` saying how they were made. First generated by
@@ -190,10 +192,10 @@ The unit suite should see the same bytes a real Keycloak sends, not hand-written
       re-generates them from a real Keycloak and the diff is reviewed.
       Because tokens expire, unit tests pass a fixed `now` to `verify_id_token` (it already
       takes one) and the fixture records the `now` it is valid at.
-- [ ] **K3.2 Fixture loader.** A `KeycloakFixtureFetcher : HttpFetcher` in
+- [x] **K3.2 Fixture loader.** A `KeycloakFixtureFetcher : HttpFetcher` in
       `tests/unit/auth_keycloak_fixture.hpp` that maps Keycloak URLs to fixture files and can
       be told to fail, delay or swap a file mid-test.
-- [ ] **K3.3 New cases** in `tests/unit/auth_keycloak_test.cpp` (add it to
+- [x] **K3.3 New cases** in `tests/unit/auth_keycloak_test.cpp` (add it to
       `tests/CMakeLists.txt`'s explicit source list):
   - accept: real-shaped RS256 token; ES256 realm; `aud: ["vb-e2e","account"]` with
     `azp: "vb-e2e"`; refresh-derived token without `nonce`.
@@ -212,7 +214,7 @@ The unit suite should see the same bytes a real Keycloak sends, not hand-written
   - discovery: issuer mismatch, missing `jwks_uri`, `http://` non-loopback issuer ⇒ fail
     closed with a log line naming the cause.
 
-- [ ] **K3.4 Token-type rule (engine; decided §6 Q1).** In `src/auth/verifier.cpp` add
+- [x] **K3.4 Token-type rule (engine; decided §6 Q1).** In `src/auth/verifier.cpp` add
       rule 1b: reject a JWS header `typ` of `at+jwt` (any case) for every preset, and for the
       `keycloak` preset require the payload claim `typ == "ID"` (missing ⇒ reject). New
       `VerifyError` value, exact cause in the server log, coarse reason to the player. Update
@@ -228,10 +230,10 @@ New `tests/e2e/test_auth_keycloak.py` (the existing `test_auth.py` stays as the 
 Every test uses the `IdpBackend` interface only, so K5 can run the same file against real
 Keycloak; tests that need `mint()` or fault injection are marked `mock_only`.
 
-- [ ] **K4.1 Migrate fixtures.** `idp` and `auth_server` move to `conftest.py`; `auth_lua()`
+- [x] **K4.1 Migrate fixtures.** `idp` and `auth_server` move to `conftest.py`; `auth_lua()`
       gains `alg`, `claims=("email","groups","realm_access")`, `audience` params.
       `test_auth.py` switches to the new admin method names.
-- [ ] **K4.2 Fast-forward re-auth (automation command).** Add a server automation command
+- [x] **K4.2 Fast-forward re-auth (automation command).** Add a server automation command
       `advance_reauth {seconds, player?}` that subtracts `seconds` from the player's re-auth
       timer and, while a request is outstanding, from its grace countdown. The next tick then
       runs the normal `system_reauth` path. The command lives in
@@ -240,7 +242,7 @@ Keycloak; tests that need `mint()` or fault injection are marked `mock_only`.
       (60 s) is not touched. Keep exactly one wall-clock test (the existing
       `test_revoked_login_is_kicked_after_the_grace_period`, marked `slow`) so the real timer
       and jitter are still covered. See §6 Q2 for why this beats lowering the floor.
-- [ ] **K4.3 Sign-in scenarios**
+- [x] **K4.3 Sign-in scenarios**
 
   | Test | Setup | Expect |
   |---|---|---|
@@ -254,7 +256,7 @@ Keycloak; tests that need `mint()` or fault injection are marked `mock_only`.
   | `first_use_trust_prompt` | fresh data dir, non-token-file client | nothing reaches the IdP until the trust prompt is accepted (assert empty request log, then accept through automation, then `/auth`) |
   | `redirect_uri_mismatch` | client registered with another pattern | IdP 400 page; client times out sign-in cleanly; no join |
 
-- [ ] **K4.4 Session & revocation scenarios** (driven by `advance_reauth`, K4.2)
+- [x] **K4.4 Session & revocation scenarios** (driven by `advance_reauth`, K4.2)
 
   | Test | Action mid-session | Expect |
   |---|---|---|
@@ -266,7 +268,7 @@ Keycloak; tests that need `mint()` or fault injection are marked `mock_only`.
   | `key_rotation_mid_session` | `rotate_keys()` then `retire_key(old)` | next re-auth token has the new `kid`; server refreshes JWKS once; player stays |
   | `refresh_token_rotation` | realm "revoke refresh token" on | each refresh returns a new RT, client stores it; reusing the old one fails |
 
-- [ ] **K4.5 IdP failure scenarios** (`mock_only`)
+- [x] **K4.5 IdP failure scenarios** (`mock_only`)
 
   | Test | Fault | Expect |
   |---|---|---|
@@ -279,7 +281,7 @@ Keycloak; tests that need `mint()` or fault injection are marked `mock_only`.
   | `discovery_issuer_mismatch` | `discovery_issuer("https://evil/realms/x")` | server refuses all joins; log names the mismatch |
   | `sign_in_rate_limit` | 31 bad attempts from one IP in 60 s | 31st refused before any IdP/JWKS work |
 
-- [ ] **K4.6 Singleplayer.** Integrated server with an auth pack and the emulator: browser
+- [x] **K4.6 Singleplayer.** Integrated server with an auth pack and the emulator: browser
       flow joins; `--insecure-skip-auth` gives `get_login() == nil`.
 
 *Run:* `$E2E -m "auth and not slow"` (target: under 3 min, using `advance_reauth`) and `$E2E -m auth`
@@ -289,12 +291,12 @@ for the full set.
 
 Proves the emulator is honest and closes "not verified against a real Keycloak token".
 
-- [ ] **K5.1 Realm export.** `tests/e2e/fixtures/keycloak/realm-e2e.json`: realm `e2e`,
+- [x] **K5.1 Realm export.** `tests/e2e/fixtures/keycloak/realm-e2e.json`: realm `e2e`,
       public client `vb-e2e` (standard flow only, PKCE S256 required, redirect
       `http://127.0.0.1/*`), group-membership mapper (`groups`, ID token on), audience mapper,
       users `alice`, `bob`, `carl`, `erin` with test-only passwords, short token lifetimes.
       Matches `docs/auth.md` §2 step by step — if the doc and the export disagree, fix the doc.
-- [ ] **K5.2 Real backend.** `tests/e2e/vbtest/keycloak_real.py` implements `IdpBackend`:
+- [x] **K5.2 Real backend.** `tests/e2e/vbtest/keycloak_real.py` implements `IdpBackend`:
       starts `quay.io/keycloak/keycloak:<pinned 26.x>` with
       `start-dev --import-realm --http-port 0`-equivalent port mapping (or uses
       `VB_KEYCLOAK_URL` if set), waits on `/health/ready`, does admin calls through the Admin
@@ -304,12 +306,12 @@ Proves the emulator is honest and closes "not verified against a real Keycloak t
       following redirects to the client's loopback listener.
       Note: the engine allows `http://` issuers only on loopback, so the container is
       published on `127.0.0.1`.
-- [ ] **K5.3 Contract/drift test.** `test_mock_keycloak_matches_real.py` (`keycloak_real`):
+- [x] **K5.3 Contract/drift test.** `test_mock_keycloak_matches_real.py` (`keycloak_real`):
       for discovery, JWKS, a code-flow token, a refresh-flow token and each K1.5 error,
       compare the real response to the emulator's — same keys present, same types, same
       error codes/descriptions (values like timestamps and ids ignored). Also regenerates the
       K3.1 fixtures into a temp dir and fails with a diff if they changed.
-- [ ] **K5.4 Run K4 against it.** `$E2E -m "auth and not mock_only" --vb-idp=keycloak`.
+- [x] **K5.4 Run K4 against it.** `$E2E -m "auth and not mock_only" --vb-idp=keycloak`.
       Every non-`mock_only` test in `test_auth_keycloak.py` must pass unchanged.
 
 *Run locally:* `docker` required;
@@ -317,12 +319,12 @@ Proves the emulator is honest and closes "not verified against a real Keycloak t
 
 ## K6 — CI, docs, bookkeeping (S)
 
-- [ ] **K6.1 Default e2e job** (`.github/workflows/build_linux.yml` `e2e`): already runs the
+- [x] **K6.1 Default e2e job** (`.github/workflows/build_linux.yml` `e2e`): already runs the
       whole suite; add `-m "not slow"` only if the K0.2 budget is blown, otherwise keep
       everything. Upload `idp.requests.jsonl` with the existing failure artefacts.
-- [ ] **K6.2 Emulator self-tests everywhere.** K2 needs no binaries: add a cheap step to the
+- [x] **K6.2 Emulator self-tests everywhere.** K2 needs no binaries: add a cheap step to the
       lint workflow (`python3 -m pytest tests/e2e/test_mock_keycloak.py`).
-- [ ] **K6.3 Real-Keycloak workflow.** New workflow `auth_keycloak.yml` that builds the e2e
+- [x] **K6.3 Real-Keycloak workflow.** New workflow `auth_keycloak.yml` that builds the e2e
       config, starts the **pinned** Keycloak image as a job `services:` container and runs
       K5.3 + K5.4. Triggers: pull requests that touch `src/auth/**`, `inc/vb/auth/**`,
       `src/net/session.cpp`, `tests/e2e/vbtest/*idp*`/`*keycloak*`, `tests/e2e/fixtures/**`
@@ -330,11 +332,11 @@ Proves the emulator is honest and closes "not verified against a real Keycloak t
       tests against Keycloak's newest release tag instead of the pinned one. The PR job
       starts non-required and becomes a required check after ~2 weeks without a flake.
       The canary opens or updates one tracking issue when it fails. See §6 Q3.
-- [ ] **K6.4 Docs.** `tests/e2e/README.md` "Authentication tests" section: the emulator, the
+- [x] **K6.4 Docs.** `tests/e2e/README.md` "Authentication tests" section: the emulator, the
       markers, `--vb-idp`, how to run against docker Keycloak. `docs/auth.md` §7 points here.
       `architecture_spec/auth.md` §10 "Manual: real Keycloak" becomes "K5 workflow (auth PRs +
       weekly canary); Firebase still manual".
-- [ ] **K6.5 Bookkeeping.** Tick the closed "not verified" lines in `REMAINING_TASKS.md`
+- [x] **K6.5 Bookkeeping.** Tick the closed "not verified" lines in `REMAINING_TASKS.md`
       9.3/9.6/9.8 and move the detail into `remaining_tasks/` per the file's convention.
 
 ## 6. Decisions and their trade-offs
@@ -449,10 +451,62 @@ nightly-only plan from the first draft.
 Stays out of scope (`architecture_spec/auth.md` §13 item 7). If it lands later, the emulator
 gets a `backchannel_logout_uri` POST in K1.9 and K4.4 gets an "instant kick" row.
 
-## 7. Baseline timings (filled by K0.2)
+## 7. Baseline timings (K0.2)
+
+Measured before K1 on the then-current `test_auth.py`, Release-ish build (RelWithDebInfo, no sanitizers), 4 cores:
 
 | Run | `-m "auth and not slow"` | `-m auth` |
 |---|---|---|
-| 1 | | |
-| 2 | | |
-| 3 | | |
+| 1 | 29.6 s | 105.3 s |
+| 2 | 26.4 s | 101.7 s |
+| 3 | 25.9 s | 102.2 s |
+
+After K4 (same machine, no sanitizers): `test_mock_keycloak.py` 7 s; `test_auth.py` fast ~28 s;
+`test_auth_keycloak.py` 28 tests ~190 s (the IdP-failure tests wait on the engine's real backoff
+timers: 10-35 s each) plus one slow test (62 s). The rest of the e2e suite is ~85 s.
+
+## 8. Outcome: where reality differed from the plan
+
+Everything above landed. What changed on the way, and what real Keycloak taught:
+
+**Run against Keycloak 26.7.5** (Maven Central's `keycloak-quarkus-dist`, `kc.sh start-dev`, in the sandbox
+that built this) the same `test_auth_keycloak.py` passes (19 passed, the rest `mock_only`), and
+`test_mock_keycloak_matches_real.py` (24 checks) passes. Before calibration the emulator was wrong
+about: `invalid_client` (not `unauthorized_client`) for an unknown client; `PKCE verification failed:
+Code mismatch`; `No refresh token`; introspection being 403 for a public client; **no `groups` claim at
+all for a user in no group**; the ID token's `aud` staying the plain client id under an audience mapper
+(the mapper only reaches the access token, or adds *another* audience, which makes `aud` an array);
+error redirects carrying `iss` and no description for `unsupported_response_type`; cookies being `Secure;
+SameSite=None` even on http; the v2 login theme's message markup. Guesses that were right: "Code not
+valid", "Session not active", "Token is not active", "User disabled", the reuse message, the discovery
+fields. The docker path (`start()` without `VB_KEYCLOAK_URL`) and `auth_keycloak.yml` have **not** been
+run here (no docker daemon, no Actions); the harness logic they share (admin API, proxy, realm import) has.
+
+**Engine changes** (beyond the plan's rule 1b): the sign-in coordinator forgot the stored refresh token
+on *any* failed silent refresh, so a Keycloak blip during a re-auth forced a browser sign-in; transient
+failures (transport, 5xx, 429, discovery) are now kept and retried (K3.3 asked for exactly this, the
+engine did not do it). Also: automation `advance_reauth` (K4.2), client `auth` snapshot + `auth`
+predicate, a headless singleplayer client that waits for a test-played sign-in, a `re-auth ok` log line.
+
+**Deviations from the task lists**
+- K4.1: `auth_lua()` did not gain `alg`/`audience`; they are properties of the realm (`@pytest.mark.realm(...)`).
+- K4.3 `user_cancels_at_idp`: a headless client has no sign-in screen to return to, it exits with
+  "sign-in cancelled" (asserted), server never saw `C2S_Auth`, no code was issued. Mock only: a real
+  Keycloak form has no cancel.
+- K4.3 `disabled_user_cannot_sign_in` / `redirect_uri_mismatch`: no redirect ever reaches the client, so it
+  just waits (5 min); the tests assert the IdP's refusal text/400 page, no code exchange, no join.
+- K4.3 `audience_array_and_azp` uses `extra_audience` (ID `aud` is an array only when a mapper adds another
+  audience); the Q1 access-token case is `test_an_access_token_is_not_a_login` and runs on both backends.
+- K4.3 `first_use_trust_prompt` is **not covered at e2e level**: a headless automation client trusts
+  automatically and raygui cannot be clicked. The unit test (`coordinator: first use asks for trust`) stands.
+- K4.4 `key_rotation_mid_session` is `slow` (62 s): the server refetches the JWKS for an unknown `kid`
+  at most once per 60 s counted from startup, in real time.
+- K4.4 `idle_session_timeout` sleeps 3 s (the IdP's clock is real); no banner assertion for the idle case
+  beyond `reauth_prompt`.
+- K5.1: the realm export has no users and no audience mapper; tests create users (`add_user`) and the
+  backend adds mappers on request (`audience_mapper`, `extra_audience`, `group_paths`). `full.path` is off.
+- K5.2: a recording proxy fronts Keycloak so `requests()`/`grants()` work on both backends.
+- K5.3: compares emulator vs Keycloak shapes and error bodies directly; the committed unit fixtures are
+  checked against the emulator (`test_the_committed_unit_fixtures_are_what_the_emulator_dumps`).
+- K6.3: a job `services:` container cannot take `start-dev --import-realm`, so the harness starts the
+  pinned container itself (image cached with `docker save` in `actions/cache`, keyed by tag).

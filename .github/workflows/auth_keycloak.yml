@@ -1,0 +1,174 @@
+name: Auth against real Keycloak
+
+# docs/auth-keycloak-testing.md (K5, K6.3). Runs the auth e2e tests, and the emulator-vs-Keycloak
+# comparison, against a real Keycloak in docker:
+#   * pull requests that touch the auth code, the IdP test harness or its fixtures, on the PINNED
+#     image (tests/e2e/vbtest/keycloak_real.py PINNED_IMAGE). Non-required at first; make it a required
+#     check after about two weeks without a flake. Bumping the pin is a change to that file, so it
+#     is tested here first.
+#   * workflow_dispatch, optionally with another image.
+#   * a weekly canary against Keycloak's newest release, which opens or updates ONE tracking issue
+#     when it fails, so a new Keycloak breaking us has an owner before we bump the pin.
+# The default e2e job (build_linux.yml) still runs the whole suite against the emulator on every PR.
+
+on:
+  pull_request:
+    paths:
+      - "src/auth/**"
+      - "inc/vb/auth/**"
+      - "src/net/session.cpp"
+      - "tests/e2e/vbtest/*idp*"
+      - "tests/e2e/vbtest/*keycloak*"
+      - "tests/e2e/vbtest/jwscrypto.py"
+      - "tests/e2e/fixtures/**"
+      - "tests/e2e/test_auth*.py"
+      - "tests/e2e/test_mock_keycloak*.py"
+      - "tests/unit/fixtures/keycloak/**"
+      - ".github/workflows/auth_keycloak.yml"
+  workflow_dispatch:
+    inputs:
+      keycloak_image:
+        description: "Keycloak image to test against (default: the pinned one)"
+        required: false
+        type: string
+  schedule:
+    - cron: "17 4 * * 1" # Mondays, 04:17 UTC
+
+permissions:
+  contents: read
+  issues: write # the canary's tracking issue
+
+concurrency:
+  group: auth-keycloak-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  real-keycloak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ninja-build cmake build-essential \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+            libgl1-mesa-dev libglu1-mesa-dev \
+            libssl-dev libprotobuf-dev protobuf-compiler libcurl4-openssl-dev
+          python3 -m pip install -r tests/e2e/requirements.txt
+
+      - name: Choose the Keycloak image
+        id: image
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            tag=$(curl -fsSL https://api.github.com/repos/keycloak/keycloak/releases/latest | python3 -c 'import json,sys; print(json.load(sys.stdin)["tag_name"])')
+            ref="quay.io/keycloak/keycloak:${tag}"
+            echo "canary=true" >> "$GITHUB_OUTPUT"
+          elif [ -n "${{ inputs.keycloak_image }}" ]; then
+            ref="${{ inputs.keycloak_image }}"
+          else
+            ref=$(cd tests/e2e && python3 -c 'from vbtest.keycloak_real import PINNED_IMAGE; print(PINNED_IMAGE)')
+          fi
+          echo "ref=${ref}" >> "$GITHUB_OUTPUT"
+          echo "Testing against ${ref}" >> "$GITHUB_STEP_SUMMARY"
+
+      # The image is several hundred MB and a registry hiccup has nothing to do with the change
+      # under test: cache it, and report a failed pull as an infrastructure error.
+      - name: Cache the Keycloak image
+        uses: actions/cache@v4
+        with:
+          path: ~/keycloak-image.tar
+          key: keycloak-image-${{ steps.image.outputs.ref }}
+
+      - name: Load or pull the Keycloak image
+        shell: bash
+        env:
+          IMAGE: ${{ steps.image.outputs.ref }}
+        run: |
+          if [ -f ~/keycloak-image.tar ]; then
+            docker load -i ~/keycloak-image.tar
+          elif docker pull "$IMAGE"; then
+            docker save "$IMAGE" -o ~/keycloak-image.tar
+          else
+            {
+              echo "### Infrastructure error"
+              echo "Could not pull \`$IMAGE\`. That says nothing about the change under test; re-run the job."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::could not pull ${IMAGE} (registry problem, not a test failure)"
+            exit 1
+          fi
+
+      # The same configuration as the e2e job in build_linux.yml, without sanitizers: these tests
+      # are about protocol behaviour, and the ASan run of the emulator suite already covers memory.
+      - name: Configure
+        shell: bash
+        run: |
+          cmake -S "${{ github.workspace }}" -B "${{ github.workspace }}/build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DVB_HEADLESS=OFF \
+            -DVB_WITH_LUA=ON \
+            -DVB_WITH_NET=ON \
+            -DVB_WITH_REPLICATION=ON \
+            -DVB_WITH_COMPRESSION=ON \
+            -DVB_WITH_AUTOMATION=ON \
+            -DVB_WITH_AUTH=ON \
+            -DVB_BUILD_CLI=OFF
+
+      - name: Build
+        shell: bash
+        run: cmake --build "${{ github.workspace }}/build" --target voxel_browser voxel_browser_server
+
+      - name: Test against Keycloak
+        shell: bash
+        env:
+          VB_KEYCLOAK_IMAGE: ${{ steps.image.outputs.ref }}
+        run: |
+          python3 -m pytest -p no:cacheprovider -q \
+            tests/e2e/test_mock_keycloak_matches_real.py tests/e2e/test_auth_keycloak.py \
+            --vb-build-dir "${{ github.workspace }}/build" \
+            --vb-artifacts "${{ github.workspace }}/build/e2e-artifacts" \
+            --vb-idp=keycloak
+
+      - name: Upload failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: auth-keycloak-failure-logs
+          path: ${{ github.workspace }}/build/e2e-artifacts
+          if-no-files-found: ignore
+
+      # One tracking issue for the canary, opened or updated, never a new one per week.
+      - name: Open or update the canary issue
+        if: failure() && steps.image.outputs.canary == 'true'
+        uses: actions/github-script@v7
+        env:
+          IMAGE: ${{ steps.image.outputs.ref }}
+        with:
+          script: |
+            const title = "Auth canary: newest Keycloak breaks the auth tests";
+            const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = `The weekly canary failed against \`${process.env.IMAGE}\`.\n\nRun: ${run}\n\n` +
+              "Either the emulator drifted from this Keycloak (`test_mock_keycloak_matches_real.py` says how) " +
+              "or the engine does not cope with it. Fix `tests/e2e/vbtest/mock_keycloak.py`, regenerate " +
+              "`tests/unit/fixtures/keycloak`, then bump `PINNED_IMAGE`.";
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo, state: "open", per_page: 100 });
+            const existing = issues.data.find(i => !i.pull_request && i.title === title);
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo, issue_number: existing.number,
+                body: `Still failing: ${process.env.IMAGE}\n\n${run}` });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo, title, body });
+            }

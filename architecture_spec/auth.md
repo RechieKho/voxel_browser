@@ -430,8 +430,12 @@ src/auth/…                    vb_auth static lib (links vb_core, curl, mbedtls
 - **E2E (pytest harness):** mock OIDC provider (small stdlib HTTP server with
   pre-generated key material checked into `tests/e2e/fixtures/`), client via
   `--auth-token-file` and via a scripted loopback redirect.
-- **Manual:** real Keycloak (docker) and a real Firebase project, once per
-  platform. Steps recorded in `docs/auth.md`.
+- **Real Keycloak (automated):** the same e2e scenarios run against a pinned Keycloak
+  image in docker (`.github/workflows/auth_keycloak.yml`: PRs that touch the auth
+  paths, `workflow_dispatch`, and a weekly canary against the newest release), and
+  `test_mock_keycloak_matches_real.py` keeps the emulator honest.
+- **Manual:** a real Firebase project (and a real browser, once per platform).
+  Steps recorded in `docs/auth.md`.
 
 ## 11. Relationship to the 2026-09-17 direction (§18 Q6)
 

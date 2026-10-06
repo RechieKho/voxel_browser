@@ -522,8 +522,8 @@ protocol changes, security notes and per-step task lists:
       connection, ticket → verdict → pack join veto with the resolved name).
       Tests (`auth_verifier_test.cpp`): every rule has pass + fail cases,
       JWKS cache/refresh/rate-limit via a fake fetcher, mutation fuzz,
-      redaction. **Not verified here:** a real Keycloak token (needs a manual
-      run); libFuzzer targets (a deterministic mutation test stands in).
+      redaction. ~~Not verified: a real Keycloak token~~ — verified in 9.9
+      (Keycloak 26.7.5, 2026-10-06); libFuzzer targets (a deterministic mutation test stands in).
       **Known gap until 9.4:** the verified `LoginInfo` is not yet kept on the
       session, so `get_login()` and duplicate-subject handling don't exist yet.
 - [x] **9.4 — Lua exposure** — done 2026-10-05: `net::LoginData` (user data
@@ -591,9 +591,10 @@ protocol changes, security notes and per-step task lists:
       `auth_login_test.cpp` (success ×2 rounds, claim change fires once,
       revoked ⇒ kicked after grace, stale iat, different subject, disabled),
       store/trust/silent/dead-token/re-auth in `auth_signin_test.cpp`.
-      **Not verified:** a real Keycloak admin logout kicking within
-      interval + grace (manual run); `--auth-token-file` re-auth rotation in
-      e2e (9.7).
+      ~~Not verified: a real Keycloak admin logout kicking within interval +
+      grace~~ — verified in 9.9 against Keycloak 26.7.5 (admin logout, disabled
+      user, idle session, key and refresh-token rotation; `advance_reauth`
+      drives the re-auth timers).
 - [x] **9.7 — Singleplayer, `vb`, e2e** — done 2026-10-05 (client UI
       compile-checked; e2e run result below).
       Singleplayer with an auth pack now runs the real sign-in through the same
@@ -624,17 +625,28 @@ protocol changes, security notes and per-step task lists:
       `google` sign-in (needs a Google OAuth client id key in `auth.lua`),
       manual Keycloak/Firebase runs on Linux/macOS/Windows, Windows build of
       the socket/ShellExecute code.
-- [ ] **9.9 — Auth testing against a mock Keycloak** — planned 2026-10-06.
-      Grow `vbtest/mock_idp.py` into a stdlib-only Keycloak emulator (users,
-      SSO sessions, Keycloak claims and error bodies, ES256, key rotation,
-      fault injection, admin logout/disable), self-test it, add C++ unit cases
-      on Keycloak-shaped fixtures, add e2e sign-in / revocation / IdP-failure
-      scenarios, and check the emulator against a real Keycloak in docker
-      (opt-in: auth PRs + weekly canary). Closes the "not verified against
-      real Keycloak" and "admin logout kicks within interval + grace" gaps
-      above. Decisions accepted 2026-10-06: token-type rule, `advance_reauth`
-      automation command, CI triggers. Phases K0–K6, tasks and decisions:
-      `docs/auth-keycloak-testing.md`.
+- [x] **9.9 — Auth testing against a mock Keycloak** — done 2026-10-06
+      (plan, decisions and deviations: `docs/auth-keycloak-testing.md`).
+      `vbtest/mock_keycloak.py` is a stdlib Keycloak emulator (users, SSO
+      sessions, Keycloak claims and error bodies, RS256/ES256, key rotation,
+      login form, fault injection, request log), self-tested without game
+      binaries and **checked against a real Keycloak** (`--vb-idp=keycloak`,
+      `test_mock_keycloak_matches_real.py`, CI `auth_keycloak.yml`: auth PRs +
+      weekly canary); running the same `test_auth_keycloak.py` against Keycloak
+      26.7.5 closed the "not verified against a real Keycloak" gaps of 9.3/9.6.
+      Engine: **rule 1b** (`typ == "ID"` for the keycloak preset, `at+jwt`
+      refused everywhere, `VerifyError::kTokenType`), an IdP outage no longer
+      erases the stored refresh token or raises the banner at once (retryable
+      failures are retried every 5 s while the re-auth request is open),
+      automation `advance_reauth`, client `auth` snapshot + predicate, headless
+      singleplayer waits for a test-played sign-in, `re-auth ok` server log
+      line. Golden fixtures for C++ unit cases (`tests/unit/fixtures/keycloak/`,
+      `auth_keycloak_test.cpp`, `auth_keycloak_client_test.cpp`). Found against
+      real Keycloak: no `groups` claim for ungrouped users, `invalid_client` for a
+      bad client id, the ID token's `aud` stays the plain client id under an
+      audience mapper. **Not done:** first-use trust prompt at e2e level (a
+      headless client trusts automatically, and raygui cannot be clicked; the
+      unit test stands), Windows/macOS runs.
 
 ---
 
