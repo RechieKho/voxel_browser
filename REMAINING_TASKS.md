@@ -624,6 +624,15 @@ protocol changes, security notes and per-step task lists:
       `google` sign-in (needs a Google OAuth client id key in `auth.lua`),
       manual Keycloak/Firebase runs on Linux/macOS/Windows, Windows build of
       the socket/ShellExecute code.
+- [ ] **9.9 — Auth testing against a mock Keycloak** — planned 2026-10-06.
+      Grow `vbtest/mock_idp.py` into a stdlib-only Keycloak emulator (users,
+      SSO sessions, Keycloak claims and error bodies, ES256, key rotation,
+      fault injection, admin logout/disable), self-test it, add C++ unit cases
+      on Keycloak-shaped fixtures, add e2e sign-in / revocation / IdP-failure
+      scenarios, and check the emulator against a real Keycloak in docker
+      (opt-in, nightly). Closes the "not verified against real Keycloak" and
+      "admin logout kicks within interval + grace" gaps above. Phases K0–K6,
+      tasks and open questions: `docs/auth-keycloak-testing.md`.
 
 ---
 
