@@ -12,6 +12,7 @@
 #include <raygui.h>
 
 #include "vb/core/noise.hpp"
+#include "vb/core/parse.hpp"
 #include "vb/render/texture_atlas.hpp"
 #include "vb/world/daynight.hpp"
 
@@ -119,7 +120,12 @@ const char *tool_name(Tool t) {
 }
 
 bool parse_ivec(const std::string &s, core::IVec3 &out) {
-	return std::sscanf(s.c_str(), "%d,%d,%d", &out.x, &out.y, &out.z) == 3;
+	int v[3] = {};
+	if (!core::parse_int_list(s, ',', v, 3)) {
+		return false;
+	}
+	out = { v[0], v[1], v[2] };
+	return true;
 }
 
 } // namespace

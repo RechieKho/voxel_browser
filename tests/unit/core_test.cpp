@@ -8,6 +8,7 @@
 #include "vb/core/ids.hpp"
 #include "vb/core/log.hpp"
 #include "vb/core/math.hpp"
+#include "vb/core/parse.hpp"
 #include "vb/core/result.hpp"
 
 using namespace vb::core;
@@ -86,4 +87,22 @@ TEST_CASE("logger routes to sinks and respects the level") {
 	vb::core::log::remove_sink(id);
 	vb::core::log::set_level(LogLevel::kInfo);
 	vb::core::log::reset_to_default_sink();
+}
+
+TEST_CASE("parse_int_list parses exactly N separated ints") {
+	int v[3] = {};
+	CHECK(parse_int_list("5x7x5", 'x', v, 3));
+	CHECK(v[0] == 5);
+	CHECK(v[1] == 7);
+	CHECK(v[2] == 5);
+	CHECK(parse_int_list("-1,0,12", ',', v, 3));
+	CHECK(v[0] == -1);
+	CHECK(v[2] == 12);
+
+	CHECK_FALSE(parse_int_list("5x7", 'x', v, 3)); // too few
+	CHECK_FALSE(parse_int_list("5x7x5x1", 'x', v, 3)); // trailing field
+	CHECK_FALSE(parse_int_list("5x7x5abc", 'x', v, 3)); // trailing junk
+	CHECK_FALSE(parse_int_list("5,7,5", 'x', v, 3)); // wrong separator
+	CHECK_FALSE(parse_int_list("5xx5", 'x', v, 3)); // empty field
+	CHECK_FALSE(parse_int_list("", 'x', v, 3));
 }

@@ -41,6 +41,7 @@
 #include "vb/cli/watch.hpp"
 #include "vb/core/build_info.hpp"
 #include "vb/core/config.hpp"
+#include "vb/core/parse.hpp"
 #include "vb/core/paths.hpp"
 #include "vb/core/version.hpp"
 #include "vb/editor/block_catalog.hpp"
@@ -1419,7 +1420,12 @@ std::filesystem::path current_pack_root() {
 std::filesystem::path default_block_script() { return current_pack_root() / "data" / "blocks.lua"; }
 
 bool parse_size(const std::string &text, vb::core::IVec3 &out) {
-	return std::sscanf(text.c_str(), "%dx%dx%d", &out.x, &out.y, &out.z) == 3;
+	int v[3] = {};
+	if (!vb::core::parse_int_list(text, 'x', v, 3)) {
+		return false;
+	}
+	out = { v[0], v[1], v[2] };
+	return true;
 }
 
 int structure_new(const Ctx &c, const std::vector<std::string> &args) {
