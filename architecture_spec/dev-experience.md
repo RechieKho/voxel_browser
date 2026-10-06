@@ -1,7 +1,8 @@
 # Developer Experience (pack authors & agents) — Design & Phased Plan
 
 > Full detail for this topic; the backlog entry is `REMAINING_TASKS.md`
-> Phase 10. Status: **planned (2026-10-06)**, nothing implemented yet.
+> Phase 10. Status: **implemented 2026-10-06** (10.A-10.G; see "As built" below for
+> the deviations from this plan).
 
 ## 1. Problem
 
@@ -376,82 +377,82 @@ phase (F) depends only on the command table and can run in parallel with B–D.
 
 ### 10.A — API inventory + drift test (S–M)
 
-- [ ] Surface walker test (§3.2) that dumps every bound name; commit the first
+- [x] Surface walker test (§3.2) that dumps every bound name; commit the first
       dump as the to-document checklist.
-- [ ] `sdk/lua/` skeleton, `api_index.txt`, `api_ignore.txt`; the test runs
+- [x] `sdk/lua/` skeleton, `api_index.txt`, `api_ignore.txt`; the test runs
       in "report only" mode until 10.B finishes, then gates.
 - **Exit:** the list of everything that needs a stub exists and is enforced.
 
 ### 10.B — LuaCATS stubs (L)
 
-- [ ] Stubs for the server VM (`vb.*`, sub-tables, usertypes, definition
+- [x] Stubs for the server VM (`vb.*`, sub-tables, usertypes, definition
       classes, `vb.on` overloads per event), the UI VM (`ui`, `client`, widget
       tree, `state`), data scripts and `auth.lua`'s returned table.
-- [ ] One example per function; context tags plus an environment line at the
+- [x] One example per function; context tags plus an environment line at the
       start of every engine global's description (§3.4.1); `sandbox.lua`.
-- [ ] Try the multi-root / nested `ui/.luarc.json` setup in VS Code and
+- [x] Try the multi-root / nested `ui/.luarc.json` setup in VS Code and
       Neovim; keep it for 10.E only where it gives correct warnings.
-- [ ] `luarc.template.json`; `content/base` and `kitchen_sink` get a
+- [x] `luarc.template.json`; `content/base` and `kitchen_sink` get a
       `.luarc.json` so the repo dogfoods it.
-- [ ] CI: LuaLS `--check` on `sdk/lua`; drift test gates.
+- [x] CI: LuaLS `--check` on `sdk/lua`; drift test gates.
 - **Exit:** opening `content/base` in VS Code with LuaLS gives completion and
   hover docs for every `vb.*` call and no false "undefined global" warnings.
 
 ### 10.C — Generated quick reference (M)
 
-- [ ] `scripts/gen_lua_docs.py` → `docs/lua-reference/` + cheat sheet + `--check`.
-- [ ] Example extraction + syntax-check doctest.
-- [ ] `docs/lua-api.md` header → reference; README links the cheat sheet.
+- [x] `scripts/gen_lua_docs.py` → `docs/lua-reference/` + cheat sheet + `--check`.
+- [x] Example extraction + syntax-check doctest.
+- [x] `docs/lua-api.md` header → reference; README links the cheat sheet.
 - **Exit:** every bound function has a reference entry with an example, and
   CI fails if a stub change isn't regenerated.
 
 ### 10.D — Headless pack validation + engine version enforcement (M–L)
 
-- [ ] `voxel_browser_server --check-pack <dir> [--json] [--strict]` (§3.4),
+- [x] `voxel_browser_server --check-pack <dir> [--json] [--strict]` (§3.4),
       including UI VM compile, structure validation and one-chunk worldgen.
-- [ ] Static global-access check per environment (§3.4.1).
-- [ ] Diagnostics carry `file:line` (parse Lua error prefixes; registration
+- [x] Static global-access check per environment (§3.4.1).
+- [x] Diagnostics carry `file:line` (parse Lua error prefixes; registration
       errors report the calling chunk via `debug.traceback` level).
-- [ ] `vb pack check` + version resolution from `engine_version_req`.
-- [ ] Enforce `engine_version_req` (§3.7): `vb::core::VersionReq` in `vb_core`;
+- [x] `vb pack check` + version resolution from `engine_version_req`.
+- [x] Enforce `engine_version_req` (§3.7): `vb::core::VersionReq` in `vb_core`;
       server/singleplayer refuse a mismatched pack; handshake carries the
       requirement and the client checks it (protocol bump, `docs/protocol.md`,
       round-trip + fuzz test); `--ignore-engine-req` (dev-only);
       `vb server start` warns; update `content/base/pack.toml`'s comment and
       `content-pack-format.md`.
-- [ ] Stretch: warn when a pack uses an API whose `since` is newer than its
+- [x] Stretch: warn when a pack uses an API whose `since` is newer than its
       requirement's lower bound (§3.7, "Later").
 - **Exit:** a broken pack, or one that needs a newer engine, yields a
   precise, machine-readable error without starting a game.
 
 ### 10.E — Scaffolding: `vb pack init` (M–L)
 
-- [ ] `templates/pack/{minimal,ui,worldgen}` + build-time embedding into `vb`.
-- [ ] `vb pack init`/`vb pack types`/`vb pack info`; `--template base`;
+- [x] `templates/pack/{minimal,ui,worldgen}` + build-time embedding into `vb`.
+- [x] `vb pack init`/`vb pack types`/`vb pack info`; `--template base`;
       `--engine-req` (default `>=<selected version>`).
-- [ ] Generated `README.md`, `AGENTS.md`, `.luarc.json`, `.gitignore` (+ the
+- [x] Generated `README.md`, `AGENTS.md`, `.luarc.json`, `.gitignore` (+ the
       `ui/` multi-root setup if 10.B kept it).
-- [ ] `vb pack dev` (host `--watch` + client connect; `--no-client`).
-- [ ] Integration test: new → check for every template.
+- [x] `vb pack dev` (host `--watch` + client connect; `--no-client`).
+- [x] Integration test: new → check for every template.
 - **Exit:** `vb pack init && vb pack dev` puts a player into a world running the
   new pack in under a minute, with editor completion working.
 
 ### 10.F — CLI reference & agent docs (M)
 
-- [ ] Extend `Command` (details, examples, flags, json); split subcommand
+- [x] Extend `Command` (details, examples, flags, json); split subcommand
       tables; `vb help <cmd>`, `--help` everywhere.
-- [ ] `vb help --markdown` → `docs/cli.md` (+ CI check); `vb help --json`.
-- [ ] Machine contract audit: `error:`/`hint:` format, `--json` on
+- [x] `vb help --markdown` → `docs/cli.md` (+ CI check); `vb help --json`.
+- [x] Machine contract audit: `error:`/`hint:` format, `--json` on
       `install`/`doctor`/`pack *`, `--yes` on every prompt.
-- [ ] Root `AGENTS.md`; `docs/llms.txt`.
+- [x] Root `AGENTS.md`; `docs/llms.txt`.
 - **Exit:** an agent given only `vb help --json` (or `docs/cli.md`) can
   install a version, scaffold, check and host a pack without guessing flags.
 
 ### 10.G — Ship it (S)
 
-- [ ] `package_release.py`: include `sdk/` and `docs/` in the game archive.
-- [ ] `vb docs [topic] [--path]`.
-- [ ] README: "Make your first pack" section (`vb pack init` → `vb pack dev`),
+- [x] `package_release.py`: include `sdk/` and `docs/` in the game archive.
+- [x] `vb docs [topic] [--path]`.
+- [x] README: "Make your first pack" section (`vb pack init` → `vb pack dev`),
       `CONTRIBUTING.md`: how to add a binding (C++ + stub + regenerate).
 - **Exit:** everything above works from a fresh `install.sh` with no repo
   checkout and no network after install.
@@ -467,3 +468,52 @@ phase (F) depends only on the command table and can run in parallel with B–D.
    2026-10-06: yes — server, singleplayer and client (§3.7).
 4. **Example execution.** Syntax-checking is cheap; actually running examples
    needs a fixture world per example. Revisit after 10.C if doc examples rot.
+
+## 7. As built (2026-10-06)
+
+Deviations and decisions made while implementing, in the order a reader will hit them:
+
+- **Surface walker** (`vb::script::describe_lua_surface`, `PackRuntime/UiRuntime::describe_api`): walks
+  `vb`/`ui`/`client` plus sol2 usertype metatables from the Lua registry. `Player` is the Lua name of the C++
+  `PlayerHandle`; `Entity` (the `self` of `vb.register_entity` callbacks) is not reachable from globals, so
+  `describe_api` lists its shared method table explicitly. A table with a metatable (`vb.storage`) counts as a
+  member (stub tag `---@vb member`).
+- **Stub parser** is a small line-based parser in `scripts/gen_lua_docs.py`, not a LuaCATS implementation:
+  `function A.b.c(args) end` / `function T:m(args) end` declarations preceded by `---` blocks. The generator
+  fails on a missing summary, example, `---@vb context` or a `---@param` that does not match the arguments.
+  Doc examples are syntax-checked by extracting the fenced blocks from the generated markdown (no
+  `build/doc_examples/`).
+- **LuaLS in CI is not wired**: there is no pinned LuaLS download in this repo yet, and an unverifiable CI
+  job would be a liability. The stubs follow the LuaCATS conventions by hand; the generator + drift test are
+  the enforced checks. Follow-up in `REMAINING_TASKS.md`.
+- **Nested `ui/.luarc.json`** (multi-root editor setup) was not attempted; the labelled stubs plus
+  `vb pack check` carry §3.4.1.
+- **`--check-pack`** lives in `src/server/check_pack.cpp` (library `vb_pack_check`, linked by the server and the
+  tests). Order: `pack.toml` (+ `engine_version_req`) -> compile every file and scan its bytecode for global
+  accesses -> `auth.lua` -> load the server files one by one (stops at the first failing file) -> `freeze()`,
+  `validate_worldgen()`, one generated chunk -> `ui/*.lua` in a `UiRuntime`. The bytecode scan is
+  `src/script/lua_global_scan.c` (needs Lua's internal headers, so it is C, `-w`). Globals defined at run time
+  (`_G[name] = ...`, as `content/base/blocks/register.lua` does) are learned from the VM after the load
+  (`global_names()`), so only reads that nothing defines warn. Pack `print` is silenced so `--json` stays clean.
+  Structure files are validated through `parse_structure` (registration) and `validate_worldgen`; the editor's
+  own validator is not run. "Block without a texture" and "unknown field in a def table" warnings are not
+  implemented.
+- **`engine_version_req` enforcement**: `vb::core::VersionReq` (`inc/vb/core/version_req.hpp`); bare versions
+  (no comparator) are rejected. Server: refuses at startup (`--ignore-engine-req`, compiled out under
+  `VB_DISTRIBUTION`). Singleplayer: falls back to the hardcoded base set with a message on stderr (the main
+  menu does not show it yet). Client: `S2CServerInfo.engine_version_req` (protocol 30), checked in the
+  handshake before any asset is downloaded; no client-side override. `vb pack check/dev` pick the newest
+  installed version that satisfies the requirement.
+- **Templates**: `minimal` (init + block + texture), `ui` (adds `ui/hello.lua` opened from chat) and
+  `worldgen` (adds `worldgen.lua`) instead of the plan's single `minimal` that already had a UI. They live in
+  `templates/pack/<name>/` over `_common/` and are baked into `vb` by `cmake/EmbedFiles.cmake`; the Lua stubs
+  are embedded the same way, so `pack init`/`types` work with no installed version (an installed version's
+  `sdk/` wins when present). `--template base` copies the installed `content/base`.
+- **Asset manifest**: dot-files/dot-directories (`.vb/`, `.luarc.json`) and the pack-root `README.md`/`AGENTS.md`
+  are never advertised to clients; the pack loader skips dot-directories.
+- **CLI**: help text lives in `src/cli/help.cpp` beside (not inside) the command table; `docs/cli.md` is
+  `vb help --markdown`, checked by `dev_cli_help_test`. `vb help --json` exports the table. `error:`/`hint:`
+  replaced the old `vb:` prefix. `--json` added to `install`, `update`, `doctor`, `pack *`. Nothing prompts;
+  the only confirmation-style guard (`server rm`) already needed `--yes`.
+- **Release archive** gains `sdk/` and `docs/*.md|txt`; `vb docs [topic] [--path]` reads them from the selected
+  version (`vb docs vb.world.raycast` prints one reference section).

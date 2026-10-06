@@ -1,6 +1,6 @@
 name = "kitchen_sink"
 version = "0.1.0"
-# See content/base/pack.toml's own comment -- not read/enforced today.
+# Enforced by the engine; see content/base/pack.toml's comment.
 engine_version_req = "*"
 
 # Same load-order caveat as content/base's own pack.toml: real `require`

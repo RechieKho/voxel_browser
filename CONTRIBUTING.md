@@ -191,9 +191,26 @@ you're adding a new `vb.*`/`ui.*` binding:
   `content/base/crafting.lua`. If you're tempted to add something like
   `vb.craft_item(...)` directly to the engine, ask whether a smaller,
   more general primitive plus content-side logic gets you the same result.
-- Document the new binding in `docs/lua-api.md` in the same commit — it's
-  meant to stay a complete, example-driven reference, not something that
-  drifts behind the code.
+- **Add the stub in the same commit** (`sdk/lua/library/*.lua`, LuaCATS): a
+  one-line summary, `---@param`/`---@return` for every argument, a
+  ```` ```lua ```` example, and `---@vb context load|runtime|ui` (usertype
+  methods as `function Player:name(...) end`, definition tables as
+  `---@class` with one `---@field` per key). Then run
+  `python3 scripts/gen_lua_docs.py` and commit the regenerated
+  `docs/lua-reference/` and `sdk/lua/api_index.txt`. Two checks keep this
+  honest: `lua_api_surface_test` (live `vb`/`ui`/`client` tables and usertype
+  methods must equal `api_index.txt`; doc examples must compile) and the
+  `lua-docs` lint job (`gen_lua_docs.py --check`). A binding that is
+  deliberately internal goes in `sdk/lua/api_ignore.txt`.
+- Put narrative / design context in `docs/lua-api.md`; it stays the guide,
+  the generated reference is the lookup.
+- A new `vb` command or flag: add it to the command table *and* its entry in
+  `src/cli/help.cpp`, then `vb help --markdown > docs/cli.md`
+  (`dev_cli_help_test` fails on a stale file). Errors are `error:` + optional
+  `hint:` on stderr; commands that report state take `--json`.
+- Changing what a pack author can observe on the wire (`S2C_ServerInfo`, ...)
+  bumps `kEngineProtocolVersion` as usual; `pack.toml`'s `engine_version_req`
+  is enforced against `kVersionNumeric` (`vb::core::VersionReq`).
 - Add a demonstrating example to `content/base` if it's the kind of thing a
   pack author would actually use (see `crafting.lua`'s heavy comments for
   the expected level of explanation — a new contributor should be able to

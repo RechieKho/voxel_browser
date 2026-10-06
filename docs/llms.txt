@@ -1,0 +1,24 @@
+# Voxel Browser
+
+> A voxel game engine with a dedicated server, a client, and Lua-scripted content packs. Server logic, content and UI are written in sandboxed Lua 5.4; `vb` is the developer CLI.
+
+## Make a content pack
+- [Quick reference](lua-reference/README.md): every Lua function in one line, with a link to its signature and example
+- [Lua API guide](lua-api.md): the narrative design reference (registration, events, UI VM, sandbox)
+- [CLI reference](cli.md): every `vb` command, flags, exit codes, `--json` (`vb help --json` for tools)
+- [Events](lua-reference/events.md): every `vb.on` event and its handler signature
+- [Types](lua-reference/types.md): definition tables such as `BlockDef`, `EntityDef`, `PipelineDef`
+
+## Guides
+- [Structure editor](structure-editor.md): decorative structures for worldgen
+- [Authentication](auth.md): pack-level `auth.lua` identity providers
+- [Testing content/base](content-base-testing.md): layered tests for packs
+- [Base pack UI](content-base-ui.md): HUD and screens of the bundled pack
+
+## Protocol and automation
+- [Wire protocol](protocol.md): normative message formats
+- [Automation protocol](automation-protocol.md): JSON-lines driver for tests
+- [End-to-end automation](e2e-automation.md): the multiplayer test harness
+
+## Optional
+- [Replication](replication.md): interest management design

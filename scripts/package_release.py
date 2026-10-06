@@ -50,6 +50,14 @@ def content_files(content_dir):
         yield path, Path("content") / rel
 
 
+def tree_files(root_dir, top, suffixes):
+    """Files under ROOT/<top> with one of `suffixes`, archived under `top/`."""
+    base = root_dir / top
+    for path in sorted(base.rglob("*")):
+        if path.is_file() and not path.is_symlink() and path.suffix in suffixes:
+            yield path, Path(top) / path.relative_to(base)
+
+
 def build_info(version, platform, build_type):
     commit = git("rev-parse", "HEAD") or "unknown"
     describe = git("describe", "--tags", "--dirty", "--always") or version
@@ -105,6 +113,12 @@ def main():
         entries.append((fname, ROOT / fname, False))
     entries += [(str(arc.as_posix()), src, False)
                 for src, arc in content_files(ROOT / "content")]
+    # Offline developer docs and Lua stubs (`vb docs`, `vb pack types`): the release carries exactly
+    # the docs and API stubs of the engine it ships.
+    entries += [(str(arc.as_posix()), src, False)
+                for src, arc in tree_files(ROOT, "sdk", {".lua", ".txt", ".json", ".md"})]
+    entries += [(str(arc.as_posix()), src, False)
+                for src, arc in tree_files(ROOT, "docs", {".md", ".txt"})]
     entries.append(("BUILD_INFO.toml",
                     build_info(args.version, args.platform, args.build_type).encode(), False))
 

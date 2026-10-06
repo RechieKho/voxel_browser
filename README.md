@@ -154,6 +154,8 @@ Everything lives under your per-user data directory (`vb paths` prints it).
 vb launch                    # start the game
 vb host                      # host a server right here (Ctrl+C stops it, world saved)
 vb host --pack ./my_pack --watch   # develop a content pack: restarts when files change
+vb pack init my_pack                # scaffold a pack (then `vb pack check`, `vb pack dev`; see below)
+vb help <command>                   # every command, flags and examples (also: vb help --json)
 
 vb server new survival --port 27016   # a named server that keeps running in the background
 vb server start survival
@@ -185,6 +187,29 @@ A version a server is pinned to or running from is protected from
 Hacking on the engine? `vb link dev ./build && vb use dev` makes your local
 build behave like an installed version, so `vb launch` and `vb host` run it.
 The full design is in `architecture_spec/dev-cli.md`.
+
+### Make your first pack
+
+A content pack is a folder of Lua files (server logic, blocks, entities, biomes, client UI). `vb`
+scaffolds, validates and runs one without the engine sources:
+
+```bash
+vb pack init my_pack           # templates: minimal (default), ui, worldgen, base
+cd my_pack
+vb pack check                  # loads the pack headless; file:line errors (--json for tools, --strict)
+vb pack dev                    # hosts it, restarts on save, opens the client (--no-client to only host)
+```
+
+`vb pack init` writes `pack.toml` (with an enforced `engine_version_req`), `init.lua`, an example block
+and texture, a `README.md` and an `AGENTS.md` for humans and agents, and `.luarc.json` plus `.vb/lua/`
+LuaCATS stubs so the Lua Language Server (VS Code "Lua" by sumneko, Neovim, ...) completes the whole
+API. Files in `ui/` run in the client UI VM (`ui`, `client`); every other file runs in the server VM
+(`vb`) — `vb pack check` reports a mix-up with its line number.
+
+Reference, all shipped with each release and readable offline (`vb docs`): the
+[Lua quick reference](docs/lua-reference/README.md) (one line per function, generated from the stubs in
+`sdk/lua/`), the [CLI reference](docs/cli.md) (`vb help <command>`, `vb help --json`), and
+[`docs/llms.txt`](docs/llms.txt), an index for agents.
 
 ### Building from source
 
@@ -292,5 +317,6 @@ comment in `cmake/Dependencies.cmake`):
 
 `ARCHITECTURE_SPEC.md` (design) · `REMAINING_TASKS.md` (backlog) · `STATE.md`
 (gotchas) · `CONTRIBUTING.md` · `docs/lua-api.md` (scripting API) ·
+`docs/lua-reference/README.md` (Lua quick reference) · `docs/cli.md` (`vb` commands) · `docs/llms.txt` (index for agents) ·
 `docs/protocol.md` · `docs/auth.md` (player sign-in) · `docs/structure-editor.md` (structures and their editor) ·
 `architecture_spec/content-pack-format.md`.

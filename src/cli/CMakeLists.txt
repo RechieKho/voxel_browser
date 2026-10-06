@@ -10,6 +10,7 @@ vb_embed_files("${_vb_embedded_cpp}"
 add_library(vb_cli_lib STATIC
   ${_vb_embedded_cpp}
   embedded.cpp
+  help.cpp
   pack.cpp
   commands.cpp
   compat.cpp
