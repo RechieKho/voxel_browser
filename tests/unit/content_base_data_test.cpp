@@ -146,7 +146,8 @@ TEST_CASE("content/base biomes register with the right block names") {
 		assert(forest.surface == "base:grass")
 		assert(forest.filler == "base:dirt")
 		assert(forest.stone == "base:stone")
-		assert(forest.decoration == "trees")
+		assert(type(forest.decoration) == "table" and #forest.decoration == 4)
+		assert(type(plains.decoration) == "table" and #plains.decoration == 3)
 	)"));
 }
 
@@ -253,4 +254,68 @@ TEST_CASE("content/base's worldgen pipeline: two biomes, sand beaches, and a dry
 	const auto spawn = vb::worldgen::default_spawn_position(gen);
 	CHECK(gen.surface_height(static_cast<int>(std::floor(spawn.x)), static_cast<int>(std::floor(spawn.z))) >
 			pipeline->sea_level);
+}
+
+TEST_CASE("content/base's structures are placed by its biomes and appear in generated chunks") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, vb::test::content_base_storage("worldgen_structures"));
+	REQUIRE(vb::script::load_content_pack(rt, vb::test::content_base_dir()));
+	rt.freeze();
+	const auto valid = rt.validate_worldgen();
+	REQUIRE_MESSAGE(valid, valid.message);
+
+	vb::worldgen::WorldGenParams params;
+	params.seed = 20260705;
+	const auto pipeline = rt.build_worldgen_pipeline(params);
+	REQUIRE(pipeline != nullptr);
+
+	std::vector<std::string> names;
+	for (const auto &def : pipeline->structures) {
+		names.push_back(def.name);
+		CHECK_FALSE(def.variants.empty());
+		CHECK(def.radius_xz <= vb::worldgen::kMaxStructureDim);
+	}
+	std::sort(names.begin(), names.end());
+	CHECK(names == std::vector<std::string>{ "base:birch_tree", "base:boulder", "base:bush", "base:oak_tree" });
+
+	// Biomes: forest is index 0 (4 entries), plains index 1 (3).
+	REQUIRE(pipeline->decoration.size() == 2);
+	CHECK(pipeline->decoration[0].size() == 4);
+	CHECK(pipeline->decoration[1].size() == 3);
+	for (const auto &rules : pipeline->decoration) {
+		for (const auto &rule : rules) {
+			CHECK(rule.spawn_rate > 0.0);
+			REQUIRE_FALSE(rule.on.empty());
+		}
+	}
+
+	// Trees really show up: find a placement of each biome's oak and check its
+	// trunk base in the generated chunk is wood.
+	const vb::worldgen::WorldGenerator gen(params, registry, pipeline);
+	const auto placements = gen.structure_placements(-256, -256, 255, 255);
+	REQUIRE(placements.size() > 100);
+	bool forest_oak = false;
+	bool plains_oak = false;
+	bool boulder = false;
+	for (const auto &p : placements) {
+		const auto &rule = pipeline->decoration[p.biome][p.rule];
+		const auto &def = pipeline->structures[rule.structure];
+		forest_oak = forest_oak || (p.biome == 0 && def.name == "base:oak_tree");
+		plains_oak = plains_oak || (p.biome == 1 && def.name == "base:oak_tree");
+		boulder = boulder || def.name == "base:boulder";
+	}
+	CHECK(forest_oak);
+	CHECK(plains_oak);
+	CHECK(boulder);
+
+	// A forest is much denser than plains.
+	std::size_t forest = 0;
+	std::size_t plains = 0;
+	for (const auto &p : placements) {
+		(p.biome == 0 ? forest : plains)++;
+	}
+	INFO("forest " << forest << " plains " << plains);
+	CHECK(forest > 0);
+	CHECK(plains > 0);
 }

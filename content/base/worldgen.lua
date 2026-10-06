@@ -29,3 +29,13 @@ vb.worldgen.set_pipeline({
 	-- biome reads as a region.
 	cell_size = 256,
 })
+
+-- Decorative structures: structures/*.lua are data files written by the
+-- structure editor (vb_structure_editor, docs/structure-editor.md), and
+-- structures/all.lua returns every one of them. Biomes place them by name in
+-- their `decoration` lists. Block names inside them resolve after the whole pack
+-- has loaded, so this can sit here even though crafting.lua and others read block
+-- ids earlier.
+for _, structure in ipairs(require("structures.all")) do
+	vb.register_structure(structure)
+end

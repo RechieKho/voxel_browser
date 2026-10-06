@@ -217,3 +217,15 @@ TEST_CASE("vb structure edit launches the editor of the chosen version with the 
 	CHECK(which.out.find("vb_structure_editor") != std::string::npos);
 }
 #endif
+
+#if VB_WITH_LUA
+TEST_CASE("vb structure validate is clean for content/base") {
+	TempDir t;
+	const Layout l = test_layout(t.path);
+	const fs::path script = fs::path(VB_PROJECT_SOURCE_DIR) / "content" / "base" / "data" / "blocks.lua";
+	const Run r = run_vb(l, { "structure", "validate", script.string() });
+	CHECK_MESSAGE(r.code == 0, r.out << r.err);
+	CHECK(r.out.find("ok: pack 'base'") != std::string::npos);
+	CHECK(r.out.find("4 structure files") != std::string::npos);
+}
+#endif

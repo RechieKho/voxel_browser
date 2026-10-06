@@ -1615,7 +1615,8 @@ void EditorApp::draw_ui() {
 //   place|remove|paint|flood x,y,z      box|line x,y,z x,y,z
 //   mirror x|z|off                      slice <layer>        select x,y,z x,y,z
 //   copy|cut                            paste x,y,z          variant <n>
-//   generate <id> [seed]   bake <id> <n> [seed]   tab <0-4>   save
+//   set <generator> <key> <value>   generate <id> [seed]   bake <id> <n> [seed]
+//   rule key=value...   tab <0-4>   save
 void EditorApp::run_script(const std::string &script) {
 	std::stringstream commands(script);
 	std::string command;
@@ -1674,16 +1675,68 @@ void EditorApp::run_script(const std::string &script) {
 			if (n >= 1 && n <= 9) {
 				tool_ = kTools[n - 1];
 			}
+		} else if (w[0] == "set" && w.size() >= 4) {
+			// set <generator> <key> <value>: a generator parameter (a number
+			// or, for block parameters, a block name).
+			if (const Generator *g = find_generator(w[1])) {
+				ParamValues &values = gen_params_[g->id()];
+				if (values.empty()) {
+					values = default_params(*g);
+				}
+				ParamValue &v = values[w[2]];
+				v.number = std::atof(w[3].c_str());
+				v.text = w[3];
+			}
 		} else if (w[0] == "generate" && w.size() >= 2) {
 			if (const Generator *g = find_generator(w[1])) {
 				const auto seed = static_cast<std::uint64_t>(w.size() >= 3 ? std::atoll(w[2].c_str()) : 1);
-				session_->generate(*g, default_params(*g), seed);
+				ParamValues &values = gen_params_[g->id()];
+				session_->generate(*g, values.empty() ? default_params(*g) : values, seed);
 			}
 		} else if (w[0] == "bake" && w.size() >= 3) {
 			if (const Generator *g = find_generator(w[1])) {
 				const auto seed = static_cast<std::uint64_t>(w.size() >= 4 ? std::atoll(w[3].c_str()) : 1);
-				session_->bake(*g, default_params(*g), seed, std::atoi(w[2].c_str()));
+				ParamValues &values = gen_params_[g->id()];
+				session_->bake(*g, values.empty() ? default_params(*g) : values, seed, std::atoi(w[2].c_str()));
 			}
+		} else if (w[0] == "rule") {
+			// rule key=value...: the structure's placement defaults, keys on
+			// (comma list), replace, rotate, mirror, spacing, slope, cluster,
+			// ymin, ymax.
+			worldgen::PlacementSpec p = session_->doc().placement;
+			for (std::size_t i = 1; i < w.size(); ++i) {
+				const auto eq = w[i].find('=');
+				if (eq == std::string::npos) {
+					continue;
+				}
+				const std::string key = w[i].substr(0, eq);
+				const std::string value = w[i].substr(eq + 1);
+				if (key == "on") {
+					std::vector<std::string> names;
+					std::stringstream parts(value);
+					for (std::string part; std::getline(parts, part, ',');) {
+						names.push_back(part);
+					}
+					p.on = names;
+				} else if (key == "replace") {
+					p.replace = worldgen::parse_replace_policy(value);
+				} else if (key == "rotate") {
+					p.rotate = value == "1" || value == "true";
+				} else if (key == "mirror") {
+					p.mirror = value == "1" || value == "true";
+				} else if (key == "spacing") {
+					p.min_spacing = std::atoi(value.c_str());
+				} else if (key == "slope") {
+					p.max_slope = std::atoi(value.c_str());
+				} else if (key == "cluster") {
+					p.cluster = std::atof(value.c_str());
+				} else if (key == "ymin") {
+					p.y_min = std::atoi(value.c_str());
+				} else if (key == "ymax") {
+					p.y_max = std::atoi(value.c_str());
+				}
+			}
+			session_->set_placement(p);
 		} else if (w[0] == "tab" && w.size() >= 2) {
 			side_tab_ = static_cast<SideTab>(std::clamp(std::atoi(w[1].c_str()), 0, 4));
 			if (side_tab_ == SideTab::kPreview) {

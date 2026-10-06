@@ -1,6 +1,6 @@
 # Structure editor — design and phased plan
 
-> Status: **In progress: S0–S6 done, S7 planned.** Plans the "dedicated external structure
+> Status: **Implemented: S0–S7 done** (the optional in-game export in S7 was left out). Plans the "dedicated external structure
 > tool" that `architecture_spec/worldgen.md` §6 stage 6 and
 > `remaining_tasks/deferred.md` ("Rule-based decorative structure
 > placement") left for after the Lua worldgen pipeline. Phase 6.14 shipped
@@ -599,35 +599,36 @@ integrates and documents.
 
 ### S7 — Integration, docs, base content
 
-- [ ] `vb structure` CLI subcommands (`architecture_spec/dev-cli.md`):
+- [x] `vb structure` CLI subcommands (`architecture_spec/dev-cli.md`):
       `new`, `edit [block-data-script]` (launches the editor; the script
       defaults to `data/blocks.lua` in the current pack), and `validate`
       (headless: evaluate the block data and every structure file with
       `eval_data_script`, then report parse errors, block names missing
       from the block data, and structure files left out of `all.lua`).
       `new` writes an empty structure file and updates `all.lua`.
-- [ ] Docs: `docs/lua-api.md` (`vb.register_structure`, the new
+- [x] Docs: `docs/lua-api.md` (`vb.register_structure`, the new
       decoration entry form, `replaceable`),
       `architecture_spec/worldgen.md` stage 6 rewritten to describe pull
       stamping, a new "Structure editor" section in `README.md`, and
       `remaining_tasks/deferred.md` updated: this item marked done and the
       runtime-callback item narrowed as in F.
-- [ ] Base content: oak and birch trees, a bush, and a boulder made in the
+- [x] Base content: oak and birch trees, a bush, and a boulder made in the
       editor, registered with one `structures.all` loop in
       `blocks/register.lua` (or a new root module), and used by
       `base:forest` and `base:plains`. **This depends on the
       open question below** about moving `content/base` onto
       `set_pipeline`.
-- [ ] Optional: an in-game export command (singleplayer, automation build
+- [ ] Optional (not done): an in-game export command (singleplayer, automation build
       only) that captures a selected region with the same `StructureWriter`.
 
 ## Open questions
 
 1. **Should `content/base` move onto `vb.worldgen.set_pipeline`?** Base
    trees need it, but it changes the default world's terrain (a new golden
-   and new spawn behavior). The recommendation is yes, as its own task
-   before the base-content part of S7, so the terrain change and the tree
-   change can be reviewed separately.
+   and new spawn behavior). **Resolved: yes**, in its own commit before the
+   trees (`content/base/worldgen.lua`): same height range, sea level and soil
+   depth, different noise salting, and an optional `beach = "base:sand"`
+   pipeline field added so beaches survive the move.
 2. **Size cap.** 64³ is plenty for trees and rocks. Ruins or villages would
    need bigger pieces or a jigsaw/assembly system. Treat that as a separate
    feature and don't raise the cap.
@@ -643,3 +644,34 @@ integrates and documents.
 5. **Hot reload into a running singleplayer world.** Useful, but server-side
    hot reload is deferred as a whole. Preview mode (S6) covers the need for
    now.
+
+## What was built, and where it differs from the plan
+
+Everything in S0–S7 above is implemented, with these notes:
+
+- **Where things live.** The headless model is `vb_editor_model`
+  (`src/editor/model/`, `inc/vb/editor/`): `Volume`, `StructureDoc` (cells are
+  indices into a name table, with 0 = keep), `StructureWriter`, `BlockCatalog`,
+  `Workspace`, `EditSession` (every tool, undo/redo, variants, placement),
+  `generators`, `TerrainPreview` and `validate_pack`. `vb_structure_editor`
+  (`src/editor/app/`) is drawing and input. The structure *format* types and
+  placement live in the engine (`inc/vb/worldgen/structure.hpp`,
+  `src/worldgen/structure*.cpp`), shared with the editor.
+- **Unknown block names.** `PackRuntime::validate_worldgen()` (called after
+  `freeze()` by the server and `--singleplayer`) reports unknown block and
+  structure names and an unknown pipeline `beach`; `build_worldgen_pipeline`
+  logs the same and builds without decoration instead of crashing.
+- **`min_spacing`** is implemented as a jittered grid with cell side
+  `2 * min_spacing`, which guarantees anchors are at least `min_spacing` apart
+  on some axis (see `architecture_spec/worldgen.md` §6).
+- **Spawn rate in the editor** is a preview-only setting; real density lives in
+  the biome entry that uses the structure.
+- **Rotational symmetry** from the editing design (§I) was not built; mirror X
+  and Z (the S4 task list) were.
+- **Dev hooks.** `vb_structure_editor --check` prints a headless summary (a
+  ctest runs it on `content/base`), and `--script "cmd;cmd"` with
+  `--screenshot <png>` drives the editor for screenshot tests; the structures
+  shipped in `content/base` were made that way (seeded generators, `Bake ×N`,
+  `save`). See the comment above `EditorApp::run_script`.
+- **Packaging.** `vb_structure_editor` is added to release archives when it was
+  built, `vb which editor` finds it, and `vb structure edit` launches it.

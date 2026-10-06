@@ -54,15 +54,47 @@ Pipeline, executed on a pool of **worldgen worker threads**, deterministic from
    height_range, vein_size, spawn_rate}`; the engine deterministically
    scatters them per chunk (same `(seed, coord)`-seeded RNG as decoration)
    — Lua supplies the table, engine does the placement.
-6. **Decoration / population pass** — runs once *neighbors are generated* so
-   trees/structures may cross chunk borders. Deterministic per-chunk RNG seeded
-   from `(seed, coord)`. Trees etc. are defined in Lua as schematics or
-   procedural callbacks. **Further out (post this pipeline landing, see
-   `REMAINING_TASKS.md`'s Deferred section):** a dedicated external structure
-   tool exporting into the schematic format, plus declarative placement rules
-   (neighbor-block constraints, clustering tendency, biome/density weighting)
-   evaluated by this pass, instead of every structure needing a hand-written
-   procedural callback. Design and phased plan: `docs/structure-editor.md`.
+6. **Decoration / population pass** — structures (trees, bushes, boulders,
+   ruins) placed by declarative rules, crossing chunk borders without ordering
+   dependencies between worker jobs ("pull" stamping; `src/worldgen/
+   structure_placement.cpp`, design in `docs/structure-editor.md` §E).
+   - **Data.** A structure is a data file (`vb.register_structure`,
+     `structures/*.lua`, written by the structure editor): size, anchor, a
+     palette of block *names*, one or more weighted variants, and default
+     placement fields (`on`, `replace`, `rotate`, `mirror`, `min_spacing`,
+     `cluster`, `max_slope`, `y_min`/`y_max`). A biome's `decoration` list
+     references structures by name with a `spawn_rate` and optional field
+     overrides. The resolved form (`worldgen::StructureDef` /
+     `PlacementRule`) is plain data with no Lua, safe on worker threads.
+   - **Anchors belong to columns, not chunks.** Each rule has a global jittered
+     grid keyed by `(world seed, grid cell, rule)`: cell side `2 * min_spacing`,
+     anchor jittered over `[0, min_spacing]` inside it (so anchors are at
+     least `min_spacing` apart on some axis), kept with a probability derived
+     from `spawn_rate` (expected placements per 32×32 column), optionally
+     multiplied by low-frequency noise when `cluster > 0` (the mean is
+     preserved). The weighted variant, rotation (0–3 quarter turns about +y)
+     and mirror come from the same per-anchor RNG.
+   - **Validity reads only pre-decoration terrain.** The biome *at the anchor*
+     must be the rule's biome; the ground block (`WorldGenerator::
+     block_at_pregen`: surface, filler, stone, carvers, water — never a
+     neighbor chunk's voxels) must be in `on` (any solid block if empty); the
+     cell above it must be air and the ground at or above sea level; the
+     ground height must lie in `y_min..y_max`; and the heights under the
+     rotated footprint (sampled) must differ by at most `max_slope`.
+   - **Each chunk pulls.** A chunk enumerates the placements within the
+     largest structure radius of its footprint and stamps only its own cells,
+     in the canonical order `(anchor x, z, biome, rule)`, so overlaps resolve
+     identically from every chunk. `replace` is `"air"`, `"air_and_plants"`
+     (air or a block registered `replaceable`) or `"all"`; an explicit
+     `base:air` cell always carves. Every vertical chunk of a column sees the
+     same placements.
+   - **Procedural variety without callbacks.** The structure editor's seeded
+     generators (tree, bush, boulder, fallen log) fill a volume at authoring
+     time and "Bake ×N" stores N variants; the engine only picks one. A true
+     runtime callback that reacts to its surroundings stays deferred
+     (`REMAINING_TASKS.md`, Deferred section).
+   - The inline `{blocks = {{x=,y=,z=,block=}}}` form still works as an
+     anonymous one-variant structure (`replace = "all"`, no rotation).
 7. **Lighting** — initial sky/block light flood fill.
 
 Generated chunks are inserted into the world with `revision = 1` and flagged for

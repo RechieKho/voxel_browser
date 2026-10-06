@@ -96,6 +96,38 @@ automation/e2e CI job has likewise not run on GitHub yet.
 
 ---
 
+## 🌲 Structure editor
+
+Biome decorations (trees, bushes, boulders, ruins) are data files in a
+content pack's `structures/` folder, placed by declarative per-biome rules that
+work across chunk borders. `vb_structure_editor` is a standalone voxel tool for
+making them (design and file format: `docs/structure-editor.md`):
+
+```bash
+# build it (on by default with the client and Lua: -DVB_WITH_LUA=ON)
+cmake --build build --target vb_structure_editor
+
+# open a pack by its block data script (a Lua file returning block tables)
+./build/vb_structure_editor content/base/data/blocks.lua [--open base:oak_tree]
+# or, with an installed or linked version:
+vb structure edit content/base/data/blocks.lua
+vb structure new base:willow --size 7x10x7   # empty file + structures/all.lua
+vb structure validate                         # headless checks for CI
+```
+
+Orbit with the right mouse button, pan with Shift+right or middle, zoom with the
+wheel. Tools are on `1`–`9` (place, remove, paint, pick block, box, line, flood,
+select, anchor); Shift+click removes, Ctrl+click picks the block under the
+cursor, Alt+click paints; `X`/`Z` toggle mirroring; `Ctrl+Z`/`Ctrl+Y` undo and
+redo, `Ctrl+S` saves, `F5` reloads the pack. The side panel has the block
+palette, seeded generators (tree, bush, boulder, fallen log) with "Bake ×N" to
+store variants, a variant list with weights, the placement rule, and a live
+terrain preview that runs the engine's real placement code on test terrain
+(fly with WASD, Q/E and the right mouse button). It reads data scripts only and
+writes just `structures/<name>.lua` and `structures/all.lua`.
+
+---
+
 ## 💻 Getting Started
 
 ### Install and run with `vb`
@@ -252,4 +284,5 @@ comment in `cmake/Dependencies.cmake`):
 
 `ARCHITECTURE_SPEC.md` (design) · `REMAINING_TASKS.md` (backlog) · `STATE.md`
 (gotchas) · `CONTRIBUTING.md` · `docs/lua-api.md` (scripting API) ·
-`docs/protocol.md` · `architecture_spec/content-pack-format.md`.
+`docs/protocol.md` · `docs/structure-editor.md` (structures and their editor) ·
+`architecture_spec/content-pack-format.md`.
