@@ -25,6 +25,7 @@ ScriptResult PackRuntime::load_pack_file(std::string_view, std::string_view) {
 		"scripting disabled (built without VB_WITH_LUA)" };
 }
 void PackRuntime::freeze() {}
+ScriptResult PackRuntime::validate_worldgen() const { return ScriptResult::success(); }
 void PackRuntime::install_join_veto(net::HandshakeServerHost &) {}
 void PackRuntime::set_auth_required(bool) {}
 void PackRuntime::install_keybind_registry(net::HandshakeServerHost &) {}
@@ -99,7 +100,9 @@ std::uint64_t PackRuntime::storage_revision() const { return 0; }
 #include "vb/protocol/chat.hpp"
 #include "vb/protocol/input.hpp"
 #include "vb/protocol/inventory.hpp"
+#include "vb/script/block_def.hpp"
 #include "vb/script/db.hpp"
+#include "vb/script/structure_def.hpp"
 #include "vb/script/vm_internal.hpp"
 #include "vb/world/raycast.hpp"
 #include "vb/worldgen/fastnoise2_compile.hpp"
@@ -612,6 +615,8 @@ struct PackRuntime::Impl {
 	std::optional<core::EntityKindId> player_kind_id;
 	std::optional<core::EntityKindId> item_drop_kind_id;
 	std::vector<BiomeDef> biomes;
+	// Structure editor S1: every vb.register_structure call, in order.
+	std::vector<worldgen::StructureSpec> structure_specs;
 	std::vector<CraftDef> crafts;
 	// Phase 6.3: vb.register_keybind names, order == bit index into every
 	// InputCmd::keybinds -- capped at S2CKeybindRegistry::kMaxKeybinds so the
@@ -811,6 +816,11 @@ struct PackRuntime::Impl {
 	// default path). See PackRuntime::build_worldgen_pipeline's own comment.
 	std::shared_ptr<const worldgen::PackWorldGenPipeline> build_worldgen_pipeline(
 			const worldgen::WorldGenParams &base) const;
+	// Structure editor S1: resolves registered structures and parses every
+	// biome's `decoration` against the (frozen) block registry. Returns an
+	// error string naming the offender, or empty on success.
+	std::string build_decoration(std::vector<worldgen::StructureDef> &structures,
+			std::vector<std::vector<worldgen::PlacementRule>> &decoration) const;
 
 	template <typename... Args>
 	void fire(const std::string &event, Args &&...args) {
@@ -1243,44 +1253,8 @@ void PackRuntime::Impl::install_bindings() {
 		if (name.empty()) {
 			throw sol::error("vb.register_block: 'name' is required");
 		}
-		world::BlockType type;
-		type.solid = def.get_or("solid", true);
-		type.opaque = def.get_or("opaque", true);
-		type.liquid = def.get_or("liquid", false);
-		// Phase 7.3: generic per-tick occupancy tracking opt-in (region_enter/
-		// region_exit) -- independent of `liquid`, but every liquid block
-		// defaults to opting in (matches base:water); non-liquid custom
-		// blocks default false and must opt in explicitly.
-		type.region = def.get_or("region", type.liquid);
-		type.light_emission =
-				static_cast<std::uint8_t>(def.get_or("light", 0));
-		type.texture = def.get_or("texture", std::string{});
-		// Phase 6.5 (spec §10.7): 0 (default) = today's instant break.
-		type.max_damage = static_cast<std::uint16_t>(def.get_or("max_damage", 0));
-		// Phase 6.5 (spec §5.2/§10.7): optional crack-stage spritesheet
-		// override, empty = engine's own built-in generic crack overlay.
-		type.crack_texture = def.get_or("crack_texture", std::string{});
-		// Phase 6.9 (spec §11.1): stack cap for this item, engine default
-		// unless overridden.
-		type.max_stack = static_cast<std::uint16_t>(
-				def.get_or("max_stack", static_cast<int>(world::kDefaultMaxStackSize)));
-		// Phase 6.11: per-item dropped-instance overrides, ItemDropSystem's own
-		// construction-time defaults unless set (negative = no override).
-		type.pickup_radius = def.get_or("pickup_radius", -1.0);
-		type.drop_lifetime_seconds = def.get_or("item_lifetime_seconds", -1.0);
-		const core::BlockId id = registry.add_or_get(name, type);
-		// add_or_get is a no-op on an already-registered name (see its own
-		// comment) -- set_texture() is the one field this pass needs to
-		// still land for a block a hardcoded BlockRegistry::base() default
-		// (or an earlier pack file) already registered, e.g.
-		// content/base/blocks/stone.lua/water.lua re-declaring an existing
-		// Phase 2 block purely to attach a texture.
-		if (!type.texture.empty()) {
-			registry.set_texture(id, type.texture);
-		}
-		if (!type.crack_texture.empty()) {
-			registry.set_crack_texture(id, type.crack_texture);
-		}
+		world::BlockType type = parse_block_type(def);
+		const core::BlockId id = register_block_type(registry, type);
 		auto it = std::find_if(blocks.begin(), blocks.end(),
 				[&](const BlockDef &b) { return b.name == name; });
 		if (it == blocks.end()) {
@@ -1361,6 +1335,20 @@ void PackRuntime::Impl::install_bindings() {
 			throw sol::error("vb.register_biome: registry already frozen");
 		}
 		biomes.push_back({ def.get_or("name", std::string{}), def });
+	};
+
+	vb["register_structure"] = [this](sol::table def) {
+		if (frozen) {
+			throw sol::error("vb.register_structure: registry already frozen");
+		}
+		worldgen::StructureSpec spec = parse_structure(def);
+		for (const auto &existing : structure_specs) {
+			if (existing.name == spec.name) {
+				throw sol::error("vb.register_structure: structure '" + spec.name +
+						"' is already registered");
+			}
+		}
+		structure_specs.push_back(std::move(spec));
 	};
 
 	vb["register_craft"] = [this](sol::table def) {
@@ -2831,6 +2819,162 @@ worldgen::NoiseNodePtr PackRuntime::Impl::parse_noise_node(
 	return node;
 }
 
+std::string PackRuntime::Impl::build_decoration(std::vector<worldgen::StructureDef> &structures,
+		std::vector<std::vector<worldgen::PlacementRule>> &decoration) const {
+	structures.clear();
+	decoration.clear();
+	std::string error;
+	for (const auto &spec : structure_specs) {
+		worldgen::StructureDef def;
+		if (!worldgen::resolve_structure(spec, registry, def, error)) {
+			return error;
+		}
+		structures.push_back(std::move(def));
+	}
+	const auto find_structure = [&](const std::string &name) -> int {
+		for (std::size_t i = 0; i < structure_specs.size(); ++i) {
+			if (structure_specs[i].name == name) {
+				return static_cast<int>(i);
+			}
+		}
+		return -1;
+	};
+
+	for (const auto &b : biomes) {
+		std::vector<worldgen::PlacementRule> out;
+		const sol::object deco_obj = b.raw.get<sol::object>("decoration");
+		// A plain string (content/base's `decoration = "trees"`) records
+		// intent only and is ignored, same as before structures existed.
+		if (deco_obj.get_type() == sol::type::table) {
+			const std::string who = "biome '" + b.name + "' decoration";
+			std::size_t entry_index = 0;
+			for (const auto &kv : deco_obj.as<sol::table>()) {
+				++entry_index;
+				if (kv.second.get_type() != sol::type::table) {
+					continue;
+				}
+				const sol::table entry_tbl = kv.second.as<sol::table>();
+				const std::string ctx = who + " entry " + std::to_string(entry_index);
+				double spawn_rate = 0.0;
+				const sol::object rate_obj = entry_tbl.get<sol::object>("spawn_rate");
+				if (rate_obj.get_type() == sol::type::number) {
+					spawn_rate = rate_obj.as<double>();
+				}
+
+				const sol::object structure_obj = entry_tbl.get<sol::object>("structure");
+				worldgen::PlacementRule rule;
+				if (structure_obj.get_type() == sol::type::string) {
+					const std::string sname = structure_obj.as<std::string>();
+					const int index = find_structure(sname);
+					if (index < 0) {
+						return ctx + ": unknown structure '" + sname + "'";
+					}
+					worldgen::PlacementSpec over;
+					try {
+						over = parse_placement(entry_tbl, ctx, { "structure", "spawn_rate" });
+					} catch (const sol::error &e) {
+						return e.what();
+					}
+					const auto &spec = structure_specs[static_cast<std::size_t>(index)];
+					if (!worldgen::resolve_placement(static_cast<std::uint32_t>(index), spawn_rate,
+								worldgen::merge_placement(spec.placement, over), registry, ctx,
+								rule, error)) {
+						return error;
+					}
+				} else {
+					// Inline `{blocks = {{x=,y=,z=,block=}, ...}}` form: an
+					// anonymous one-variant structure that overwrites
+					// everything and never rotates.
+					const sol::optional<sol::table> blocks_tbl = entry_tbl["blocks"];
+					struct Offset {
+						int x, y, z;
+						core::BlockId block;
+					};
+					std::vector<Offset> offsets;
+					if (blocks_tbl) {
+						for (const auto &bkv : *blocks_tbl) {
+							if (bkv.second.get_type() != sol::type::table) {
+								continue;
+							}
+							const sol::table bo = bkv.second.as<sol::table>();
+							const std::string bname = bo.get_or("block", std::string{});
+							offsets.push_back({ bo.get_or("x", 0), bo.get_or("y", 0),
+									bo.get_or("z", 0),
+									bname.empty() ? core::BlockId::kAir : registry.find(bname) });
+						}
+					}
+					if (offsets.empty()) {
+						continue;
+					}
+					core::IVec3 lo{ offsets[0].x, offsets[0].y, offsets[0].z };
+					core::IVec3 hi = lo;
+					for (const Offset &o : offsets) {
+						lo = { std::min(lo.x, o.x), std::min(lo.y, o.y), std::min(lo.z, o.z) };
+						hi = { std::max(hi.x, o.x), std::max(hi.y, o.y), std::max(hi.z, o.z) };
+					}
+					const core::IVec3 size{ hi.x - lo.x + 1, hi.y - lo.y + 1, hi.z - lo.z + 1 };
+					if (size.x > worldgen::kMaxStructureDim || size.y > worldgen::kMaxStructureDim ||
+							size.z > worldgen::kMaxStructureDim) {
+						return ctx + ": inline blocks span more than " +
+								std::to_string(worldgen::kMaxStructureDim) + " blocks";
+					}
+					worldgen::StructureDef anon;
+					anon.name = b.name + "#inline" + std::to_string(entry_index);
+					anon.anchor = { -lo.x, -lo.y, -lo.z };
+					anon.radius_xz = std::max({ anon.anchor.x, size.x - 1 - anon.anchor.x,
+							anon.anchor.z, size.z - 1 - anon.anchor.z });
+					worldgen::StructureVariant variant;
+					variant.size = size;
+					variant.cells.assign(
+							static_cast<std::size_t>(size.x) * static_cast<std::size_t>(size.y) *
+									static_cast<std::size_t>(size.z),
+							worldgen::kKeepCell);
+					for (const Offset &o : offsets) {
+						const std::size_t idx =
+								(static_cast<std::size_t>(o.y - lo.y) * static_cast<std::size_t>(size.z) +
+										static_cast<std::size_t>(o.z - lo.z)) *
+										static_cast<std::size_t>(size.x) +
+								static_cast<std::size_t>(o.x - lo.x);
+						variant.cells[idx] = o.block;
+					}
+					anon.variants.push_back(std::move(variant));
+					rule.structure = static_cast<std::uint32_t>(structures.size());
+					structures.push_back(std::move(anon));
+					rule.spawn_rate = spawn_rate;
+					rule.replace = worldgen::ReplacePolicy::kAll;
+					rule.rotate = false;
+					rule.mirror = false;
+					rule.min_spacing = 1;
+					rule.max_slope = 1 << 20;
+					rule.y_min = -(1 << 20);
+					rule.y_max = 1 << 20;
+				}
+				out.push_back(std::move(rule));
+			}
+		}
+		decoration.push_back(std::move(out));
+	}
+	return {};
+}
+
+ScriptResult PackRuntime::validate_worldgen() const {
+	if (impl_->worldgen_pipeline_table) {
+		const std::string beach = impl_->worldgen_pipeline_table->get_or("beach", std::string{});
+		if (!beach.empty() && impl_->registry.find(beach) == core::BlockId::kAir &&
+				impl_->registry.get(core::BlockId::kAir).name != beach) {
+			return { false, core::ScriptError::kRuntime,
+				"vb.worldgen.set_pipeline: 'beach' names unknown block '" + beach + "'" };
+		}
+	}
+	std::vector<worldgen::StructureDef> structures;
+	std::vector<std::vector<worldgen::PlacementRule>> decoration;
+	const std::string err = impl_->build_decoration(structures, decoration);
+	if (err.empty()) {
+		return ScriptResult::success();
+	}
+	return { false, core::ScriptError::kRuntime, err };
+}
+
 std::shared_ptr<const worldgen::PackWorldGenPipeline> PackRuntime::Impl::build_worldgen_pipeline(
 		const worldgen::WorldGenParams &base) const {
 	if (!worldgen_pipeline_table) {
@@ -2864,6 +3008,9 @@ std::shared_ptr<const worldgen::PackWorldGenPipeline> PackRuntime::Impl::build_w
 	};
 	pipeline->sea_level = def.get_or("sea_level", base.sea_level);
 	pipeline->soil_depth = def.get_or("soil_depth", base.soil_depth);
+	if (const std::string beach = def.get_or("beach", std::string{}); !beach.empty()) {
+		pipeline->beach = registry.find(beach);
+	}
 
 	// Biomes: every vb.register_biome entry becomes a worldgen::BiomeEntry,
 	// resolved surface/filler/stone block ids and a same-order adjacency
@@ -2906,42 +3053,22 @@ std::shared_ptr<const worldgen::PackWorldGenPipeline> PackRuntime::Impl::build_w
 	pipeline->biomes = worldgen::BiomeSelector(base.seed, cell_size, entries);
 
 	// Decoration: index-aligned with `entries`/`pipeline->biomes` -- always
-	// push one (possibly empty) list per biome so decoration_for()'s index
-	// lookup stays valid. `decoration` may be a plain string (content/base's
-	// existing pre-6.14 usage, e.g. `decoration = "trees"`) -- captured but
-	// intentionally not a schematic, unchanged behavior from before this
-	// item landed.
-	for (const auto &b : biomes) {
-		std::vector<worldgen::DecorationEntry> out;
-		const sol::object deco_obj = b.raw["decoration"];
-		if (deco_obj.get_type() == sol::type::table) {
-			const sol::table deco_list = deco_obj.as<sol::table>();
-			for (const auto &kv : deco_list) {
-				if (kv.second.get_type() != sol::type::table) {
-					continue;
-				}
-				const sol::table entry_tbl = kv.second.as<sol::table>();
-				worldgen::DecorationEntry de;
-				de.spawn_rate = entry_tbl.get_or("spawn_rate", 0.0);
-				const sol::optional<sol::table> blocks_tbl = entry_tbl["blocks"];
-				if (blocks_tbl) {
-					for (const auto &bkv : *blocks_tbl) {
-						if (bkv.second.get_type() != sol::type::table) {
-							continue;
-						}
-						const sol::table bo = bkv.second.as<sol::table>();
-						worldgen::DecorationEntry::BlockOffset off;
-						off.offset = { bo.get_or("x", 0), bo.get_or("y", 0),
-							bo.get_or("z", 0) };
-						const std::string bname = bo.get_or("block", std::string{});
-						off.block = bname.empty() ? core::BlockId::kAir : registry.find(bname);
-						de.blocks.push_back(off);
-					}
-				}
-				out.push_back(std::move(de));
-			}
+	// one (possibly empty) rule list per biome so decoration_for()'s index
+	// lookup stays valid. See build_decoration.
+	{
+		const std::string err = build_decoration(pipeline->structures, pipeline->decoration);
+		if (!err.empty()) {
+			// validate_worldgen() already reports this at startup; a caller
+			// that skipped it gets terrain with no decoration, not a crash.
+			VB_ERROR("script", "worldgen decoration disabled: ", err);
+			pipeline->structures.clear();
+			pipeline->decoration.assign(biomes.size(), {});
 		}
-		pipeline->decoration.push_back(std::move(out));
+		pipeline->replaceable.assign(registry.size(), 0);
+		for (std::size_t i = 0; i < registry.size(); ++i) {
+			pipeline->replaceable[i] =
+					registry.get(static_cast<core::BlockId>(i)).replaceable ? 1 : 0;
+		}
 	}
 
 	// Carvers (spec §6 stage 4) and veins (stage 5): top-level pipeline

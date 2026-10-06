@@ -190,6 +190,10 @@ inline vb::script::PackRuntime make_singleplayer_pack_runtime(
 				  << "running with the hardcoded base block set only\n";
 	}
 	rt.freeze();
+	if (const auto worldgen_check = rt.validate_worldgen(); !worldgen_check) {
+		std::cerr << "client: singleplayer content pack has invalid worldgen data ("
+				  << worldgen_check.message << ") -- decoration disabled\n";
+	}
 	return rt;
 }
 

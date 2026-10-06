@@ -1,13 +1,20 @@
--- base:plains -- declarative only. `vb.register_biome` (src/script/
--- pack_runtime.cpp) captures this table but nothing reads it back yet: the
--- server's WorldGenerator is still the Phase 2 hardcoded fBm-heightmap
--- pipeline (src/worldgen/generator.cpp), not the Lua-driven
--- `vb.worldgen.set_pipeline` one the spec describes (§10.3) --
--- REMAINING_TASKS.md 4.2/2.2 track that swap as a separate, unstarted
--- follow-up. Kept here as the pack-format placeholder for when it lands.
+-- base:plains -- open grassland with the odd tree, bush and boulder.
+-- A biome registered with vb.register_biome only takes effect once a pack calls
+-- vb.worldgen.set_pipeline; content/base does in worldgen.lua. `probability` is
+-- this biome's weight when each Voronoi cell picks one (the larger, the more
+-- common). Each `decoration` entry names a structure registered in
+-- worldgen.lua; `spawn_rate` is the expected number of placements per 32x32
+-- column, and any placement field of the structure (on, min_spacing, ...) could
+-- be overridden here too.
 vb.register_biome({
 	name = "base:plains",
 	surface = "base:grass",
 	filler = "base:dirt",
 	stone = "base:stone",
+	probability = 3.0,
+	decoration = {
+		{ structure = "base:oak_tree", spawn_rate = 0.4 },
+		{ structure = "base:bush", spawn_rate = 1.2 },
+		{ structure = "base:boulder", spawn_rate = 0.15 },
+	},
 })

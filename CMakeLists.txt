@@ -101,6 +101,14 @@ option(VB_WITH_WORLDGEN  "FastNoise2 world generation (Phase 2)"              OF
 option(VB_WITH_AUTH      "In-engine authentication via a pack-level auth.lua (architecture_spec/auth.md); OFF = a pack that declares auth.lua refuses to start" ON)
 option(VB_WITH_COMPRESSION "LZ4 + xxHash chunk/asset codecs (Phase 2/4)"      OFF)
 
+# The structure editor needs the renderer (client) and Lua (data scripts).
+if(VB_BUILD_CLIENT AND VB_WITH_LUA AND NOT VB_HEADLESS)
+  set(VB_BUILD_EDITOR_DEFAULT ON)
+else()
+  set(VB_BUILD_EDITOR_DEFAULT OFF)
+endif()
+option(VB_BUILD_EDITOR   "Build the structure editor (vb_structure_editor)"   ${VB_BUILD_EDITOR_DEFAULT})
+
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   set(VB_TESTS_DEFAULT_HEADLESS ON)
 endif()

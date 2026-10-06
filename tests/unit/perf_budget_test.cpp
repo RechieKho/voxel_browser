@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
+#include <cmath>
+#include <memory>
 #include <vector>
 
 #include "vb/protocol/snapshot.hpp"
@@ -16,6 +18,7 @@
 #include "vb/world/client_chunk_store.hpp"
 #include "vb/world/lighting.hpp"
 #include "vb/worldgen/generator.hpp"
+#include "vb/worldgen/structure.hpp"
 
 using namespace vb::world;
 using vb::core::ChunkCoord;
@@ -106,6 +109,68 @@ TEST_CASE("chunk mesh time for a representative surface chunk stays under "
 	// real algorithmic regression (e.g. an accidental O(n^2) pass over the
 	// chunk).
 	CHECK(best_ms < 100.0);
+}
+
+TEST_CASE("generating a decoration-heavy chunk stays under a generous budget "
+		  "(structure pull-stamping, docs/structure-editor.md section E)") {
+	const BlockRegistry registry = BlockRegistry::base();
+	auto pipeline = std::make_shared<wg::PackWorldGenPipeline>();
+	pipeline->height_field = [](double x, double z) {
+		return 66.0 + std::sin(x * 0.05) * 4.0 + std::cos(z * 0.07) * 4.0;
+	};
+	pipeline->sea_level = 62;
+	std::vector<wg::BiomeEntry> entries(1);
+	entries[0].name = "perf:plains";
+	entries[0].surface = registry.find("base:grass");
+	entries[0].filler = registry.find("base:dirt");
+	entries[0].stone = registry.find("base:stone");
+	entries[0].adjacency = { 1.0 };
+	pipeline->biomes = wg::BiomeSelector(1, 128.0, entries);
+	pipeline->replaceable.assign(registry.size(), 0);
+
+	// Three dense rules on a 9x9x9 structure: the worst case for the nine-
+	// column search is many large overlapping anchors per chunk.
+	wg::StructureDef big;
+	big.name = "perf:big";
+	big.anchor = { 4, 0, 4 };
+	big.radius_xz = 4;
+	wg::StructureVariant v;
+	v.size = { 9, 9, 9 };
+	v.cells.assign(9 * 9 * 9, registry.find("base:leaves"));
+	big.variants.push_back(std::move(v));
+	pipeline->structures.push_back(std::move(big));
+	pipeline->decoration.assign(1, {});
+	for (int i = 0; i < 3; ++i) {
+		wg::PlacementRule rule;
+		rule.structure = 0;
+		rule.spawn_rate = 16.0;
+		rule.min_spacing = 2 + i;
+		rule.rotate = true;
+		rule.mirror = true;
+		rule.cluster = 0.5;
+		rule.max_slope = 6;
+		pipeline->decoration[0].push_back(rule);
+	}
+
+	wg::WorldGenParams params;
+	params.seed = 42;
+	const wg::WorldGenerator gen(params, registry, pipeline);
+	const ChunkCoord coord{ 0, 2, 0 };
+
+	std::chrono::steady_clock::duration best = std::chrono::steady_clock::duration::max();
+	for (int i = 0; i < 3; ++i) {
+		Chunk chunk(coord);
+		const auto start = std::chrono::steady_clock::now();
+		gen.generate(chunk);
+		best = std::min(best, std::chrono::steady_clock::now() - start);
+	}
+	const auto best_ms =
+			std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(best)
+					.count();
+	const auto placements = gen.structure_placements(-4, -4, 35, 35);
+	REQUIRE(placements.size() > 20); // the budget is only meaningful with real work
+	INFO("decoration-heavy chunk generate: ", best_ms, " ms, ", placements.size(), " anchors");
+	CHECK(best_ms < 400.0);
 }
 
 TEST_CASE("S2CEntitySnapshot for a saturated interest set stays under a "

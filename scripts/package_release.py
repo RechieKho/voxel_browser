@@ -19,6 +19,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 BINARIES = ("voxel_browser", "voxel_browser_server", "vb")
+# Built only when the renderer and Lua are (VB_BUILD_EDITOR); shipped when present.
+OPTIONAL_BINARIES = ("vb_structure_editor",)
 EXTRA_FILES = ("server.toml.example", "client.toml.example")
 EXEC_ATTR = (0o100755 << 16)
 FILE_ATTR = (0o100644 << 16)
@@ -95,6 +97,10 @@ def main():
         if not src.is_file():
             sys.exit(f"package_release: missing {src}")
         entries.append((fname, src, True))
+    for name in OPTIONAL_BINARIES:
+        fname = exe_name(name, args.platform)
+        if (args.build_dir / fname).is_file():
+            entries.append((fname, args.build_dir / fname, True))
     for fname in EXTRA_FILES:
         entries.append((fname, ROOT / fname, False))
     entries += [(str(arc.as_posix()), src, False)

@@ -79,7 +79,18 @@ std::optional<fs::path> read_link_target(const fs::path &file) {
 } // namespace
 
 std::string binary_file_name(Binary which) {
-	const char *base = which == Binary::Client ? "voxel_browser" : "voxel_browser_server";
+	const char *base = "voxel_browser";
+	switch (which) {
+		case Binary::Client:
+			base = "voxel_browser";
+			break;
+		case Binary::Server:
+			base = "voxel_browser_server";
+			break;
+		case Binary::Editor:
+			base = "vb_structure_editor";
+			break;
+	}
 #if defined(_WIN32)
 	return std::string(base) + ".exe";
 #else

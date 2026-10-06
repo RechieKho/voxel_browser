@@ -60,6 +60,10 @@ struct BlockType {
 	// the first user, not a special case; a future lava/gas/poison-cloud
 	// block reuses this with zero engine changes.
 	bool region = false;
+	// Structure editor S0: marks a block a structure may overwrite when its
+	// placement rule says `replace = "air_and_plants"` (leaves, tall grass,
+	// and so on). Plain terrain (stone, dirt, ...) is never replaceable.
+	bool replaceable = false;
 };
 
 // Well-known ids in the Phase 2 base registry. Do not assume these hold once
@@ -98,6 +102,11 @@ public:
 	// solid/opaque/liquid/etc back to whatever it happened to also pass. A
 	// no-op if `id` is out of range.
 	void set_texture(core::BlockId id, std::string texture);
+
+	// Same posture as set_texture(), for `replaceable` -- lets a pack
+	// re-declaring a built-in block (base:leaves) flag it without disturbing
+	// the fields add_or_get already froze. A no-op if `id` is out of range.
+	void set_replaceable(core::BlockId id, bool replaceable);
 
 	// Same posture as set_texture(), for `crack_texture` -- a pack
 	// re-declaring an already-registered block purely to attach a crack

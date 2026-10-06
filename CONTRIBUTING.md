@@ -19,6 +19,7 @@ The engine is split into two static libraries plus three executables
 | `vb_render`              | Client-only rendering (raylib + raygui). Never linked by the server. |
 | `voxel_browser`          | The client ("the browser") executable — `src/client/main.cpp` (CLI/window setup) + `ClientApp` (`client_app.cpp`, the per-frame state machine shared by windowed and `--headless`). |
 | `voxel_browser_server`   | The authoritative, headless server executable — `src/server/main.cpp`. |
+| `vb_structure_editor`    | The structure editor — `src/editor/app/` (optional, see the `editor` row below). |
 | `vb_tests`               | Unit + integration tests (doctest) — `tests/unit/*.cpp`.       |
 
 `vb_core` is assembled from per-module subdirectories, each with its own
@@ -37,6 +38,7 @@ The engine is split into two static libraries plus three executables
 | `assetsync`    | `src/assetsync/`, `inc/vb/assetsync/` | Content-pack manifest hashing + client-side content-addressed cache. |
 | `script`       | `src/script/`, `inc/vb/script/` | Embedded Lua VM (`vb::script::Vm`), the server pack API (`PackRuntime`), the client UI VM (`UiRuntime`), the content-pack loader. |
 | `automation`   | `src/automation/`, `inc/vb/automation/` | **Dev-only** (`VB_WITH_AUTOMATION`): JSON-lines host, command/predicate engine. Linked into the two executables only when the flag is on; endpoints live in `src/client/automation_endpoint.hpp` and `src/server/automation_endpoint.hpp`. |
+| `editor`       | `src/editor/model/`, `inc/vb/editor/`; app in `src/editor/app/` | The structure editor (`docs/structure-editor.md`). `vb_editor_model` is a headless library (volume, structure document, writer, block catalog, workspace, edit session with undo, generators, terrain preview, validation) built whenever tests are, and linked by `vb` for `vb structure`; the `vb_structure_editor` executable (raylib + raygui, `VB_BUILD_EDITOR`, on by default with the client and Lua, off for `VB_HEADLESS`) is only drawing and input on top of it. |
 | `render`       | `src/render/`, `inc/vb/render/` | Window/camera, input seam (`InputSource`/`InputFrame`, `sample_input_cmd`), chunk/entity renderers, raygui-backed UI + main menu. `vb_render` only. |
 
 A build without a phase's heavy dependency (`VB_WITH_NET`/`_LUA`/

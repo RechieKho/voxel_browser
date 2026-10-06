@@ -20,8 +20,10 @@ add_executable(vb_tests
   unit/content_base_data_test.cpp
   unit/content_base_ui_test.cpp
   unit/content_pack_test.cpp
+  unit/data_script_test.cpp
   unit/core_test.cpp
   unit/daynight_test.cpp
+  unit/editor_model_test.cpp
   unit/entity_visual_layout_test.cpp
   unit/entity_visual_test.cpp
   unit/frustum_test.cpp
@@ -45,6 +47,8 @@ add_executable(vb_tests
   unit/script_db_test.cpp
   unit/server_time_estimator_test.cpp
   unit/sha256_test.cpp
+  unit/structure_placement_test.cpp
+  unit/structure_test.cpp
   unit/soak_test.cpp
   unit/ui_runtime_test.cpp
   unit/world_replication_test.cpp
@@ -62,6 +66,7 @@ target_compile_definitions(vb_tests PRIVATE
 target_link_libraries(vb_tests
   PRIVATE
     vb_core
+    vb_editor_model
     vb_auth
     doctest::doctest
     vb_warnings
@@ -78,6 +83,7 @@ if(VB_BUILD_CLI)
   target_sources(vb_tests PRIVATE unit/dev_cli_host_test.cpp)
   target_sources(vb_tests PRIVATE unit/dev_cli_polish_test.cpp)
   target_sources(vb_tests PRIVATE unit/dev_cli_hardening_test.cpp)
+  target_sources(vb_tests PRIVATE unit/dev_cli_structure_test.cpp)
   target_compile_definitions(vb_tests PRIVATE VB_TEST_VB_EXE="$<TARGET_FILE:vb>")
   add_dependencies(vb_tests vb)
   if(VB_BUILD_SERVER)
@@ -138,6 +144,15 @@ if(VB_BUILD_CLIENT)
             --render-distance 2)
   set_tests_properties(singleplayer_smoke PROPERTIES
     PASS_REGULAR_EXPRESSION "joined singleplayer" TIMEOUT 60)
+endif()
+
+# The structure editor: load the real content/base pack headless and print a
+# summary (--check opens no window).
+if(VB_BUILD_EDITOR)
+  add_test(NAME editor_check
+    COMMAND vb_structure_editor "${CMAKE_SOURCE_DIR}/content/base/data/blocks.lua" --check)
+  set_tests_properties(editor_check PROPERTIES
+    PASS_REGULAR_EXPRESSION "pack 'base' at .*: [0-9]+ blocks, [0-9]+ structure files, 0 errors")
 endif()
 
 # A build without VB_WITH_AUTOMATION must reject --automation loudly instead of

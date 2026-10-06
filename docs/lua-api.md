@@ -57,6 +57,22 @@ for (auto &l : session.take_leaves()) rt.dispatch_player_leave(l);
 rt.dispatch_tick(dt);
 ```
 
+- **Block data scripts (recommended convention).** A pack can keep its block
+  tables in a pure-data Lua file (`data/blocks.lua`) that `return`s a list of
+  the tables `vb.register_block` takes, and register them from pack code
+  (`content/base` does this in `blocks/register.lua`, which the loader runs
+  first so root modules like `crafting.lua` still see `base_*_id` globals at
+  load time). Tools such as the structure editor evaluate the data script alone
+  (`vb::script::eval_data_script`) in a bare Lua state: any `vb.*` access raises
+  "block data scripts must only return data; register blocks from pack code",
+  and `require` only reaches the pack's own `.lua` files. Fields the engine
+  doesn't know (`on_break`, a pack's own `drops`) are ignored. Keep the list in
+  registration order — block ids follow it and saved worlds store ids. A pack
+  that registers some blocks directly still works; the editor just won't see
+  those. See `docs/structure-editor.md` §G.
+- `register_block{replaceable = true}` (default `false`): a structure whose rule
+  says `replace = "air_and_plants"` may overwrite this block (`base:leaves`).
+  Like `texture`, it lands on an already-registered built-in block too.
 - Registration (pack load only, rejected once `freeze()` has run):
   `vb.register_block(def) -> BlockId` (idempotent by `name`; **the real
   texture/atlas system**: `texture` is a pack-relative path (e.g.
@@ -168,7 +184,7 @@ rt.dispatch_tick(dt);
   names returns the same pre-assigned index (idempotent-by-name already
   covers it); it does not let a pack change which physical key drives it.
   `vb.worldgen.set_pipeline{height=, base_height=, amplitude=, sea_level=,
-  soil_depth=, cell_size=, carvers={{noise=, threshold=, y_min=, y_max=},
+  soil_depth=, beach=, cell_size=, carvers={{noise=, threshold=, y_min=, y_max=},
   ...}, veins={{block=, target_rock=, height_min=, height_max=, vein_size=,
   spawn_rate=}, ...}}` (Phase 6.14, pack-load-time only) replaces
   `WorldGenerator`'s fixed fBm-heightmap default with a pack-driven pipeline
@@ -190,6 +206,11 @@ rt.dispatch_tick(dt);
   `WorldGenerator` on its exact pre-6.14 fixed path — byte-identical output,
   `tests/unit/worldgen_test.cpp`'s golden-hash gate for the default path is
   unaffected.
+  `beach = "base:sand"` (optional block name, default off) makes every
+  column whose surface is at or below `sea_level + 1` use that block for
+  surface and filler, like the fixed default path's sand beaches; without it
+  each biome's own surface block runs down to the sea floor, and a structure
+  rule with `on = {grass}` never anchors on a beach.
   `vb.noise.*` builds the node-graph description `set_pipeline`'s `height`
   and each carver's `noise` field expect — plain tagged Lua tables, not
   opaque handles: `vb.noise.constant(v)`, `vb.noise.value{frequency=}`,
@@ -197,13 +218,48 @@ rt.dispatch_tick(dt);
   lacunarity=, gain=, frequency=}`, `vb.noise.remap{source=, in_min=,
   in_max=, out_min=, out_max=}`, `vb.noise.combine{a=, b=,
   op="add"|"multiply"|"min"|"max"}`.
-  **Decoration is schematic-only, not procedural** (explicit scope
-  narrowing, same threading reasoning as above): a per-site Lua callback
-  can't run on a worker thread either, so `vb.register_biome`'s `decoration`
-  table is a pure-data offset list, not a callback — see that entry above
-  and `REMAINING_TASKS.md`'s Deferred section for what's intentionally not
-  attempted here (cross-chunk decoration, procedural/callback schematics,
-  Voronoi cell resolution result caching).
+  `vb.register_structure(def)` (structure editor S1, pack-load-time only,
+  not idempotent: a repeated `name` is an error) registers a decorative
+  structure: `name`, `size = {x=,y=,z=}` (each 1..64), optional `anchor`
+  (default `{0,0,0}`; the cell that sits on the ground block), `palette`
+  (single character -> block *name*, or `false` for "keep the terrain
+  there"), `variants = {{weight=, layers={...}}, ...}` (`layers[y][z]` is one
+  row of `size.x` palette characters, bottom layer first) and an optional
+  `placement = {on=, replace=, rotate=, mirror=, min_spacing=, max_slope=,
+  y_min=, y_max=, cluster=}` of defaults. Unknown keys are errors. The table
+  is plain data, so the usual home is `structures/<name>.lua` returning it,
+  registered with `vb.register_structure(require("structures.oak_tree"))`
+  (the loader does not walk `structures/`). Block names are resolved after
+  the whole pack has loaded: `PackRuntime::validate_worldgen()` (called by
+  the server and `--singleplayer` right after `freeze()`) reports an unknown
+  block or structure name, naming it. A biome's `decoration` entry can now
+  be `{structure = "name", spawn_rate = n, <any placement field>}`; the
+  inline `{blocks = ...}` form still works and becomes an anonymous
+  one-variant structure (`replace = "all"`, no rotation).
+  **Decoration is data, not callbacks** (same threading reasoning as above):
+  a per-site Lua callback can't run on a worker thread either, so decoration
+  is a list of structures (`vb.register_structure`, above) plus declarative
+  placement rules, not a function. Placement is rule-based and crosses chunk
+  borders (structure editor S2): for each rule, anchors come from a global
+  jittered grid keyed by `(world seed, grid cell, rule)` — `spawn_rate` is the
+  expected number of placements per 32×32 column, `min_spacing` the minimum
+  gap between anchors on some axis, `cluster` (0..1) gates them with
+  low-frequency noise without changing the mean. An anchor is kept only when
+  the biome *at the anchor* is the rule's biome, the ground block is in `on`
+  (any solid block when empty), the anchor is not underwater, the ground
+  height is inside `y_min..y_max`, and the terrain under the (rotated)
+  footprint varies by at most `max_slope`. All of that reads only
+  pre-decoration terrain (`WorldGenerator::block_at_pregen`, the height
+  field), so it never depends on a neighbor chunk. Each chunk pulls the
+  placements whose footprint reaches it and stamps its own cells in a fixed
+  order (anchor x, z, then rule), so a tree on a border is identical from
+  either side and from every vertical chunk. `replace` decides what a
+  structure may overwrite — `"air"` (default), `"air_and_plants"` (air or a
+  block registered with `replaceable = true`) or `"all"`; an explicit
+  `base:air` palette cell always carves. The anchor cell sits one block above
+  the ground block. Still not attempted: runtime/callback decoration that
+  reacts to its surroundings (`REMAINING_TASKS.md`'s Deferred section) and
+  Voronoi cell resolution result caching.
   A pack registering blocks beyond the Phase 2 `base()` set logs an info
   line; those ids reach the client if (and only if) the host wires
   `HandshakeServerHost::block_registry` from this same registry
@@ -604,7 +660,7 @@ than as a black box — every file is commented explaining *why*, not just
 | `blocks/planks.lua`, `sticks.lua`     | Registering genuinely new, crafted-only blocks (not a re-declaration) |
 | `crafting.lua`                        | A full, working game system (recipes, ingredient checks, a `/craft` chat command) built entirely in content on top of `vb.register_craft` + `player:give`/`take` — **the reference example of "game rules belong in a pack, not the engine"** |
 | `entities/dropped_item.lua`           | `vb.register_entity` — real dispatch since Phase 6.1 (`vb.world.spawn`/`on_spawn`/`on_tick`/`on_hit`/`on_death` all fire, no EnTT registry involved), but nothing in `content/base` itself ever calls `vb.world.spawn("base:dropped_item", ...)` — real block drops still go through the separate, already-working `vb.world.spawn_item_drop` hardcoded path above instead. `content/examples/kitchen_sink/entities/sentry.lua` (Phase 6.15) is the worked example of a pack actually spawning/hitting/killing one of these |
-| `biomes/plains.lua`, `forest.lua`     | `vb.register_biome`: has a real consumer as of Phase 6.14 (`vb.worldgen.set_pipeline`), but `content/base` itself still never calls `set_pipeline` — these stay declarative-only *in this pack*, kept minimal/production-shaped per spec §5.1; a worked pipeline example belongs to 6.15's separate demo pack |
+| `biomes/plains.lua`, `forest.lua`, `worldgen.lua`, `structures/*.lua`, `data/blocks.lua` | `vb.register_biome` with `decoration = {{structure=, spawn_rate=}, ...}`, `vb.worldgen.set_pipeline` (`worldgen.lua`, which also registers every structure from `structures/all.lua`), and the data files behind them: structures written by the structure editor and the block data script it reads. Terrain keeps the fixed default's range and gets sand beaches through `beach = "base:sand"`. `content/examples/kitchen_sink` is the other worldgen example |
 | `ui/inventory.lua`, `ui/pause.lua`    | `ui.define`, real screens loaded by every connecting client |
 | `ui/_style.lua`                       | A shared `base_ui` style table; the client sorts `ui/*.lua` before loading so `_style.lua` is always first |
 | `ui/death.lua`, `death.lua`           | A `player_death` handler (returns nothing, so default respawn stands) that opens a "you died" notice via `player:open_ui` |

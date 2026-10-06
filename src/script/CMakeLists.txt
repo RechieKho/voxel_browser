@@ -3,6 +3,9 @@
 # are linked from src/core/CMakeLists.txt under that flag).
 
 target_sources(vb_core PRIVATE
+  block_def.cpp
+  structure_def.cpp
+  data_script.cpp
   db.cpp
   pack_loader.cpp
   pack_runtime.cpp

@@ -15,7 +15,7 @@
 namespace vb::cli {
 
 enum class EntryKind { Release, Link };
-enum class Binary { Client, Server };
+enum class Binary { Client, Server, Editor };
 
 struct Entry {
 	std::string name; // "v0.2.0" or a link name
@@ -37,7 +37,8 @@ std::string toml_quote(const std::string &s);
 // crash never leaves a truncated file behind.
 Status write_text_atomic(const std::filesystem::path &path, const std::string &text);
 
-// File name of a binary for this platform ("voxel_browser_server[.exe]").
+// File name of a binary for this platform ("voxel_browser_server[.exe]"). The
+// editor (vb_structure_editor) is optional: a release or build may not ship it.
 std::string binary_file_name(Binary which);
 
 // cli.toml `default_version`; nullopt when unset/unreadable.

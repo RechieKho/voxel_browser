@@ -1,6 +1,8 @@
 #pragma once
 
 #include <filesystem>
+#include <string>
+#include <unordered_map>
 
 #include "vb/script/pack_runtime.hpp"
 
@@ -38,6 +40,13 @@
 // real fix was elsewhere; see STATE.md).
 
 namespace vb::script {
+
+// Every `.lua` file under `content_pack` (except `ui/`), keyed by its
+// pack-root-relative path with forward slashes -- the map `require` resolves
+// against. Shared with eval_data_script (data_script.hpp). Empty if the
+// directory doesn't exist.
+std::unordered_map<std::string, std::string> collect_requirable_modules(
+		const std::filesystem::path &content_pack);
 
 // Loads every pack Lua file into `rt` (before rt.freeze()). Returns false on
 // a real syntax/runtime error in a pack file (a broken pack is a fatal

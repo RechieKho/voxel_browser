@@ -7,6 +7,8 @@ target_sources(vb_core PRIVATE
   fastnoise2_compile.cpp
   generator.cpp
   noise_graph.cpp
+  structure.cpp
+  structure_placement.cpp
   worker_pool.cpp
 )
 

@@ -24,32 +24,25 @@
 - Compression tuning (zstd), snapshot delta compression, bit-packed inputs.
 - Dedicated server browser / master server list.
 - Modding: multiple stacked content packs, dependency resolution.
-- Rule-based decorative structure placement (trees, ruins, rock formations)
-  for the worldgen decoration pass (`ARCHITECTURE_SPEC.md` §6 stage 6):
-  structures authored in a dedicated external tool and imported into the
-  content pack as a schematic, placed by declarative rules (neighbor-block
-  constraints — e.g. "must be on dirt", clustering tendency, biome/density
-  weighting) rather than every structure needing a hand-written procedural
-  callback. Explicitly post-first-playable — depends on the Lua-driven
-  worldgen pipeline itself (Phase 4.2/6) landing and settling first; noted
-  now so the decoration-pass design leaves room for it. **Phase 6.14 landed
-  the dependency** (`vb.worldgen.set_pipeline` + `vb.register_biome`'s
-  `decoration` schematic entries, `vb/worldgen/pipeline.hpp`'s
-  `DecorationEntry`) — this item itself is still not attempted. Two
-  narrower gaps 6.14 left inside what it *did* ship, worth folding into
-  whichever future session tackles this:
-  - **Procedural/callback decoration.** 6.14's decoration is schematic-only
-    (a fixed block-offset list) — a per-site Lua callback (e.g. "grow a
-    randomized tree shape") can't run on a `WorldGenWorkerPool` worker
-    thread (Lua/sol2 is strictly single-threaded; see `set_pipeline`'s own
-    entry in Phase 6 above for the same constraint). Would need either a
-    main-thread deferred-apply pass after a chunk comes back from a worker,
-    or a per-worker `sol::state`, neither attempted.
-  - **Cross-chunk decoration.** 6.14's decoration offsets landing outside
-    the originating chunk are silently skipped (`WorldGenerator::generate`,
-    `src/worldgen/generator.cpp`) — no structure can straddle a chunk
-    boundary yet, unlike the spec's stage-6 framing ("runs once neighbors
-    are generated so trees/structures may cross chunk borders").
+- ~~Rule-based decorative structure placement (trees, ruins, rock formations)~~
+  **Done** (`docs/structure-editor.md`, phases S0–S7): structures are data
+  files (`vb.register_structure`, `structures/*.lua`) authored in the
+  standalone `vb_structure_editor`, placed by declarative per-biome rules with
+  cross-chunk "pull" stamping (`architecture_spec/worldgen.md` §6 stage 6);
+  `content/base` now ships oak and birch trees, a bush and a boulder made with
+  it. Left out of that work: the optional in-game export command (capture a
+  selected region from singleplayer into a structure file), structure-to-
+  structure avoidance across rules, preview on a pack's real biomes, and
+  structures bigger than 64 blocks per side (a jigsaw/assembly system).
+- Runtime/callback decoration (narrowed from the item above): the structure
+  editor covers procedural *variety* by baking seeded variants at authoring
+  time, so what stays deferred is decoration that has to react to its
+  surroundings at generation time (e.g. a vine that follows the cliff face).
+  A per-site Lua callback can't run on a `WorldGenWorkerPool` worker thread
+  (Lua/sol2 is strictly single-threaded; see `set_pipeline`'s own entry in
+  Phase 6 for the same constraint), so it would need a main-thread
+  deferred-apply pass after a chunk comes back from a worker, or a per-worker
+  `sol::state`; neither is attempted.
 - Voronoi biome-cell resolution result caching (`vb/worldgen/
   biome_selector.hpp`'s `BiomeSelector::resolve`, Phase 6.14): deliberately
   recomputes its bounded neighbor-adjacency recursion from scratch on every

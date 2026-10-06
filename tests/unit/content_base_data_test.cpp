@@ -106,19 +106,13 @@ TEST_CASE("content/base entity textures resolve to real files under content/base
 }
 
 TEST_CASE("content/base biomes register with the right block names") {
-	// vb.register_biome has no PackRuntime read-back accessor today
-	// (docs/content-base-testing.md §3 Phase C1 task 4 anticipated this --
-	// noted for Phase C5's findings list) and build_worldgen_pipeline()
-	// only captures registered biomes when some pack also calls
-	// vb.worldgen.set_pipeline (content/base never does -- see biomes/
-	// plains.lua's own "declarative only" comment), so it reports nullptr
-	// here regardless of what registered. The only way left to observe a
-	// registration call is to intercept it before content/base's own
-	// biomes/*.lua files run: wrap vb.register_biome in a prelude loaded
-	// first (same Lua global, so blocks/*.lua's load order still sees the
-	// wrapped version), record every call's table into vb.storage (plain
-	// Lua tables can't cross the C++/test boundary directly), then read
-	// storage back after load_content_pack().
+	// vb.register_biome has no PackRuntime read-back accessor of its own, so
+	// this observes each registration call by wrapping vb.register_biome in a
+	// prelude loaded before content/base's own biomes/*.lua files (same Lua
+	// global, so they see the wrapped version), recording every call's table
+	// into a Lua global, and asserting on it after load_content_pack().
+	// (content/base's pipeline, covered by the next test case, is the other
+	// way to see them.)
 	vb::net::LoopbackNetwork net;
 	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
 	vb::script::PackRuntime rt(
@@ -152,7 +146,8 @@ TEST_CASE("content/base biomes register with the right block names") {
 		assert(forest.surface == "base:grass")
 		assert(forest.filler == "base:dirt")
 		assert(forest.stone == "base:stone")
-		assert(forest.decoration == "trees")
+		assert(type(forest.decoration) == "table" and #forest.decoration == 4)
+		assert(type(plains.decoration) == "table" and #plains.decoration == 3)
 	)"));
 }
 
@@ -208,3 +203,119 @@ TEST_CASE("content/base base:player's represents tags a joined player's visual k
 }
 
 #endif // VB_WITH_LUA
+
+TEST_CASE("content/base's worldgen pipeline: two biomes, sand beaches, and a dry-land spawn") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, vb::test::content_base_storage("worldgen_pipeline"));
+	REQUIRE(vb::script::load_content_pack(rt, vb::test::content_base_dir()));
+	rt.freeze();
+	const auto valid = rt.validate_worldgen();
+	REQUIRE_MESSAGE(valid, valid.message);
+
+	vb::worldgen::WorldGenParams params;
+	params.seed = 20260705;
+	const auto pipeline = rt.build_worldgen_pipeline(params);
+	REQUIRE(pipeline != nullptr);
+	CHECK(pipeline->biomes.biome_count() == 2);
+	// biomes/*.lua load in sorted order: forest, then plains.
+	CHECK(pipeline->biomes.biome(0).name == "base:forest");
+	CHECK(pipeline->biomes.biome(1).name == "base:plains");
+	CHECK(pipeline->sea_level == 62);
+	CHECK(pipeline->soil_depth == 4);
+	CHECK(pipeline->beach == registry.find("base:sand"));
+
+	// Terrain keeps the fixed default's shape: surface heights in a similar
+	// range, grass above the beach line and sand at it.
+	const vb::worldgen::WorldGenerator gen(params, registry, pipeline);
+	int lowest = 1000;
+	int highest = -1000;
+	bool saw_grass = false;
+	bool saw_sand = false;
+	for (int x = -512; x < 512; x += 16) {
+		for (int z = -512; z < 512; z += 16) {
+			const int h = gen.surface_height(x, z);
+			lowest = std::min(lowest, h);
+			highest = std::max(highest, h);
+			const auto top = gen.block_at_pregen(x, h, z);
+			saw_grass = saw_grass || top == registry.find("base:grass");
+			saw_sand = saw_sand || top == registry.find("base:sand");
+			if (h > pipeline->sea_level + 1) {
+				CHECK(top != registry.find("base:sand"));
+			}
+		}
+	}
+	CHECK(lowest >= 64 - 29);
+	CHECK(highest <= 64 + 29);
+	CHECK(saw_grass);
+	CHECK(saw_sand);
+
+	// The player spawns on dry land.
+	const auto spawn = vb::worldgen::default_spawn_position(gen);
+	CHECK(gen.surface_height(static_cast<int>(std::floor(spawn.x)), static_cast<int>(std::floor(spawn.z))) >
+			pipeline->sea_level);
+}
+
+TEST_CASE("content/base's structures are placed by its biomes and appear in generated chunks") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, vb::test::content_base_storage("worldgen_structures"));
+	REQUIRE(vb::script::load_content_pack(rt, vb::test::content_base_dir()));
+	rt.freeze();
+	const auto valid = rt.validate_worldgen();
+	REQUIRE_MESSAGE(valid, valid.message);
+
+	vb::worldgen::WorldGenParams params;
+	params.seed = 20260705;
+	const auto pipeline = rt.build_worldgen_pipeline(params);
+	REQUIRE(pipeline != nullptr);
+
+	std::vector<std::string> names;
+	for (const auto &def : pipeline->structures) {
+		names.push_back(def.name);
+		CHECK_FALSE(def.variants.empty());
+		CHECK(def.radius_xz <= vb::worldgen::kMaxStructureDim);
+	}
+	std::sort(names.begin(), names.end());
+	CHECK(names == std::vector<std::string>{ "base:birch_tree", "base:boulder", "base:bush", "base:oak_tree" });
+
+	// Biomes: forest is index 0 (4 entries), plains index 1 (3).
+	REQUIRE(pipeline->decoration.size() == 2);
+	CHECK(pipeline->decoration[0].size() == 4);
+	CHECK(pipeline->decoration[1].size() == 3);
+	for (const auto &rules : pipeline->decoration) {
+		for (const auto &rule : rules) {
+			CHECK(rule.spawn_rate > 0.0);
+			REQUIRE_FALSE(rule.on.empty());
+		}
+	}
+
+	// Trees really show up: find a placement of each biome's oak and check its
+	// trunk base in the generated chunk is wood.
+	const vb::worldgen::WorldGenerator gen(params, registry, pipeline);
+	const auto placements = gen.structure_placements(-256, -256, 255, 255);
+	REQUIRE(placements.size() > 100);
+	bool forest_oak = false;
+	bool plains_oak = false;
+	bool boulder = false;
+	for (const auto &p : placements) {
+		const auto &rule = pipeline->decoration[p.biome][p.rule];
+		const auto &def = pipeline->structures[rule.structure];
+		forest_oak = forest_oak || (p.biome == 0 && def.name == "base:oak_tree");
+		plains_oak = plains_oak || (p.biome == 1 && def.name == "base:oak_tree");
+		boulder = boulder || def.name == "base:boulder";
+	}
+	CHECK(forest_oak);
+	CHECK(plains_oak);
+	CHECK(boulder);
+
+	// A forest is much denser than plains.
+	std::size_t forest = 0;
+	std::size_t plains = 0;
+	for (const auto &p : placements) {
+		(p.biome == 0 ? forest : plains)++;
+	}
+	INFO("forest " << forest << " plains " << plains);
+	CHECK(forest > 0);
+	CHECK(plains > 0);
+}
