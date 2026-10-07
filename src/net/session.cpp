@@ -687,6 +687,21 @@ std::optional<std::pair<float, float>> ServerSession::player_health(core::NetId 
 	return std::nullopt;
 }
 
+bool ServerSession::teleport_player(core::NetId id, core::Vec3d pos) {
+	for (const auto &[conn, state] : conns_) {
+		(void)conn;
+		if (state.playing && state.net_id == id) {
+			const auto rot = registry_.get<ecs::Rotation>(state.entity);
+			set_player_state(id, pos, { rot.yaw, rot.pitch }, {});
+			// Same as a respawn: the next movement step re-derives grounding
+			// at the new spot instead of trusting the old one's.
+			registry_.get<ecs::Collider>(state.entity).on_ground = false;
+			return true;
+		}
+	}
+	return false;
+}
+
 #if defined(VB_WITH_AUTOMATION)
 bool ServerSession::set_player_health(core::NetId id, float value) {
 	for (auto &[conn, state] : conns_) {
@@ -702,18 +717,6 @@ bool ServerSession::set_player_health(core::NetId id, float value) {
 			h.current = target;
 		}
 		return true;
-	}
-	return false;
-}
-
-bool ServerSession::teleport_player(core::NetId id, core::Vec3d pos) {
-	for (const auto &[conn, state] : conns_) {
-		(void)conn;
-		if (state.playing && state.net_id == id) {
-			const auto &rot = registry_.get<ecs::Rotation>(state.entity);
-			set_player_state(id, pos, { rot.yaw, rot.pitch }, {});
-			return true;
-		}
 	}
 	return false;
 }
@@ -1841,8 +1844,8 @@ HandshakeClientHost make_asset_host(assetsync::ClientAssetCache *cache) {
 		return {};
 	}
 	HandshakeClientHost host;
-	host.assets_missing = [cache](const std::vector<protocol::AssetEntryRecord> &entries) {
-		return cache->compute_missing(entries);
+	host.assets_missing = [cache](const protocol::S2CAssetManifest &manifest) {
+		return cache->compute_missing(manifest.entries, manifest.manifest_hash);
 	};
 	host.on_asset_chunk = [cache](const protocol::S2CAssetData &chunk) {
 		return cache->ingest_chunk(chunk);

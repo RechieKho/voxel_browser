@@ -407,9 +407,9 @@ int main(int argc, char **argv) {
 
 	// Asset manifest (Phase 4.4): built once at startup from the content
 	// pack, handed to every connection by reference. A build without
-	// VB_WITH_COMPRESSION (kDisabled) just skips asset sync entirely for
-	// every client, same graceful degrade as VB_WITH_NET off above; any
-	// other failure means the pack itself is broken/hostile and is fatal.
+	// VB_WITH_COMPRESSION (kDisabled) skips asset sync for every client with
+	// a startup warning; any other failure means the pack itself is
+	// broken/hostile and is fatal.
 	const vb::assetsync::AssetSizeCaps asset_caps{
 		static_cast<std::uint64_t>(config.asset_max_file_mb) * 1024ull * 1024ull,
 		static_cast<std::uint64_t>(config.asset_max_total_mb) * 1024ull * 1024ull
@@ -419,7 +419,14 @@ int main(int argc, char **argv) {
 	if (manifest_result) {
 		manifest_holder.set(std::make_shared<const vb::assetsync::Manifest>(
 				std::move(*manifest_result)));
-	} else if (manifest_result.error() != vb::core::AssetSyncError::kDisabled) {
+	} else if (manifest_result.error() == vb::core::AssetSyncError::kDisabled) {
+		// Not fatal (a headless test server needs no assets), but never
+		// silent: a joining client then has no ui/ screens or HUD -- so no
+		// visible chat or hotbar -- and renders untextured blocks.
+		std::cerr << "server: WARNING: asset sync disabled (built without "
+					 "VB_WITH_COMPRESSION): clients will not receive ui/ scripts "
+					 "or textures\n";
+	} else {
 		std::cerr << "server: failed to build asset manifest for "
 				  << config.content_pack << ": "
 				  << vb::core::message(manifest_result.error()) << '\n';
@@ -469,10 +476,13 @@ int main(int argc, char **argv) {
 	// of seed -- with base_height=64 and amplitude=28 the real surface ranges
 	// roughly [36, 92], so a fixed Y can land at or below it and spawn the
 	// player embedded in solid terrain outright (no fall involved).
+	// Computed once: the search generates real chunks to rule out spots
+	// inside trees/boulders/caves, which is too slow to redo per join.
+	const vb::core::Vec3d spawn = vb::worldgen::default_spawn_position(generator);
 	vb::net::HandshakeServerHost host;
-	host.on_ready = [generator](std::string_view) {
+	host.on_ready = [spawn](std::string_view) {
 		vb::net::JoinGrant grant;
-		grant.spawn_pos = vb::worldgen::default_spawn_position(generator);
+		grant.spawn_pos = spawn;
 		return grant;
 	};
 	// Phase 4.3: advertise the (possibly Lua-extended) registry to every

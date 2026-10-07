@@ -13,6 +13,11 @@ std::string describe_build() {
 	out += ", built ";
 	out += kBuildTimestamp;
 	out += ')';
+#if defined(VB_WITH_COMPRESSION)
+	// Without it asset sync is a kDisabled stub: joining clients get no ui/
+	// scripts or textures. The release pipeline greps for this one too.
+	out += " +asset-sync";
+#endif
 #if defined(VB_WITH_AUTOMATION)
 	// Release pipeline greps --version for "automation" (docs/e2e-automation.md §7.3).
 	out += " +automation";

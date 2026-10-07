@@ -87,6 +87,7 @@ std::vector<std::string> PackRuntime::global_names() { return {}; }
 #else
 
 #include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <set>
 #include <string>
@@ -896,6 +897,38 @@ struct PlayerHandle {
 		return t;
 	}
 
+	// Teleport: feet position, velocity zeroed, look direction kept. The
+	// owning client snaps to it like any authoritative correction.
+	void set_pos(double x, double y, double z) const {
+		if (rt->session == nullptr) {
+			throw sol::error("player:set_pos(): session not attached yet");
+		}
+		if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
+			throw sol::error("player:set_pos(): coordinates must be finite numbers");
+		}
+		if (!rt->session->teleport_player(net_id, { x, y, z })) {
+			throw sol::error("player:set_pos(): player is gone");
+		}
+	}
+
+	// The feet position this player was granted at join -- where the
+	// engine's default respawn puts them.
+	sol::object get_spawn_pos(sol::this_state ts) const {
+		sol::state_view lua(ts);
+		if (rt->session == nullptr) {
+			throw sol::error("player:get_spawn_pos(): session not attached yet");
+		}
+		if (!rt->session->player_move_state(net_id)) {
+			throw sol::error("player:get_spawn_pos(): player is gone");
+		}
+		const core::Vec3d p = rt->session->spawn_point(net_id);
+		sol::table t = lua.create_table();
+		t["x"] = p.x;
+		t["y"] = p.y;
+		t["z"] = p.z;
+		return t;
+	}
+
 	void set_velocity(double x, double y, double z) const {
 		if (rt->session == nullptr) {
 			throw sol::error("entity:set_velocity(): session not attached yet");
@@ -1225,7 +1258,8 @@ void PackRuntime::Impl::install_bindings() {
 	sol::state &lua = lua_state();
 
 	lua.new_usertype<PlayerHandle>("Player", "get_pos", &PlayerHandle::get_pos,
-			"set_velocity", &PlayerHandle::set_velocity, "remove",
+			"set_pos", &PlayerHandle::set_pos, "get_spawn_pos",
+			&PlayerHandle::get_spawn_pos, "set_velocity", &PlayerHandle::set_velocity, "remove",
 			&PlayerHandle::remove, "get_inventory", &PlayerHandle::get_inventory,
 			"send_message", &PlayerHandle::send_message, "open_ui",
 			&PlayerHandle::open_ui, "give", &PlayerHandle::give, "take",

@@ -844,4 +844,50 @@ TEST_CASE("asset sync: a second connection with an unchanged pack transfers noth
 	std::filesystem::remove_all(cache_dir);
 }
 
+// Regression: the client keyed pending downloads by content hash, so two pack
+// files with identical bytes requested that hash twice; the server streamed
+// it twice and the second copy failed the handshake ("asset transfer
+// failed"), and only one of the two paths would have reached the virtual FS.
+TEST_CASE("asset sync: identical files under different paths both arrive") {
+	const auto pack = make_asset_pack("duplicates");
+	for (const char *name : { "textures/a.png", "textures/b.png" }) {
+		std::filesystem::create_directories((pack / name).parent_path());
+		std::ofstream f(pack / name, std::ios::binary);
+		f << "same placeholder bytes";
+	}
+	auto manifest_result = vb::assetsync::build_manifest(pack);
+	REQUIRE(manifest_result);
+	auto manifest_ptr = std::make_shared<const vb::assetsync::Manifest>(
+			std::move(*manifest_result));
+
+	LoopbackNetwork net;
+	int file_bytes_calls = 0;
+	HandshakeServerHost host = make_asset_host(manifest_ptr, pack, &file_bytes_calls);
+	ServerSession server(net.server(), HandshakeServerConfig{}, host);
+	REQUIRE(net.server().listen(0));
+
+	vb::net::Transport &t = net.create_client();
+	auto id = t.connect("x", 0);
+	REQUIRE(id);
+	const auto cache_dir = std::filesystem::temp_directory_path() /
+			"vb_netcode_assetsync_cache_duplicates";
+	std::filesystem::remove_all(cache_dir);
+	vb::assetsync::ClientAssetCache cache(cache_dir, 16ull * 1024ull * 1024ull);
+	ClientSession client(t, *id, HandshakeClientConfig{ "Dup", "", "v", 1 }, &cache);
+
+	for (int i = 0; i < 40 && !client.joined() && !client.failed(); ++i) {
+		server.tick(0.05);
+		client.tick(0.05);
+	}
+	REQUIRE_FALSE(client.failed());
+	REQUIRE(client.joined());
+	CHECK(client.virtual_pack_fs().size() == manifest_ptr->entries.size());
+	CHECK(client.virtual_pack_fs().count("textures/a.png") == 1);
+	CHECK(client.virtual_pack_fs().count("textures/b.png") == 1);
+	CHECK(file_bytes_calls == static_cast<int>(manifest_ptr->entries.size()) - 1); // shared bytes sent once
+
+	std::filesystem::remove_all(pack);
+	std::filesystem::remove_all(cache_dir);
+}
+
 #endif // VB_WITH_COMPRESSION

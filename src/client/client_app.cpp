@@ -28,6 +28,11 @@ namespace vb::client {
 
 namespace {
 
+// Damaged blocks farther than this from the camera get no crack overlay:
+// the crack art is unreadable past a few blocks, and the server replicates
+// damage for every loaded chunk, not just ones within reach.
+constexpr float kCrackDrawDistance = 24.0f;
+
 // How long a connection attempt may take before the client gives up. 10 s in every shipped
 // build. Development builds let the test harness stretch it (VB_CONNECT_TIMEOUT_SECONDS), as it
 // stretches its own waits, so a sanitized client behind a simulated bad network isn't judged
@@ -1061,27 +1066,69 @@ bool ClientApp::frame(const vb::render::InputFrame &input, double dt) {
 					static_cast<float>(look_hit.voxel.z) + 0.5f
 				};
 				DrawCubeWires(hit_center, 1.02f, 1.02f, 1.02f, BLACK);
-				// Real crack-stage overlay (REMAINING_TASKS.md 6.5, closed
-				// 2026-09-27): a textured cube sampling the live-damaged
-				// block's own crack stage from crack_atlas -- its own
-				// pack-set crack_texture override if one decoded validly
-				// at join time, else the engine's shared built-in
-				// procedural crack pattern. Stage picks progressively
-				// more damaged art as break_progress climbs toward 1.0;
-				// alpha still darkens in step with it too, same "more
-				// damaged reads as more visible" cue the old flat cube
-				// gave.
-				if (break_progress && crack_overlay) {
-					const float fraction = vb::core::clamp(*break_progress, 0.0f, 1.0f);
+			}
+			// Real crack-stage overlay (REMAINING_TASKS.md 6.5, closed
+			// 2026-09-27): a textured cube sampling each damaged block's
+			// own crack stage from crack_atlas -- its pack-set
+			// crack_texture override if one decoded validly at join time,
+			// else the engine's shared built-in procedural crack pattern.
+			// Stage picks progressively more damaged art as the damage
+			// fraction climbs toward 1.0; alpha darkens in step with it.
+			// Drawn for every damaged block the server replicates (they
+			// stay damaged until healed), not only the one under the
+			// crosshair: tying it to the aim made the crack blink on and
+			// off whenever the look ray grazed a neighbouring block.
+			if (crack_overlay && !client->block_damage().empty()) {
+				const auto &registry = client->chunk_store().registry();
+				const auto opaque_at = [&](vb::core::IVec3 v) {
+					return registry.is_opaque(client->chunk_store().block_at(v));
+				};
+				crack_overlay->begin();
+				for (const auto &[voxel, punches] : client->block_damage()) {
+					const vb::core::BlockId block = client->chunk_store().block_at(voxel);
+					if (!registry.contains(block) || registry.get(block).max_damage == 0) {
+						continue;
+					}
+					const Vector3 center{ static_cast<float>(voxel.x) + 0.5f,
+						static_cast<float>(voxel.y) + 0.5f,
+						static_cast<float>(voxel.z) + 0.5f };
+					const float dx = center.x - camera.position.x;
+					const float dy = center.y - camera.position.y;
+					const float dz = center.z - camera.position.z;
+					if (dx * dx + dy * dy + dz * dz > kCrackDrawDistance * kCrackDrawDistance) {
+						continue;
+					}
+					const float fraction = vb::core::clamp(static_cast<float>(punches) /
+									static_cast<float>(registry.get(block).max_damage),
+							0.0f, 1.0f);
 					const int stage = std::min(
 							static_cast<int>(fraction * vb::render::CrackAtlas::kStages),
 							vb::render::CrackAtlas::kStages - 1);
-					const vb::core::BlockId block =
-							client->chunk_store().block_at(look_hit.voxel);
-					const vb::render::AtlasRect rect = crack_atlas.rect_for(block, stage);
+					using Face = vb::render::CrackOverlay::Face;
+					struct Side {
+						vb::core::IVec3 offset;
+						Face face;
+					};
+					static constexpr Side kSides[] = {
+						{ { 1, 0, 0 }, Face::kPosX },
+						{ { -1, 0, 0 }, Face::kNegX },
+						{ { 0, 1, 0 }, Face::kPosY },
+						{ { 0, -1, 0 }, Face::kNegY },
+						{ { 0, 0, 1 }, Face::kPosZ },
+						{ { 0, 0, -1 }, Face::kNegZ },
+					};
+					std::uint8_t hidden = 0;
+					for (const Side &side : kSides) {
+						if (opaque_at({ voxel.x + side.offset.x, voxel.y + side.offset.y,
+									voxel.z + side.offset.z })) {
+							hidden = static_cast<std::uint8_t>(hidden | side.face);
+						}
+					}
 					const auto alpha = static_cast<unsigned char>(fraction * 220.0f + 35.0f);
-					crack_overlay->draw(hit_center, rect, alpha);
+					crack_overlay->draw(center, camera.position,
+							crack_atlas.rect_for(block, stage), alpha, hidden);
 				}
+				crack_overlay->end();
 			}
 			EndMode3D();
 			draw_overlay(controller, status, chunk_count, entity_count,

@@ -118,6 +118,13 @@ public:
 	// Always available: `player:get_health()` (Lua) reads it.
 	std::optional<std::pair<float, float>> player_health(core::NetId id) const;
 
+	// Moves a player to `pos` (feet), zeroing velocity and keeping their look
+	// direction; the client reconciles to it like any authoritative
+	// correction. Always available: `player:set_pos()` (Lua) and the
+	// automation `teleport` command both call it. False if `id` isn't a
+	// playing connection.
+	bool teleport_player(core::NetId id, core::Vec3d pos);
+
 #if defined(VB_WITH_AUTOMATION)
 	// --- development-only automation primitives (docs/e2e-automation.md §5.3) ---
 	// Compiled out of production builds with the rest of the automation code;
@@ -127,9 +134,6 @@ public:
 	// kills + respawns as usual, cause "automation"); raising just heals.
 	// False if `id` isn't a playing connection.
 	bool set_player_health(core::NetId id, float value);
-	// Moves a player to `pos`, zeroing velocity and keeping their look
-	// direction; the client reconciles to it like any authoritative correction.
-	bool teleport_player(core::NetId id, core::Vec3d pos);
 	// Jumps the day/night clock and tells every client immediately.
 	void set_time_of_day(std::uint32_t ticks);
 	// Closes a playing connection with `reason`.

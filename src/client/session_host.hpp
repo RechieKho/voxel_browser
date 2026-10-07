@@ -74,14 +74,6 @@ inline vb::worldgen::WorldGenerator make_generator(
 	return vb::worldgen::WorldGenerator(p, registry, std::move(pipeline));
 }
 
-// The spawn-position calculation only needs the well-known base block ids
-// (air/stone/dirt/.../water), which a pack re-declaring those names by
-// `add_or_get` never changes -- safe to always use the fixed base() registry
-// here even when the real world uses a pack-extended one.
-inline vb::worldgen::WorldGenerator make_generator(std::uint64_t seed) {
-	return make_generator(seed, vb::world::BlockRegistry::base());
-}
-
 inline vb::net::HandshakeServerConfig sp_server_config(std::uint64_t seed, int view_distance,
 		const std::optional<vb::auth::AuthConfig> &auth = std::nullopt) {
 	vb::net::HandshakeServerConfig c;
@@ -110,12 +102,16 @@ inline vb::net::HandshakeClientConfig sp_client_config(const std::string &name) 
 // seed -- with base_height=64 and amplitude=28 the real surface ranges
 // roughly [36, 92], so a fixed Y can land at or below it and spawn the player
 // embedded in solid terrain outright (no fall involved). Compute a real one
-// from the same seed instead.
-inline vb::net::HandshakeServerHost sp_server_host(std::uint64_t seed) {
+// instead, from the generator the world itself uses (pack pipeline
+// included): a pipeline-less stand-in has a different height field and used
+// to spawn singleplayer players underground. Computed once, not per join.
+inline vb::net::HandshakeServerHost sp_server_host(
+		const vb::worldgen::WorldGenerator &generator) {
+	const vb::core::Vec3d spawn = vb::worldgen::default_spawn_position(generator);
 	vb::net::HandshakeServerHost host;
-	host.on_ready = [seed](std::string_view) {
+	host.on_ready = [spawn](std::string_view) {
 		vb::net::JoinGrant grant;
-		grant.spawn_pos = vb::worldgen::default_spawn_position(make_generator(seed));
+		grant.spawn_pos = spawn;
 		return grant;
 	};
 	return host;
@@ -269,13 +265,14 @@ inline vb::render::VirtualFs load_entity_textures_from_disk(
 	return vfs;
 }
 
-inline vb::net::HandshakeServerHost make_singleplayer_host(std::uint64_t seed,
+inline vb::net::HandshakeServerHost make_singleplayer_host(
+		const vb::worldgen::WorldGenerator &generator,
 		vb::script::PackRuntime &pack_runtime,
 		const vb::world::BlockRegistry &registry,
 		const vb::physics::MoveParams &move_params,
 		const std::optional<vb::auth::AuthConfig> &auth = std::nullopt,
 		std::shared_ptr<void> *auth_service_out = nullptr) {
-	vb::net::HandshakeServerHost host = sp_server_host(seed);
+	vb::net::HandshakeServerHost host = sp_server_host(generator);
 	pack_runtime.install_join_veto(host); // before ServerSession copies `host`
 #if defined(VB_WITH_AUTH)
 	if (auth) {
@@ -379,6 +376,11 @@ struct Singleplayer {
 	// make_singleplayer_host below and set_move_params() in the body.
 	vb::physics::MoveParams move_params;
 	vb::world::World world;
+	// Phase 6.14: mirrors src/server/main.cpp's own build_worldgen_pipeline
+	// call -- the pipeline is nullptr unless a pack called
+	// vb.worldgen.set_pipeline, in which case --singleplayer's terrain
+	// matches a dedicated server's. Shared by `pool` and the spawn search.
+	vb::worldgen::WorldGenerator generator;
 	vb::worldgen::WorldGenWorkerPool pool;
 	// Phase 7.6 follow-up: declared before `server` so it outlives the
 	// WorldReplicator that `server` owns (which holds a raw, non-owning
@@ -392,15 +394,12 @@ struct Singleplayer {
 	Singleplayer(std::uint64_t seed, const std::string &name, int view_distance) : pack_runtime(make_singleplayer_pack_runtime(net.server(), registry, auth_config)),
 																				   move_params(pack_runtime.effective_move_params(vb::physics::MoveParams{})),
 																				   world(registry),
-																				   // Phase 6.14: mirrors src/server/main.cpp's own
-																				   // build_worldgen_pipeline call -- nullptr unless a pack called
-																				   // vb.worldgen.set_pipeline, in which case --singleplayer's
-																				   // terrain matches a dedicated server's.
-																				   pool(make_generator(seed, registry,
+																				   generator(make_generator(seed, registry,
 																						   pack_runtime.build_worldgen_pipeline(
 																								   vb::worldgen::WorldGenParams{ seed }))),
+																				   pool(generator),
 																				   server(net.server(), sp_server_config(seed, view_distance, auth_config),
-																						   make_singleplayer_host(seed, pack_runtime, registry, move_params,
+																						   make_singleplayer_host(generator, pack_runtime, registry, move_params,
 																								   auth_config, &auth_service)) {
 		server.set_move_params(move_params);
 		// Phase 6.18: mirrors src/server/main.cpp's own set_punch_params call.

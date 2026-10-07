@@ -172,7 +172,10 @@ void ClientAssetCache::commit_file(core::AssetHash h,
 core::AssetHash ClientAssetCache::last_known_manifest_hash_for(
 		std::string_view server_key) const {
 	auto it = last_manifest_hash_.find(std::string(server_key));
-	return it != last_manifest_hash_.end() ? it->second : core::AssetHash{};
+	if (it == last_manifest_hash_.end() || !manifests_.contains(it->second)) {
+		return core::AssetHash{};
+	}
+	return it->second;
 }
 
 void ClientAssetCache::remember_manifest_hash(std::string_view server_key,
@@ -181,15 +184,35 @@ void ClientAssetCache::remember_manifest_hash(std::string_view server_key,
 }
 
 std::vector<core::AssetHash> ClientAssetCache::compute_missing(
-		const std::vector<protocol::AssetEntryRecord> &entries) {
+		const std::vector<protocol::AssetEntryRecord> &entries,
+		core::AssetHash manifest_hash) {
 	pending_.clear();
 	virtual_fs_.clear();
+	const std::vector<protocol::AssetEntryRecord> *list = &entries;
+	if (manifest_hash != core::AssetHash{}) {
+		if (!entries.empty()) {
+			manifests_[manifest_hash] = entries;
+		} else if (const auto it = manifests_.find(manifest_hash); it != manifests_.end()) {
+			list = &it->second; // reconnect fast path: the server sent no entries
+		}
+	}
 	std::vector<core::AssetHash> missing;
-	for (const auto &e : entries) {
+	const auto request = [&](const protocol::AssetEntryRecord &e) {
+		auto [it, inserted] = pending_.try_emplace(e.hash);
+		it->second.paths.push_back(e.path);
+		if (inserted) {
+			it->second.expected_size = e.size;
+			missing.push_back(e.hash); // once per hash, however many paths share it
+		}
+	};
+	for (const auto &e : *list) {
+		if (pending_.contains(e.hash)) {
+			request(e); // already being fetched for another path
+			continue;
+		}
 		auto it = index_.find(e.hash);
 		if (it == index_.end()) {
-			missing.push_back(e.hash);
-			pending_[e.hash] = PendingFile{ e.path, e.size, {}, 0, 0, false };
+			request(e);
 			continue;
 		}
 		touch(e.hash);
@@ -200,8 +223,7 @@ std::vector<core::AssetHash> ClientAssetCache::compute_missing(
 			// Index says we have it but the file is gone (manual deletion,
 			// disk issue) -- re-request it rather than silently omitting it.
 			index_.erase(it);
-			missing.push_back(e.hash);
-			pending_[e.hash] = PendingFile{ e.path, e.size, {}, 0, 0, false };
+			request(e);
 		}
 	}
 	save_index();
@@ -236,7 +258,9 @@ bool ClientAssetCache::ingest_chunk(const protocol::S2CAssetData &chunk) {
 	}
 
 	commit_file(chunk.hash, pf.buffer);
-	virtual_fs_[pf.path] = pf.buffer;
+	for (const std::string &path : pf.paths) {
+		virtual_fs_[path] = pf.buffer;
+	}
 	pf.done = true;
 	return true;
 }

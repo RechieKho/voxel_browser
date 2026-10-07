@@ -16,12 +16,14 @@ Player:get_login
 Player:get_name
 Player:get_pos
 Player:get_selected_slot
+Player:get_spawn_pos
 Player:give
 Player:open_ui
 Player:place_block
 Player:punch
 Player:remove
 Player:send_message
+Player:set_pos
 Player:set_velocity
 Player:take
 client.break_progress

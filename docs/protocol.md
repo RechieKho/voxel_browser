@@ -445,6 +445,8 @@ reply; if it has no manifest at all (opted out, or built without
 `VB_WITH_COMPRESSION`), `manifest_hash` is `{0,0}` and `entries` is empty.
 The client always replies with exactly one `C2S_AssetRequest`; an empty
 `missing` list (nothing to fetch) skips straight past `kSyncingAssets`.
+`missing` names each hash at most once, even when several manifest paths
+share its bytes; the client writes the received file to every such path.
 `S2C_AssetData` chunks are paced by the server (a small per-tick send budget,
 not real flow-control windowing) and verified by hash on the client before
 being committed to its content-addressed cache — a mismatch aborts the

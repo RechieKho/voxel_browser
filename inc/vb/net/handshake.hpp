@@ -334,9 +334,10 @@ struct HandshakeClientHost {
 	std::function<core::AssetHash()> last_known_manifest_hash = [] {
 		return core::AssetHash{};
 	};
-	std::function<std::vector<core::AssetHash>(
-			const std::vector<protocol::AssetEntryRecord> &)>
-			assets_missing = [](const std::vector<protocol::AssetEntryRecord> &) {
+	// Gets the whole S2C_AssetManifest: on the reconnect fast path its entry
+	// list is empty and only manifest_hash says which files the client needs.
+	std::function<std::vector<core::AssetHash>(const protocol::S2CAssetManifest &)>
+			assets_missing = [](const protocol::S2CAssetManifest &) {
 		return std::vector<core::AssetHash>{};
 	};
 	std::function<bool(const protocol::S2CAssetData &)> on_asset_chunk =

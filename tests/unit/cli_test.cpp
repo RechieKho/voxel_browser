@@ -44,6 +44,17 @@ TEST_CASE("describe_build is non-empty and mentions the project") {
 	CHECK(s.find("protocol") != std::string::npos);
 }
 
+// The release workflows grep --version for "+asset-sync": a distribution
+// build without VB_WITH_COMPRESSION silently shipped with asset sync off.
+TEST_CASE("describe_build reports +asset-sync exactly when asset sync is built in") {
+	const std::string s = vb::core::describe_build();
+#if defined(VB_WITH_COMPRESSION)
+	CHECK(s.find("+asset-sync") != std::string::npos);
+#else
+	CHECK(s.find("+asset-sync") == std::string::npos);
+#endif
+}
+
 TEST_CASE("protocol version is set") {
 	CHECK(vb::kEngineProtocolVersion >= 1);
 }

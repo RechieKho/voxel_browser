@@ -167,4 +167,47 @@ TEST_CASE("LRU eviction keeps the cache under its byte cap") {
 	std::filesystem::remove_all(dir);
 }
 
+TEST_CASE("identical bytes under two paths are requested once and land at both paths") {
+	const auto dir = temp_cache_dir("duplicates");
+	ClientAssetCache cache(dir, 1024ull * 1024ull);
+
+	const AssetHash h = vb::assetsync::hash_bytes(bytes_of("same"));
+	const auto missing = cache.compute_missing(
+			{ entry_for("a.png", h, 4), entry_for("b.png", h, 4) });
+	REQUIRE(missing.size() == 1);
+	CHECK(missing[0] == h);
+	CHECK(cache.sync_total_bytes() == 4);
+
+	REQUIRE(ingest_whole_file(cache, h, "same"));
+	CHECK(cache.all_received());
+	CHECK(cache.virtual_fs().count("a.png") == 1);
+	CHECK(cache.virtual_fs().count("b.png") == 1);
+
+	std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("reconnect fast path rebuilds the virtual FS from the remembered manifest") {
+	const auto dir = temp_cache_dir("fast_path");
+	ClientAssetCache cache(dir, 1024ull * 1024ull);
+
+	const AssetHash file = vb::assetsync::hash_bytes(bytes_of("ui code"));
+	const AssetHash manifest{ 42, 7 };
+	CHECK(cache.compute_missing({ entry_for("ui/hud.lua", file, 7) }, manifest).size() == 1);
+	REQUIRE(ingest_whole_file(cache, file, "ui code"));
+
+	// Not offered as "known" until the cache can actually rebuild it.
+	cache.remember_manifest_hash("server", AssetHash{ 9, 9 });
+	CHECK(cache.last_known_manifest_hash_for("server") == AssetHash{});
+	cache.remember_manifest_hash("server", manifest);
+	CHECK(cache.last_known_manifest_hash_for("server") == manifest);
+
+	// The fast-path reply: same manifest hash, no entries.
+	CHECK(cache.compute_missing({}, manifest).empty());
+	CHECK(cache.all_received());
+	REQUIRE(cache.virtual_fs().count("ui/hud.lua") == 1);
+	CHECK(cache.virtual_fs().at("ui/hud.lua") == bytes_of("ui code"));
+
+	std::filesystem::remove_all(dir);
+}
+
 #endif // VB_WITH_COMPRESSION
