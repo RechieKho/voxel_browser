@@ -109,6 +109,10 @@ def main():
         fname = exe_name(name, args.platform)
         if (args.build_dir / fname).is_file():
             entries.append((fname, args.build_dir / fname, True))
+    if args.platform.startswith("windows"):
+        # vcpkg's dynamic triplet puts the runtime DLLs (protobuf, abseil, ...) next to the exes in
+        # the build dir. Without them the installed server dies with STATUS_DLL_NOT_FOUND.
+        entries += [(dll.name, dll, False) for dll in sorted(args.build_dir.glob("*.dll"))]
     for fname in EXTRA_FILES:
         entries.append((fname, ROOT / fname, False))
     entries += [(str(arc.as_posix()), src, False)
