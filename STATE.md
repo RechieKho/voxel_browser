@@ -134,9 +134,12 @@ Both sections were historical (Phase 0, 2026-09-10) and moved to
 - **Tags:** `setup_metadata.yml` runs `git describe --tags --abbrev=0`, which
   errors on a history with no tags; `v0.0.1` exists since 2026-09-28, so
   `bundle`/`publish` now get a real version.
-- `publish.yml` triggers only on `v*.*.*` tags and pulls artifacts from
-  `runner.yml` by name `${project_name}` (note trailing space in the YAML
-  on `name:` line 26 — `action-download-artifact` may or may not trim it).
+- `publish.yml` triggers only on `v*.*.*` tags and **rebuilds at the tag** by
+  calling `runner.yml` (`workflow_call`), then downloads the `${project_name}`
+  bundle artifact from the same run. It used to pull the latest `main` build,
+  whose shallow checkout had no tags, so archives/`release.toml` said `v0.0.0`
+  and `vb install` 404'd. `setup_metadata.yml` now uses `fetch-depth: 0`.
+  Releases cut before this fix (all `v0.0.x` so far) are broken: re-tag.
 - `lint.yml` installs clang-format via `pip install` then runs it via
   `pipx run clang-format` (dead weight from the pip install). Lints `src/**`
   with `--Werror` — every new file under `src/` must be clang-format-clean.
