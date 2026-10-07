@@ -567,7 +567,7 @@ ClientHandshakeStep ClientHandshake::on_frame(const Frame &frame) {
 			if (!m) {
 				return fail("malformed AssetManifest");
 			}
-			std::vector<core::AssetHash> missing = host_.assets_missing(m->entries);
+			std::vector<core::AssetHash> missing = host_.assets_missing(*m);
 
 			ClientHandshakeStep step;
 			step.send.push_back(frame_message(protocol::C2SAssetRequest{ missing }));

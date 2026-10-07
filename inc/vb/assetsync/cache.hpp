@@ -29,16 +29,23 @@ public:
 	// Reconnect fast path (in-session only this phase -- not persisted
 	// across process restarts; the on-disk CAS already makes a restarted
 	// process's *transfer* a no-op regardless, see docs/lua-api.md-style
-	// note in REMAINING_TASKS.md).
+	// note in REMAINING_TASKS.md). Reports the zero hash (forcing a full
+	// manifest) unless this cache still holds that manifest's entry list:
+	// a fast-path reply carries no entries, so compute_missing() has to
+	// rebuild the virtual FS from the stored list.
 	core::AssetHash last_known_manifest_hash_for(std::string_view server_key) const;
 	void remember_manifest_hash(std::string_view server_key, core::AssetHash hash);
 
 	// Starts a new transfer cycle: returns the hashes from `entries` not
-	// already present in the cache, and immediately reads every
-	// already-cached entry into the virtual FS (touching its LRU
-	// last-used time). Resets ingest/all_received bookkeeping.
+	// already present in the cache, each once even when several paths share
+	// it, and immediately reads every already-cached entry into the virtual
+	// FS (touching its LRU last-used time). Resets ingest/all_received
+	// bookkeeping. `manifest_hash` is the S2C_AssetManifest's own hash: a
+	// full entry list is remembered under it, and an empty list for a
+	// remembered hash (the server's reconnect fast path) reuses that list.
 	std::vector<core::AssetHash> compute_missing(
-			const std::vector<protocol::AssetEntryRecord> &entries);
+			const std::vector<protocol::AssetEntryRecord> &entries,
+			core::AssetHash manifest_hash = {});
 
 	// Appends one streamed chunk. Returns false on a protocol violation
 	// (unexpected hash/seq) or a completed file failing hash verification --
@@ -74,7 +81,7 @@ private:
 		std::int64_t last_used_unix = 0;
 	};
 	struct PendingFile {
-		std::string path;
+		std::vector<std::string> paths; // every manifest path with these bytes
 		std::uint64_t expected_size = 0;
 		std::vector<std::byte> buffer;
 		std::uint32_t chunks_received = 0;
@@ -96,6 +103,8 @@ private:
 	std::uint64_t cap_bytes_;
 	std::unordered_map<core::AssetHash, IndexEntry> index_;
 	std::unordered_map<std::string, core::AssetHash> last_manifest_hash_;
+	// Entry list of every full manifest seen this session, by manifest hash.
+	std::unordered_map<core::AssetHash, std::vector<protocol::AssetEntryRecord>> manifests_;
 	std::unordered_map<core::AssetHash, PendingFile> pending_;
 	std::unordered_map<std::string, std::vector<std::byte>> virtual_fs_;
 };

@@ -120,6 +120,17 @@ content-only (e.g. the user explicitly asks for a content-pack feature).
   server, not per join. `ServerSession::teleport_player` is no longer
   automation-only: Lua `player:set_pos(x,y,z)` / `player:get_spawn_pos()`.
 
+- **Asset cache keys downloads by content hash, but paths are many-to-one**
+  (2026-10-07): identical files under two paths used to be requested twice,
+  and the server's second copy failed the join. `ClientAssetCache` now
+  requests each hash once and writes it to every path. It also remembers
+  each full manifest's entry list, so the server's reconnect fast path (no
+  entries) can rebuild the virtual FS; `last_known_manifest_hash_for` stays
+  zero unless that list is held. Nothing sends a known hash yet.
+- **Crack overlay draws for every damaged block** (2026-10-07), not just the
+  aimed one, pulled 1% toward the eye instead of a fixed 0.002 bulge.
+  `GenMeshCube` meshes are already uploaded (static) -- copy, don't re-upload.
+
 Full write-ups for all of the above: `state/changelog-part4.md` (newest),
 then `state/changelog-part3.md` and the other detail files below.
 
@@ -149,6 +160,12 @@ Both sections were historical (Phase 0, 2026-09-10) and moved to
   whose shallow checkout had no tags, so archives/`release.toml` said `v0.0.0`
   and `vb install` 404'd. `setup_metadata.yml` now uses `fetch-depth: 0`.
   Releases cut before this fix (all `v0.0.x` so far) are broken: re-tag.
+- **Distribution builds must pass `-DVB_WITH_COMPRESSION=ON`** (default
+  OFF). Without it asset sync is a `kDisabled` stub: joining clients get no
+  `ui/` scripts (no HUD, so no visible chat/hotbar) and untextured blocks.
+  v0.1.2 shipped like that. `--version` now reports `+asset-sync`, the three
+  build workflows' release verify step requires it, and the server warns at
+  startup when it's missing.
 - `lint.yml` installs clang-format via `pip install` then runs it via
   `pipx run clang-format` (dead weight from the pip install). Lints `src/**`
   with `--Werror` — every new file under `src/` must be clang-format-clean.

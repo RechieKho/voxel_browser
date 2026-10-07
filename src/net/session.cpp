@@ -1844,8 +1844,8 @@ HandshakeClientHost make_asset_host(assetsync::ClientAssetCache *cache) {
 		return {};
 	}
 	HandshakeClientHost host;
-	host.assets_missing = [cache](const std::vector<protocol::AssetEntryRecord> &entries) {
-		return cache->compute_missing(entries);
+	host.assets_missing = [cache](const protocol::S2CAssetManifest &manifest) {
+		return cache->compute_missing(manifest.entries, manifest.manifest_hash);
 	};
 	host.on_asset_chunk = [cache](const protocol::S2CAssetData &chunk) {
 		return cache->ingest_chunk(chunk);
