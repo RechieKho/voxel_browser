@@ -27,6 +27,10 @@ jobs:
     steps:
       - name: Check out code
         uses: actions/checkout@v4
+        with:
+          # Full history + tags: a shallow clone has no tags, so `git describe`
+          # would fall back to v0.0.0 and name the release archives wrongly.
+          fetch-depth: 0
 
       - name: Get project name
         id: get_project_name

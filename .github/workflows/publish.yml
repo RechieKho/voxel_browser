@@ -9,8 +9,13 @@ jobs:
   setup_metadata:
     uses: ./.github/workflows/setup_metadata.yml
 
+  # Build at the tag itself so archive names and release.toml carry the tag's
+  # version (artifacts from an earlier main build would be named for an older tag).
+  build:
+    uses: ./.github/workflows/runner.yml
+
   release:
-    needs: setup_metadata
+    needs: [setup_metadata, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -19,11 +24,10 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Download Artifact
-        uses: dawidd6/action-download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          workflow: runner.yml
-          name: ${{ needs.setup_metadata.outputs.project_name }} 
+          name: ${{ needs.setup_metadata.outputs.project_name }}
+          path: ${{ github.workspace }}
 
       # release.toml.sig: Ed25519 signature over release.toml (dev-cli.md "Release
       # signing"). Until release_keys.txt lists a key there is nothing to enforce,
