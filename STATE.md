@@ -82,7 +82,7 @@ content-only (e.g. the user explicitly asks for a content-pack feature).
 
 ---
 
-## Current status (2026-10-06)
+## Current status (2026-10-07)
 
 - **E2E automation (dev-only): E0–E6 all landed** (2026-10-02..04). Design
   `docs/e2e-automation.md` (gotchas in its §10), wire contract
@@ -110,6 +110,15 @@ content-only (e.g. the user explicitly asks for a content-pack feature).
 - `WorldReplicator::set_send_budget_bytes` (`server.toml`
   `chunk_send_budget_bytes_per_tick`, 0 = unlimited) caps per-tick chunk
   send bytes; the ingest side is `set_chunk_ingest_budget()`.
+
+- **Spawn position must come from the world's own generator** (2026-10-07).
+  `--singleplayer` used to compute it with a pipeline-less `WorldGenerator`
+  whose height field differs from `content/base`'s Lua pipeline -- feet up to
+  14 blocks under (or ~19 above) the real surface depending on seed.
+  `default_spawn_position` now also checks the *generated* chunks (structures,
+  carvers) for solid ground + two air voxels, so it's computed once per
+  server, not per join. `ServerSession::teleport_player` is no longer
+  automation-only: Lua `player:set_pos(x,y,z)` / `player:get_spawn_pos()`.
 
 Full write-ups for all of the above: `state/changelog-part4.md` (newest),
 then `state/changelog-part3.md` and the other detail files below.

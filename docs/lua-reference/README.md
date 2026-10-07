@@ -9,6 +9,8 @@ One line per function. Click a name for its parameters and example. Narrative/de
 [Full reference](Player.md)
 
 - [`Player:get_pos() -> Vec3`](Player.md#player-get-pos) — Server pack VM only. Current position.
+- [`Player:set_pos(x, y, z)`](Player.md#player-set-pos) — Server pack VM only. Teleports the player: feet position, velocity zeroed, look direction kept. The player's client snaps to it like any server correction. Errors on non-finite coordinates.
+- [`Player:get_spawn_pos() -> Vec3`](Player.md#player-get-spawn-pos) — Server pack VM only. The feet position this player was granted when they joined (where the default respawn puts them).
 - [`Player:set_velocity(x, y, z)`](Player.md#player-set-velocity) — Server pack VM only. Adds to the player's velocity (m/s).
 - [`Player:remove()`](Player.md#player-remove) — Server pack VM only. Logged no-op (nothing to remove a player from).
 - [`Player:get_inventory() -> ItemStack[]`](Player.md#player-get-inventory) — Server pack VM only. Inventory as a list of `{item=, count=}` (1-based slots).

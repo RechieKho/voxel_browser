@@ -17,6 +17,28 @@ local Player = {}
 function Player:get_pos() end
 
 ---@vb context runtime
+---Server pack VM only. Teleports the player: feet position, velocity zeroed,
+---look direction kept. The player's client snaps to it like any server
+---correction. Errors on non-finite coordinates.
+---```lua
+---player:set_pos(0.5, 90, 0.5)
+---```
+---@param x number
+---@param y number
+---@param z number
+function Player:set_pos(x, y, z) end
+
+---@vb context runtime
+---Server pack VM only. The feet position this player was granted when they
+---joined (where the default respawn puts them).
+---```lua
+---local s = player:get_spawn_pos()
+---player:set_pos(s.x, s.y, s.z) -- back to spawn
+---```
+---@return Vec3
+function Player:get_spawn_pos() end
+
+---@vb context runtime
 ---Server pack VM only. Adds to the player's velocity (m/s).
 ---```lua
 ---player:set_velocity(0, 8, 0) -- launch upward

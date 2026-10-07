@@ -16,6 +16,39 @@ Returns `Vec3`
 local p = player:get_pos() -- {x=, y=, z=}
 ```
 
+## Player:set_pos
+
+`Player:set_pos(x, y, z)`
+
+context: **runtime**
+
+Server pack VM only. Teleports the player: feet position, velocity zeroed, look direction kept. The player's client snaps to it like any server correction. Errors on non-finite coordinates.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `x` | `number` |  |
+| `y` | `number` |  |
+| `z` | `number` |  |
+
+```lua
+player:set_pos(0.5, 90, 0.5)
+```
+
+## Player:get_spawn_pos
+
+`Player:get_spawn_pos() -> Vec3`
+
+context: **runtime**
+
+Server pack VM only. The feet position this player was granted when they joined (where the default respawn puts them).
+
+Returns `Vec3`
+
+```lua
+local s = player:get_spawn_pos()
+player:set_pos(s.x, s.y, s.z) -- back to spawn
+```
+
 ## Player:set_velocity
 
 `Player:set_velocity(x, y, z)`

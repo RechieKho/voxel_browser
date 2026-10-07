@@ -56,7 +56,8 @@ Runtime:
   `vb.world.raycast(origin, dir, max)`, `vb.world.spawn(kind, pos)`.
 - Entities: `entity:get_pos()`, `entity:set_velocity()`, `entity:remove()`,
   `entity:get_inventory()`, component-ish accessors for base components.
-- Players: `player:send_message(text)`, `player:open_ui(name, ctx)`,
+- Players: `player:set_pos(x,y,z)` (teleport), `player:get_spawn_pos()`,
+  `player:send_message(text)`, `player:open_ui(name, ctx)`,
   `player:give(itemstack)`, `player:take(itemstack) -> bool`,
   `player:get_name()`.
 - Events (subscribe): `vb.on("player_join" | "player_leave" | "block_break" |

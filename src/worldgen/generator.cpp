@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <map>
+#include <optional>
 
 #include "vb/core/math.hpp"
 #include "vb/world/paletted_chunk_store.hpp"
@@ -212,21 +214,76 @@ int WorldGenerator::sea_level() const {
 	return pipeline_ ? pipeline_->sea_level : params_.sea_level;
 }
 
+namespace {
+
+// Generates (and caches) whole chunks so a spawn candidate can be checked
+// against the real world -- structures and carvers included -- instead of the
+// bare heightmap.
+class GeneratedVoxels {
+public:
+	explicit GeneratedVoxels(const WorldGenerator &gen) : gen_(gen) {}
+
+	core::BlockId at(int x, int y, int z) {
+		const core::IVec3 voxel{ x, y, z };
+		const core::ChunkCoord coord = core::chunk_of(voxel);
+		auto it = chunks_.find(coord);
+		if (it == chunks_.end()) {
+			world::Chunk chunk(coord);
+			gen_.generate(chunk);
+			it = chunks_.emplace(coord, std::move(chunk)).first;
+		}
+		const core::IVec3 local = core::local_of(voxel);
+		return it->second.get(local.x, local.y, local.z);
+	}
+
+private:
+	const WorldGenerator &gen_;
+	std::map<core::ChunkCoord, world::Chunk> chunks_;
+};
+
+} // namespace
+
 core::Vec3d default_spawn_position(const WorldGenerator &gen, int spawn_x,
 		int spawn_z) {
-	int land_x = spawn_x;
-	int land_z = spawn_z;
 	const int sea_level = gen.sea_level();
+	const core::BlockId air = core::BlockId::kAir;
+	GeneratedVoxels voxels(gen);
+
+	// A column is a spawn spot when its surface is dry land and, in the
+	// generated world, the surface voxel is still solid with two voxels of
+	// air above it (a standing player is under two voxels tall). The
+	// heightmap alone misses whatever the later passes put there: a tree
+	// trunk or boulder standing on that exact column, or a cave carved
+	// through the surface.
+	const auto standable = [&](int x, int z, int surface) {
+		const core::BlockId floor = voxels.at(x, surface, z);
+		return floor != air && voxels.at(x, surface + 1, z) == air &&
+				voxels.at(x, surface + 2, z) == air;
+	};
 
 	// Spiral outward in growing square rings from (spawn_x, spawn_z) until a
-	// dry-land column turns up. Ring 0 is just the starting column itself;
+	// standable column turns up. Ring 0 is just the starting column itself;
 	// ring r visits the perimeter of the (2r+1)x(2r+1) square around it.
 	// Capped well beyond any plausible island/ocean size so a pathological
-	// seed can't spin forever -- falls back to the starting column's surface
-	// (which is what every caller did before this search existed) if nothing
-	// turns up.
+	// seed can't spin forever -- falls back to the first dry-land column seen
+	// (or the starting column) if nothing standable turns up.
 	constexpr int kMaxRing = 256;
-	bool found = gen.surface_height(land_x, land_z) > sea_level;
+	std::optional<core::IVec3> dry_land;
+	const auto try_column = [&](int x, int z) -> std::optional<core::IVec3> {
+		const int surface = gen.surface_height(x, z);
+		if (surface <= sea_level) {
+			return std::nullopt;
+		}
+		if (!dry_land) {
+			dry_land = core::IVec3{ x, surface, z };
+		}
+		if (!standable(x, z, surface)) {
+			return std::nullopt;
+		}
+		return core::IVec3{ x, surface, z };
+	};
+
+	std::optional<core::IVec3> found = try_column(spawn_x, spawn_z);
 	for (int r = 1; !found && r <= kMaxRing; ++r) {
 		const int x0 = spawn_x - r;
 		const int x1 = spawn_x + r;
@@ -239,20 +296,21 @@ core::Vec3d default_spawn_position(const WorldGenerator &gen, int spawn_x,
 				if (x != x0 && x != x1 && z != z0 && z != z1) {
 					continue;
 				}
-				if (gen.surface_height(x, z) > sea_level) {
-					land_x = x;
-					land_z = z;
-					found = true;
-				}
+				found = try_column(x, z);
 			}
 		}
 	}
 
-	const int surface = gen.surface_height(land_x, land_z);
+	core::IVec3 spot{ spawn_x, gen.surface_height(spawn_x, spawn_z), spawn_z };
+	if (found) {
+		spot = *found;
+	} else if (dry_land) {
+		spot = *dry_land;
+	}
 	// Feet one voxel above the topmost solid block (occupies [surface,
 	// surface+1)), centred in the column.
-	return { static_cast<double>(land_x) + 0.5,
-		static_cast<double>(surface) + 1.0, static_cast<double>(land_z) + 0.5 };
+	return { static_cast<double>(spot.x) + 0.5,
+		static_cast<double>(spot.y) + 1.0, static_cast<double>(spot.z) + 0.5 };
 }
 
 } // namespace vb::worldgen

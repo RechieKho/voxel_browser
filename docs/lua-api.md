@@ -295,6 +295,8 @@ rt.dispatch_tick(dt);
   applies — re-registering an existing block name doesn't update it.
 - Entity / player Lua object (needs `attach_session()`; one merged usertype
   today since no non-player entity exists): `:get_pos() -> {x,y,z}`,
+  `:set_pos(x,y,z)` (teleport: feet position, velocity zeroed, the client
+  snaps to it), `:get_spawn_pos() -> {x,y,z}` (the join spawn point),
   `:set_velocity(x,y,z)`, `:remove()` (no-op, logged — nothing to remove
   from), `:get_inventory() -> {{item,count}, ...}`, `:give({item,count})`,
   `:take({item,count}) -> bool` (removes up to `count` of `item` across

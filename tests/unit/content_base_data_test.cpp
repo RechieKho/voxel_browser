@@ -9,6 +9,7 @@
 
 #if VB_WITH_LUA
 
+#include <cmath>
 #include <filesystem>
 
 using vb::test::BasePackFixture;
@@ -254,6 +255,43 @@ TEST_CASE("content/base's worldgen pipeline: two biomes, sand beaches, and a dry
 	const auto spawn = vb::worldgen::default_spawn_position(gen);
 	CHECK(gen.surface_height(static_cast<int>(std::floor(spawn.x)), static_cast<int>(std::floor(spawn.z))) >
 			pipeline->sea_level);
+}
+
+// Regression: --singleplayer used to pick its spawn with a pipeline-less
+// generator whose height field differs from content/base's, and the spawn
+// search only consulted the heightmap -- so players often joined below the
+// real terrain, or inside a tree/boulder standing on the spawn column. Check
+// the spawn against the *generated* chunks (structures and carvers included)
+// for several seeds: solid ground underfoot, two voxels of air for the body.
+TEST_CASE("content/base: default_spawn_position stands on open ground in the generated world") {
+	vb::net::LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, vb::test::content_base_storage("worldgen_spawn"));
+	REQUIRE(vb::script::load_content_pack(rt, vb::test::content_base_dir()));
+	rt.freeze();
+
+	for (const std::uint64_t seed : { 1ULL, 7ULL, 19ULL, 1234ULL, 20260705ULL }) {
+		CAPTURE(seed);
+		vb::worldgen::WorldGenParams params;
+		params.seed = seed;
+		const auto pipeline = rt.build_worldgen_pipeline(params);
+		REQUIRE(pipeline != nullptr);
+		const vb::worldgen::WorldGenerator gen(params, registry, pipeline);
+
+		const auto spawn = vb::worldgen::default_spawn_position(gen);
+		const vb::core::IVec3 feet{ static_cast<int>(std::floor(spawn.x)),
+			static_cast<int>(std::floor(spawn.y)), static_cast<int>(std::floor(spawn.z)) };
+		const auto block_at = [&](int dy) {
+			const vb::core::IVec3 v{ feet.x, feet.y + dy, feet.z };
+			vb::world::Chunk chunk(vb::core::chunk_of(v));
+			gen.generate(chunk);
+			const auto local = vb::core::local_of(v);
+			return chunk.get(local.x, local.y, local.z);
+		};
+		CHECK(block_at(-1) != vb::core::BlockId::kAir);
+		CHECK(block_at(0) == vb::core::BlockId::kAir);
+		CHECK(block_at(1) == vb::core::BlockId::kAir);
+	}
 }
 
 TEST_CASE("content/base's structures are placed by its biomes and appear in generated chunks") {

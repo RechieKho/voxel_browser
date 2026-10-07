@@ -469,10 +469,13 @@ int main(int argc, char **argv) {
 	// of seed -- with base_height=64 and amplitude=28 the real surface ranges
 	// roughly [36, 92], so a fixed Y can land at or below it and spawn the
 	// player embedded in solid terrain outright (no fall involved).
+	// Computed once: the search generates real chunks to rule out spots
+	// inside trees/boulders/caves, which is too slow to redo per join.
+	const vb::core::Vec3d spawn = vb::worldgen::default_spawn_position(generator);
 	vb::net::HandshakeServerHost host;
-	host.on_ready = [generator](std::string_view) {
+	host.on_ready = [spawn](std::string_view) {
 		vb::net::JoinGrant grant;
-		grant.spawn_pos = vb::worldgen::default_spawn_position(generator);
+		grant.spawn_pos = spawn;
 		return grant;
 	};
 	// Phase 4.3: advertise the (possibly Lua-extended) registry to every

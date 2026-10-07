@@ -1449,6 +1449,79 @@ TEST_CASE("player:get_health() reports {current, max} and drops after damage()")
 	)"));
 }
 
+// player:set_pos() teleports through ServerSession::teleport_player (no
+// longer automation-only): the server position moves at once, velocity is
+// zeroed, and the owning client's prediction reconciles to the new spot.
+TEST_CASE("player:set_pos() teleports a player and the client follows") {
+	LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("set_pos"));
+	REQUIRE(rt.load_pack_file(R"(
+		after, spawn, bad_ok = nil, nil, nil
+		vb.on("chat", function(player, text)
+			if text == "tp" then
+				player:set_pos(100.5, 80, -20.5)
+				after = player:get_pos()
+				spawn = player:get_spawn_pos()
+				bad_ok = pcall(function() player:set_pos(0 / 0, 1, 2) end)
+			end
+			return true
+		end)
+	)"));
+	rt.freeze();
+
+	HandshakeServerConfig cfg;
+	cfg.world_seed = 7;
+	ServerSession server(net.server(), cfg);
+	rt.attach_session(server);
+	// Fly mode: no gravity, so the teleported position holds still while the
+	// client catches up.
+	vb::physics::MoveParams fly;
+	fly.fly = true;
+	server.set_move_params(fly);
+	REQUIRE(net.server().listen(0));
+
+	Transport &ta = net.create_client();
+	auto ida = ta.connect("x", 0);
+	REQUIRE(ida);
+	ClientSession client(ta, *ida, HandshakeClientConfig{ "A", "", "v", 1 });
+	auto pump = [&](int n) {
+		for (int i = 0; i < n; ++i) {
+			server.tick(0.05);
+			client.tick(0.05);
+		}
+	};
+	pump(16);
+	REQUIRE(client.joined());
+
+	client.send_chat("tp");
+	pump(2);
+	REQUIRE(rt.load_pack_file(R"(
+		assert(after.x == 100.5 and after.y == 80 and after.z == -20.5)
+		assert(spawn.x == 0 and spawn.y == 64 and spawn.z == 0)
+		assert(bad_ok == false)
+	)"));
+	const auto st = server.player_move_state(client.join_accept()->your_net_id);
+	REQUIRE(st);
+	CHECK(st->position.x == doctest::Approx(100.5));
+	CHECK(st->position.y == doctest::Approx(80.0));
+	CHECK(st->position.z == doctest::Approx(-20.5));
+
+	// A real client is always sending input; idle cmds are enough for the
+	// server to include its authoritative state in snapshots to reconcile to.
+	vb::protocol::InputCmd idle;
+	for (std::uint32_t i = 1; i <= 10; ++i) {
+		idle.seq = i;
+		client.push_input(idle);
+		pump(1);
+	}
+	const auto feet = client.predicted_feet();
+	CHECK(feet.x == doctest::Approx(100.5).epsilon(0.01));
+	CHECK(feet.y == doctest::Approx(80.0).epsilon(0.01));
+	CHECK(feet.z == doctest::Approx(-20.5).epsilon(0.01));
+}
+
 TEST_CASE("vb.register_entity + vb.world.spawn: self persists across on_tick, "
 		  "on_hit/on_death fire, and the instance replicates to a client") {
 	LoopbackNetwork net;

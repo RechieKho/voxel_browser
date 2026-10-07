@@ -127,6 +127,12 @@ private:
 // floating in open water instead of on land. This now spirals outward from
 // (spawn_x, spawn_z) in a growing square ring, one column at a time, until
 // it finds one whose surface sits above sea level, and spawns there instead.
+// A dry column also has to be standable in the *generated* world (the
+// heightmap alone ignores structures and carvers): its surface voxel still
+// solid and the two voxels above it air -- otherwise a tree trunk, boulder or
+// cave mouth on that exact column spawned the player inside it. Pass the
+// same generator (pipeline included) the world itself uses, or the heights
+// won't match the terrain the player actually lands in.
 // Callers (client `--singleplayer` and the dedicated server) feed this into
 // a HandshakeServerHost::on_ready so JoinGrant::spawn_pos is seed-correct
 // instead of a guess.
