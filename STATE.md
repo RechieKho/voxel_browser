@@ -127,6 +127,10 @@ content-only (e.g. the user explicitly asks for a content-pack feature).
   each full manifest's entry list, so the server's reconnect fast path (no
   entries) can rebuild the virtual FS; `last_known_manifest_hash_for` stays
   zero unless that list is held. Nothing sends a known hash yet.
+- **Every e2e timeout must scale with `VB_E2E_TIMEOUT_SCALE`, both processes'
+  included** (2026-10-08): the server's fixed 10 s per-step handshake limit
+  (now `handshake_timeout_seconds`) intermittently dropped a second client on
+  the sanitized e2e leg while the harness and client were already stretched 3x.
 - **Saved sign-ins are per server** (2026-10-08): `auth::SessionStore` keys
   refresh tokens by `(server "host:port", issuer, client_id)`, not by
   provider, so two servers on one Keycloak realm no longer share a login and

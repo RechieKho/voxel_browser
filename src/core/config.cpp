@@ -69,6 +69,11 @@ ServerConfig server_from_table(const toml::table &tbl) {
 	read_uint(tbl, "port", c.port);
 	read_string(tbl, "content_pack", c.content_pack);
 	read_uint(tbl, "max_players", c.max_players);
+	read_double(tbl, "handshake_timeout_seconds", c.handshake_timeout_seconds);
+	if (!(c.handshake_timeout_seconds > 0.0)) {
+		VB_WARN("config", "handshake_timeout_seconds must be > 0, using 10");
+		c.handshake_timeout_seconds = 10.0;
+	}
 	read_uint(tbl, "view_distance", c.view_distance);
 	read_uint(tbl, "tick_rate", c.tick_rate);
 	read_uint(tbl, "world_seed", c.world_seed);

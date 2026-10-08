@@ -630,7 +630,12 @@ without any automation and remove the duplicated headless loop.
     assertion. Aim settling tolerance loosened to 0.05 degrees. (c) The client's own hard-coded
     10 s connect deadline expired for the second client behind `--net-sim` on a sanitized build;
     dev builds read `VB_CONNECT_TIMEOUT_SECONDS` (the harness sets it from its timeout scale;
-    shipped builds are still exactly 10 s). UBSan also prints ~35 `invalid vptr` lines per client
+    shipped builds are still exactly 10 s). The server side has the same shape: it drops a join
+    stuck in one handshake step after `handshake_timeout_seconds` (server.toml, default 10 s), and
+    a sanitized server under load intermittently kicked a second client that way ("join failed:
+    handshake timeout" in `test_same_account_signing_in_again_kicks_the_older_session`,
+    2026-10-07); the harness now writes `10 * VB_E2E_TIMEOUT_SCALE` into every test server's
+    config. UBSan also prints ~35 `invalid vptr` lines per client
     from `GnsRuntime` (`SteamNetworkingUtils()`), identical with and without this work and
     harmless to the tests, but they are noise worth a look (GNS hands out that interface in a way
     UBSan's vptr check dislikes).

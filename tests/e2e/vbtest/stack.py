@@ -24,7 +24,10 @@ def start_server(server_bin, repo, artifact_dir, workdir, procs, config=None, ex
     (nothing a test does, e.g. vb.storage, can dirty the repo). `pack_files` ({relative path: text})
     are written into that copy, e.g. an `auth.lua` that makes the pack require sign-in.
     Returns a connected `Server`."""
-    cfg = dict(DEFAULT_SERVER_CONFIG, **(config or {}))
+    # The server drops a join stuck in one handshake step for this long; stretch it
+    # like every other wait, or a slow (sanitizer) server kicks a client the harness
+    # is still happily waiting for ("join failed: handshake timeout").
+    cfg = {**DEFAULT_SERVER_CONFIG, "handshake_timeout_seconds": 10.0 * timeout_scale(), **(config or {})}
     workdir = pathlib.Path(workdir)
     pack = make_pack(repo, workdir, pack_files)
     last = None

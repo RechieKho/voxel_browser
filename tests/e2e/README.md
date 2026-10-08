@@ -95,7 +95,7 @@ python3 -m pytest tests/e2e --vb-build-dir build-e2e -k break
 | `--vb-artifacts` / `VB_E2E_ARTIFACTS` | where failed tests' logs go (default `tests/e2e/artifacts`) |
 | `--vb-keep-artifacts` | keep artifacts of passing tests too |
 | `--vb-allow-remote-host` | let clients connect to a non-loopback host (a dedicated **dev** server only) |
-| `VB_E2E_TIMEOUT_SCALE` | multiply every wait (CTest sets 3 for sanitizer builds) |
+| `VB_E2E_TIMEOUT_SCALE` | multiply every wait, plus the client's connect timeout and the server's `handshake_timeout_seconds` (CTest sets 3 for sanitizer builds) |
 | `DISPLAY` | windowed tests need one; they skip themselves without it. Run the suite under `xvfb-run -a -s "-screen 0 1280x720x24" ...` (software GL is enough) |
 
 A failed test leaves, per process, `<name>.stderr.log`, `<name>.trace.jsonl` (every request

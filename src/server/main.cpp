@@ -466,6 +466,7 @@ int main(int argc, char **argv) {
 #endif
 	}
 	hs_config.max_players = config.max_players;
+	hs_config.handshake_timeout_seconds = config.handshake_timeout_seconds;
 	hs_config.world_seed = seed;
 
 	// JoinGrant::spawn_pos otherwise defaults to a fixed {0, 64, 0} regardless
