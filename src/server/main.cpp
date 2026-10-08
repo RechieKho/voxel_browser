@@ -65,16 +65,15 @@ extern "C" void handle_signal(int) {
 	g_stop.store(true, std::memory_order_relaxed);
 }
 
-// Manifest staleness fix (REMAINING_TASKS.md's Phase 4 "Manifest staleness"
-// item): the manifest is built once at startup, but a pack that writes
-// vb.storage *after* startup (a later tick, not just load time) rewrites
-// storage.json on disk out from under it -- every subsequently-joining
-// client would asset-sync against a manifest hash that no longer matches
-// what asset_file_bytes() actually reads off disk. This small holder lets
-// the main loop swap in a freshly-rebuilt manifest whenever
-// PackRuntime::storage_revision() moves, without every host.* lambda call
-// needing its own synchronization. host.asset_manifest/asset_file_bytes run
-// on the same thread session.tick() does today, but a mutex costs nothing
+// The asset manifest is hashed once, but host.asset_file_bytes reads the
+// file again when a client asks for it. Runtime state the server itself
+// writes (vb.storage, vb.db) is excluded from the manifest entirely
+// (core::is_pack_runtime_state), so normally nothing it lists changes. If
+// a listed file does change on disk anyway (someone edits the pack while
+// the server runs), asset_file_bytes refuses to serve bytes that no longer
+// match their advertised hash and marks the manifest stale, and the main
+// loop swaps in a rebuilt one. host.asset_manifest/asset_file_bytes run on
+// the same thread session.tick() does today, but a mutex costs nothing
 // noticeable at this call rate and makes that assumption unnecessary to
 // maintain.
 struct ManifestHolder {
@@ -88,7 +87,9 @@ struct ManifestHolder {
 	void set(std::shared_ptr<const vb::assetsync::Manifest> p) {
 		std::lock_guard<std::mutex> lock(mutex);
 		ptr = std::move(p);
+		stale.store(false, std::memory_order_relaxed);
 	}
+	std::atomic_bool stale{ false }; // a listed file's bytes no longer match its hash
 };
 
 void print_usage() {
@@ -387,22 +388,11 @@ int main(int argc, char **argv) {
 				  << "' has invalid worldgen data: " << worldgen_check.message << "\n";
 		return EXIT_FAILURE;
 	}
-	// Flush any vb.storage write load_content_pack's init.lua made (e.g.
-	// content/base's own boot_count demo) to disk *before* the manifest
-	// below hashes storage.json's on-disk bytes -- otherwise storage_dirty
-	// stays true until the first PackRuntime::dispatch_tick() (Phase 4.2's
-	// deferred-flush design), which lands *after* the manifest is already
-	// built. That flush then silently rewrites storage.json out from under
-	// the just-hashed manifest entry: the next asset_file_bytes() read for
-	// it returns the new bytes, but the manifest still advertises the old
-	// (pre-flush) hash, so every connecting client's asset-sync fails that
-	// one file's verification with "hash mismatch" -- deterministically, on
-	// every connect, on every machine, for any pack that writes vb.storage
-	// at load time. Found 2026-09-18 while investigating exactly that
-	// report; see STATE.md. The matching *runtime* half of this gap (a pack
-	// writing vb.storage well after startup, not just at load time) is
-	// handled below by ManifestHolder/manifest_refresh_check, once the
-	// manifest itself exists to refresh.
+	// Persist any vb.storage write load_content_pack's init.lua made (e.g.
+	// content/base's own boot_count demo) now rather than on the first tick.
+	// storage.json used to be part of the asset manifest below, and this
+	// flush landing after the manifest was hashed broke every join with
+	// "hash mismatch" (2026-09-18); it is runtime state and excluded now.
 	pack_runtime.flush_storage();
 
 	// Asset manifest (Phase 4.4): built once at startup from the content
@@ -414,7 +404,14 @@ int main(int argc, char **argv) {
 		static_cast<std::uint64_t>(config.asset_max_file_mb) * 1024ull * 1024ull,
 		static_cast<std::uint64_t>(config.asset_max_total_mb) * 1024ull * 1024ull
 	};
-	auto manifest_result = vb::assetsync::build_manifest(config.content_pack, asset_caps);
+	// A world save directory configured inside the pack (`world_dir = "<pack>/
+	// world"`) is runtime state too: never offered to clients.
+	std::vector<std::filesystem::path> asset_exclude_dirs;
+	if (config.persist_world) {
+		asset_exclude_dirs.emplace_back(config.world_dir);
+	}
+	auto manifest_result = vb::assetsync::build_manifest(
+			config.content_pack, asset_caps, asset_exclude_dirs);
 	ManifestHolder manifest_holder;
 	if (manifest_result) {
 		manifest_holder.set(std::make_shared<const vb::assetsync::Manifest>(
@@ -436,7 +433,6 @@ int main(int argc, char **argv) {
 	// no VB_WITH_COMPRESSION -- means asset sync is off entirely and this
 	// revision is never consulted again).
 	const bool asset_sync_enabled = manifest_holder.get() != nullptr;
-	std::uint64_t last_seen_storage_revision = pack_runtime.storage_revision();
 
 	vb::world::World world(registry);
 	// World persistence (opt-in via server.toml's persist_world, default on).
@@ -566,6 +562,18 @@ int main(int argc, char **argv) {
 			f.read(reinterpret_cast<char *>(buf.data()),
 					static_cast<std::streamsize>(e->size));
 		}
+		// The file changed since it was hashed: sending these bytes would only
+		// fail the client's check ("asset transfer failed (hash mismatch ...)")
+		// with nothing logged here. Refuse, say why, and have the main loop
+		// rebuild the manifest so the next join gets the current file.
+		if (!f || f.peek() != std::ifstream::traits_type::eof() ||
+				vb::assetsync::hash_bytes(buf) != h) {
+			std::cerr << "server: asset '" << e->path
+					  << "' changed on disk since the manifest was built; refusing "
+						 "to serve it and rebuilding the manifest\n";
+			manifest_holder.stale.store(true, std::memory_order_relaxed);
+			return std::nullopt;
+		}
 		return buf;
 	};
 	pack_runtime.install_keybind_registry(host); // before ServerSession copies `host` in
@@ -664,29 +672,17 @@ int main(int argc, char **argv) {
 		region_store->flush();
 	};
 
-	// Manifest staleness fix, continued from the ManifestHolder comment
-	// above: rebuild the manifest whenever storage.json actually changed
-	// since the last check. Throttled to at most once a second (same
-	// interval-in-ticks shape as autosave_ticks above) rather than checked
-	// every single tick -- a pack that flushes vb.storage every tick would
-	// otherwise pay a full content-pack rescan+rehash at the tick rate,
-	// which is real work (every asset file, not just storage.json) this
-	// item's own text never asked for. A one-tick-late manifest for a
-	// same-second write is an acceptable trade against that, matching the
-	// same "durability backstop, not a hard real-time guarantee" posture
-	// autosave_ticks already has.
+	// Rebuilds the manifest once asset_file_bytes has found a listed file
+	// changed on disk (see ManifestHolder). Checked about once a second, same
+	// interval-in-ticks shape as autosave_ticks above.
 	const long long manifest_check_ticks =
 			asset_sync_enabled ? std::max<long long>(1, config.tick_rate) : 0;
 	auto manifest_refresh_check = [&] {
-		if (!asset_sync_enabled) {
+		if (!asset_sync_enabled || !manifest_holder.stale.load(std::memory_order_relaxed)) {
 			return;
 		}
-		const std::uint64_t current = pack_runtime.storage_revision();
-		if (current == last_seen_storage_revision) {
-			return;
-		}
-		last_seen_storage_revision = current;
-		auto rebuilt = vb::assetsync::build_manifest(config.content_pack, asset_caps);
+		auto rebuilt = vb::assetsync::build_manifest(
+				config.content_pack, asset_caps, asset_exclude_dirs);
 		if (rebuilt) {
 			manifest_holder.set(std::make_shared<const vb::assetsync::Manifest>(
 					std::move(*rebuilt)));
@@ -694,10 +690,9 @@ int main(int argc, char **argv) {
 			// A pack whose manifest built fine at startup failing to rebuild
 			// later (disk full, a file deleted mid-run, ...) is a real
 			// operational problem, but not a reason to crash a running
-			// server over -- keep serving the last-known-good manifest and
-			// warn instead.
-			std::cerr << "server: failed to rebuild asset manifest after a "
-						 "vb.storage write: "
+			// server over -- keep serving the last-known-good manifest, warn,
+			// and try again next check.
+			std::cerr << "server: failed to rebuild asset manifest: "
 					  << vb::core::message(rebuilt.error()) << '\n';
 		}
 	};

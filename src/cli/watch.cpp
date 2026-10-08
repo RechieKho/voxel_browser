@@ -2,6 +2,8 @@
 
 #include <system_error>
 
+#include "vb/core/pack_layout.hpp"
+
 namespace vb::cli {
 
 namespace fs = std::filesystem;
@@ -9,8 +11,7 @@ namespace fs = std::filesystem;
 namespace {
 
 bool ignored(const fs::path &relative) {
-	const std::string first = relative.begin()->string();
-	if (first == "db" || relative.filename() == "storage.json") {
+	if (core::is_pack_runtime_state(relative)) {
 		return true;
 	}
 	for (const fs::path &part : relative) {

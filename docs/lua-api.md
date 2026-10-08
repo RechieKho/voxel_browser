@@ -449,7 +449,9 @@ rt.dispatch_tick(dt);
   (no dirty-flag/flush step, unlike `vb.storage`). Backed by
   `vb::script::ScriptDb` (`inc/vb/script/db.hpp`): each key's file lives at
   `<content_pack>/db/<sha256(key) 2-hex-prefix>/<sha256(key)>`, the same
-  content-addressed shard layout as `vb::assetsync::ClientAssetCache`. No
+  content-addressed shard layout as `vb::assetsync::ClientAssetCache`.
+  Neither `db/` nor `storage.json` is ever sent to clients (both are left out
+  of the asset manifest), so both are safe for server-private data. No
   enumeration API — get/set/delete by an already-known key only. The engine
   has no notion of "logged in": a connection stays just a connection until a
   pack's own login flow (built on `vb.db`) looks up a record and decides to

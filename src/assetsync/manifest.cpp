@@ -18,7 +18,8 @@ const AssetEntry *Manifest::find(core::AssetHash h) const {
 }
 
 core::Result<Manifest, core::AssetSyncError> build_manifest(
-		const std::filesystem::path &, AssetSizeCaps) {
+		const std::filesystem::path &, AssetSizeCaps,
+		const std::vector<std::filesystem::path> &) {
 	return core::Err{ core::AssetSyncError::kDisabled };
 }
 
@@ -35,6 +36,7 @@ core::AssetHash hash_bytes(std::span<const std::byte>) { return {}; }
 
 #include <xxhash.h>
 
+#include "vb/core/pack_layout.hpp"
 #include "vb/protocol/byte_buffer.hpp"
 
 namespace vb::assetsync {
@@ -103,7 +105,8 @@ AssetKind kind_for(const std::filesystem::path &rel_path) {
 } // namespace
 
 core::Result<Manifest, core::AssetSyncError> build_manifest(
-		const std::filesystem::path &pack_root, AssetSizeCaps caps) {
+		const std::filesystem::path &pack_root, AssetSizeCaps caps,
+		const std::vector<std::filesystem::path> &exclude_dirs) {
 	std::error_code ec;
 	if (!std::filesystem::is_directory(pack_root, ec) || ec) {
 		return Err{ core::AssetSyncError::kIoError };
@@ -112,6 +115,15 @@ core::Result<Manifest, core::AssetSyncError> build_manifest(
 			std::filesystem::canonical(pack_root, ec);
 	if (ec) {
 		return Err{ core::AssetSyncError::kIoError };
+	}
+
+	std::vector<std::filesystem::path> excluded_canonical;
+	for (const auto &dir : exclude_dirs) {
+		std::error_code dec;
+		auto c = std::filesystem::canonical(dir, dec);
+		if (!dec) { // a directory that doesn't exist (yet) has nothing to skip
+			excluded_canonical.push_back(std::move(c));
+		}
 	}
 
 	Manifest manifest;
@@ -143,6 +155,29 @@ core::Result<Manifest, core::AssetSyncError> build_manifest(
 			if (!is_under_root(root_canonical, resolved)) {
 				return Err{ core::AssetSyncError::kPathEscape };
 			}
+		}
+
+		// Server-private runtime state (vb.db's db/, vb.storage's
+		// storage.json) and excluded directories (a world save inside the
+		// pack): never advertised, never descended into.
+		const std::filesystem::path rel_path =
+				std::filesystem::relative(entry.path(), pack_root, ec);
+		if (ec) {
+			return Err{ core::AssetSyncError::kIoError };
+		}
+		bool excluded = core::is_pack_runtime_state(rel_path);
+		if (!excluded && !excluded_canonical.empty() && entry.is_directory(ec)) {
+			std::error_code cec;
+			const auto dir = std::filesystem::canonical(entry.path(), cec);
+			excluded = !cec &&
+					std::find(excluded_canonical.begin(), excluded_canonical.end(), dir) !=
+							excluded_canonical.end();
+		}
+		if (excluded) {
+			if (entry.is_directory(ec)) {
+				it.disable_recursion_pending();
+			}
+			continue;
 		}
 
 		// Developer-tooling files are never served to clients: dot-entries

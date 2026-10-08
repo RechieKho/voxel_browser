@@ -19,6 +19,10 @@
 
 #include "vb/assetsync/cache.hpp"
 #include "vb/assetsync/manifest.hpp"
+#if VB_WITH_LUA
+#include "vb/script/pack_runtime.hpp"
+#include "vb/world/block.hpp"
+#endif
 #endif
 
 using namespace vb::net;
@@ -889,5 +893,63 @@ TEST_CASE("asset sync: identical files under different paths both arrive") {
 	std::filesystem::remove_all(pack);
 	std::filesystem::remove_all(cache_dir);
 }
+
+#if VB_WITH_LUA
+// Regression: build_manifest scanned the pack's db/ (vb.db's store, written
+// while the server runs) and asset_file_bytes serves a file's *current*
+// bytes, so once a pack wrote vb.db after startup every cold-cache client
+// failed with "asset transfer failed (hash mismatch or size cap)" -- and
+// every client was offered the server's whole database.
+TEST_CASE("asset sync: vb.db writes after the manifest is built don't break joins") {
+	const auto pack = make_asset_pack("vb_db");
+	LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, pack / "storage.json");
+	REQUIRE(rt.load_pack_file(R"(
+		vb.db.set("meta:clock", { n = 1 })
+		vb.storage.boot = 1
+	)"));
+	rt.flush_storage();
+
+	auto manifest_result = vb::assetsync::build_manifest(pack);
+	REQUIRE(manifest_result);
+	auto manifest_ptr = std::make_shared<const vb::assetsync::Manifest>(
+			std::move(*manifest_result));
+	REQUIRE(std::filesystem::exists(pack / "db"));
+	REQUIRE(std::filesystem::exists(pack / "storage.json"));
+	for (const auto &e : manifest_ptr->entries) {
+		CHECK_MESSAGE(e.path.rfind("db/", 0) != 0, e.path);
+		CHECK(e.path != "storage.json");
+	}
+
+	// The pack keeps writing while the server runs.
+	REQUIRE(rt.load_pack_file(R"(
+		vb.db.set("meta:clock", { n = 2 })
+		vb.storage.boot = 2
+	)"));
+	rt.flush_storage();
+
+	HandshakeServerHost host = make_asset_host(manifest_ptr, pack);
+	ServerSession server(net.server(), HandshakeServerConfig{}, host);
+	REQUIRE(net.server().listen(0));
+	vb::net::Transport &t = net.create_client();
+	auto id = t.connect("x", 0);
+	REQUIRE(id);
+	const auto cache_dir = std::filesystem::temp_directory_path() /
+			"vb_netcode_assetsync_cache_vb_db";
+	std::filesystem::remove_all(cache_dir);
+	vb::assetsync::ClientAssetCache cache(cache_dir, 16ull * 1024ull * 1024ull);
+	ClientSession client(t, *id, HandshakeClientConfig{ "Cold", "", "v", 1 }, &cache);
+	for (int i = 0; i < 40 && !client.joined() && !client.failed(); ++i) {
+		server.tick(0.05);
+		client.tick(0.05);
+	}
+	REQUIRE_FALSE(client.failed());
+	CHECK(client.joined());
+
+	std::filesystem::remove_all(pack);
+	std::filesystem::remove_all(cache_dir);
+}
+#endif // VB_WITH_LUA
 
 #endif // VB_WITH_COMPRESSION

@@ -56,8 +56,17 @@ struct AssetSizeCaps {
 // exceeding `caps`. Deterministic: identical directory contents always
 // produce the same entry order and manifest_hash, regardless of the OS's
 // directory-iteration order.
+//
+// Skipped, never offered to clients: dot-entries, the pack-root
+// README.md/AGENTS.md/auth.lua, the server's own runtime state
+// (core::is_pack_runtime_state: `db/`, `storage.json`), and every directory
+// in `exclude_dirs` (e.g. a world save directory that lives inside the
+// pack). Runtime state is server-private -- vb.db holds player records --
+// and changes while the server runs, so a manifest entry for it would both
+// leak it and go stale within seconds.
 core::Result<Manifest, core::AssetSyncError> build_manifest(
-		const std::filesystem::path &pack_root, AssetSizeCaps caps = {});
+		const std::filesystem::path &pack_root, AssetSizeCaps caps = {},
+		const std::vector<std::filesystem::path> &exclude_dirs = {});
 
 // xxHash3-128 of a byte span. Also used by the client cache to verify a
 // downloaded file. Returns {} when built without VB_WITH_COMPRESSION --

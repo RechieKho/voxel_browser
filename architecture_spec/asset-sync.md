@@ -24,6 +24,14 @@ AssetEntry {
 The manifest is itself hashed (`manifest_hash`) so a client that reconnects can
 skip the whole exchange with one comparison.
 
+Never listed: the server's own runtime state inside the pack folder
+(`storage.json`, `db/` — `vb::core::is_pack_runtime_state`, shared with
+`vb pack dev`'s watcher), a `world_dir` configured inside the pack, dot-entries,
+and the pack-root `README.md`/`AGENTS.md`/`auth.lua`. Runtime state is
+server-private (`vb.db` holds player records) and changes while the server
+runs. If a listed file changes on disk anyway, the server refuses to serve the
+mismatching bytes, logs it, and rebuilds the manifest.
+
 ### 9.2 Client cache
 
 Content-addressed store at `~/.cache/voxel_browser/assets/<hh>/<hash>` (OS-
