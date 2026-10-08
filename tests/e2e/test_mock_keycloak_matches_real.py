@@ -161,7 +161,9 @@ def test_token_response_and_claims(both):
     assert mi["at_hash"] == jc.b64u(__import__("hashlib").sha256(m["access_token"].encode()).digest()[:16])
     assert ri["at_hash"] == jc.b64u(__import__("hashlib").sha256(r["access_token"].encode()).digest()[:16])
     assert mi["nonce"] == ri["nonce"] == "n-1"
-    assert m["expires_in"] == r["expires_in"] == 300
+    # Real Keycloak computes expires_in as exp - now in whole seconds, so a second
+    # boundary crossed while it issues the token reports 299.
+    assert m["expires_in"] == 300 and r["expires_in"] in (299, 300), (m["expires_in"], r["expires_in"])
 
 
 def test_refresh_derived_token_has_no_nonce(both):
