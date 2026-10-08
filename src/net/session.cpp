@@ -55,6 +55,12 @@ bool decompress_frame_payload(protocol::Frame &frame,
 #endif
 }
 
+// Gameplay frames ClientSession holds between C2S_Ready and a late
+// S2C_JoinAccept (see ClientSession::early_gameplay_). A few seconds of
+// snapshots and the initial chunk burst fit easily; past this the server is
+// misbehaving.
+constexpr std::size_t kMaxEarlyGameplayFrames = 8192;
+
 // Per-tick S2C_AssetData send budget (spec §9.3's pacing, simple per-tick
 // cap rather than literal byte-in-flight windowing).
 constexpr int kAssetSendBudgetPerTick = 4;
@@ -2004,10 +2010,37 @@ void ClientSession::tick(double dt_seconds) {
 						apply_gameplay_frame(*frame)) {
 					break;
 				}
+				// The server is already playing once it sends JoinAccept, so its
+				// first gameplay frames can overtake a lost-and-resent JoinAccept
+				// (different lanes, no cross-lane ordering). Hold them until we
+				// have joined instead of failing the join over them -- and don't
+				// drop them: the server never resends a chunk it believes sent.
+				if (handshake_.status() == ClientHandshakeStatus::kSyncing &&
+						frame->header.type != protocol::MessageType::kS2CJoinAccept) {
+					if (early_gameplay_.size() >= kMaxEarlyGameplayFrames) {
+						failure_reason_ = "too many messages before JoinAccept";
+						return;
+					}
+					early_gameplay_.emplace_back(frame->header,
+							std::vector<std::byte>(frame->payload.begin(), frame->payload.end()));
+					break;
+				}
 				auto step = handshake_.on_frame(*frame);
 				send_frames(transport_, conn_, step.send);
 				if (step.failed) {
 					failure_reason_ = step.failure_reason;
+				}
+				if (handshake_.status() == ClientHandshakeStatus::kJoined &&
+						!early_gameplay_.empty()) {
+					for (const auto &[header, payload] : early_gameplay_) {
+						const protocol::Frame early{ header, payload };
+						if (!apply_gameplay_frame(early)) {
+							VB_WARN("net", "ignored early message type ",
+									static_cast<unsigned>(header.type), " before JoinAccept");
+						}
+					}
+					early_gameplay_.clear();
+					early_gameplay_.shrink_to_fit();
 				}
 				break;
 			}

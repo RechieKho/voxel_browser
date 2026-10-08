@@ -1061,6 +1061,11 @@ private:
 	Transport &transport_;
 	ConnId conn_;
 	ClientHandshake handshake_;
+	// Gameplay frames (snapshots, chunks, time of day, ...) that arrived after
+	// C2S_Ready but before S2C_JoinAccept. They travel on other lanes with no
+	// ordering against JoinAccept, which can be lost and resent; applied in
+	// arrival order right after it. Bounded: see kMaxEarlyGameplayFrames.
+	std::vector<std::pair<protocol::MessageHeader, std::vector<std::byte>>> early_gameplay_;
 	std::function<TokenTicket(const protocol::S2CReauthRequest &)> reauth_provider_;
 	TokenTicket reauth_ticket_;
 	bool started_ = false;

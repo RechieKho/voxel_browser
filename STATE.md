@@ -127,6 +127,12 @@ content-only (e.g. the user explicitly asks for a content-pack feature).
   each full manifest's entry list, so the server's reconnect fast path (no
   entries) can rebuild the virtual FS; `last_known_manifest_hash_for` stays
   zero unless that list is held. Nothing sends a known hash yet.
+- **Gameplay frames can overtake `S2C_JoinAccept`** (2026-10-08): they ride
+  other lanes, and a lost JoinAccept is resent late, so under packet loss the
+  client's handshake used to fail with "expected JoinAccept" (flaky
+  `test_gameplay_survives_lag_jitter_and_loss`). `ClientSession` now holds
+  them (`early_gameplay_`, max 8192) and applies them right after joining;
+  never drop them -- the server doesn't resend chunks it thinks it sent.
 - **Every e2e timeout must scale with `VB_E2E_TIMEOUT_SCALE`, both processes'
   included** (2026-10-08): the server's fixed 10 s per-step handshake limit
   (now `handshake_timeout_seconds`) intermittently dropped a second client on
