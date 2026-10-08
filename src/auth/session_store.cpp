@@ -71,54 +71,87 @@ std::optional<StoredSession> parse(const fs::path &p) {
 		return std::nullopt;
 	}
 	StoredSession s;
+	s.server = get(doc, "server");
 	s.issuer = get(doc, "issuer");
 	s.client_id = get(doc, "client_id");
 	s.provider = get(doc, "provider");
 	s.api_key = get(doc, "api_key");
 	s.refresh_token = get(doc, "refresh_token");
 	s.label = get(doc, "label");
-	if (s.issuer.empty() || s.refresh_token.empty()) {
+	if (s.server.empty() || s.issuer.empty() || s.refresh_token.empty()) {
 		return std::nullopt;
 	}
 	return s;
 }
 
+bool is_session_file(const fs::path &p) {
+	return p.extension() == ".json" && p.filename() != "trust.json";
+}
+
 } // namespace
 
 SessionStore::SessionStore(fs::path dir) :
-		dir_(std::move(dir)) {}
-
-fs::path SessionStore::path_for(const std::string &issuer, const std::string &client_id) const {
-	return dir_ / (hex(sha256(issuer + "|" + client_id)) + ".json");
+		dir_(std::move(dir)) {
+	// Saved logins used to be per (issuer, client_id) and shared by every
+	// server on that provider. Those files have no "server" field (parse()
+	// rejects them); remove them so their refresh tokens don't linger.
+	std::error_code ec;
+	for (const auto &e : fs::directory_iterator(dir_, ec)) {
+		if (is_session_file(e.path()) && !parse(e.path())) {
+			fs::remove(e.path(), ec);
+		}
+	}
 }
 
-std::optional<StoredSession> SessionStore::load(const std::string &issuer,
+fs::path SessionStore::path_for(const std::string &server, const std::string &issuer,
 		const std::string &client_id) const {
-	auto s = parse(path_for(issuer, client_id));
-	// The file name is a hash, so confirm it really is this pair's entry.
-	if (s && (s->issuer != issuer || s->client_id != client_id)) {
+	return dir_ / (hex(sha256(server + "|" + issuer + "|" + client_id)) + ".json");
+}
+
+std::optional<StoredSession> SessionStore::load(const std::string &server,
+		const std::string &issuer, const std::string &client_id) const {
+	auto s = parse(path_for(server, issuer, client_id));
+	// The file name is a hash, so confirm it really is this entry.
+	if (s && (s->server != server || s->issuer != issuer || s->client_id != client_id)) {
 		return std::nullopt;
 	}
 	return s;
 }
 
 bool SessionStore::save(const StoredSession &s) {
-	const json doc = { { "issuer", s.issuer }, { "client_id", s.client_id },
-		{ "provider", s.provider }, { "api_key", s.api_key },
+	const json doc = { { "server", s.server }, { "issuer", s.issuer },
+		{ "client_id", s.client_id }, { "provider", s.provider }, { "api_key", s.api_key },
 		{ "refresh_token", s.refresh_token }, { "label", s.label } };
-	return write_private(path_for(s.issuer, s.client_id), doc.dump());
+	return write_private(path_for(s.server, s.issuer, s.client_id), doc.dump());
 }
 
-void SessionStore::erase(const std::string &issuer, const std::string &client_id) {
+void SessionStore::erase(const std::string &server, const std::string &issuer,
+		const std::string &client_id) {
 	std::error_code ec;
-	fs::remove(path_for(issuer, client_id), ec);
+	fs::remove(path_for(server, issuer, client_id), ec);
+}
+
+std::vector<StoredSession> SessionStore::list_for(const std::string &server) const {
+	std::vector<StoredSession> out;
+	for (auto &s : list()) {
+		if (s.server == server) {
+			out.push_back(std::move(s));
+		}
+	}
+	return out;
+}
+
+void SessionStore::sign_out(const std::string &server) {
+	for (const auto &s : list_for(server)) {
+		erase(s.server, s.issuer, s.client_id);
+	}
 }
 
 std::vector<StoredSession> SessionStore::list() const {
 	std::vector<StoredSession> out;
 	std::error_code ec;
 	for (const auto &e : fs::directory_iterator(dir_, ec)) {
-		if (e.path().extension() == ".json" && e.path().filename() != "trust.json") {
+		if (is_session_file(e.path())) {
 			if (auto s = parse(e.path())) {
 				out.push_back(std::move(*s));
 			}
@@ -130,7 +163,7 @@ std::vector<StoredSession> SessionStore::list() const {
 void SessionStore::clear() {
 	std::error_code ec;
 	for (const auto &e : fs::directory_iterator(dir_, ec)) {
-		if (e.path().extension() == ".json" && e.path().filename() != "trust.json") {
+		if (is_session_file(e.path())) {
 			fs::remove(e.path(), ec);
 		}
 	}

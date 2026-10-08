@@ -168,7 +168,7 @@ MainMenu::MainResult MainMenu::draw_main(const std::vector<std::string> &recent_
 	if (!signed_in_label_.empty()) {
 		const float w = 260.0f;
 		const float sx = std::max(8.0f, static_cast<float>(GetScreenWidth()) - w - 12.0f);
-		GuiLabel(Rectangle{ sx, 10.0f, w, 20.0f }, ("Signed in as " + signed_in_label_).c_str());
+		GuiLabel(Rectangle{ sx, 10.0f, w, 20.0f }, ("Signed in to " + signed_in_label_).c_str());
 		if (GuiButton(Rectangle{ sx, 32.0f, 100.0f, 24.0f }, "Sign out")) {
 			result.sign_out = true;
 		}

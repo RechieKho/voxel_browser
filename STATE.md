@@ -127,6 +127,11 @@ content-only (e.g. the user explicitly asks for a content-pack feature).
   each full manifest's entry list, so the server's reconnect fast path (no
   entries) can rebuild the virtual FS; `last_known_manifest_hash_for` stays
   zero unless that list is held. Nothing sends a known hash yet.
+- **Saved sign-ins are per server** (2026-10-08): `auth::SessionStore` keys
+  refresh tokens by `(server "host:port", issuer, client_id)`, not by
+  provider, so two servers on one Keycloak realm no longer share a login and
+  the menu's "Signed in to <server> as ..." / Sign out cover the selected
+  server only. Old per-provider files are deleted when the store opens.
 - **`db/` and `storage.json` are runtime state, never assets** (2026-10-08).
   The manifest used to scan them: every client could download the server's
   `vb.db` (player records), and the first `vb.db` write after startup made

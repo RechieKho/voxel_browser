@@ -576,19 +576,20 @@ struct RefreshIdp final : HttpFetcher {
 TEST_CASE("session store: round trip, owner-only file, sign out, trust list") {
 	const auto dir = fresh_dir("rt");
 	SessionStore store(dir);
-	CHECK_FALSE(store.load(kIssuer, "voxel"));
+	CHECK_FALSE(store.load("srv:1", kIssuer, "voxel"));
 	StoredSession s;
+	s.server = "srv:1";
 	s.issuer = kIssuer;
 	s.client_id = "voxel";
 	s.provider = "keycloak";
 	s.refresh_token = "R1";
 	s.label = "alice";
 	REQUIRE(store.save(s));
-	const auto back = store.load(kIssuer, "voxel");
+	const auto back = store.load("srv:1", kIssuer, "voxel");
 	REQUIRE(back);
 	CHECK(back->refresh_token == "R1");
 	CHECK(back->label == "alice");
-	CHECK_FALSE(store.load(kIssuer, "other-client"));
+	CHECK_FALSE(store.load("srv:1", kIssuer, "other-client"));
 	CHECK(store.list().size() == 1);
 #if !defined(_WIN32)
 	for (const auto &e : std::filesystem::directory_iterator(dir)) {
@@ -611,10 +612,75 @@ TEST_CASE("session store: round trip, owner-only file, sign out, trust list") {
 	CHECK(label_from_id_token("not a jwt").empty());
 }
 
+// Saved logins are per server: two servers on the same identity provider
+// don't share one, and signing out of one leaves the other.
+TEST_CASE("session store: logins are per server, and sign_out is per server") {
+	const auto dir = fresh_dir("per_server");
+	{
+		// A login saved before logins were per server (no "server" field).
+		std::filesystem::create_directories(dir);
+		std::ofstream legacy(dir / "0123abcd.json");
+		legacy << R"({"issuer":"https://id.example","client_id":"voxel","refresh_token":"R-old"})";
+	}
+	SessionStore store(dir);
+	CHECK_FALSE(std::filesystem::exists(dir / "0123abcd.json")); // removed, never reused
+	CHECK(store.list().empty());
+
+	for (const char *server : { "a.example:1", "b.example:1" }) {
+		StoredSession s;
+		s.server = server;
+		s.issuer = kIssuer;
+		s.client_id = "voxel";
+		s.refresh_token = std::string("R-") + server;
+		REQUIRE(store.save(s));
+	}
+	CHECK(store.load("a.example:1", kIssuer, "voxel")->refresh_token == "R-a.example:1");
+	CHECK(store.load("b.example:1", kIssuer, "voxel")->refresh_token == "R-b.example:1");
+	CHECK_FALSE(store.load("c.example:1", kIssuer, "voxel"));
+	CHECK(store.list_for("a.example:1").size() == 1);
+
+	store.sign_out("a.example:1");
+	CHECK_FALSE(store.load("a.example:1", kIssuer, "voxel"));
+	CHECK(store.load("b.example:1", kIssuer, "voxel"));
+	std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("coordinator: another server on the same provider does not reuse a saved login") {
+	const auto dir = fresh_dir("other_server");
+	auto store = std::make_shared<SessionStore>(dir);
+	StoredSession s;
+	s.server = "a.example:1";
+	s.issuer = kIssuer;
+	s.client_id = "voxel";
+	s.provider = "keycloak";
+	s.refresh_token = "R-valid";
+	store->save(s);
+	store->trust("b.example:1", kIssuer);
+
+	auto idp = std::make_shared<RefreshIdp>();
+	SignInCoordinator::Options o;
+	o.http = idp;
+	o.store = store;
+	o.server_id = "b.example:1";
+	SignInCoordinator coord(std::move(o));
+	vb::protocol::S2CAuthChallenge ch;
+	ch.provider = "keycloak";
+	ch.issuer = kIssuer;
+	ch.client_id = "voxel";
+	ch.nonce = "n";
+	auto ticket = coord.provider()(ch);
+	CHECK_FALSE(coord.needs_trust());
+	CHECK(coord.phase() == SignInCoordinator::Phase::kChoosing); // asks: no silent sign-in
+	CHECK(idp->refreshes == 0); // a.example's refresh token never left the client
+	CHECK_FALSE(ticket().done);
+	std::filesystem::remove_all(dir);
+}
+
 TEST_CASE("coordinator: first use asks for trust, then a cached refresh token signs in silently") {
 	const auto dir = fresh_dir("silent");
 	auto store = std::make_shared<SessionStore>(dir);
 	StoredSession s;
+	s.server = "play.example:27015";
 	s.issuer = kIssuer;
 	s.client_id = "voxel";
 	s.provider = "keycloak";
@@ -664,7 +730,7 @@ TEST_CASE("coordinator: first use asks for trust, then a cached refresh token si
 	CHECK(hs.status() == vb::net::ClientHandshakeStatus::kAuthenticating);
 	CHECK(idp->refreshes == 1);
 	// The rotated refresh token was stored.
-	CHECK(store->load(kIssuer, "voxel")->refresh_token == "R-rotated");
+	CHECK(store->load("play.example:27015", kIssuer, "voxel")->refresh_token == "R-rotated");
 	std::filesystem::remove_all(dir);
 }
 
@@ -672,6 +738,7 @@ TEST_CASE("coordinator: a dead refresh token is forgotten and falls back to the 
 	const auto dir = fresh_dir("dead");
 	auto store = std::make_shared<SessionStore>(dir);
 	StoredSession s;
+	s.server = "srv:1";
 	s.issuer = kIssuer;
 	s.client_id = "voxel";
 	s.provider = "keycloak";
@@ -696,7 +763,7 @@ TEST_CASE("coordinator: a dead refresh token is forgotten and falls back to the 
 	}
 	CHECK(coord.phase() == SignInCoordinator::Phase::kChoosing);
 	CHECK(coord.last_error() == "Your saved sign-in expired");
-	CHECK_FALSE(store->load(kIssuer, "voxel")); // forgotten
+	CHECK_FALSE(store->load("srv:1", kIssuer, "voxel")); // forgotten
 	CHECK_FALSE(ticket().done);
 	std::filesystem::remove_all(dir);
 }
@@ -705,6 +772,7 @@ TEST_CASE("coordinator: a re-auth request is answered silently, else it raises t
 	const auto dir = fresh_dir("reauth");
 	auto store = std::make_shared<SessionStore>(dir);
 	StoredSession s;
+	s.server = "srv:1";
 	s.issuer = kIssuer;
 	s.client_id = "voxel";
 	s.provider = "keycloak";

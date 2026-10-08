@@ -31,14 +31,15 @@ public:
 		bool singleplayer = false;
 		bool open_settings = false;
 		bool quit = false;
-		bool sign_out = false; // "Sign out" (only shown while signed_in_label is set)
+		bool sign_out = false; // "Sign out" of the selected server (only shown while signed_in_label is set)
 	};
 	// `recent_servers` is "host:port" strings, most-recent first; clicking one
 	// fills the address/port fields.
 	MainResult draw_main(const std::vector<std::string> &recent_servers);
 
-	// Phase 9.6: shown top-right with a Sign out button when non-empty (e.g.
-	// "alice (id.example.com)"). Empty = nothing drawn.
+	// Phase 9.6: shown top-right as "Signed in to <label>" with a Sign out
+	// button when non-empty (e.g. "play.example.com:27015 as alice": logins
+	// are per server). Empty = nothing drawn.
 	void set_signed_in_label(std::string label) { signed_in_label_ = std::move(label); }
 
 	const std::string &address() const { return address_; }
