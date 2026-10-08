@@ -171,12 +171,14 @@ static std::unique_ptr<render::ChunkRenderer> make_renderer(const Workspace &wor
 	render::TextureAtlas atlas = render::TextureAtlas::build(workspace.catalog().registry(), vfs);
 	std::vector<render::AtlasRect> rects;
 	std::vector<Color> averages;
+	std::vector<bool> translucent;
 	for (std::size_t i = 0; i < atlas.block_count(); ++i) {
 		const auto id = static_cast<core::BlockId>(i);
 		rects.push_back(atlas.rect_for(id));
 		averages.push_back(atlas.average_color_for(id));
+		translucent.push_back(atlas.is_translucent(id));
 	}
-	renderer->set_atlas(atlas.upload(), std::move(rects), std::move(averages));
+	renderer->set_atlas(atlas.upload(), std::move(rects), std::move(averages), std::move(translucent));
 	return renderer;
 }
 

@@ -336,7 +336,8 @@ def test_inventory_screen_opens_and_closes(server, clients):
   `server.toml.example`, a fixed seed, a free UDP port picked by the harness
   (GNS can't listen on port 0, §10 item 7), and a private copy of the base pack
   (so `vb.storage` can't dirty the repo; `@pytest.mark.vb_server(...)` adds
-  `server.toml` keys; other packs via `@pytest.mark.pack(...)` are not built yet).
+  `server.toml` keys, `@pytest.mark.vb_pack_files({path: text})` adds files to
+  that pack copy; other packs via `@pytest.mark.pack(...)` are not built yet).
   Persistence is off, so every test gets a fresh world.
 - `clients(n, names=…)`: a factory. Each client gets its **own temp asset
   cache dir** (so asset sync is exercised cold) and its own

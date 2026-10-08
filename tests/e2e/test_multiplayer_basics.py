@@ -109,6 +109,31 @@ def test_player_can_reconnect_after_being_kicked(server, clients):
     expect(again).to_be_joined()
 
 
+LEAVE_REPORTER = """
+local online = {}
+-- player_join only has a name; the first input hands us the Player.
+vb.on("player_input", function(player) online[player:get_name()] = player end)
+vb.on("player_leave", function(player)
+	local name = player:get_name()
+	local pos = player:get_pos()
+	online[name] = nil
+	for _, other in pairs(online) do
+		other:send_message(("left: [%s] at y=%d"):format(name, math.floor(pos.y)))
+	end
+end)
+"""
+
+
+@pytest.mark.vb_pack_files({"zz_leave_reporter.lua": LEAVE_REPORTER})
+def test_player_leave_handler_knows_who_left(server, clients):
+    """player_leave fires after the session dropped the connection; the handle must still
+    answer get_name() and get_pos() (last known position), or name-keyed cleanup is a no-op."""
+    alice, bob = clients(2, names=["Alice", "Bob"])
+    expect(server).to_have_player_count(2)
+    alice.close()
+    expect(bob).to_have_chat(regex=r"left: \[Alice\] at y=-?\d+")
+
+
 def test_harness_refuses_non_loopback_hosts(server, clients):
     """docs/e2e-automation.md §7.4: test bots never connect anywhere but this machine."""
     with pytest.raises(UnsafeHostError):

@@ -73,6 +73,10 @@ struct SessionPlayerLeft {
 	ConnId conn = ConnId::kInvalid;
 	core::NetId net_id = core::NetId::kInvalid;
 	std::string reason;
+	// Captured just before the player's entity is destroyed: by the time a
+	// leave is taken, the session can no longer answer for this net id.
+	std::string name;
+	std::optional<physics::MoveState> last_state;
 };
 
 class ServerSession {

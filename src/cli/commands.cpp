@@ -687,9 +687,23 @@ int cmd_launch(const Ctx &c, const std::vector<std::string> &raw) {
 	}
 	// Singleplayer worlds live in the user's data dir, not in (or next to) the
 	// version they were created with, so they survive uninstall/update.
+	// A pack other than the bundled one gets its own world: saved chunks are
+	// block ids that only mean something to the pack that wrote them.
 	if (!has_opt("--world-dir")) {
+		std::optional<std::string> user_pack;
+		for (std::size_t i = 0; i < passthrough.size(); ++i) {
+			if (passthrough[i] == "--content-pack" && i + 1 < passthrough.size()) {
+				user_pack = passthrough[i + 1];
+			} else if (passthrough[i].rfind("--content-pack=", 0) == 0) {
+				user_pack = passthrough[i].substr(std::string("--content-pack=").size());
+			}
+		}
+		std::filesystem::path world = c.layout.singleplayer_world_dir();
+		if (user_pack) {
+			world = world.parent_path() / ("singleplayer-" + pack_world_name(*user_pack));
+		}
 		args.push_back("--world-dir");
-		args.push_back(c.layout.singleplayer_world_dir().string());
+		args.push_back(world.string());
 	}
 	// The bundled content/base of *this* version (for a link: the source tree
 	// beside the build dir), whatever the working directory is.

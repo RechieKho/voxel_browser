@@ -31,6 +31,13 @@ struct Instance {
 std::filesystem::path instance_toml(const Instance &i);
 std::filesystem::path instance_server_toml(const Instance &i);
 std::filesystem::path instance_world_dir(const Instance &i);
+// A folder name for one pack's own world: the pack directory's name plus a
+// hash of its absolute path ("my_pack-1a2b3c4d"), so two packs never share a
+// world save (saved chunks are block ids, only meaningful to their own pack).
+std::string pack_world_name(const std::filesystem::path &pack);
+// Where `vb host --pack <pack>` keeps that pack's world when it is not the
+// instance's own pack: <instance>/worlds/<pack_world_name>.
+std::filesystem::path instance_pack_world_dir(const Instance &i, const std::filesystem::path &pack);
 std::filesystem::path instance_log_file(const Instance &i);
 std::filesystem::path instance_run_dir(const Instance &i);
 std::filesystem::path instance_status_file(const Instance &i);

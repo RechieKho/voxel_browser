@@ -140,7 +140,7 @@ Result<ClientConfig, CoreError> load_client_config(const std::string &path);
 Result<void, CoreError> save_client_config(const std::string &path, const ClientConfig &config);
 
 // Apply recognised CLI flags on top of a config (mutates in place).
-//   server: --bind --port --content-pack --tick-rate --max-players --seed --motd
+//   server: --bind --port --content-pack --tick-rate --max-players --seed --motd --world-dir
 //   client: --name --width --height --fov --render-distance --asset-cache-dir
 void apply_cli_overrides(ServerConfig &config, const Args &args);
 void apply_cli_overrides(ClientConfig &config, const Args &args);

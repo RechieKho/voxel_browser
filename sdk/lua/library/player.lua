@@ -4,7 +4,8 @@
 
 ---@vb context runtime
 ---Server pack VM only. A connected player. Obtained from event handlers; do not store across ticks
----unless you also handle `player_leave`.
+---unless you also handle `player_leave`. In `player_leave` the connection is already gone, but
+---`get_name()`, `get_login()` and `get_pos()` (last known position) still answer.
 ---@class Player
 local Player = {}
 

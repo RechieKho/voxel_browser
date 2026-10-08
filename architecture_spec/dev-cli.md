@@ -173,10 +173,12 @@ cache = `<dir>/cache`) — for portable installs, CI, and tests.
 │   └── <name>/                 # a server instance (§6)
 │       ├── instance.toml       # version pin, pack, autostart flags
 │       ├── server.toml         # the real engine config, user-editable
-│       ├── world/              # server's world_dir (relative, CWD = here)
+│       ├── world/              # server's world_dir (relative, CWD = here); blocks.txt records its block ids
+│       ├── worlds/<pack>-<hash>/ # `vb host --pack <other>` / `vb pack dev`: one world per other pack
 │       ├── logs/server.log     # + rotated server.log.1 …
 │       └── run/                # pid, stop sentinel (§6.3) — exists only while running
 ├── worlds/singleplayer/        # client's --singleplayer world (§6.2), outside versions/
+├── worlds/singleplayer-<pack>-<hash>/ # `vb launch -- --content-pack <dir>`: that pack's own world
 ├── downloads/                  # *.part files; resumable, cleaned on success
 ├── bin/                        # optional shims (8.5)
 └── lock                        # advisory lock for mutating commands

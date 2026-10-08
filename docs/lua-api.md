@@ -87,7 +87,11 @@ rt.dispatch_tick(dt);
   `"textures/stone.png"`), synced to the client over the existing Asset Sync
   virtual FS and packed into one atlas texture per session
   (`vb::render::TextureAtlas`) — a block with no `texture` (the default,
-  empty string) keeps rendering a flat placeholder color. `model` is still
+  empty string) keeps rendering a flat placeholder color. Texture alpha is
+  honoured: fully clear texels are cut out (a plant sprite on
+  `opaque = false` shows the terrain behind it), and a texture whose
+  visible texels are mostly half-transparent (glass) is drawn blended.
+  `model` is still
   accepted but not stored — no wire-visible model field exists on
   `BlockType` yet; `max_damage` — Phase 6.5, default `0` = today's instant
   break — opts the block into the shared block-damage breaking system below,
@@ -321,6 +325,9 @@ rt.dispatch_tick(dt);
   "player_interact"|"chat"|"tick"|"ui_event"|"player_death"|"player_input"|
   "block_break_begin"|"block_break_tick"|"block_health_tick"|
   "region_enter"|"region_exit"|"player_landed", handler)`,
+  (`player_leave` runs after the connection is gone, but its `player` still
+  answers `get_name()`, `get_login()` and `get_pos()` — the last known
+  position — so cleanup keyed by name works; health/hunger read `nil`),
   vetoable via `return false` (except `tick`/`ui_event`, which have
   no veto semantics; `player_death` is a *decision* hook, not a veto —
   see below; `player_input`/`chat` may veto *or* replace, see below;
@@ -633,7 +640,18 @@ back which widgets fired an interaction — no sol2 in the render half.
   (`current_name`/the widget whose callback is currently running are filled
   in automatically). `ui.close()` — always sends one `"close"` event, then
   runs the layout's own `on_close` (if any) for local cosmetic cleanup, then
-  clears state.
+  clears state. The mouse stays released afterwards (the player clicks back
+  into the world) unless the pack asks otherwise: `ui.close{ capture_mouse =
+  true }`, a layout field `capture_mouse_on_close = true` (the default for
+  every close of that screen, including server-side ones), or
+  `client.capture_mouse(true)` from any callback. A capture request waits
+  until no screen or chat is open, and the click that closed the screen is
+  not sent as an attack/break. `client.capture_mouse(false)` releases it;
+  `client.mouse_captured()` reports the current state. `ui.close()` may be
+  called from the screen's own render function (e.g. "close myself when the
+  server reopens me with `done = true`"): the render finishes normally and
+  the close happens right after it, running the `on_close` that render
+  returned.
 - Client wiring (`src/client/main.cpp`): every synced `ui/*.lua` file
   (`ClientSession::virtual_pack_fs()`, Asset Sync/Phase 4.4) is loaded into
   `UiRuntime` right after join; `ClientSession::take_open_ui()` then drains a

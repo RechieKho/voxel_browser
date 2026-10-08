@@ -20,7 +20,7 @@ vb = {}
 ---@field liquid? boolean Liquid block (default false).
 ---@field region? boolean Fire `region_enter`/`region_exit` events (defaults to `liquid`).
 ---@field light? integer Light emission 0-15 (default 0).
----@field texture? string Pack-relative path, e.g. `"textures/ruby.png"`. Empty = flat placeholder colour.
+---@field texture? string Pack-relative path, e.g. `"textures/ruby.png"`. Empty = flat placeholder colour. Clear texels are cut out (sprites); mostly half-transparent art is blended (glass).
 ---@field max_damage? integer Punches needed to break; 0 = instant (default 0).
 ---@field crack_texture? string Pack-relative crack-stage spritesheet; empty = engine default overlay.
 ---@field max_stack? integer Inventory stack cap (engine default).

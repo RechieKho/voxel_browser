@@ -93,6 +93,13 @@ void ClientApp::begin_connect(bool as_singleplayer) {
 	if (as_singleplayer) {
 		sp = std::make_unique<Singleplayer>(7, menu.player_name(), view_distance);
 		connecting_target = "singleplayer";
+		if (!sp->world_error.empty()) {
+			error_message = sp->world_error;
+			std::cout << "client: " << error_message << '\n';
+			sp.reset();
+			state = AppState::kError;
+			return;
+		}
 #if defined(VB_WITH_AUTH)
 		install_sign_in(sp->client(), connecting_target);
 #endif
@@ -406,14 +413,16 @@ void ClientApp::enter_playing() {
 					vb::render::TextureAtlas::build(client->chunk_store().registry(), vfs);
 			std::vector<vb::render::AtlasRect> rects;
 			std::vector<Color> averages;
+			std::vector<bool> translucent;
 			rects.reserve(atlas.block_count());
 			averages.reserve(atlas.block_count());
 			for (std::size_t i = 0; i < atlas.block_count(); ++i) {
 				const auto id = static_cast<vb::core::BlockId>(i);
 				rects.push_back(atlas.rect_for(id));
 				averages.push_back(atlas.average_color_for(id));
+				translucent.push_back(atlas.is_translucent(id));
 			}
-			chunk_renderer->set_atlas(atlas.upload(), std::move(rects), std::move(averages));
+			chunk_renderer->set_atlas(atlas.upload(), std::move(rects), std::move(averages), std::move(translucent));
 
 			// REMAINING_TASKS.md 6.5's last piece: same join-time, same vfs
 			// -- a block's crack_texture (if any) is synced/on-disk exactly
@@ -451,6 +460,8 @@ void ClientApp::enter_playing() {
 		}
 	}
 	mouse_captured = false;
+	pending_capture_ = false;
+	suppress_primary_ = false;
 	chat_log.clear();
 	chat_buf.clear();
 	chat_open = false;
@@ -800,12 +811,36 @@ bool ClientApp::frame(const vb::render::InputFrame &input, double dt) {
 			// value -- calling EnableCursor() every frame the inventory
 			// stayed open re-centered the cursor 60+ times a second,
 			// making it look stuck in the middle of the screen.
-			if (ui_runtime.is_open() || chat_open || input.key_pressed(KEY_TAB) ||
-					input.key_pressed(KEY_ESCAPE)) {
+			//
+			// A pack can also ask for capture/release (client.capture_mouse,
+			// ui.close{ capture_mouse = true }, capture_mouse_on_close). A
+			// release applies now; a capture waits until no screen and no
+			// chat box need the cursor, and Tab/Escape cancel it.
+			const bool user_release = input.key_pressed(KEY_TAB) || input.key_pressed(KEY_ESCAPE);
+			bool pack_release = false;
+			if (const auto request = ui_runtime.take_capture_request()) {
+				pack_release = !*request;
+				pending_capture_ = *request;
+			}
+			if (user_release || pack_release) {
+				pending_capture_ = false;
+			}
+			if (ui_runtime.is_open() || chat_open || user_release || pack_release) {
 				if (mouse_captured) {
 					mouse_captured = false;
 					if (render) {
 						EnableCursor();
+					}
+				}
+			} else if (pending_capture_) {
+				pending_capture_ = false;
+				if (!mouse_captured) {
+					mouse_captured = true;
+					// The click that closed the screen may still be held: don't
+					// let it reach the server as a punch.
+					suppress_primary_ = true;
+					if (render) {
+						DisableCursor();
 					}
 				}
 			} else if (input.mouse_button_pressed(MOUSE_BUTTON_LEFT) && !mouse_captured) {
@@ -838,10 +873,20 @@ bool ClientApp::frame(const vb::render::InputFrame &input, double dt) {
 			controller.update(look_in, dt);
 
 			{
-				const vb::protocol::InputCmd cmd = vb::render::sample_input_cmd(input, ++input_seq, dt,
+				vb::protocol::InputCmd cmd = vb::render::sample_input_cmd(input, ++input_seq, dt,
 						controller.yaw(), controller.pitch(), mouse_captured,
 						movement_bindings, client->registered_keybinds(),
 						selected_slot);
+				// After a pack-requested capture: hold back `primary` until the
+				// click that closed the screen is released.
+				if (suppress_primary_) {
+					if (input.mouse_button_down(MOUSE_BUTTON_LEFT)) {
+						cmd.buttons = static_cast<std::uint8_t>(
+								cmd.buttons & ~vb::protocol::kInputPrimary);
+					} else {
+						suppress_primary_ = false;
+					}
+				}
 				client->push_input(cmd);
 				// Singleplayer ticks the whole embedded game (client + server,
 				// over loopback); a real connection just pumps this client's
@@ -918,6 +963,7 @@ bool ClientApp::frame(const vb::render::InputFrame &input, double dt) {
 				ui_runtime.set_player_list(config.player_name, std::move(other_names));
 			}
 			ui_runtime.set_chat({ chat_log.begin(), chat_log.end() }, chat_open);
+			ui_runtime.set_mouse_captured(mouse_captured);
 			if (const auto &st = client->player_status()) {
 				ui_runtime.set_player_status(vb::script::UiRuntime::StatusView{
 						st->health, st->max_health, st->hunger, st->max_hunger });

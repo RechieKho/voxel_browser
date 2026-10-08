@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include <optional>
 #include <ostream>
 
 #include "vb/net/loopback.hpp"
@@ -145,6 +146,49 @@ TEST_CASE("close() with a session attached sends the close event instead of cras
 
 	ui.open("test", "{}");
 	ui.close(); // and the C++ entry point
+	CHECK_FALSE(ui.is_open());
+}
+
+TEST_CASE("ui.close() from the screen's own render function closes it after the frame") {
+	// Regression: do_close() reset current_render_fn while that function was
+	// still running, and the client exited without a word on the next frame.
+	vb::net::LoopbackNetwork net;
+	REQUIRE(net.server().listen(0));
+	vb::net::Transport &transport = net.create_client();
+	auto conn = transport.connect("loopback", 0);
+	REQUIRE(conn);
+	vb::net::ClientSession session(transport, *conn,
+			vb::net::HandshakeClientConfig{ "Tester", "", "vb-test", 1 });
+
+	UiRuntime ui;
+	ui.attach_session(session);
+	REQUIRE(ui.load_pack_file(R"(
+		closed = 0
+		after_close = nil
+		ui.define("x:loading", function(state)
+			if state.done then
+				ui.close{ capture_mouse = true }
+				after_close = state.done -- the render keeps running normally
+				return { widgets = {}, on_close = function() closed = closed + 1 end }
+			end
+			return { widgets = { { id = "t", type = "text", x = 10, y = 10, text = "loading" } } }
+		end)
+	)"));
+	ui.open("x:loading", "{}");
+	CHECK(ui.render_frame().size() == 1);
+	ui.open("x:loading", R"({"done": true})");
+	CHECK(ui.render_frame().empty());
+	CHECK_FALSE(ui.is_open());
+	CHECK(ui.take_capture_request() == std::optional<bool>(true));
+	CHECK(ui.load_pack_file("assert(after_close == true and closed == 1)"));
+	CHECK(ui.render_frame().empty()); // nothing open: a no-op
+
+	// A render that errors after closing still closes.
+	REQUIRE(ui.load_pack_file(R"(
+		ui.define("x:bad", function(state) ui.close(); error("boom") end)
+	)"));
+	ui.open("x:bad", "{}");
+	ui.render_frame();
 	CHECK_FALSE(ui.is_open());
 }
 
@@ -395,6 +439,77 @@ TEST_CASE("report_hud_change/report_hud_list_change invoke a HUD widget's "
 		assert(last_text == "typed")
 		assert(last_index == 1)
 	)"));
+}
+
+// Mouse capture is the pack's choice: nothing is requested unless a pack asks.
+TEST_CASE("mouse capture: ui.close() requests nothing; ui.close{capture_mouse} and the layout field do") {
+	UiRuntime ui;
+	REQUIRE(ui.load_pack_file(R"(
+		ui.define("plain", function(state)
+			return { widgets = {
+				{ id = "close", type = "button", x=0,y=0,w=1,h=1, text = "x",
+				  on_click = function() ui.close() end },
+				{ id = "back", type = "button", x=0,y=0,w=1,h=1, text = "x",
+				  on_click = function() ui.close{ capture_mouse = true } end },
+			} }
+		end)
+		ui.define("auto", function(state)
+			return { capture_mouse_on_close = true, widgets = {
+				{ id = "close", type = "button", x=0,y=0,w=1,h=1, text = "x",
+				  on_click = function() ui.close() end },
+				{ id = "stay", type = "button", x=0,y=0,w=1,h=1, text = "x",
+				  on_click = function() ui.close{ capture_mouse = false } end },
+			} }
+		end)
+		ui.define("veto", function(state)
+			return { capture_mouse_on_close = true, widgets = {},
+				on_close = function() client.capture_mouse(false) end }
+		end)
+	)"));
+
+	SUBCASE("plain close keeps today's behaviour") {
+		ui.open("plain", "{}");
+		ui.render_frame();
+		ui.report_click("close");
+		CHECK_FALSE(ui.is_open());
+		CHECK_FALSE(ui.take_capture_request());
+	}
+	SUBCASE("ui.close{ capture_mouse = true }") {
+		ui.open("plain", "{}");
+		ui.render_frame();
+		ui.report_click("back");
+		CHECK(ui.take_capture_request() == std::optional<bool>(true));
+		CHECK_FALSE(ui.take_capture_request()); // taken once
+	}
+	SUBCASE("capture_mouse_on_close, and an explicit false overriding it") {
+		ui.open("auto", "{}");
+		ui.render_frame();
+		ui.report_click("close");
+		CHECK(ui.take_capture_request() == std::optional<bool>(true));
+		ui.open("auto", "{}");
+		ui.render_frame();
+		ui.report_click("stay");
+		CHECK(ui.take_capture_request() == std::optional<bool>(false));
+	}
+	SUBCASE("an on_close handler has the last word") {
+		ui.open("veto", "{}");
+		ui.render_frame();
+		ui.close();
+		CHECK(ui.take_capture_request() == std::optional<bool>(false));
+	}
+}
+
+TEST_CASE("mouse capture: client.capture_mouse / client.mouse_captured") {
+	UiRuntime ui;
+	ui.set_mouse_captured(true);
+	REQUIRE(ui.load_pack_file(R"(
+		assert(client.mouse_captured() == true)
+		client.capture_mouse(false)
+		client.capture_mouse(true) -- the last request wins
+	)"));
+	CHECK(ui.take_capture_request() == std::optional<bool>(true));
+	ui.set_mouse_captured(false);
+	CHECK(ui.load_pack_file("assert(client.mouse_captured() == false)"));
 }
 
 #endif // VB_WITH_LUA

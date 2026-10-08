@@ -52,7 +52,7 @@ BlockDef[]
 | `liquid?` | `boolean` | Liquid block (default false). |
 | `region?` | `boolean` | Fire `region_enter`/`region_exit` events (defaults to `liquid`). |
 | `light?` | `integer` | Light emission 0-15 (default 0). |
-| `texture?` | `string` | Pack-relative path, e.g. `"textures/ruby.png"`. Empty = flat placeholder colour. |
+| `texture?` | `string` | Pack-relative path, e.g. `"textures/ruby.png"`. Empty = flat placeholder colour. Clear texels are cut out (sprites); mostly half-transparent art is blended (glass). |
 | `max_damage?` | `integer` | Punches needed to break; 0 = instant (default 0). |
 | `crack_texture?` | `string` | Pack-relative crack-stage spritesheet; empty = engine default overlay. |
 | `max_stack?` | `integer` | Inventory stack cap (engine default). |
@@ -292,6 +292,7 @@ integer[] `{r, g, b, a?}`, 0-255 each.
 | --- | --- | --- |
 | `widgets` | `Widget[]` |  |
 | `on_close?` | `fun()` | Local cosmetic cleanup when the screen closes. |
+| `capture_mouse_on_close?` | `boolean` | Recapture the mouse whenever this screen closes (default false). |
 
 ## SpawnOptions
 
@@ -330,6 +331,12 @@ integer[] `{r, g, b, a?}`, 0-255 each.
 | --- | --- | --- |
 | `weight` | `number` | Selection weight. |
 | `layers` | `string[][]` | `layers[y][z]` is one row of `size.x` palette characters, bottom layer first. |
+
+## UiCloseOptions
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `capture_mouse?` | `boolean` | true: recapture the mouse once no screen or chat box is open. |
 
 ## VbEvent
 

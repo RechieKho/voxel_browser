@@ -232,6 +232,7 @@ void apply_cli_overrides(ServerConfig &config, const Args &args) {
 	config.bind_address = args.value_or("bind", config.bind_address);
 	config.content_pack = args.value_or("content-pack", config.content_pack);
 	config.motd = args.value_or("motd", config.motd);
+	config.world_dir = args.value_or("world-dir", config.world_dir);
 	config.port = static_cast<std::uint16_t>(
 			args.int_or("port", static_cast<int>(config.port)));
 	config.tick_rate = static_cast<std::uint32_t>(

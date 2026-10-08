@@ -251,6 +251,12 @@ private:
 	std::unique_ptr<vb::render::CrackOverlay> crack_overlay;
 	vb::render::CrackAtlas crack_atlas;
 	bool mouse_captured = false;
+	// A pack asked for capture (UiRuntime::take_capture_request) that waits
+	// for the screen/chat box to close; Tab/Escape or a release cancel it.
+	bool pending_capture_ = false;
+	// Set when a pack-requested capture lands: `primary` is masked out until
+	// the left button is released, so the closing click never punches.
+	bool suppress_primary_ = false;
 	// Entity-management follow-up (held item / hotbar selection): which
 	// inventory slot (0-based) number keys 1-9 have selected, persisted
 	// across frames like input_seq above -- sample_input_cmd only ever reads

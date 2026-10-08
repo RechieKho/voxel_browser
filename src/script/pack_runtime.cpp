@@ -700,6 +700,9 @@ struct PackRuntime::Impl {
 
 	std::unordered_map<core::NetId, ecs::Inventory> inventories;
 	std::unordered_map<core::NetId, std::string> player_names;
+	// Where a leaving player was when the session dropped them; set only
+	// while player_leave runs, so get_pos() can still answer.
+	std::unordered_map<core::NetId, physics::MoveState> leaving_states;
 	// External auth (auth.md §6). `logins` is filled at join and kept until
 	// after player_leave fires, so every callback that gets a Player can read
 	// its login even once the session has dropped the connection.
@@ -886,7 +889,12 @@ struct PlayerHandle {
 		if (rt->session == nullptr) {
 			throw sol::error("entity:get_pos(): session not attached yet");
 		}
-		const auto st = rt->session->player_move_state(net_id);
+		auto st = rt->session->player_move_state(net_id);
+		if (!st) {
+			if (const auto it = rt->leaving_states.find(net_id); it != rt->leaving_states.end()) {
+				st = it->second; // player_leave: the last known position
+			}
+		}
 		if (!st) {
 			throw sol::error("entity:get_pos(): entity is gone");
 		}
@@ -1068,10 +1076,16 @@ struct PlayerHandle {
 	}
 
 	std::string get_name() const {
-		if (rt->session == nullptr) {
-			return {};
+		if (rt->session != nullptr) {
+			if (const std::string_view name = rt->session->player_name(net_id); !name.empty()) {
+				return std::string(name);
+			}
 		}
-		return std::string(rt->session->player_name(net_id));
+		// Kept until after player_leave, when the session no longer has the conn.
+		if (const auto it = rt->player_names.find(net_id); it != rt->player_names.end()) {
+			return it->second;
+		}
+		return {};
 	}
 
 	// Phase 6.6: the one way to reduce a player's health from Lua. `cause` is
@@ -3299,8 +3313,15 @@ void PackRuntime::dispatch_login_changed(const net::SessionLoginChanged &c) {
 }
 
 void PackRuntime::dispatch_player_leave(const net::SessionPlayerLeft &l) {
+	if (!l.name.empty()) {
+		impl_->player_names[l.net_id] = l.name;
+	}
+	if (l.last_state) {
+		impl_->leaving_states[l.net_id] = *l.last_state;
+	}
 	PlayerHandle p{ l.net_id, impl_.get() };
 	impl_->fire("player_leave", p);
+	impl_->leaving_states.erase(l.net_id);
 	impl_->player_names.erase(l.net_id);
 	impl_->logins.erase(l.net_id);
 	impl_->login_tables.erase(l.net_id);
