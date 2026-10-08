@@ -252,6 +252,12 @@ struct UiRuntime::Impl {
 	sol::table current_state; // persists across every frame this screen is open
 	sol::protected_function current_on_close; // refreshed by each evaluate_frame()
 	bool current_capture_on_close = false; // layout's capture_mouse_on_close, ditto
+	// ui.close() from the screen's own render function can't tear the screen
+	// down under the running call; it's recorded here and done once the
+	// render returns (with that frame's on_close).
+	bool in_render = false;
+	bool close_after_render = false;
+	std::optional<bool> close_after_render_capture;
 	// Mouse capture: what the client reports (client.mouse_captured()), and
 	// the latest request from client.capture_mouse / ui.close{capture_mouse}
 	// / capture_mouse_on_close, taken by the client each frame.
@@ -359,6 +365,13 @@ void UiRuntime::Impl::install_bindings() {
 				capture = c.as<bool>();
 			}
 		}
+		if (in_render) {
+			close_after_render = true;
+			if (capture) {
+				close_after_render_capture = capture;
+			}
+			return;
+		}
 		do_close(capture);
 	};
 
@@ -447,32 +460,51 @@ void UiRuntime::Impl::evaluate_frame() {
 		return;
 	}
 	vm.begin_call_budget();
+	close_after_render = false;
+	close_after_render_capture.reset();
+	in_render = true;
 	sol::protected_function_result r = current_render_fn(current_state);
+	in_render = false;
+	// A ui.close() during the render, done now that the call has returned.
+	const auto finish_close = [this]() {
+		if (!close_after_render) {
+			return false;
+		}
+		close_after_render = false;
+		do_close(std::exchange(close_after_render_capture, std::nullopt));
+		return true;
+	};
 	if (!r.valid()) {
 		const sol::error e = r;
 		VB_WARN("script", "ui '", current_name, "' render function error: ", e.what());
+		finish_close();
 		return; // leave the previous frame's widgets in place, don't flicker
 	}
 	sol::object result = r;
+	sol::table layout;
+	if (result.get_type() == sol::type::table) {
+		layout = result.as<sol::table>();
+		sol::object on_close = layout["on_close"];
+		current_on_close = on_close.is<sol::protected_function>()
+				? on_close.as<sol::protected_function>()
+				: sol::protected_function();
+		const sol::object capture_on_close = layout["capture_mouse_on_close"];
+		current_capture_on_close = capture_on_close.is<bool>() && capture_on_close.as<bool>();
+	}
+	if (finish_close()) {
+		return;
+	}
 	if (result.get_type() != sol::type::table) {
 		VB_WARN("script", "ui '", current_name,
 				"' render function did not return a table");
 		return;
 	}
-	sol::table layout = result.as<sol::table>();
 	sol::object widgets_obj = layout["widgets"];
 	if (widgets_obj.get_type() != sol::type::table) {
 		VB_WARN("script", "ui '", current_name, "' render result has no 'widgets' array");
 		return;
 	}
 	sol::table widget_tables = widgets_obj.as<sol::table>();
-
-	sol::object on_close = layout["on_close"];
-	current_on_close = on_close.is<sol::protected_function>()
-			? on_close.as<sol::protected_function>()
-			: sol::protected_function();
-	const sol::object capture_on_close = layout["capture_mouse_on_close"];
-	current_capture_on_close = capture_on_close.is<bool>() && capture_on_close.as<bool>();
 
 	widget_by_id.clear();
 	widgets_vec.clear();

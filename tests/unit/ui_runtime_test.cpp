@@ -149,6 +149,49 @@ TEST_CASE("close() with a session attached sends the close event instead of cras
 	CHECK_FALSE(ui.is_open());
 }
 
+TEST_CASE("ui.close() from the screen's own render function closes it after the frame") {
+	// Regression: do_close() reset current_render_fn while that function was
+	// still running, and the client exited without a word on the next frame.
+	vb::net::LoopbackNetwork net;
+	REQUIRE(net.server().listen(0));
+	vb::net::Transport &transport = net.create_client();
+	auto conn = transport.connect("loopback", 0);
+	REQUIRE(conn);
+	vb::net::ClientSession session(transport, *conn,
+			vb::net::HandshakeClientConfig{ "Tester", "", "vb-test", 1 });
+
+	UiRuntime ui;
+	ui.attach_session(session);
+	REQUIRE(ui.load_pack_file(R"(
+		closed = 0
+		after_close = nil
+		ui.define("x:loading", function(state)
+			if state.done then
+				ui.close{ capture_mouse = true }
+				after_close = state.done -- the render keeps running normally
+				return { widgets = {}, on_close = function() closed = closed + 1 end }
+			end
+			return { widgets = { { id = "t", type = "text", x = 10, y = 10, text = "loading" } } }
+		end)
+	)"));
+	ui.open("x:loading", "{}");
+	CHECK(ui.render_frame().size() == 1);
+	ui.open("x:loading", R"({"done": true})");
+	CHECK(ui.render_frame().empty());
+	CHECK_FALSE(ui.is_open());
+	CHECK(ui.take_capture_request() == std::optional<bool>(true));
+	CHECK(ui.load_pack_file("assert(after_close == true and closed == 1)"));
+	CHECK(ui.render_frame().empty()); // nothing open: a no-op
+
+	// A render that errors after closing still closes.
+	REQUIRE(ui.load_pack_file(R"(
+		ui.define("x:bad", function(state) ui.close(); error("boom") end)
+	)"));
+	ui.open("x:bad", "{}");
+	ui.render_frame();
+	CHECK_FALSE(ui.is_open());
+}
+
 TEST_CASE("close() invokes on_close (from the latest frame) exactly once and clears state") {
 	UiRuntime ui;
 	REQUIRE(ui.load_pack_file(R"(

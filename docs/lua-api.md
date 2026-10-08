@@ -644,7 +644,11 @@ back which widgets fired an interaction — no sol2 in the render half.
   `client.capture_mouse(true)` from any callback. A capture request waits
   until no screen or chat is open, and the click that closed the screen is
   not sent as an attack/break. `client.capture_mouse(false)` releases it;
-  `client.mouse_captured()` reports the current state.
+  `client.mouse_captured()` reports the current state. `ui.close()` may be
+  called from the screen's own render function (e.g. "close myself when the
+  server reopens me with `done = true`"): the render finishes normally and
+  the close happens right after it, running the `on_close` that render
+  returned.
 - Client wiring (`src/client/main.cpp`): every synced `ui/*.lua` file
   (`ClientSession::virtual_pack_fs()`, Asset Sync/Phase 4.4) is loaded into
   `UiRuntime` right after join; `ClientSession::take_open_ui()` then drains a

@@ -66,7 +66,7 @@ ui.send_event("buy", { item = "base:wood" })
 
 context: **ui**
 
-Client UI VM only. Closes the current screen (always notifies the server with a "close" event). By default the mouse stays free; `capture_mouse = true` drops the player back into the game, and the click that closed the screen is not sent as a punch.
+Client UI VM only. Closes the current screen (always notifies the server with a "close" event). By default the mouse stays free; `capture_mouse = true` drops the player back into the game, and the click that closed the screen is not sent as a punch. Calling it from the screen's own render function is fine: the screen closes right after that render returns.
 
 | Parameter | Type | Description |
 | --- | --- | --- |
