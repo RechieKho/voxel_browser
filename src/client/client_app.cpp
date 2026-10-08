@@ -93,6 +93,13 @@ void ClientApp::begin_connect(bool as_singleplayer) {
 	if (as_singleplayer) {
 		sp = std::make_unique<Singleplayer>(7, menu.player_name(), view_distance);
 		connecting_target = "singleplayer";
+		if (!sp->world_error.empty()) {
+			error_message = sp->world_error;
+			std::cout << "client: " << error_message << '\n';
+			sp.reset();
+			state = AppState::kError;
+			return;
+		}
 #if defined(VB_WITH_AUTH)
 		install_sign_in(sp->client(), connecting_target);
 #endif

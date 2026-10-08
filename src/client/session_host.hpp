@@ -34,6 +34,7 @@
 #include "vb/core/cli.hpp"
 #include "vb/core/config.hpp"
 #include "vb/core/ids.hpp" // kChunkDim
+#include "vb/core/log.hpp"
 #include "vb/core/paths.hpp"
 #include "vb/core/version_req.hpp"
 #include "vb/net/gns_transport.hpp"
@@ -61,6 +62,7 @@
 #include "vb/world/raycast.hpp"
 #include "vb/world/region_store.hpp"
 #include "vb/world/world.hpp"
+#include "vb/world/world_registry.hpp"
 #include "vb/worldgen/generator.hpp"
 #include "vb/worldgen/worker_pool.hpp"
 
@@ -388,6 +390,9 @@ struct Singleplayer {
 	// destroyed in reverse declaration order, so this stays alive for the
 	// whole time `server`'s replicator could still touch it.
 	std::unique_ptr<vb::world::RegionStore> region_store;
+	// Set when the saved world can't be used with this pack (see
+	// vb::world::check_world_registry); the session must not be played then.
+	std::string world_error;
 	vb::net::ServerSession server;
 	std::optional<vb::net::ClientSession> client_session;
 
@@ -424,7 +429,20 @@ struct Singleplayer {
 		// persist_world config toggle to check here yet (no client.toml
 		// surface for it, same fixed-default posture kSingleplayerWorldDir's
 		// own comment already has).
-		region_store = std::make_unique<vb::world::RegionStore>(kSingleplayerWorldDir);
+		// Same registry check as the dedicated server: a world saved by another
+		// pack is refused (world_error, shown instead of joining) rather than
+		// loaded with the wrong blocks.
+		const auto pack_info = vb::script::read_pack_manifest(kSingleplayerContentPack);
+		const auto check = vb::world::check_world_registry(kSingleplayerWorldDir, registry,
+				pack_info.name.empty() ? kSingleplayerContentPack : pack_info.name);
+		if (!check.ok) {
+			world_error = check.message;
+		} else {
+			if (!check.message.empty()) {
+				VB_WARN("world", check.message);
+			}
+			region_store = std::make_unique<vb::world::RegionStore>(kSingleplayerWorldDir);
+		}
 
 		auto replicator = std::make_unique<vb::net::WorldReplicator>(
 				world, pool, registry, view_distance, 3);

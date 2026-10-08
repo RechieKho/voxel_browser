@@ -1,6 +1,8 @@
 // Phase 8.4: hosting -- server instances, process tracking, graceful stop.
 #include <doctest/doctest.h>
 
+#include <optional>
+
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
@@ -229,6 +231,48 @@ TEST_CASE("plan_launch builds the server command line") {
 		CHECK(p2.args[p2.args.size() - 2] == "--seed");
 		CHECK(p2.args.back() == "42");
 		CHECK(load_instance(l, "s")->pack == "builtin:base"); // unchanged
+	}
+
+	SUBCASE("hosting another pack uses that pack's own world, never the instance's") {
+		const auto world_arg = [](const LaunchPlan &p) -> std::optional<std::string> {
+			for (std::size_t i = 0; i + 1 < p.args.size(); ++i) {
+				if (p.args[i] == "--world-dir") {
+					return p.args[i + 1];
+				}
+			}
+			return std::nullopt;
+		};
+		write(t.path / "a" / "mypack" / "pack.toml", "x");
+		write(t.path / "b" / "mypack" / "pack.toml", "x");
+		Overrides ov;
+		ov.pack = (t.path / "a" / "mypack").string();
+		LaunchPlan pa;
+		REQUIRE(plan_launch(l, inst, ov, pa));
+		REQUIRE(world_arg(pa));
+		CHECK(fs::path(*world_arg(pa)) == instance_pack_world_dir(inst, t.path / "a" / "mypack"));
+		CHECK(fs::path(*world_arg(pa)).parent_path() == inst.dir / "worlds");
+		CHECK(fs::path(*world_arg(pa)).filename().string().rfind("mypack-", 0) == 0);
+
+		// A different pack with the same folder name still gets a different world.
+		ov.pack = (t.path / "b" / "mypack").string();
+		LaunchPlan pb;
+		REQUIRE(plan_launch(l, inst, ov, pb));
+		REQUIRE(world_arg(pb));
+		CHECK(*world_arg(pb) != *world_arg(pa));
+
+		// The instance's own pack keeps world/ (no override at all).
+		ov.pack = "builtin:base";
+		LaunchPlan own;
+		REQUIRE(plan_launch(l, inst, ov, own));
+		CHECK_FALSE(world_arg(own));
+
+		// An explicit --world-dir from the user wins.
+		ov.pack = (t.path / "a" / "mypack").string();
+		ov.extra_args = { "--world-dir", "/elsewhere" };
+		LaunchPlan mine;
+		REQUIRE(plan_launch(l, inst, ov, mine));
+		CHECK(std::count(mine.args.begin(), mine.args.end(), std::string("--world-dir")) == 1);
+		CHECK(*world_arg(mine) == "/elsewhere");
 	}
 
 	SUBCASE("missing version suggests installing it") {

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <fstream>
 #include <memory>
 #include <ostream>
@@ -15,6 +16,7 @@
 #include "vb/cli/portcheck.hpp"
 #include "vb/cli/version.hpp"
 #include "vb/core/config.hpp"
+#include "vb/core/hash.hpp"
 
 namespace vb::cli {
 
@@ -113,6 +115,36 @@ std::int64_t now_unix() {
 fs::path instance_toml(const Instance &i) { return i.dir / "instance.toml"; }
 fs::path instance_server_toml(const Instance &i) { return i.dir / "server.toml"; }
 fs::path instance_world_dir(const Instance &i) { return i.dir / "world"; }
+
+std::string pack_world_name(const fs::path &pack) {
+	std::error_code ec;
+	fs::path abs = fs::weakly_canonical(pack, ec);
+	if (ec) {
+		abs = fs::absolute(pack, ec);
+	}
+	std::string name = abs.filename().string();
+	if (name.empty()) {
+		name = abs.parent_path().filename().string(); // "dir/" -> "dir"
+	}
+	for (char &ch : name) {
+		const bool safe = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+				(ch >= '0' && ch <= '9') || ch == '-' || ch == '_' || ch == '.';
+		if (!safe) {
+			ch = '_';
+		}
+	}
+	if (name.empty()) {
+		name = "pack";
+	}
+	const std::uint64_t h = vb::core::Fnv1a{}.update(abs.generic_string()).digest();
+	char hex[9];
+	std::snprintf(hex, sizeof(hex), "%08llx", static_cast<unsigned long long>(h & 0xffffffffULL));
+	return name + "-" + hex;
+}
+
+fs::path instance_pack_world_dir(const Instance &i, const fs::path &pack) {
+	return i.dir / "worlds" / pack_world_name(pack);
+}
 fs::path instance_log_file(const Instance &i) { return i.dir / "logs" / "server.log"; }
 fs::path instance_run_dir(const Instance &i) { return i.dir / "run"; }
 fs::path instance_status_file(const Instance &i) { return instance_run_dir(i) / "status.toml"; }
@@ -319,6 +351,21 @@ Status plan_launch(const Layout &layout, const Instance &inst, const Overrides &
 	out.version_name = entry->name;
 	out.port = ov.port.value_or(loaded->port);
 	out.args = { "--config", config.string(), "--content-pack", pack->string() };
+	// Hosting some other pack on this instance (`vb host --pack`, `vb pack dev`)
+	// must not load the instance's world: its saved chunks are block ids of the
+	// instance's own pack. Each such pack gets its own world folder instead
+	// (an explicit `-- --world-dir` from the user still wins).
+	if (!ov.pack.empty()) {
+		const auto own = resolve_pack(inst.pack, entry->root, &why);
+		std::error_code ec;
+		const bool same = own && fs::equivalent(*own, *pack, ec);
+		const bool user_world = std::any_of(ov.extra_args.begin(), ov.extra_args.end(),
+				[](const std::string &a) { return a == "--world-dir" || a.rfind("--world-dir=", 0) == 0; });
+		if (!same && !user_world) {
+			out.args.push_back("--world-dir");
+			out.args.push_back(instance_pack_world_dir(inst, *pack).string());
+		}
+	}
 	if (ov.port) {
 		out.args.push_back("--port");
 		out.args.push_back(std::to_string(*ov.port));

@@ -46,6 +46,7 @@
 #include "vb/world/block.hpp"
 #include "vb/world/region_store.hpp"
 #include "vb/world/world.hpp"
+#include "vb/world/world_registry.hpp"
 #include "vb/worldgen/generator.hpp"
 #include "vb/worldgen/worker_pool.hpp"
 
@@ -102,6 +103,7 @@ void print_usage() {
 				 "  --tick-rate <hz>       simulation tick rate override\n"
 				 "  --max-players <n>      player cap override\n"
 				 "  --seed <n>             world seed override (0 = random)\n"
+				 "  --world-dir <dir>      world save directory override (server.toml world_dir)\n"
 				 "  --motd <text>          message of the day override\n"
 				 "  --ticks <n>            run n ticks then exit (0 = forever)\n"
 				 "  --status-file <path>   rewrite this TOML file every few seconds with uptime,\n"
@@ -441,6 +443,18 @@ int main(int argc, char **argv) {
 	// place the feature can be switched off entirely, not just left idle.
 	std::unique_ptr<vb::world::RegionStore> region_store;
 	if (config.persist_world) {
+		// Saved chunks are raw block ids: refuse a world whose ids belong to a
+		// different pack's registry rather than load its terrain with the
+		// wrong (and untextured) blocks.
+		const auto check = vb::world::check_world_registry(config.world_dir, registry,
+				pack_manifest.name.empty() ? config.content_pack : pack_manifest.name);
+		if (!check.ok) {
+			std::cerr << "server: " << check.message << '\n';
+			return EXIT_FAILURE;
+		}
+		if (!check.message.empty()) {
+			std::cerr << "server: WARNING: " << check.message << '\n';
+		}
 		region_store = std::make_unique<vb::world::RegionStore>(config.world_dir);
 	}
 	vb::worldgen::WorldGenParams gen_params;
@@ -643,7 +657,10 @@ int main(int argc, char **argv) {
 			  << "server: bind " << config.bind_address << ':' << config.port
 			  << " (bound port " << transport.bound_port() << "), pack '"
 			  << config.content_pack << "', " << config.tick_rate << " Hz, max "
-			  << config.max_players << " players, seed " << seed << '\n';
+			  << config.max_players << " players, seed " << seed << ", world "
+			  << (config.persist_world ? std::filesystem::absolute(config.world_dir).string()
+									   : std::string("(not saved)"))
+			  << '\n';
 
 	const auto tick_dt =
 			std::chrono::nanoseconds(std::chrono::seconds(1)) / config.tick_rate;

@@ -15,5 +15,6 @@ target_sources(vb_core PRIVATE
   paletted_chunk_store.cpp
   raycast.cpp
   region_store.cpp
+  world_registry.cpp
   world.cpp
 )

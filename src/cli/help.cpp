@@ -34,7 +34,7 @@ const std::vector<CommandDoc> &command_docs() {
 				{ { "--version <v>", "which installed version" }, { "--connect host[:port]", "join a server instead of the main menu" } },
 				{ { "vb launch --connect localhost:7777", "join a local server" }, { "vb launch -- --singleplayer", "start singleplayer directly" } }, {}, false },
 		{ "host", "Runs a dedicated server in the foreground (Ctrl+C stops it). With `--watch` it restarts whenever the pack changes on disk. Everything after `--` goes to the server.",
-				{ { "--version <v>", "which installed version" }, { "--port <n>", "UDP port" }, { "--pack <dir>", "content pack directory (default: the bundled base pack)" },
+				{ { "--version <v>", "which installed version" }, { "--port <n>", "UDP port" }, { "--pack <dir>", "content pack directory (default: the bundled base pack); each pack keeps its own world" },
 						{ "--watch", "restart the server when files in the pack change" } },
 				{ { "vb host --pack ./my_pack --watch", "develop a pack with auto-restart" } }, {}, false },
 		{ "server", "Named, persistent server instances (each with its own server.toml, world, logs and pinned version) that run in the background.",

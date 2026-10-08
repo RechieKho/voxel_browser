@@ -20,6 +20,7 @@ max_messages_per_second = 0.0   # 0 = unlimited; per-connection flood guard, tok
 auth_mode          = "none"     # "none" | "token" (token verification is stubbed)
 motd               = ""
 persist_world      = true       # false = never touch disk, in-memory-only world (prior behavior)
-world_dir          = "world"    # relative to the server's working directory, like content_pack
+world_dir          = "world"    # relative to the server's working directory, like content_pack; blocks.txt
+                                # inside records the pack's block ids, and a pack with other blocks is refused
 autosave_interval_seconds = 60.0 # 0 disables periodic autosave (unload/shutdown still save)
 chunk_send_budget_bytes_per_tick = 0 # 0 = unlimited; caps S2C_ChunkAdd bytes/tick per player (paces a large initial view-box burst)

@@ -127,6 +127,13 @@ content-only (e.g. the user explicitly asks for a content-pack feature).
   each full manifest's entry list, so the server's reconnect fast path (no
   entries) can rebuild the virtual FS; `last_known_manifest_hash_for` stays
   zero unless that list is held. Nothing sends a known hash yet.
+- **A world save is tied to its pack's block registry** (2026-10-08):
+  region files hold raw block ids, so `<world_dir>/blocks.txt` records the
+  names by id and `world::check_world_registry` refuses a pack whose ids mean
+  other blocks (appending blocks is fine). `vb host --pack <other>` and
+  `vb pack dev` use `<instance>/worlds/<pack>-<hash>/` (the instance's own
+  pack keeps `world/`); `vb launch -- --content-pack` likewise. Server and
+  singleplayer both check; the server logs its world dir at startup.
 - **Gameplay frames can overtake `S2C_JoinAccept`** (2026-10-08): they ride
   other lanes, and a lost JoinAccept is resent late, so under packet loss the
   client's handshake used to fail with "expected JoinAccept" (flaky

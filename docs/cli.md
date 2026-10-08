@@ -98,7 +98,7 @@ Runs a dedicated server in the foreground (Ctrl+C stops it). With `--watch` it r
 options:
   --version <v>           which installed version
   --port <n>              UDP port
-  --pack <dir>            content pack directory (default: the bundled base pack)
+  --pack <dir>            content pack directory (default: the bundled base pack); each pack keeps its own world
   --watch                 restart the server when files in the pack change
 
 examples:
