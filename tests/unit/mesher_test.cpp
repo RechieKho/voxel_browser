@@ -360,9 +360,17 @@ TEST_CASE("mesh worker pool: dedup rejects a genuinely in-flight resubmit") {
 	LightEngine(BlockRegistry::base()).relight_chunk(a); // worker real work to do
 	put(store, a); // instead of racing an ~instant job.
 
+	// Both snapshots are built before either submit: building one takes about
+	// as long as meshing it, so building the second between the two submits
+	// let a fast runner finish (and untrack) the first job in that gap, and
+	// the "duplicate" was then rightly accepted as new work (seen on macOS
+	// CI). Back-to-back submits leave microseconds against milliseconds of
+	// meshing.
+	ChunkMeshSnapshot first = build_chunk_mesh_snapshot(store, { 0, 0, 0 });
+	ChunkMeshSnapshot second = build_chunk_mesh_snapshot(store, { 0, 0, 0 });
 	ChunkMeshWorkerPool pool(1);
-	CHECK(pool.submit(build_chunk_mesh_snapshot(store, { 0, 0, 0 }), store.registry()));
-	CHECK_FALSE(pool.submit(build_chunk_mesh_snapshot(store, { 0, 0, 0 }), store.registry()));
+	CHECK(pool.submit(std::move(first), store.registry()));
+	CHECK_FALSE(pool.submit(std::move(second), store.registry()));
 
 	std::vector<ChunkMeshResult> done;
 	for (int spin = 0; spin < 200000 && done.empty(); ++spin) {
