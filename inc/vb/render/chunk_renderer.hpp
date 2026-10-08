@@ -78,7 +78,10 @@ public:
 	// src/client/main.cpp, which calls this once per session before any
 	// chunk has been meshed at all, so in practice every chunk gets it from
 	// its very first upload). Call at most once per ChunkRenderer.
-	void set_atlas(Texture2D atlas, std::vector<AtlasRect> rects, std::vector<Color> average_colors);
+	// `translucent[id]` (TextureAtlas::is_translucent) picks the blended pass
+	// per block; empty = the flat fallback colours decide (base:leaves only).
+	void set_atlas(Texture2D atlas, std::vector<AtlasRect> rects, std::vector<Color> average_colors,
+			std::vector<bool> translucent = {});
 
 	// REMAINING_TASKS 7.5: the color underwater fog should default to for
 	// `id` -- the atlas's real average texture color if set_atlas() has been
@@ -115,11 +118,13 @@ private:
 	int fog_loc_color_ = -1;
 	int fog_loc_start_ = -1;
 	int fog_loc_end_ = -1;
+	int fog_loc_alpha_cutoff_ = -1;
 
 	Texture2D atlas_{};
 	bool has_atlas_ = false;
 	std::vector<AtlasRect> atlas_rects_;
 	std::vector<Color> atlas_average_colors_;
+	std::vector<bool> atlas_translucent_;
 
 	world::ChunkMeshWorkerPool pool_;
 	std::unordered_map<core::ChunkCoord, GpuChunk> gpu_;

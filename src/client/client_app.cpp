@@ -413,14 +413,16 @@ void ClientApp::enter_playing() {
 					vb::render::TextureAtlas::build(client->chunk_store().registry(), vfs);
 			std::vector<vb::render::AtlasRect> rects;
 			std::vector<Color> averages;
+			std::vector<bool> translucent;
 			rects.reserve(atlas.block_count());
 			averages.reserve(atlas.block_count());
 			for (std::size_t i = 0; i < atlas.block_count(); ++i) {
 				const auto id = static_cast<vb::core::BlockId>(i);
 				rects.push_back(atlas.rect_for(id));
 				averages.push_back(atlas.average_color_for(id));
+				translucent.push_back(atlas.is_translucent(id));
 			}
-			chunk_renderer->set_atlas(atlas.upload(), std::move(rects), std::move(averages));
+			chunk_renderer->set_atlas(atlas.upload(), std::move(rects), std::move(averages), std::move(translucent));
 
 			// REMAINING_TASKS.md 6.5's last piece: same join-time, same vfs
 			// -- a block's crack_texture (if any) is synced/on-disk exactly

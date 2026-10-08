@@ -104,3 +104,51 @@ TEST_CASE("TextureAtlas::build packs every block into a non-overlapping, in-rang
 		}
 	}
 }
+
+namespace {
+
+// A 4x4 image: `clear` fully transparent texels, `partial` at alpha 128, the
+// rest solid.
+std::vector<std::byte> encode_alpha_png(int clear, int partial) {
+	Image img = GenImageColor(4, 4, Color{ 40, 160, 40, 255 });
+	for (int i = 0; i < 16; ++i) {
+		Color c{ 40, 160, 40, 255 };
+		if (i < clear) {
+			c.a = 0;
+		} else if (i < clear + partial) {
+			c.a = 128;
+		}
+		ImageDrawPixel(&img, i % 4, i / 4, c);
+	}
+	int size = 0;
+	unsigned char *bytes = ExportImageToMemory(img, ".png", &size);
+	UnloadImage(img);
+	REQUIRE(bytes != nullptr);
+	std::vector<std::byte> out(reinterpret_cast<std::byte *>(bytes), reinterpret_cast<std::byte *>(bytes) + size);
+	MemFree(bytes);
+	return out;
+}
+
+} // namespace
+
+// Pack blocks with see-through sprites used to be drawn opaque-pass without
+// any cutout (holes in the terrain behind them); which pass a block uses now
+// comes from its texture, not a hard-coded colour table.
+TEST_CASE("TextureAtlas::is_translucent: cutout sprites stay opaque, glass-like art blends") {
+	BlockRegistry registry = BlockRegistry::base();
+	VirtualFs vfs;
+	vfs["textures/plant.png"] = encode_alpha_png(10, 1); // mostly clear, a soft edge texel
+	vfs["textures/glass.png"] = encode_alpha_png(0, 12); // mostly half transparent
+	vfs["textures/solid.png"] = encode_alpha_png(0, 0);
+	registry.set_texture(vb::world::base_block::stone, "textures/plant.png");
+	registry.set_texture(vb::world::base_block::dirt, "textures/glass.png");
+	registry.set_texture(vb::world::base_block::sand, "textures/solid.png");
+
+	const TextureAtlas atlas = TextureAtlas::build(registry, vfs);
+	CHECK_FALSE(atlas.is_translucent(vb::world::base_block::stone)); // cut out in the opaque pass
+	CHECK(atlas.is_translucent(vb::world::base_block::dirt));
+	CHECK_FALSE(atlas.is_translucent(vb::world::base_block::sand));
+	// No texture: the flat fallback colour decides, as before (leaves blend).
+	CHECK(atlas.is_translucent(vb::world::base_block::leaves));
+	CHECK_FALSE(atlas.is_translucent(vb::world::base_block::grass));
+}

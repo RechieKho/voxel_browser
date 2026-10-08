@@ -38,6 +38,27 @@ Color fallback_color_for(std::uint32_t block_id) {
 
 namespace {
 
+// Share of a texture's visible texels that are partially transparent, above
+// which the block is drawn blended rather than cut out. A sprite's
+// anti-aliased rim is a small share; glass-like art is most of it.
+constexpr double kTranslucentShare = 0.25;
+
+bool mostly_partial_alpha(const Image &img) {
+	Color *pixels = LoadImageColors(img);
+	std::size_t visible = 0;
+	std::size_t partial = 0;
+	for (int i = 0; i < img.width * img.height; ++i) {
+		const unsigned char a = pixels[i].a;
+		if (a > 8) {
+			++visible;
+			partial += a < 247 ? 1u : 0u;
+		}
+	}
+	UnloadImageColors(pixels);
+	return visible > 0 &&
+			static_cast<double>(partial) > kTranslucentShare * static_cast<double>(visible);
+}
+
 // Average pixel color of a decoded Image, ignoring fully transparent pixels
 // (a transparent border shouldn't wash out a texture's own color).
 Color average_of(const Image &img) {
@@ -130,6 +151,7 @@ TextureAtlas TextureAtlas::build(const world::BlockRegistry &registry, const Vir
 	atlas.image_ = GenImageColor(atlas_w, atlas_h, BLANK);
 	atlas.rects_.resize(n);
 	atlas.average_colors_.resize(n);
+	atlas.translucent_.resize(n);
 
 	for (std::size_t i = 0; i < n; ++i) {
 		const auto id = static_cast<core::BlockId>(i);
@@ -158,6 +180,7 @@ TextureAtlas TextureAtlas::build(const world::BlockRegistry &registry, const Vir
 						static_cast<int>(it->second.size()));
 				if (decoded.data != nullptr) {
 					atlas.average_colors_[i] = average_of(decoded);
+					atlas.translucent_[i] = mostly_partial_alpha(decoded);
 					ImageResize(&decoded, kCellSize, kCellSize);
 					ImageDraw(&atlas.image_, decoded, Rectangle{ 0, 0, static_cast<float>(decoded.width), static_cast<float>(decoded.height) },
 							content, WHITE);
@@ -172,6 +195,7 @@ TextureAtlas TextureAtlas::build(const world::BlockRegistry &registry, const Vir
 			// already the same uniform color any spill-over would sample.
 			const Color fallback = fallback_color_for(static_cast<std::uint32_t>(i));
 			atlas.average_colors_[i] = fallback;
+			atlas.translucent_[i] = fallback.a < 255;
 			ImageDrawRectangleRec(&atlas.image_, padded_cell, fallback);
 		}
 	}
@@ -188,7 +212,8 @@ TextureAtlas::~TextureAtlas() {
 TextureAtlas::TextureAtlas(TextureAtlas &&other) noexcept
 		: image_(other.image_),
 		  rects_(std::move(other.rects_)),
-		  average_colors_(std::move(other.average_colors_)) {
+		  average_colors_(std::move(other.average_colors_)),
+		  translucent_(std::move(other.translucent_)) {
 	other.image_ = Image{};
 }
 
@@ -200,6 +225,7 @@ TextureAtlas &TextureAtlas::operator=(TextureAtlas &&other) noexcept {
 		image_ = other.image_;
 		rects_ = std::move(other.rects_);
 		average_colors_ = std::move(other.average_colors_);
+		translucent_ = std::move(other.translucent_);
 		other.image_ = Image{};
 	}
 	return *this;
@@ -265,6 +291,12 @@ const AtlasRect &TextureAtlas::rect_for(core::BlockId id) const {
 	static constexpr AtlasRect kFull{ 0.0f, 0.0f, 1.0f, 1.0f };
 	const auto idx = static_cast<std::size_t>(id);
 	return idx < rects_.size() ? rects_[idx] : kFull;
+}
+
+bool TextureAtlas::is_translucent(core::BlockId id) const {
+	const auto idx = static_cast<std::size_t>(id);
+	return idx < translucent_.size() ? translucent_[idx]
+									 : fallback_color_for(static_cast<std::uint32_t>(idx)).a < 255;
 }
 
 Color TextureAtlas::average_color_for(core::BlockId id) const {

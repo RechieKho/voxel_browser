@@ -52,7 +52,7 @@ BlockDef[]
 | `liquid?` | `boolean` | Liquid block (default false). |
 | `region?` | `boolean` | Fire `region_enter`/`region_exit` events (defaults to `liquid`). |
 | `light?` | `integer` | Light emission 0-15 (default 0). |
-| `texture?` | `string` | Pack-relative path, e.g. `"textures/ruby.png"`. Empty = flat placeholder colour. |
+| `texture?` | `string` | Pack-relative path, e.g. `"textures/ruby.png"`. Empty = flat placeholder colour. Clear texels are cut out (sprites); mostly half-transparent art is blended (glass). |
 | `max_damage?` | `integer` | Punches needed to break; 0 = instant (default 0). |
 | `crack_texture?` | `string` | Pack-relative crack-stage spritesheet; empty = engine default overlay. |
 | `max_stack?` | `integer` | Inventory stack cap (engine default). |

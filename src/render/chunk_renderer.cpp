@@ -63,6 +63,7 @@ uniform vec4 colDiffuse;
 uniform vec3 fogColor;
 uniform float fogStart;
 uniform float fogEnd;
+uniform float alphaCutoff;
 
 out vec4 finalColor;
 
@@ -70,6 +71,12 @@ void main()
 {
     vec4 texelColor = texture(texture0, fragTexCoord);
     vec4 base = texelColor * colDiffuse * fragColor;
+    // Alpha cutout: a clear texel (plant/bush sprite background) must not
+    // write depth, or terrain drawn after it fails the depth test and the
+    // sky shows through. 0.5 in the opaque pass, near 0 in the blended one.
+    if (base.a < alphaCutoff) {
+        discard;
+    }
     float fogFactor = clamp((fogEnd - fragFogDist) / max(fogEnd - fogStart, 0.001), 0.0, 1.0);
     finalColor = vec4(mix(fogColor, base.rgb, fogFactor), base.a);
 }
@@ -209,22 +216,24 @@ void update_gpu_mesh(Mesh &mesh, const world::MeshData &data, const std::vector<
 	mesh.triangleCount = static_cast<int>(data.indices.size() / 3);
 }
 
-// Splits one chunk's mesh into two: opaque and transparent (leaves/water)
-// quads, so ChunkRenderer can upload/draw them as two separate models
-// (Phase 2 remaining item: chunk transparent second pass). Every face
+// Splits one chunk's mesh into two: opaque and transparent quads, so
+// ChunkRenderer can upload/draw them as two separate models (Phase 2
+// remaining item: chunk transparent second pass). Every face
 // chunk_mesh_snapshot.cpp emits is one quad -- 4 contiguous vertices, all
 // sharing one `block_id` (one voxel's one face) -- so partitioning by quad
 // via each quad's first index is exact, never splits a face across the two
-// outputs. Transparency is read off the same fallback flat-color alpha
-// fill_mesh_arrays already uses for vertex-color alpha (today: only
-// base:leaves, at a=220 -- see fallback_color_for()), not a per-texel check
-// -- a real textured block with genuine alpha-cutout art would need its own
-// opt-in flag on BlockType, not attempted here.
-void split_transparent(const world::MeshData &data, world::MeshData &opaque, world::MeshData &transparent) {
+// outputs. `translucent[id]` (from TextureAtlas::is_translucent, the block's
+// real texture) decides when known; otherwise the flat fallback colour's
+// alpha does (base:leaves). Clear-or-solid sprites (plants) stay opaque: the
+// shader's alpha cutout handles them, and they keep writing depth.
+void split_transparent(const world::MeshData &data, const std::vector<bool> &translucent,
+		world::MeshData &opaque, world::MeshData &transparent) {
 	const std::size_t quads = data.quad_count();
 	for (std::size_t q = 0; q < quads; ++q) {
 		const std::uint32_t v0 = data.indices[q * 6];
-		const bool is_transparent = fallback_color_for(data.vertices[v0].block_id).a < 255;
+		const std::uint32_t id = data.vertices[v0].block_id;
+		const bool is_transparent = id < translucent.size() ? translucent[id]
+															: fallback_color_for(id).a < 255;
 		world::MeshData &dst = is_transparent ? transparent : opaque;
 		const auto base = static_cast<std::uint32_t>(dst.vertices.size());
 		for (std::uint32_t c = 0; c < 4; ++c) {
@@ -288,6 +297,7 @@ ChunkRenderer::ChunkRenderer(std::size_t mesh_threads) : pool_(mesh_threads) {
 	fog_loc_color_ = GetShaderLocation(fog_shader_, "fogColor");
 	fog_loc_start_ = GetShaderLocation(fog_shader_, "fogStart");
 	fog_loc_end_ = GetShaderLocation(fog_shader_, "fogEnd");
+	fog_loc_alpha_cutoff_ = GetShaderLocation(fog_shader_, "alphaCutoff");
 }
 
 ChunkRenderer::~ChunkRenderer() {
@@ -306,7 +316,9 @@ ChunkRenderer::~ChunkRenderer() {
 	}
 }
 
-void ChunkRenderer::set_atlas(Texture2D atlas, std::vector<AtlasRect> rects, std::vector<Color> average_colors) {
+void ChunkRenderer::set_atlas(Texture2D atlas, std::vector<AtlasRect> rects, std::vector<Color> average_colors,
+		std::vector<bool> translucent) {
+	atlas_translucent_ = std::move(translucent);
 	if (has_atlas_) {
 		UnloadTexture(atlas_);
 	}
@@ -352,7 +364,7 @@ void ChunkRenderer::upload(core::ChunkCoord coord, const world::MeshData &data,
 	GpuChunk &slot = gpu_[coord];
 	world::MeshData opaque_data;
 	world::MeshData transparent_data;
-	split_transparent(data, opaque_data, transparent_data);
+	split_transparent(data, atlas_translucent_, opaque_data, transparent_data);
 	upload_part(slot.opaque, opaque_data);
 	upload_part(slot.transparent, transparent_data);
 	slot.revision = revision;
@@ -469,6 +481,8 @@ void ChunkRenderer::draw(const Camera3D &camera) const {
 	// of drawn immediately, so their distance-sort below is against exactly
 	// the same camera position/frustum test as pass 1.
 	std::vector<std::pair<core::ChunkCoord, const GpuChunk *>> transparent_visible;
+	const float opaque_cutoff = 0.5f; // clear sprite texels write no depth
+	SetShaderValue(fog_shader_, fog_loc_alpha_cutoff_, &opaque_cutoff, SHADER_UNIFORM_FLOAT);
 	for (const auto &[coord, gpu] : gpu_) {
 		const core::IVec3 o = core::chunk_origin(coord);
 		const core::Vec3d cmin{ static_cast<double>(o.x), static_cast<double>(o.y), static_cast<double>(o.z) };
@@ -502,6 +516,9 @@ void ChunkRenderer::draw(const Camera3D &camera) const {
 			});
 
 	rlDrawRenderBatchActive(); // flush pass 1 before changing GL depth state
+	// Blended pass: keep partially transparent texels, drop only clear ones.
+	const float blend_cutoff = 0.01f;
+	SetShaderValue(fog_shader_, fog_loc_alpha_cutoff_, &blend_cutoff, SHADER_UNIFORM_FLOAT);
 	rlDisableDepthMask();
 	for (const auto &[coord, gpu] : transparent_visible) {
 		DrawModel(gpu->transparent.model, chunk_draw_pos(coord), 1.0f, WHITE);

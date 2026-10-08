@@ -87,7 +87,11 @@ rt.dispatch_tick(dt);
   `"textures/stone.png"`), synced to the client over the existing Asset Sync
   virtual FS and packed into one atlas texture per session
   (`vb::render::TextureAtlas`) — a block with no `texture` (the default,
-  empty string) keeps rendering a flat placeholder color. `model` is still
+  empty string) keeps rendering a flat placeholder color. Texture alpha is
+  honoured: fully clear texels are cut out (a plant sprite on
+  `opaque = false` shows the terrain behind it), and a texture whose
+  visible texels are mostly half-transparent (glass) is drawn blended.
+  `model` is still
   accepted but not stored — no wire-visible model field exists on
   `BlockType` yet; `max_damage` — Phase 6.5, default `0` = today's instant
   break — opts the block into the shared block-damage breaking system below,

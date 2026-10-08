@@ -127,6 +127,13 @@ content-only (e.g. the user explicitly asks for a content-pack feature).
   each full manifest's entry list, so the server's reconnect fast path (no
   entries) can rebuild the virtual FS; `last_known_manifest_hash_for` stays
   zero unless that list is held. Nothing sends a known hash yet.
+- **Chunk alpha: cutout in the opaque pass, blend only for glass-like art**
+  (2026-10-08). The chunk shader discards below `alphaCutoff` (0.5 opaque
+  pass, 0.01 blended pass) so clear sprite texels write no depth. The
+  blended pass is chosen per block by `TextureAtlas::is_translucent` (>25%
+  of visible texels partially transparent), else the fallback colour alpha
+  (base:leaves). The old "hole" only shows when the background is in a
+  chunk drawn after the sprite's -- test across chunk boundaries.
 - **A world save is tied to its pack's block registry** (2026-10-08):
   region files hold raw block ids, so `<world_dir>/blocks.txt` records the
   names by id and `world::check_world_registry` refuses a pack whose ids mean

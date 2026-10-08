@@ -71,6 +71,12 @@ public:
 
 	const AtlasRect &rect_for(core::BlockId id) const;
 	Color average_color_for(core::BlockId id) const;
+	// True when `id`'s own texture is mostly *partially* transparent (glass,
+	// water-like art) and so needs the blended pass. A texture of only clear
+	// and solid texels -- a plant sprite, anti-aliased edges and all -- is
+	// not: the opaque pass's alpha cutout draws it, depth and all. Without a
+	// texture, the flat fallback colour's alpha decides (base:leaves).
+	bool is_translucent(core::BlockId id) const;
 
 	std::size_t block_count() const { return rects_.size(); }
 
@@ -78,6 +84,7 @@ private:
 	Image image_{};
 	std::vector<AtlasRect> rects_;
 	std::vector<Color> average_colors_;
+	std::vector<bool> translucent_;
 };
 
 } // namespace vb::render
