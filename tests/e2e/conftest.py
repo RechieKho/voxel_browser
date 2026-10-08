@@ -46,6 +46,7 @@ def pytest_addoption(parser):
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "vb_server(**toml): extra server.toml keys for this test's server")
+    config.addinivalue_line("markers", "vb_pack_files(files): {path: text} written into this test's server pack")
     config.addinivalue_line("markers", "auth: in-engine authentication tests (test_auth*.py, test_mock_keycloak.py)")
     config.addinivalue_line("markers", "slow: waits on a real re-auth interval (>= 60 s); everything else fast-forwards "
                             "with the advance_reauth automation command")
@@ -146,8 +147,11 @@ def server(request, binaries, artifact_dir, tmp_path, _procs):
     cfg = {}
     for marker in request.node.iter_markers("vb_server"):
         cfg.update(marker.kwargs)
+    pack_files = {}
+    for marker in request.node.iter_markers("vb_pack_files"):
+        pack_files.update(marker.args[0])
     return start_server(binaries["server"], REPO, artifact_dir, tmp_path, _procs, config=cfg,
-                        extra_args=net_sim_args(request))
+                        extra_args=net_sim_args(request), pack_files=pack_files or None)
 
 
 @pytest.fixture

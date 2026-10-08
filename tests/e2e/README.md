@@ -109,7 +109,8 @@ saw it". The path is printed with the failure; rebuild a page with
 
 - **Fixtures**: `server` (a fresh dedicated server per test, free loopback port, private copy
   of `content/base`, no persistence) and `clients(n, names=None)` / `client`. Mark a test
-  `@pytest.mark.vb_server(view_distance=2)` to add `server.toml` keys.
+  `@pytest.mark.vb_server(view_distance=2)` to add `server.toml` keys, and
+  `@pytest.mark.vb_pack_files({"zz_test.lua": "..."})` to add files to the server's pack copy.
 - **Handles**: `Server` (`set_block`, `fill`, `teleport`, `give`, `set_time`, `set_health`,
   `kick`, `run_lua`, `block_at`, `state`) and `Client` (`key_press`, `walk_to`, `break_block`,
   `place_block`, `select_slot`, `chat`, `ui("id").click()`, `look_at`, `state`, ...). Every call

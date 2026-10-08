@@ -668,7 +668,13 @@ TEST_CASE("player_leave dispatch fires with the right net id") {
 	vb::script::PackRuntime rt(net.server(), registry, temp_storage("leave"));
 	REQUIRE(rt.load_pack_file(R"(
 		left_fired = false
-		vb.on("player_leave", function(p) left_fired = true end)
+		left_name = nil
+		left_pos = nil
+		vb.on("player_leave", function(p)
+			left_fired = true
+			left_name = p:get_name()
+			left_pos = p:get_pos() -- the last known position, not "entity is gone"
+		end)
 	)"));
 	rt.freeze();
 
@@ -706,7 +712,11 @@ TEST_CASE("player_leave dispatch fires with the right net id") {
 	}
 
 	CHECK(captured_id == expected_id);
-	const auto check = rt.load_pack_file("assert(left_fired == true)");
+	const auto check = rt.load_pack_file(R"(
+		assert(left_fired == true)
+		assert(left_name == "Leaver", "player_leave get_name(): [" .. tostring(left_name) .. "]")
+		assert(type(left_pos) == "table" and type(left_pos.y) == "number")
+	)");
 	REQUIRE(check);
 }
 

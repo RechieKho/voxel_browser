@@ -477,3 +477,5 @@ or `REMAINING_TASKS.md`/`ARCHITECTURE_SPEC.md` for design-level context.
 - Mouse capture is owned by `ClientApp`; the UI VM only *requests* it (`UiRuntime::take_capture_request`, fed
   by `ui.close{capture_mouse=true}` / `capture_mouse_on_close` / `client.capture_mouse`). A request waits while
   a screen or chat is open; the frame that captures masks `kInputPrimary` until the button is released.
+- `player_leave` runs after `ServerSession` dropped the conn, so session lookups by net id fail there.
+  `SessionPlayerLeft` carries the `name` and `last_state` captured at disconnect; `PlayerHandle` falls back to them.

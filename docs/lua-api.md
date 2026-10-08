@@ -325,6 +325,9 @@ rt.dispatch_tick(dt);
   "player_interact"|"chat"|"tick"|"ui_event"|"player_death"|"player_input"|
   "block_break_begin"|"block_break_tick"|"block_health_tick"|
   "region_enter"|"region_exit"|"player_landed", handler)`,
+  (`player_leave` runs after the connection is gone, but its `player` still
+  answers `get_name()`, `get_login()` and `get_pos()` — the last known
+  position — so cleanup keyed by name works; health/hunger read `nil`),
   vetoable via `return false` (except `tick`/`ui_event`, which have
   no veto semantics; `player_death` is a *decision* hook, not a veto —
   see below; `player_input`/`chat` may veto *or* replace, see below;

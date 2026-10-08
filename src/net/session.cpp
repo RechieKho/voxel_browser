@@ -1028,7 +1028,12 @@ void ServerSession::system_network_io(double dt_seconds) {
 					if (replicator_) {
 						replicator_->forget_player(it->second.net_id);
 					}
-					leaves_.push_back({ ev.conn, it->second.net_id, ev.reason });
+					leaves_.push_back({ ev.conn, it->second.net_id, ev.reason,
+							registry_.get<ecs::PlayerTag>(it->second.entity).name,
+							physics::MoveState{
+									registry_.get<ecs::Position>(it->second.entity).value,
+									registry_.get<ecs::Velocity>(it->second.entity).value,
+									registry_.get<ecs::Collider>(it->second.entity).on_ground } });
 					const protocol::S2CPlayerLeave leave_msg{ it->second.net_id };
 					for (auto &[other_conn, other] : conns_) {
 						if (other_conn != ev.conn && other.playing) {
