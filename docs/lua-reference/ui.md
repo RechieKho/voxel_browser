@@ -62,12 +62,17 @@ ui.send_event("buy", { item = "base:wood" })
 
 ## ui.close
 
-`ui.close()`
+`ui.close(opts)`
 
 context: **ui**
 
-Client UI VM only. Closes the current screen (always notifies the server with a "close" event).
+Client UI VM only. Closes the current screen (always notifies the server with a "close" event). By default the mouse stays free; `capture_mouse = true` drops the player back into the game, and the click that closed the screen is not sent as a punch.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `opts?` | `UiCloseOptions` |  |
 
 ```lua
 ui.close()
+ui.close{ capture_mouse = true } -- "back to the game"
 ```

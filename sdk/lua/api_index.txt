@@ -27,11 +27,13 @@ Player:set_pos
 Player:set_velocity
 Player:take
 client.break_progress
+client.capture_mouse
 client.chat_log
 client.chat_open
 client.health
 client.hunger
 client.inventory
+client.mouse_captured
 client.mouse_position
 client.player_name
 client.players

@@ -24,6 +24,8 @@ std::vector<std::string> UiRuntime::global_names() { return {}; }
 void UiRuntime::open(std::string_view, std::string_view) {}
 void UiRuntime::close() {}
 bool UiRuntime::is_open() const { return false; }
+void UiRuntime::set_mouse_captured(bool) {}
+std::optional<bool> UiRuntime::take_capture_request() { return std::nullopt; }
 const std::string &UiRuntime::current_name() const {
 	static const std::string kEmpty;
 	return kEmpty;
@@ -60,6 +62,7 @@ void UiRuntime::report_hud_list_change(const std::string &, int) {}
 #else
 
 #include <unordered_map>
+#include <utility>
 
 #include <nlohmann/json.hpp>
 
@@ -248,6 +251,12 @@ struct UiRuntime::Impl {
 	sol::protected_function current_render_fn;
 	sol::table current_state; // persists across every frame this screen is open
 	sol::protected_function current_on_close; // refreshed by each evaluate_frame()
+	bool current_capture_on_close = false; // layout's capture_mouse_on_close, ditto
+	// Mouse capture: what the client reports (client.mouse_captured()), and
+	// the latest request from client.capture_mouse / ui.close{capture_mouse}
+	// / capture_mouse_on_close, taken by the client each frame.
+	bool mouse_captured = false;
+	std::optional<bool> capture_request;
 	std::unordered_map<std::string, sol::table> widget_by_id;
 	std::vector<Widget> widgets_vec;
 	std::string current_widget_id; // scratch, valid during a callback
@@ -301,7 +310,7 @@ struct UiRuntime::Impl {
 			std::unordered_map<std::string, sol::table> &widget_map, bool is_hud);
 	void evaluate_frame();
 	void evaluate_hud_frame();
-	void do_close();
+	void do_close(std::optional<bool> capture = std::nullopt);
 };
 
 UiRuntime::Impl::Impl(VmLimits limits) : vm(limits) {
@@ -340,7 +349,18 @@ void UiRuntime::Impl::install_bindings() {
 		send_event(kind, value);
 	};
 
-	ui["close"] = [this] { do_close(); };
+	// ui.close() / ui.close{ capture_mouse = true }: the option asks the
+	// client to recapture the mouse once nothing else needs a cursor.
+	ui["close"] = [this](sol::optional<sol::table> opts) {
+		std::optional<bool> capture;
+		if (opts) {
+			const sol::object c = (*opts)["capture_mouse"];
+			if (c.is<bool>()) {
+				capture = c.as<bool>();
+			}
+		}
+		do_close(capture);
+	};
 
 	// Raw, engine-computed local client state a HUD (or any Lua UI) can
 	// query for presentation -- "engine provides raw state, Lua decides how
@@ -383,6 +403,11 @@ void UiRuntime::Impl::install_bindings() {
 		return t;
 	};
 	client_tbl["chat_open"] = [this]() -> bool { return chat_open; };
+	// Asks the client to capture (true) or release (false) the mouse. A
+	// capture waits until no screen and no chat box are open; the last
+	// request wins.
+	client_tbl["capture_mouse"] = [this](bool on) { capture_request = on; };
+	client_tbl["mouse_captured"] = [this]() -> bool { return mouse_captured; };
 	client_tbl["inventory"] = [this]() -> sol::table {
 		sol::table t = lua_state().create_table();
 		int i = 1;
@@ -446,6 +471,8 @@ void UiRuntime::Impl::evaluate_frame() {
 	current_on_close = on_close.is<sol::protected_function>()
 			? on_close.as<sol::protected_function>()
 			: sol::protected_function();
+	const sol::object capture_on_close = layout["capture_mouse_on_close"];
+	current_capture_on_close = capture_on_close.is<bool>() && capture_on_close.as<bool>();
 
 	widget_by_id.clear();
 	widgets_vec.clear();
@@ -503,9 +530,17 @@ void UiRuntime::Impl::evaluate_hud_frame() {
 	}
 }
 
-void UiRuntime::Impl::do_close() {
+void UiRuntime::Impl::do_close(std::optional<bool> capture) {
 	if (current_name.empty()) {
 		return;
+	}
+	// The screen's own default first, then the caller's explicit choice; the
+	// on_close handler below can still override both via client.capture_mouse.
+	if (current_capture_on_close) {
+		capture_request = true;
+	}
+	if (capture) {
+		capture_request = *capture;
 	}
 	// A real nil object, built on this VM's state: a bare sol::lua_nil converts to a
 	// state-less reference, and lua_to_json() then dereferences a null lua_State
@@ -523,6 +558,7 @@ void UiRuntime::Impl::do_close() {
 	current_render_fn = sol::protected_function();
 	current_state = sol::lua_nil;
 	current_on_close = sol::protected_function();
+	current_capture_on_close = false;
 	widget_by_id.clear();
 	widgets_vec.clear();
 }
@@ -601,6 +637,12 @@ void UiRuntime::open(std::string_view name, std::string_view ctx_json) {
 }
 
 void UiRuntime::close() { impl_->do_close(); }
+
+void UiRuntime::set_mouse_captured(bool captured) { impl_->mouse_captured = captured; }
+
+std::optional<bool> UiRuntime::take_capture_request() {
+	return std::exchange(impl_->capture_request, std::nullopt);
+}
 
 bool UiRuntime::is_open() const { return !impl_->current_name.empty(); }
 const std::string &UiRuntime::current_name() const { return impl_->current_name; }

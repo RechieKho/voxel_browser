@@ -122,6 +122,15 @@ public:
 	bool is_open() const;
 	const std::string &current_name() const;
 
+	// Mouse capture, pack-controlled (default: the engine never recaptures on
+	// its own). set_mouse_captured() feeds client.mouse_captured();
+	// take_capture_request() returns and clears the latest request from
+	// client.capture_mouse(on), ui.close{ capture_mouse = ... } or a screen's
+	// capture_mouse_on_close. The client applies a capture only once no
+	// screen and no chat box are open.
+	void set_mouse_captured(bool captured);
+	std::optional<bool> take_capture_request();
+
 	// Evaluates render_fn(state) for the current frame (no-op, returning
 	// the last -- likely empty -- list if no screen is open) and returns
 	// the fresh widget list. Call once per UI frame, right before handing

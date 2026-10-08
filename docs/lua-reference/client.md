@@ -114,6 +114,36 @@ Returns `boolean`
 if client.chat_open() then end
 ```
 
+## client.capture_mouse
+
+`client.capture_mouse(on)`
+
+context: **ui**
+
+Client UI VM only. Asks the client to capture (`true`) or release (`false`) the mouse. A capture waits until no screen and no chat box are open; the last request wins.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `on` | `boolean` |  |
+
+```lua
+client.capture_mouse(true)
+```
+
+## client.mouse_captured
+
+`client.mouse_captured() -> boolean`
+
+context: **ui**
+
+Client UI VM only. Whether the mouse is captured (looking around) right now.
+
+Returns `boolean`
+
+```lua
+if not client.mouse_captured() then end
+```
+
 ## client.inventory
 
 `client.inventory() -> {name:`

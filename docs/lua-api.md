@@ -637,7 +637,14 @@ back which widgets fired an interaction — no sol2 in the render half.
   (`current_name`/the widget whose callback is currently running are filled
   in automatically). `ui.close()` — always sends one `"close"` event, then
   runs the layout's own `on_close` (if any) for local cosmetic cleanup, then
-  clears state.
+  clears state. The mouse stays released afterwards (the player clicks back
+  into the world) unless the pack asks otherwise: `ui.close{ capture_mouse =
+  true }`, a layout field `capture_mouse_on_close = true` (the default for
+  every close of that screen, including server-side ones), or
+  `client.capture_mouse(true)` from any callback. A capture request waits
+  until no screen or chat is open, and the click that closed the screen is
+  not sent as an attack/break. `client.capture_mouse(false)` releases it;
+  `client.mouse_captured()` reports the current state.
 - Client wiring (`src/client/main.cpp`): every synced `ui/*.lua` file
   (`ClientSession::virtual_pack_fs()`, Asset Sync/Phase 4.4) is loaded into
   `UiRuntime` right after join; `ClientSession::take_open_ui()` then drains a

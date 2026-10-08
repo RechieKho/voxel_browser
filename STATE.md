@@ -474,3 +474,6 @@ or `REMAINING_TASKS.md`/`ARCHITECTURE_SPEC.md` for design-level context.
   cannot start with a dot.
 - Local tooling: CI's clang-format is the newest pip release (23.x); Ubuntu's 18.x disagrees on existing
   files. Use `pip install clang-format` and run it on the files you touched.
+- Mouse capture is owned by `ClientApp`; the UI VM only *requests* it (`UiRuntime::take_capture_request`, fed
+  by `ui.close{capture_mouse=true}` / `capture_mouse_on_close` / `client.capture_mouse`). A request waits while
+  a screen or chat is open; the frame that captures masks `kInputPrimary` until the button is released.

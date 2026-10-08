@@ -292,6 +292,7 @@ integer[] `{r, g, b, a?}`, 0-255 each.
 | --- | --- | --- |
 | `widgets` | `Widget[]` |  |
 | `on_close?` | `fun()` | Local cosmetic cleanup when the screen closes. |
+| `capture_mouse_on_close?` | `boolean` | Recapture the mouse whenever this screen closes (default false). |
 
 ## SpawnOptions
 
@@ -330,6 +331,12 @@ integer[] `{r, g, b, a?}`, 0-255 each.
 | --- | --- | --- |
 | `weight` | `number` | Selection weight. |
 | `layers` | `string[][]` | `layers[y][z]` is one row of `size.x` palette characters, bottom layer first. |
+
+## UiCloseOptions
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `capture_mouse?` | `boolean` | true: recapture the mouse once no screen or chat box is open. |
 
 ## VbEvent
 

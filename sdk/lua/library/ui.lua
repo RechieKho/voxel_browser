@@ -26,6 +26,10 @@
 ---@class ScreenLayout
 ---@field widgets Widget[]
 ---@field on_close? fun() Local cosmetic cleanup when the screen closes.
+---@field capture_mouse_on_close? boolean Recapture the mouse whenever this screen closes (default false).
+
+---@class UiCloseOptions
+---@field capture_mouse? boolean true: recapture the mouse once no screen or chat box is open.
 
 ---@vb context ui
 ---Client UI VM only. The UI API table (`vb` does not exist here).
@@ -69,10 +73,14 @@ function ui.send_event(kind, value) end
 
 ---@vb context ui
 ---Client UI VM only. Closes the current screen (always notifies the server with a "close" event).
+---By default the mouse stays free; `capture_mouse = true` drops the player back into the game,
+---and the click that closed the screen is not sent as a punch.
 ---```lua
 ---ui.close()
+---ui.close{ capture_mouse = true } -- "back to the game"
 ---```
-function ui.close() end
+---@param opts? UiCloseOptions
+function ui.close(opts) end
 
 ---@vb context ui
 ---Client UI VM only. Read-only local client state.
@@ -142,6 +150,23 @@ function client.chat_log() end
 ---```
 ---@return boolean
 function client.chat_open() end
+
+---@vb context ui
+---Client UI VM only. Asks the client to capture (`true`) or release (`false`) the mouse.
+---A capture waits until no screen and no chat box are open; the last request wins.
+---```lua
+---client.capture_mouse(true)
+---```
+---@param on boolean
+function client.capture_mouse(on) end
+
+---@vb context ui
+---Client UI VM only. Whether the mouse is captured (looking around) right now.
+---```lua
+---if not client.mouse_captured() then end
+---```
+---@return boolean
+function client.mouse_captured() end
 
 ---@vb context ui
 ---Client UI VM only. Inventory slots (`item` 0 = empty); live.
