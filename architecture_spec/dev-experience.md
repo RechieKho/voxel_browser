@@ -509,8 +509,9 @@ Deviations and decisions made while implementing, in the order a reader will hit
   `templates/pack/<name>/` over `_common/` and are baked into `vb` by `cmake/EmbedFiles.cmake`; the Lua stubs
   are embedded the same way, so `pack init`/`types` work with no installed version (an installed version's
   `sdk/` wins when present). `--template base` copies the installed `content/base`.
-- **Asset manifest**: dot-files/dot-directories (`.vb/`, `.luarc.json`) and the pack-root `README.md`/`AGENTS.md`
-  are never advertised to clients; the pack loader skips dot-directories.
+- **Asset manifest**: dot-files/dot-directories (`.vb/`, `.luarc.json`), the pack-root `README.md`/`AGENTS.md`
+  and the server's runtime state (`storage.json`, `db/`) are never advertised to clients; the pack loader skips
+  dot-directories.
 - **CLI**: help text lives in `src/cli/help.cpp` beside (not inside) the command table; `docs/cli.md` is
   `vb help --markdown`, checked by `dev_cli_help_test`. `vb help --json` exports the table. `error:`/`hint:`
   replaced the old `vb:` prefix. `--json` added to `install`, `update`, `doctor`, `pack *`. Nothing prompts;

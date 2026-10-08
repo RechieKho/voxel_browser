@@ -211,6 +211,7 @@ private:
 	std::shared_ptr<vb::auth::SessionStore> auth_store;
 	bool reauth_panel_open = false; // the in-game "sign in again" overlay
 	int menu_frames = 0;
+	std::string signed_in_server_; // "host:port" the menu's sign-in label is for
 	void install_sign_in(vb::net::ClientSession &session, const std::string &server_id);
 #if defined(VB_WITH_AUTOMATION)
 	bool headless_browser_started_ = false;

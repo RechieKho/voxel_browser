@@ -19,6 +19,10 @@
 
 #include "vb/assetsync/cache.hpp"
 #include "vb/assetsync/manifest.hpp"
+#if VB_WITH_LUA
+#include "vb/script/pack_runtime.hpp"
+#include "vb/world/block.hpp"
+#endif
 #endif
 
 using namespace vb::net;
@@ -158,6 +162,89 @@ TEST_CASE("integrated: a second client sees the first move (interpolated)") {
 	const Vec3d seen = b->interpolated_pos(a_id);
 	CHECK(seen.x - a_spawn.x > 2.0);
 	CHECK(seen.x > first.x); // it kept moving as B watched
+}
+
+namespace {
+
+// Client-side transport that holds back S2C_JoinAccept for a few polls while
+// letting every later frame through -- what a lost-and-resent JoinAccept
+// looks like when the server's first gameplay frames ride other lanes.
+class HoldJoinAccept final : public vb::net::Transport {
+public:
+	explicit HoldJoinAccept(vb::net::Transport &inner) : inner_(inner) {}
+	vb::core::Status<vb::core::NetError> listen(std::uint16_t port) override { return inner_.listen(port); }
+	vb::core::Result<ConnId, vb::core::NetError> connect(std::string_view h, std::uint16_t p) override {
+		return inner_.connect(h, p);
+	}
+	void send(ConnId c, vb::protocol::Lane l, std::span<const std::byte> f) override { inner_.send(c, l, f); }
+	void close(ConnId c, std::string_view r) override { inner_.close(c, r); }
+	bool is_server() const override { return inner_.is_server(); }
+	std::size_t connection_count() const override { return inner_.connection_count(); }
+	void poll(std::vector<TransportEvent> &out) override {
+		std::vector<TransportEvent> events;
+		inner_.poll(events);
+		for (auto &ev : events) {
+			std::size_t consumed = 0;
+			if (ev.kind == TransportEvent::Kind::kMessage &&
+					vb::protocol::read_frame(std::span<const std::byte>(ev.frame), consumed)
+									->header.type == vb::protocol::MessageType::kS2CJoinAccept) {
+				held_ = std::move(ev);
+				polls_left_ = 5;
+				continue;
+			}
+			if (held_) {
+				++overtaken;
+			}
+			out.push_back(std::move(ev));
+		}
+		if (held_ && --polls_left_ <= 0) {
+			out.push_back(std::move(*held_));
+			held_.reset();
+		}
+	}
+
+	int overtaken = 0; // frames delivered while JoinAccept was held back
+
+private:
+	vb::net::Transport &inner_;
+	std::optional<TransportEvent> held_;
+	int polls_left_ = 0;
+};
+
+} // namespace
+
+// Regression (seen on CI under --net-sim loss): gameplay frames that overtook
+// JoinAccept reached the handshake FSM and failed the join with "expected
+// JoinAccept". They are now held and applied right after joining.
+TEST_CASE("join: gameplay frames that overtake JoinAccept don't fail the join") {
+	LoopbackNetwork net;
+	ServerSession server(net.server(), [] {
+		HandshakeServerConfig c;
+		c.world_seed = 1;
+		return c;
+	}());
+	REQUIRE(net.server().listen(0));
+
+	HoldJoinAccept t(net.create_client());
+	auto id = t.connect("x", 0);
+	REQUIRE(id);
+	ClientSession client(t, *id, HandshakeClientConfig{ "Alice", "", "v", 1 });
+	for (int i = 0; i < 30 && !client.joined() && !client.failed(); ++i) {
+		server.tick(0.05);
+		client.tick(0.05);
+	}
+	CHECK(t.overtaken > 0); // the scenario really happened
+	REQUIRE_FALSE(client.failed());
+	REQUIRE(client.joined());
+	// Early frames were applied, not dropped. S2C_PlayerStatus is sent once
+	// right after the join and then only on change, so dropping the early
+	// copy would leave the client without its health for good.
+	for (int i = 0; i < 4; ++i) {
+		server.tick(0.05);
+		client.tick(0.05);
+	}
+	REQUIRE(client.player_status());
+	CHECK(client.player_status()->max_health > 0.0f);
 }
 
 TEST_CASE("chat: a broadcast reaches every playing client, including the sender") {
@@ -889,5 +976,63 @@ TEST_CASE("asset sync: identical files under different paths both arrive") {
 	std::filesystem::remove_all(pack);
 	std::filesystem::remove_all(cache_dir);
 }
+
+#if VB_WITH_LUA
+// Regression: build_manifest scanned the pack's db/ (vb.db's store, written
+// while the server runs) and asset_file_bytes serves a file's *current*
+// bytes, so once a pack wrote vb.db after startup every cold-cache client
+// failed with "asset transfer failed (hash mismatch or size cap)" -- and
+// every client was offered the server's whole database.
+TEST_CASE("asset sync: vb.db writes after the manifest is built don't break joins") {
+	const auto pack = make_asset_pack("vb_db");
+	LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+	vb::script::PackRuntime rt(net.server(), registry, pack / "storage.json");
+	REQUIRE(rt.load_pack_file(R"(
+		vb.db.set("meta:clock", { n = 1 })
+		vb.storage.boot = 1
+	)"));
+	rt.flush_storage();
+
+	auto manifest_result = vb::assetsync::build_manifest(pack);
+	REQUIRE(manifest_result);
+	auto manifest_ptr = std::make_shared<const vb::assetsync::Manifest>(
+			std::move(*manifest_result));
+	REQUIRE(std::filesystem::exists(pack / "db"));
+	REQUIRE(std::filesystem::exists(pack / "storage.json"));
+	for (const auto &e : manifest_ptr->entries) {
+		CHECK_MESSAGE(e.path.rfind("db/", 0) != 0, e.path);
+		CHECK(e.path != "storage.json");
+	}
+
+	// The pack keeps writing while the server runs.
+	REQUIRE(rt.load_pack_file(R"(
+		vb.db.set("meta:clock", { n = 2 })
+		vb.storage.boot = 2
+	)"));
+	rt.flush_storage();
+
+	HandshakeServerHost host = make_asset_host(manifest_ptr, pack);
+	ServerSession server(net.server(), HandshakeServerConfig{}, host);
+	REQUIRE(net.server().listen(0));
+	vb::net::Transport &t = net.create_client();
+	auto id = t.connect("x", 0);
+	REQUIRE(id);
+	const auto cache_dir = std::filesystem::temp_directory_path() /
+			"vb_netcode_assetsync_cache_vb_db";
+	std::filesystem::remove_all(cache_dir);
+	vb::assetsync::ClientAssetCache cache(cache_dir, 16ull * 1024ull * 1024ull);
+	ClientSession client(t, *id, HandshakeClientConfig{ "Cold", "", "v", 1 }, &cache);
+	for (int i = 0; i < 40 && !client.joined() && !client.failed(); ++i) {
+		server.tick(0.05);
+		client.tick(0.05);
+	}
+	REQUIRE_FALSE(client.failed());
+	CHECK(client.joined());
+
+	std::filesystem::remove_all(pack);
+	std::filesystem::remove_all(cache_dir);
+}
+#endif // VB_WITH_LUA
 
 #endif // VB_WITH_COMPRESSION

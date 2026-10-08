@@ -35,6 +35,12 @@ struct ServerConfig {
 	std::uint16_t port = 27015;
 	std::string content_pack = "content/base";
 	std::uint32_t max_players = 16;
+	// Seconds a joining connection may sit in any one handshake step (asset
+	// sync, waiting for Ready, ...) before it is dropped with "handshake
+	// timeout". Signing in has its own, much longer limit. Raise it for slow
+	// hosts, e.g. sanitizer builds (the e2e harness scales it with
+	// VB_E2E_TIMEOUT_SCALE).
+	double handshake_timeout_seconds = 10.0;
 	std::uint32_t view_distance = 4; // chunks
 	std::uint32_t tick_rate = 20;
 	std::uint64_t world_seed = 0; // 0 = random at startup

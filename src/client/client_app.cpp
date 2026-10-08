@@ -272,24 +272,22 @@ void ClientApp::draw_reauth_prompt() {
 	}
 }
 
+// The saved login for the server currently in the connect fields: logins
+// are per server (vb::auth::SessionStore), so there is no engine-wide
+// "signed in" state to show.
 void ClientApp::refresh_signed_in_label() {
 	if (!auth_store) {
 		auth_store = std::make_shared<vb::auth::SessionStore>(
 				vb::core::user_config_dir() / "auth");
 	}
-	const auto sessions = auth_store->list();
+	signed_in_server_ = menu.address() + ':' + std::to_string(menu.port());
+	const auto sessions = auth_store->list_for(signed_in_server_);
 	if (sessions.empty()) {
 		menu.set_signed_in_label({});
 		return;
 	}
-	std::string host = sessions.front().issuer;
-	if (const auto p = host.find("//"); p != std::string::npos) {
-		host = host.substr(p + 2);
-	}
-	host = host.substr(0, host.find('/'));
-	menu.set_signed_in_label((sessions.front().label.empty() ? std::string("account")
-															 : sessions.front().label) +
-			" (" + host + ")");
+	const std::string &account = sessions.front().label;
+	menu.set_signed_in_label(signed_in_server_ + " as " + (account.empty() ? std::string("account") : account));
 }
 #endif
 
@@ -568,7 +566,9 @@ bool ClientApp::frame(const vb::render::InputFrame &input, double dt) {
 	switch (state) {
 		case AppState::kMenu: {
 #if defined(VB_WITH_AUTH)
-			if (render && (menu_frames++ % 120) == 0) {
+			const bool server_changed =
+					signed_in_server_ != menu.address() + ':' + std::to_string(menu.port());
+			if (render && ((menu_frames++ % 120) == 0 || server_changed)) {
 				refresh_signed_in_label(); // cheap: a handful of tiny files
 			}
 #endif
@@ -581,7 +581,7 @@ bool ClientApp::frame(const vb::render::InputFrame &input, double dt) {
 #endif
 #if defined(VB_WITH_AUTH)
 			if (result.sign_out && auth_store) {
-				auth_store->clear(); // forget every cached refresh token
+				auth_store->sign_out(signed_in_server_); // this server only
 				refresh_signed_in_label();
 			}
 #endif

@@ -127,6 +127,29 @@ content-only (e.g. the user explicitly asks for a content-pack feature).
   each full manifest's entry list, so the server's reconnect fast path (no
   entries) can rebuild the virtual FS; `last_known_manifest_hash_for` stays
   zero unless that list is held. Nothing sends a known hash yet.
+- **Gameplay frames can overtake `S2C_JoinAccept`** (2026-10-08): they ride
+  other lanes, and a lost JoinAccept is resent late, so under packet loss the
+  client's handshake used to fail with "expected JoinAccept" (flaky
+  `test_gameplay_survives_lag_jitter_and_loss`). `ClientSession` now holds
+  them (`early_gameplay_`, max 8192) and applies them right after joining;
+  never drop them -- the server doesn't resend chunks it thinks it sent.
+- **Every e2e timeout must scale with `VB_E2E_TIMEOUT_SCALE`, both processes'
+  included** (2026-10-08): the server's fixed 10 s per-step handshake limit
+  (now `handshake_timeout_seconds`) intermittently dropped a second client on
+  the sanitized e2e leg while the harness and client were already stretched 3x.
+- **Saved sign-ins are per server** (2026-10-08): `auth::SessionStore` keys
+  refresh tokens by `(server "host:port", issuer, client_id)`, not by
+  provider, so two servers on one Keycloak realm no longer share a login and
+  the menu's "Signed in to <server> as ..." / Sign out cover the selected
+  server only. Old per-provider files are deleted when the store opens.
+- **`db/` and `storage.json` are runtime state, never assets** (2026-10-08).
+  The manifest used to scan them: every client could download the server's
+  `vb.db` (player records), and the first `vb.db` write after startup made
+  cold-cache joins fail with "asset transfer failed (hash mismatch ...)".
+  `core::is_pack_runtime_state` is the one rule (manifest + `vb pack dev`
+  watcher); a `world_dir` inside the pack is excluded too. A listed file that
+  changes anyway is refused (logged) and the manifest rebuilt -- the old
+  storage-revision rebuild trigger is gone.
 - **Crack overlay draws for every damaged block** (2026-10-07), not just the
   aimed one, pulled 1% toward the eye instead of a fixed 0.002 bulge.
   `GenMeshCube` meshes are already uploaded (static) -- copy, don't re-upload.

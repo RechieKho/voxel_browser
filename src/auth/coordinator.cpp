@@ -166,7 +166,7 @@ void SignInCoordinator::begin_silent_locked() {
 	if (!options_.store || !options_.http || !challenge_ || task_) {
 		return;
 	}
-	const auto stored = options_.store->load(challenge_->issuer, challenge_->client_id);
+	const auto stored = options_.store->load(options_.server_id, challenge_->issuer, challenge_->client_id);
 	if (!stored) {
 		return;
 	}
@@ -185,6 +185,7 @@ void SignInCoordinator::save_session_locked(const SignInResult &r) {
 		return;
 	}
 	StoredSession s;
+	s.server = options_.server_id;
 	s.issuer = challenge_->issuer;
 	s.client_id = challenge_->client_id;
 	s.provider = challenge_->provider;
@@ -235,7 +236,7 @@ void SignInCoordinator::update_locked() {
 		if (was_silent && options_.store && challenge_) {
 			// The cached refresh token is no good (expired, revoked): forget it
 			// and fall back to an interactive sign-in.
-			options_.store->erase(challenge_->issuer, challenge_->client_id);
+			options_.store->erase(options_.server_id, challenge_->issuer, challenge_->client_id);
 			error_ = "Your saved sign-in expired";
 		} else {
 			error_ = r.error;

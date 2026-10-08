@@ -33,6 +33,7 @@ TEST_CASE("server config: defaults when the document is empty") {
 	CHECK(c->max_connections_per_ip == 0); // 0 = unlimited
 	CHECK(c->max_messages_per_second == doctest::Approx(0.0)); // 0 = unlimited
 	CHECK(c->chunk_send_budget_bytes_per_tick == 0); // 0 = unlimited
+	CHECK(c->handshake_timeout_seconds == doctest::Approx(10.0));
 }
 
 TEST_CASE("server config: values are read from TOML") {
@@ -40,6 +41,7 @@ TEST_CASE("server config: values are read from TOML") {
 		bind_address = "127.0.0.1"
 		port = 28000
 		max_players = 4
+		handshake_timeout_seconds = 30.0
 		tick_rate = 30
 		world_seed = 123456789
 		gravity = 19.5
@@ -55,6 +57,7 @@ TEST_CASE("server config: values are read from TOML") {
 	CHECK(c->bind_address == "127.0.0.1");
 	CHECK(c->port == 28000);
 	CHECK(c->max_players == 4);
+	CHECK(c->handshake_timeout_seconds == doctest::Approx(30.0));
 	CHECK(c->tick_rate == 30);
 	CHECK(c->world_seed == 123456789u);
 	CHECK(c->gravity == doctest::Approx(19.5));
@@ -65,6 +68,12 @@ TEST_CASE("server config: values are read from TOML") {
 	CHECK(c->chunk_send_budget_bytes_per_tick == 65536);
 	CHECK(c->auth_mode == ConfigAuthMode::kToken);
 	CHECK(c->motd == "hi");
+}
+
+TEST_CASE("server config: a non-positive handshake_timeout_seconds falls back to 10") {
+	auto c = parse_server_config("handshake_timeout_seconds = 0\n");
+	REQUIRE(c);
+	CHECK(c->handshake_timeout_seconds == doctest::Approx(10.0));
 }
 
 TEST_CASE("server config: [auth] overrides parse; absent table leaves them empty") {

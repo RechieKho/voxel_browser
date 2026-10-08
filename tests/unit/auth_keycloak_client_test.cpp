@@ -85,6 +85,7 @@ std::filesystem::path fresh_store_dir(const char *name) {
 std::shared_ptr<SessionStore> store_with_refresh_token(const std::filesystem::path &dir, const std::string &server) {
 	auto store = std::make_shared<SessionStore>(dir);
 	StoredSession s;
+	s.server = server;
 	s.issuer = tokens().issuer();
 	s.client_id = tokens().client_id();
 	s.provider = "keycloak";
@@ -175,7 +176,7 @@ TEST_CASE("keycloak coordinator: a refresh token Keycloak refuses is forgotten, 
 		REQUIRE(wait_until([&] { return coord.phase() != SignInCoordinator::Phase::kWorking; }));
 		CHECK(coord.phase() == SignInCoordinator::Phase::kChoosing);
 		CHECK(coord.last_error() == "Your saved sign-in expired");
-		CHECK_FALSE(store->load(tokens().issuer(), tokens().client_id()));
+		CHECK_FALSE(store->load("play.example:27015", tokens().issuer(), tokens().client_id()));
 		CHECK_FALSE(ticket().done);
 		std::filesystem::remove_all(dir);
 	}
@@ -195,8 +196,8 @@ TEST_CASE("keycloak coordinator: an IdP outage at sign-in keeps the stored refre
 	REQUIRE(wait_until([&] { return coord.phase() != SignInCoordinator::Phase::kWorking; }));
 	CHECK(coord.phase() == SignInCoordinator::Phase::kChoosing);
 	CHECK(coord.last_error() == "Could not reach the identity provider");
-	REQUIRE(store->load(tokens().issuer(), tokens().client_id())); // kept
-	CHECK(store->load(tokens().issuer(), tokens().client_id())->refresh_token == "R-stored");
+	REQUIRE(store->load("play.example:27015", tokens().issuer(), tokens().client_id())); // kept
+	CHECK(store->load("play.example:27015", tokens().issuer(), tokens().client_id())->refresh_token == "R-stored");
 	std::filesystem::remove_all(dir);
 }
 
@@ -225,8 +226,8 @@ TEST_CASE("keycloak coordinator: a re-auth retries quietly through an outage and
 	CHECK(p.token == tokens().token("id_refresh_no_nonce"));
 	CHECK(static_cast<int>(http->token_posts().size()) - before >= 3); // failed, failed, succeeded
 	CHECK_FALSE(coord.reauth_prompt_active());
-	REQUIRE(store->load(tokens().issuer(), tokens().client_id()));
-	CHECK(store->load(tokens().issuer(), tokens().client_id())->refresh_token != "R-stored"); // rotated
+	REQUIRE(store->load("play.example:27015", tokens().issuer(), tokens().client_id()));
+	CHECK(store->load("play.example:27015", tokens().issuer(), tokens().client_id())->refresh_token != "R-stored"); // rotated
 	std::filesystem::remove_all(dir);
 }
 
@@ -257,7 +258,7 @@ TEST_CASE("keycloak coordinator: a long outage raises the prompt after a few mis
 		(void)ticket();
 		return http->token_posts().size() >= 5 && coord.reauth_prompt_active();
 	}, 5000));
-	REQUIRE(store->load(tokens().issuer(), tokens().client_id())); // never forgotten over an outage
+	REQUIRE(store->load("play.example:27015", tokens().issuer(), tokens().client_id())); // never forgotten over an outage
 	// a new request from the server starts the count afresh
 	ticket = coord.reauth_provider()(req);
 	CHECK_FALSE(ticket().done);

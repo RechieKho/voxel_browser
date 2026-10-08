@@ -56,7 +56,7 @@ public:
 		std::function<bool(const std::string &)> open_browser; // default: system browser
 		// Refresh-token cache + trust list. Null = no persistence, no prompt.
 		std::shared_ptr<SessionStore> store;
-		std::string server_id; // "host:port", the first-use trust key
+		std::string server_id; // "host:port": keys both the trust list and the saved login
 		// A silent re-auth refresh that failed for a transient reason (IdP down, 5xx) is
 		// retried this often while the server's request is open; the stored refresh
 		// token is kept. Tests shorten it.

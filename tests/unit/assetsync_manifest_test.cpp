@@ -181,4 +181,38 @@ TEST_CASE("build_manifest never advertises the pack-root auth.lua") {
 	std::filesystem::remove_all(pack);
 }
 
+// vb.db's db/ and vb.storage's storage.json are the server's own runtime
+// state: private (player records) and rewritten while the server runs. They
+// were in the manifest, so every client could download the database, and
+// the first vb.db write after startup made the advertised hash stale.
+TEST_CASE("build_manifest leaves out runtime state and excluded directories") {
+	const auto pack = make_pack("runtime_state");
+	const auto write = [&](const char *rel, const char *text) {
+		std::filesystem::create_directories((pack / rel).parent_path());
+		std::ofstream f(pack / rel, std::ios::binary);
+		f << text;
+	};
+	write("db/ab/abcdef", "{\"coins\":5}");
+	write("db/ab/abcdef.tmp", "{\"coins\":6}");
+	write("storage.json", "{}");
+	write("world/r.0.0.vbr", "region");
+	write("textures/db/kept.png", "pack art that happens to sit in a db/ folder");
+	write("scripts/storage.json", "pack data, not vb.storage");
+
+	const auto m = build_manifest(pack, {}, { pack / "world" });
+	REQUIRE(m);
+	std::vector<std::string> paths;
+	for (const auto &e : m->entries) {
+		paths.push_back(e.path);
+	}
+	CHECK(paths == std::vector<std::string>{ "scripts/init.lua", "scripts/storage.json",
+						   "textures/db/kept.png", "ui/menu.toml" });
+
+	// Without the exclusion the world directory is ordinary pack content.
+	const auto unexcluded = build_manifest(pack);
+	REQUIRE(unexcluded);
+	CHECK(unexcluded->entries.size() == paths.size() + 1);
+	std::filesystem::remove_all(pack);
+}
+
 #endif // VB_WITH_COMPRESSION

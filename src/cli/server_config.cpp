@@ -58,6 +58,8 @@ std::string effective_value(const vb::core::ServerConfig &c, const std::string &
 		return c.content_pack;
 	if (key == "max_players")
 		return std::to_string(c.max_players);
+	if (key == "handshake_timeout_seconds")
+		return number_text(c.handshake_timeout_seconds);
 	if (key == "view_distance")
 		return std::to_string(c.view_distance);
 	if (key == "tick_rate")
@@ -229,6 +231,7 @@ const std::vector<ConfigKey> &server_config_keys() {
 		{ "port", ConfigType::Integer },
 		{ "content_pack", ConfigType::String },
 		{ "max_players", ConfigType::Integer },
+		{ "handshake_timeout_seconds", ConfigType::Number },
 		{ "view_distance", ConfigType::Integer },
 		{ "tick_rate", ConfigType::Integer },
 		{ "world_seed", ConfigType::Integer },

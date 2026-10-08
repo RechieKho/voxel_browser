@@ -351,12 +351,19 @@ own player only) for "Signed in as …" labels. No claims, no tokens.
   Success page tells the player to return to the game.
 - **Firebase password:** engine-drawn email/password form → Identity
   Toolkit REST → ID token. Password never touches the game server.
-- **Session cache:** refresh token per `(issuer, client_id)` in
-  `user_config_dir()/auth/<sha256(issuer|client_id)>.json`, mode 0600
-  (OS keychain is a later step). Re-joining tries a silent refresh first;
-  the token it yields carries no nonce, so it's accepted only within
-  `max_token_age_seconds` (§5.3 rule 5). "Sign out" in the main menu deletes
-  the cache entry.
+- **Session cache:** refresh token per `(server, issuer, client_id)` in
+  `user_config_dir()/auth/<sha256(server|issuer|client_id)>.json`, mode 0600
+  (OS keychain is a later step). `server` is the address the client
+  connected to (`host:port`, or `singleplayer`). Each server is its own
+  sign-in: two servers on the same identity provider never share a saved
+  login (it was per `(issuer, client_id)` until 2026-10-08; such files are
+  deleted on startup). Re-joining the same server tries a silent refresh
+  first; the token it yields carries no nonce, so it's accepted only within
+  `max_token_age_seconds` (§5.3 rule 5). A join that fails for a non-auth
+  reason (asset sync, timeout, kick) keeps the login; only a refused refresh
+  token or "Sign out" removes it. The main menu shows the saved login for
+  the server in its connect fields, and its "Sign out" forgets only that
+  server's login.
 - **First-use trust prompt:** first time a server address asks for a given
   issuer, show "*<server>* wants you to sign in with *<issuer host>*".
   Remembered per (server, issuer).
