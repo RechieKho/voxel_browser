@@ -106,6 +106,11 @@ public:
 	void set_chunk_ingest_budget(std::size_t chunks_per_update) {
 		lifecycle_.set_ingest_budget(chunks_per_update);
 	}
+	// Wall-time cap per tick() on the same work (ChunkLifecycleSystem::
+	// set_ingest_time_budget); 0 = none.
+	void set_chunk_ingest_time_budget(double ms) {
+		lifecycle_.set_ingest_time_budget(ms);
+	}
 
 	// STATE.md §6: bounds the *send* side of streaming a player's view box --
 	// distinct from set_chunk_ingest_budget() above, which only bounds the

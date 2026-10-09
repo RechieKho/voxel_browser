@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <utility>
+#include <vector>
 
 #include "vb/world/block.hpp"
 #include "vb/world/chunk.hpp"
@@ -22,7 +23,7 @@ inline constexpr std::uint8_t kMaxLight = 15;
 class LightEngine {
 public:
 	// Holds the registry by value (it is cheap and callers pass temporaries).
-	explicit LightEngine(BlockRegistry registry) : registry_(std::move(registry)) {}
+	explicit LightEngine(BlockRegistry registry);
 
 	// Loaded chunks adjacent to the one being relit, each seeding sky light
 	// across the corresponding border instead of `relight_chunk` assuming
@@ -55,6 +56,12 @@ private:
 	// How much light a block passes through (kMaxLight for air/transparent,
 	// reduced for liquids, 0 for opaque).
 	std::uint8_t transmittance(core::BlockId block) const;
+	std::uint8_t emission(core::BlockId block) const;
+
+	// transmittance()/light_emission() per block id, computed once: the flood
+	// fill reads them for every voxel it visits.
+	std::vector<std::uint8_t> pass_by_id_;
+	std::vector<std::uint8_t> emit_by_id_;
 
 	BlockRegistry registry_;
 };

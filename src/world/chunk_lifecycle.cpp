@@ -1,6 +1,7 @@
 #include "vb/world/chunk_lifecycle.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <utility>
 
 #include "vb/world/lighting.hpp"
@@ -38,6 +39,13 @@ namespace vb::world {
 // stutter loop). Singleplayer::tick() shrinks the budget via
 // set_ingest_budget() proportionally to how many catch-up steps it expects
 // to run that frame so the *frame*, not each individual step, pays this cost.
+//
+// The count alone doesn't bound time: lighting costs a few ms per chunk, so 32
+// chunks (twice per update(), see the two ingest() calls) held a dedicated
+// server's tick for up to ~1.6 s while a view box filled, and the tick reads
+// every player's input only at its start. Callers therefore also set a time
+// budget (set_ingest_time_budget): src/server/main.cpp half a tick,
+// Singleplayer::tick() a share of the frame.
 
 ChunkLifecycleSystem::ChunkLifecycleSystem(World &world,
 		worldgen::WorldGenWorkerPool &pool, const BlockRegistry &registry) : world_(world),
@@ -52,6 +60,16 @@ void ChunkLifecycleSystem::update(const std::vector<core::ChunkCoord> &desired) 
 			desired.end());
 
 	auto find = [&](core::ChunkCoord c) { return world_.find_chunk(c); };
+	const auto started = std::chrono::steady_clock::now();
+	// Some work (one batch or one disk load) per update() regardless of the
+	// time budget, so streaming always advances.
+	bool progressed = false;
+	const auto over_time = [&] {
+		return progressed && ingest_time_budget_ms_ > 0.0 &&
+				std::chrono::duration<double, std::milli>(
+						std::chrono::steady_clock::now() - started)
+						.count() >= ingest_time_budget_ms_;
+	};
 	auto ingest = [&] {
 		for (auto &chunk : pool_.poll_completed()) {
 			backlog_.push_back(std::move(chunk));
@@ -65,26 +83,35 @@ void ChunkLifecycleSystem::update(const std::vector<core::ChunkCoord> &desired) 
 		// order (across worker threads) has no relation to its column
 		// position, so the chunk below can easily finish and need lighting
 		// before the chunk above it exists yet.
-		std::vector<core::ChunkCoord> just_inserted;
+		//
+		// In batches of kIngestBatch so the time budget can stop between them;
+		// every chunk inserted is lit before update() returns (the replicator
+		// streams whatever is loaded).
 		std::size_t taken = 0;
-		while (taken < ingest_budget_ && !backlog_.empty()) {
-			std::unique_ptr<Chunk> chunk = std::move(backlog_.front());
-			backlog_.pop_front();
-			const core::ChunkCoord coord = chunk->coord();
-			requested_.erase(coord);
-			++taken;
-			if (wanted.count(coord) == 0) {
-				continue;
+		while (taken < ingest_budget_ && !backlog_.empty() && !over_time()) {
+			progressed = true;
+			std::vector<core::ChunkCoord> just_inserted;
+			for (std::size_t in_batch = 0; in_batch < kIngestBatch &&
+					taken < ingest_budget_ && !backlog_.empty();
+					++in_batch) {
+				std::unique_ptr<Chunk> chunk = std::move(backlog_.front());
+				backlog_.pop_front();
+				const core::ChunkCoord coord = chunk->coord();
+				requested_.erase(coord);
+				++taken;
+				if (wanted.count(coord) == 0) {
+					continue;
+				}
+				chunk->set_gen_state(GenState::kGenerated);
+				world_.insert_chunk(std::move(chunk));
+				just_inserted.push_back(coord);
 			}
-			chunk->set_gen_state(GenState::kGenerated);
-			world_.insert_chunk(std::move(chunk));
-			just_inserted.push_back(coord);
-		}
-		for (core::ChunkCoord coord : just_inserted) {
-			relight_column(light_, coord, find,
-					[](core::ChunkCoord, const std::array<Light, kChunkVolume> &,
-							const Chunk &) {});
-			newly_ready_.push_back(coord);
+			for (core::ChunkCoord coord : just_inserted) {
+				relight_column(light_, coord, find,
+						[](core::ChunkCoord, const std::array<Light, kChunkVolume> &,
+								const Chunk &) {});
+				newly_ready_.push_back(coord);
+			}
 		}
 	};
 
@@ -125,10 +152,11 @@ void ChunkLifecycleSystem::update(const std::vector<core::ChunkCoord> &desired) 
 		}
 		if (region_store_ != nullptr) {
 			if (std::unique_ptr<Chunk> loaded = region_store_->load(coord)) {
-				if (disk_loads >= ingest_budget_) {
+				if (disk_loads >= ingest_budget_ || over_time()) {
 					continue;
 				}
 				++disk_loads;
+				progressed = true;
 				loaded->set_gen_state(GenState::kGenerated);
 				world_.insert_chunk(std::move(loaded));
 				relight_column(light_, coord, find,
