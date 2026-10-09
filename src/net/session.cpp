@@ -23,6 +23,15 @@ std::span<const std::byte> span_of(const std::vector<std::byte> &v) {
 	return { v.data(), v.size() };
 }
 
+// Inverse of world::index_of (x fastest, then z, then y).
+core::IVec3 world_voxel_of(core::ChunkCoord coord, std::size_t local_index) {
+	const auto dim = static_cast<std::size_t>(world::kChunkDim);
+	const core::IVec3 origin = core::chunk_origin(coord);
+	return { origin.x + static_cast<int>(local_index % dim),
+		origin.y + static_cast<int>(local_index / (dim * dim)),
+		origin.z + static_cast<int>((local_index / dim) % dim) };
+}
+
 // Reverses frame_message()'s optional LZ4 framing (ARCHITECTURE_SPEC.md §18
 // Q4) before a message's payload reaches its `decode()`. A no-op (returns
 // true, `storage` untouched) when MessageFlag::kCompressed isn't set --
@@ -513,7 +522,10 @@ void ServerSession::broadcast_block_damage(core::IVec3 pos, std::uint16_t punche
 		return;
 	}
 	const core::ChunkCoord cc = core::chunk_of(pos);
-	const protocol::S2CBlockDamage msg{ pos, punches };
+	// The chunk's current revision versions this update against block
+	// changes, which travel on another lane (see BlockDamageTracker).
+	const world::Chunk *chunk = replicator_->world().find_chunk(cc);
+	const protocol::S2CBlockDamage msg{ pos, punches, chunk != nullptr ? chunk->revision() : 0 };
 	for (auto &[conn, state] : conns_) {
 		if (state.playing && replicator_->player_has_chunk(state.net_id, cc)) {
 			send_message(transport_, conn, msg);
@@ -1892,6 +1904,7 @@ void ClientSession::tick(double dt_seconds) {
 	// comment for why this is what fixes interpolated_pos()'s old
 	// "frozen until the next packet" staircase.
 	server_time_.advance(dt_seconds);
+	block_damage_.advance(dt_seconds);
 
 	// An asynchronous sign-in (browser, form, token file) resolves between
 	// frames; the server sends nothing while it waits.
@@ -2077,10 +2090,28 @@ bool ClientSession::apply_gameplay_frame(const protocol::Frame &frame) {
 				// thinks it was sent (last_sent_ includes it), so it's never
 				// retried -- a permanent, invisible hole with no trace of why.
 				// Log it loudly so a report like that has something to go on.
+				// A chunk re-sent while already loaded (its revision moved
+				// outside the per-edit delta path) may have changed blocks
+				// that block damage refers to.
+				std::vector<core::BlockId> before;
+				if (const world::Chunk *old = chunks_.find(m->coord)) {
+					before.resize(world::kChunkVolume);
+					for (std::size_t i = 0; i < world::kChunkVolume; ++i) {
+						before[i] = old->blocks().get(i);
+					}
+				}
 				if (auto applied = chunks_.apply_add(*m); !applied) {
 					VB_ERROR("net", "chunk (", m->coord.x, ",", m->coord.y, ",",
 							m->coord.z, ") add rejected: ",
 							core::message(applied.error()));
+				} else if (!before.empty()) {
+					const world::Chunk *now = chunks_.find(m->coord);
+					for (std::size_t i = 0; now != nullptr && i < world::kChunkVolume; ++i) {
+						if (now->blocks().get(i) != before[i]) {
+							block_damage_.on_block_changed(
+									world_voxel_of(m->coord, i), m->revision);
+						}
+					}
 				}
 			} else {
 				VB_ERROR("net", "malformed S2C_ChunkAdd: ", core::message(m.error()));
@@ -2093,6 +2124,11 @@ bool ClientSession::apply_gameplay_frame(const protocol::Frame &frame) {
 					VB_ERROR("net", "chunk (", m->coord.x, ",", m->coord.y, ",",
 							m->coord.z, ") delta rejected: ",
 							core::message(applied.error()));
+				} else {
+					for (const protocol::BlockChange &c : m->blocks) {
+						block_damage_.on_block_changed(
+								world_voxel_of(m->coord, c.local_index), m->new_revision);
+					}
 				}
 				forget_pending_edits_for(m->coord); // authoritative wins
 			} else {
@@ -2115,13 +2151,7 @@ bool ClientSession::apply_gameplay_frame(const protocol::Frame &frame) {
 				// the chunk) -- drop any stale entries now so a re-entered
 				// chunk never starts showing a leftover crack from before it
 				// was last seen.
-				for (auto it = block_damage_.begin(); it != block_damage_.end();) {
-					if (core::chunk_of(it->first) == m->coord) {
-						it = block_damage_.erase(it);
-					} else {
-						++it;
-					}
-				}
+				block_damage_.on_chunk_removed(m->coord);
 			}
 			return true;
 		}
@@ -2295,11 +2325,7 @@ void ClientSession::apply_fog_params(const protocol::S2CFogParams &msg) {
 }
 
 void ClientSession::apply_block_damage(const protocol::S2CBlockDamage &msg) {
-	if (msg.punches == 0) {
-		block_damage_.erase(msg.pos);
-	} else {
-		block_damage_[msg.pos] = msg.punches;
-	}
+	block_damage_.on_damage(msg.pos, msg.punches, msg.revision);
 }
 
 void ClientSession::apply_snapshot(const protocol::S2CEntitySnapshot &snap) {

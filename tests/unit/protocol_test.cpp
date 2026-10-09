@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "vb/core/version.hpp"
+#include "vb/net/transport.hpp"
 #include "vb/protocol/assetsync.hpp"
 #include "vb/protocol/byte_buffer.hpp"
 #include "vb/protocol/chat.hpp"
@@ -103,6 +104,25 @@ TEST_CASE("lane assignment matches the spec") {
 	CHECK(lane_for(MessageType::kC2SInputBatch) == Lane::kInput);
 	CHECK(lane_for(MessageType::kS2CKeybindRegistry) == Lane::kWorld);
 	CHECK(lane_for(MessageType::kS2CEntityKindRegistry) == Lane::kWorld);
+	CHECK(lane_for(MessageType::kS2CBlockDamage) == Lane::kFeedback);
+}
+
+TEST_CASE("transport lane policy: kFeedback is reliable, unbatched, on its own GNS lane") {
+	using vb::net::gns_lane_index;
+	using vb::net::lane_skips_nagle;
+	using vb::net::send_mode_for_lane;
+	using vb::net::SendMode;
+	CHECK(send_mode_for_lane(Lane::kFeedback) == SendMode::kReliableOrdered);
+	CHECK(gns_lane_index(Lane::kFeedback) == 1);
+	CHECK(lane_skips_nagle(Lane::kFeedback));
+	// Every other lane keeps sharing GNS lane 0 (control/world/assets stay
+	// mutually ordered) and keeps Nagle batching.
+	for (const Lane lane : { Lane::kControl, Lane::kWorld, Lane::kSnapshot, Lane::kAssets,
+				 Lane::kInput }) {
+		CHECK(gns_lane_index(lane) == 0);
+		CHECK_FALSE(lane_skips_nagle(lane));
+	}
+	CHECK(gns_lane_index(Lane::kFeedback) < vb::net::kGnsLaneCount);
 }
 
 TEST_CASE("handshake structs round-trip") {
@@ -427,9 +447,11 @@ TEST_CASE("block damage round-trips (Phase 6.5's deferred replication half)") {
 	S2CBlockDamage msg;
 	msg.pos = { 10, -3, 42 };
 	msg.punches = 5;
+	msg.revision = 0x0123456789abcdefull;
 	auto r = round_trip(msg);
 	CHECK(r.pos == vb::core::IVec3{ 10, -3, 42 });
 	CHECK(r.punches == 5);
+	CHECK(r.revision == 0x0123456789abcdefull);
 }
 
 TEST_CASE("keybind registry round-trips, including an empty list") {

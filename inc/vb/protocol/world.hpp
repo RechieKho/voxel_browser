@@ -327,11 +327,18 @@ struct S2CBlockEditResult {
 // treating 0 as a value to render. No max_damage field -- the receiving
 // client already knows the block's registered BlockType::max_damage from
 // its own chunk mirror + block registry, so this stays a pure delta.
+//
+// Travels on Lane::kFeedback, so it can arrive before or after the
+// S2C_ChunkDelta/ChunkAdd for the same block. `revision` is the server's
+// revision of the chunk containing `pos` when this was sent; the client
+// drops it if the block at `pos` has changed at a later revision
+// (net::BlockDamageTracker).
 struct S2CBlockDamage {
 	static constexpr MessageType kType = MessageType::kS2CBlockDamage;
 
 	core::IVec3 pos{};
 	std::uint16_t punches = 0;
+	std::uint64_t revision = 0; // v31+
 
 	void encode(std::vector<std::byte> &out) const;
 	static Decoded<S2CBlockDamage> decode(std::span<const std::byte> in);

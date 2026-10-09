@@ -125,6 +125,65 @@ TEST_CASE("GnsTransport: connect, exchange a message, and disconnect over real U
 	CHECK(server.connection_count() == 0);
 }
 
+// Block damage rides Lane::kFeedback, which maps to its own higher-priority
+// GNS lane: it must not wait behind bulk world data already queued on the
+// connection. GNS sends at ~1 MB/s by default, so before this a damage update
+// behind a burst of chunks waited for the whole burst.
+TEST_CASE("GnsTransport: a kFeedback message overtakes queued kWorld data") {
+	constexpr std::uint16_t kTestPort = 27207;
+	GnsTransport server;
+	REQUIRE(server.listen(kTestPort));
+	GnsTransport client;
+	const auto conn = client.connect("127.0.0.1", server.bound_port());
+	REQUIRE(conn);
+	ConnId server_side_conn = ConnId::kInvalid;
+	bool client_connected = false;
+	REQUIRE(pump_until(500, [&] {
+		std::vector<TransportEvent> ev;
+		client.poll(ev);
+		for (const auto &e : ev) {
+			client_connected = client_connected || e.kind == TransportEvent::Kind::kConnected;
+		}
+		ev.clear();
+		server.poll(ev);
+		for (const auto &e : ev) {
+			if (e.kind == TransportEvent::Kind::kConnected) {
+				server_side_conn = e.conn;
+			}
+		}
+		return client_connected && server_side_conn != ConnId::kInvalid;
+	}));
+
+	// ~1 MiB of chunk-sized world messages, then one small feedback message.
+	constexpr int kWorldMessages = 16;
+	const std::vector<std::byte> world(64 * 1024, std::byte{ 0xAA });
+	for (int i = 0; i < kWorldMessages; ++i) {
+		server.send(server_side_conn, vb::protocol::Lane::kWorld, world);
+	}
+	const std::vector<std::byte> feedback(16, std::byte{ 0xFB });
+	server.send(server_side_conn, vb::protocol::Lane::kFeedback, feedback);
+
+	int world_received = 0;
+	int world_before_feedback = -1;
+	REQUIRE(pump_until(2000, [&] {
+		std::vector<TransportEvent> ev;
+		client.poll(ev);
+		for (const auto &e : ev) {
+			if (e.kind != TransportEvent::Kind::kMessage) {
+				continue;
+			}
+			if (e.frame == feedback) {
+				world_before_feedback = world_received;
+			} else if (e.frame.size() == world.size()) {
+				++world_received;
+			}
+		}
+		return world_before_feedback >= 0 && world_received == kWorldMessages;
+	}));
+	// Sent ahead of the queue, not after all of it (one shared lane would give 16).
+	CHECK(world_before_feedback < kWorldMessages / 2);
+}
+
 // REMAINING_TASKS.md Phase 3's "wall-clock server_time_est" gap needs a
 // real transport-level RTT to feed it (the whole reason it was gated on
 // GnsTransport in the first place -- LoopbackTransport has nothing to
