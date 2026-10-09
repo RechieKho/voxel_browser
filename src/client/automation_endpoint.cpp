@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <optional>
 
@@ -352,6 +353,14 @@ struct BreakBlockTask final : AimedTask {
 	std::string before;
 	bool waiting = false;
 	std::uint16_t punches_at_click = 0;
+	// Wall time from each click to the client seeing the server's answer
+	// (a punch count change, or the block gone): the punch round trip.
+	std::chrono::steady_clock::time_point clicked_at;
+	json confirm_ms = json::array();
+	void confirmed() {
+		const auto elapsed = std::chrono::steady_clock::now() - clicked_at;
+		confirm_ms.push_back(std::chrono::duration<double, std::milli>(elapsed).count());
+	}
 	BreakBlockTask(vb::core::IVec3 p, long long timeout_frames) :
 			AimedTask(timeout_frames), pos(p) {}
 
@@ -376,6 +385,7 @@ struct BreakBlockTask final : AimedTask {
 			c.in.hold_mouse_button(MOUSE_BUTTON_LEFT, 1);
 			waiting = true;
 			punches_at_click = punches(c, pos);
+			clicked_at = std::chrono::steady_clock::now();
 		}
 	}
 	std::optional<Reply> post(Ctx &c) override {
@@ -387,7 +397,11 @@ struct BreakBlockTask final : AimedTask {
 			return Reply::error("not_loaded", "target chunk is not loaded");
 		}
 		if (now && *now != before) {
-			return Reply::success(json{ { "block_before", before }, { "block_after", *now } });
+			if (waiting) {
+				confirmed();
+			}
+			return Reply::success(json{ { "block_before", before }, { "block_after", *now },
+					{ "confirm_ms", confirm_ms } });
 		}
 		// Free to punch again only once the server confirmed the last one. No blind retry on
 		// silence: an instant-break block gives no feedback but vanishing, and a slow server
@@ -396,6 +410,7 @@ struct BreakBlockTask final : AimedTask {
 		// effectively never lost; if it is, the timeout says so.
 		if (waiting && punches(c, pos) != punches_at_click) {
 			waiting = false;
+			confirmed();
 		}
 		if (c.frame - start >= deadline) {
 			const auto hit = c.look_ray();

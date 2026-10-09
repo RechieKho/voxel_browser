@@ -55,12 +55,23 @@ public:
 		ingest_budget_ = chunks_per_update;
 	}
 
+	// Wall-time cap on inserting+lighting chunks per update(), in
+	// milliseconds (0 = none, the default). Lighting is the expensive part of
+	// a tick while a view box fills (a few ms per chunk), and the tick reads
+	// player input only at its start, so an uncapped batch delays every
+	// player's actions. Work stops between batches of kIngestBatch chunks once
+	// the budget is spent; the rest waits in the backlog. At least one batch
+	// always runs, so streaming never stalls.
+	void set_ingest_time_budget(double ms) { ingest_time_budget_ms_ = ms; }
+	static constexpr std::size_t kIngestBatch = 4;
+
 private:
 	World &world_;
 	worldgen::WorldGenWorkerPool &pool_;
 	LightEngine light_;
 	RegionStore *region_store_ = nullptr;
 	std::size_t ingest_budget_ = 32; // see set_ingest_budget() / chunk_lifecycle.cpp
+	double ingest_time_budget_ms_ = 0.0; // see set_ingest_time_budget()
 	std::unordered_set<core::ChunkCoord> requested_;
 	std::vector<core::ChunkCoord> newly_ready_;
 	std::vector<core::ChunkCoord> unloaded_;

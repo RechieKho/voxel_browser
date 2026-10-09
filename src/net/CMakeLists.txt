@@ -4,6 +4,7 @@
 # that flag).
 
 target_sources(vb_core PRIVATE
+  block_damage_tracker.cpp
   loopback.cpp
   gns_transport.cpp
   handshake.cpp

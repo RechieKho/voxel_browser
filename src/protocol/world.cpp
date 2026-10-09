@@ -425,6 +425,7 @@ void S2CBlockDamage::encode(std::vector<std::byte> &out) const {
 	ByteWriter w(out);
 	write_ivec3(w, pos);
 	w.u16(punches);
+	w.u64(revision);
 }
 
 Decoded<S2CBlockDamage> S2CBlockDamage::decode(std::span<const std::byte> in) {
@@ -432,6 +433,7 @@ Decoded<S2CBlockDamage> S2CBlockDamage::decode(std::span<const std::byte> in) {
 	S2CBlockDamage m;
 	m.pos = read_ivec3(r);
 	m.punches = r.u16();
+	m.revision = r.u64();
 	return finish(r, std::move(m));
 }
 

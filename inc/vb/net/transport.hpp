@@ -13,7 +13,7 @@
 #include "vb/protocol/message.hpp"
 
 // Transport abstraction (spec §8.1). The application speaks in whole framed
-// messages on one of five lanes; the backend preserves message boundaries and
+// messages on one of six lanes; the backend preserves message boundaries and
 // applies the lane's reliability. Two backends:
 //
 //   LoopbackTransport  in-process, deterministic, no dependencies — used by
@@ -39,12 +39,30 @@ constexpr SendMode send_mode_for_lane(protocol::Lane lane) {
 		case protocol::Lane::kControl:
 		case protocol::Lane::kWorld:
 		case protocol::Lane::kAssets:
+		case protocol::Lane::kFeedback:
 			return SendMode::kReliableOrdered;
 		case protocol::Lane::kSnapshot:
 		case protocol::Lane::kInput:
 			return SendMode::kUnreliable;
 	}
 	return SendMode::kReliableOrdered;
+}
+
+// GameNetworkingSockets lanes. Every lane above shares GNS lane 0 -- one
+// reliable stream, so control/world/assets stay mutually ordered as they
+// always have -- except kFeedback, which gets GNS lane 1 at a higher send
+// priority: a block-damage update goes out ahead of any queued chunk data,
+// and a lost chunk packet doesn't hold it back (GNS only orders reliable
+// messages within a lane).
+inline constexpr int kGnsLaneCount = 2;
+constexpr int gns_lane_index(protocol::Lane lane) {
+	return lane == protocol::Lane::kFeedback ? 1 : 0;
+}
+
+// Lanes sent without GNS's Nagle delay (~5 ms of batching): small messages
+// the player is waiting on. Bulk lanes keep batching.
+constexpr bool lane_skips_nagle(protocol::Lane lane) {
+	return lane == protocol::Lane::kFeedback;
 }
 
 struct TransportEvent {

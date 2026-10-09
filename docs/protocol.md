@@ -4,7 +4,18 @@
 > as any change to a struct in `inc/vb/protocol/`, and bump
 > `kEngineProtocolVersion` in `cmake/version.hpp.in`.
 
-Current `ENGINE_PROTOCOL_VERSION`: **30**.
+Current `ENGINE_PROTOCOL_VERSION`: **31**.
+
+- **31** — `S2C_BlockDamage` moves from lane `kWorld` to a new lane
+  `kFeedback` (5, reliable ordered) and gains a trailing `u64 revision`: the
+  server's revision of the chunk holding `pos` when it was sent. On
+  `GnsTransport`, `kFeedback` is its own GNS connection lane (lane 1, sent
+  ahead of lane 0) without Nagle batching, so a damage update no longer waits
+  behind queued chunk data. Because it is no longer ordered against
+  `S2C_ChunkDelta`/`ChunkAdd`, the client (`net::BlockDamageTracker`) drops a
+  damage update whose `revision` is older than the last change to the block
+  at `pos` (a delta's `new_revision`, or a re-sent chunk's `revision` for the
+  voxels it changed).
 
 - **30** — `S2C_ServerInfo` gains a trailing `string engine_version_req` (≤ 128
   bytes, `kMaxEngineVersionReqBytes`; longer ⇒ `kLengthExceeded`): the pack's
@@ -376,6 +387,7 @@ buffered, and yields `consumed` so a stream reader can advance.
 | 2    | `snapshot` | unreliable (seq-gated)  | entity snapshots                               |
 | 3    | `assets`   | reliable ordered       | asset manifest + file chunk transfer           |
 | 4    | `input`    | unreliable (seq)        | `C2S_InputBatch`                               |
+| 5    | `feedback` | reliable ordered       | `S2C_BlockDamage` (v31+); not ordered against `world` |
 
 ## Messages
 
@@ -658,10 +670,12 @@ The `Transport` interface (`inc/vb/net/transport.hpp`) delivers whole framed
 messages per lane. Backends: `LoopbackTransport` (in-process, tests +
 integrated singleplayer) and `GnsTransport` (GameNetworkingSockets, real UDP,
 `VB_WITH_NET`) — both implemented. `GnsTransport` maps each `Lane`'s
-reliability (see `send_mode_for_lane`) straight onto GNS send flags; it does
-not yet use GNS's own connection-lanes feature, so all reliable traffic shares
-one ordered stream (a latency nuance, not a correctness issue — see
-`REMAINING_TASKS.md` 1.2).
+reliability (see `send_mode_for_lane`) onto GNS send flags. Every lane shares
+GNS connection lane 0 (one reliable ordered stream, so `control`, `world` and
+`assets` stay mutually ordered) except `feedback`, which is GNS lane 1 at a
+higher send priority and skips Nagle (`gns_lane_index`, `lane_skips_nagle`;
+lanes are configured on both ends with `ConfigureConnectionLanes`).
+`LoopbackTransport` delivers everything in send order.
 
 ## Dependency pins
 

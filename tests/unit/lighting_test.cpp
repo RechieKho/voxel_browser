@@ -309,3 +309,54 @@ TEST_CASE("relight_column pushes a newly-opened sideways gap into an "
 	// delta out to whoever's watching it, not just west's.
 	CHECK(relit == std::vector<ChunkCoord>{ { 0, 0, 0 }, { 1, 0, 0 } });
 }
+
+// relight_chunk() short-cuts a chunk made of one block; these pin the
+// shortcut to what the flood fill computes.
+TEST_CASE("one-block chunks: solid emitters keep their own light, sky depends on the chunk above") {
+	auto reg = BlockRegistry::base();
+	BlockType glow;
+	glow.name = "test:glow";
+	glow.opaque = true;
+	glow.light_emission = 12;
+	const BlockId glow_id = reg.add_or_get(glow.name, glow);
+	const LightEngine engine(reg);
+
+	Chunk solid({ 0, 0, 0 });
+	solid.blocks().fill(glow_id);
+	engine.relight_chunk(solid);
+	CHECK(solid.light(0, kChunkDim - 1, 0).sky() == 0);
+	CHECK(solid.light(7, 3, 9).block() == 12);
+	CHECK(solid.light(31, 31, 31).block() == 12);
+
+	// Open sky above: all air is fully lit.
+	Chunk sky_above({ 0, 1, 0 });
+	engine.relight_chunk(sky_above);
+	Chunk air({ 0, 0, 0 });
+	engine.relight_chunk(air, LightEngine::Neighbours(&sky_above));
+	CHECK(air.light(4, 0, 4).sky() == kMaxLight);
+	CHECK(air.light(4, 0, 4).block() == 0);
+
+	// Under a solid roof, air gets no sky light at all.
+	Chunk roof({ 0, 1, 0 });
+	roof.blocks().fill(base_block::stone);
+	engine.relight_chunk(roof);
+	Chunk cave({ 0, 0, 0 });
+	engine.relight_chunk(cave, LightEngine::Neighbours(&roof));
+	CHECK(cave.light(16, kChunkDim - 1, 16).sky() == 0);
+	CHECK(cave.light(16, 0, 16).sky() == 0);
+
+	// A partly lit roof row is not "full sky": light falls off from the gap.
+	Chunk holed({ 0, 1, 0 });
+	holed.blocks().fill(base_block::stone);
+	holed.blocks().set(16, 0, 16, BlockId::kAir);
+	holed.blocks().set(16, 1, 16, BlockId::kAir);
+	for (int y = 2; y < kChunkDim; ++y) {
+		holed.blocks().set(16, y, 16, BlockId::kAir);
+	}
+	engine.relight_chunk(holed);
+	Chunk below({ 0, 0, 0 });
+	engine.relight_chunk(below, LightEngine::Neighbours(&holed));
+	CHECK(below.light(16, kChunkDim - 1, 16).sky() == kMaxLight);
+	CHECK(below.light(17, kChunkDim - 1, 16).sky() == kMaxLight - 1);
+	CHECK(below.light(26, kChunkDim - 1, 16).sky() == kMaxLight - 10);
+}

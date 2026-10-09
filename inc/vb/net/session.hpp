@@ -20,6 +20,7 @@
 #include "vb/core/math.hpp"
 #include "vb/ecs/components.hpp"
 #include "vb/ecs/system_runner.hpp"
+#include "vb/net/block_damage_tracker.hpp"
 #include "vb/net/handshake.hpp"
 #include "vb/net/server_time_estimator.hpp"
 #include "vb/net/transport.hpp"
@@ -1010,7 +1011,7 @@ public:
 	// themselves for a fraction -- same "engine reports raw state,
 	// presentation computes the rest" posture break_progress() always had.
 	const std::unordered_map<core::IVec3, std::uint16_t> &block_damage() const {
-		return block_damage_;
+		return block_damage_.punches();
 	}
 
 	// This player's inventory (spec §5.1), kept in sync by S2C_Inventory.
@@ -1105,7 +1106,7 @@ private:
 	std::unordered_map<core::NetId, std::uint16_t> entity_items_;
 	world::DayNightCurve day_night_curve_; // empty = default_day_night_curve()
 	std::optional<protocol::S2CFogParams> fog_override_;
-	std::unordered_map<core::IVec3, std::uint16_t> block_damage_;
+	BlockDamageTracker block_damage_;
 
 	physics::MoveState predicted_;
 	physics::MoveParams move_params_;

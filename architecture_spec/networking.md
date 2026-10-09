@@ -33,6 +33,12 @@ is used for the compact entity component blobs; envelope + routing is ours.
 | 2    | `snapshot`     | unreliable (seq-gated)  | entity snapshots, local-player reconciliation      |
 | 3    | `assets`       | reliable ordered       | asset manifest + file chunk transfer              |
 | 4    | `input`        | unreliable (seq)        | client → server `InputCmd` batches                 |
+| 5    | `feedback`     | reliable ordered       | block damage; own GNS lane, sent first, no Nagle   |
+
+Lanes 0–4 share one GNS connection lane (a single reliable stream). `feedback`
+is GNS lane 1 so a damage update isn't queued behind chunk data; since it is
+not ordered against `world`, `S2C_BlockDamage` carries the chunk revision and
+the client drops updates older than the block's last change.
 
 ### 8.3 Connection Handshake
 

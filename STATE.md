@@ -479,3 +479,10 @@ or `REMAINING_TASKS.md`/`ARCHITECTURE_SPEC.md` for design-level context.
   a screen or chat is open; the frame that captures masks `kInputPrimary` until the button is released.
 - `player_leave` runs after `ServerSession` dropped the conn, so session lookups by net id fail there.
   `SessionPlayerLeft` carries the `name` and `last_state` captured at disconnect; `PlayerHandle` falls back to them.
+- `S2C_BlockDamage` rides `Lane::kFeedback` (GNS lane 1, no Nagle), *not* ordered against `kWorld` chunk
+  messages. Client-side damage goes through `net::BlockDamageTracker`, which uses the message's chunk `revision`
+  vs the block's last change revision; don't write `ClientSession::block_damage_` directly.
+- Chunk ingest (insert + relight) is capped per tick by time as well as count: the dedicated server gives it half
+  a tick, singleplayer 20 ms per frame. `LightEngine` caches per-block-id transmittance/emission and short-cuts
+  one-block chunks; keep `relight_chunk` output identical when touching it (lighting_test pins the fast paths).
+  `VB_E2E_BENCH=1 pytest tests/e2e/test_latency.py` measures punch latency while another player explores.

@@ -43,6 +43,8 @@ bool GnsTransport::set_net_sim(const NetSimParams &) {
 #else
 
 #include <algorithm>
+#include <cstdint>
+#include <cstring>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -71,6 +73,23 @@ struct GnsTransport::Impl {
 	std::vector<HSteamNetConnection> owned_conns;
 	std::vector<TransportEvent> pending;
 };
+
+namespace {
+
+// See kGnsLaneCount: lane 1 (kFeedback) is sent ahead of lane 0. Lanes are
+// configured by each sending side for its own outbound traffic, so both the
+// accepting server and the connecting client call this.
+void configure_lanes(ISteamNetworkingSockets *sockets, HSteamNetConnection conn) {
+	const int priorities[kGnsLaneCount] = { 1, 0 }; // lower = sent first
+	const EResult result =
+			sockets->ConfigureConnectionLanes(conn, kGnsLaneCount, priorities, nullptr);
+	if (result != k_EResultOK) {
+		VB_WARN("net", "ConfigureConnectionLanes failed (result=", static_cast<int>(result),
+				"): block-damage updates will queue behind chunk data");
+	}
+}
+
+} // namespace
 
 namespace {
 
@@ -181,6 +200,7 @@ private:
 				sockets->CloseConnection(info->m_hConn, 0, nullptr, false);
 				return;
 			}
+			configure_lanes(sockets, info->m_hConn);
 			owner->owned_conns.push_back(info->m_hConn);
 			rt.register_connection(info->m_hConn, owner);
 			return;
@@ -375,6 +395,7 @@ core::Result<ConnId, core::NetError> GnsTransport::connect(
 	if (conn == k_HSteamNetConnection_Invalid) {
 		return core::Err{ core::NetError::kConnectFailed };
 	}
+	configure_lanes(sockets, conn);
 	impl_->owned_conns.push_back(conn);
 	GnsRuntime::instance().register_connection(conn, impl_.get());
 	return static_cast<ConnId>(conn);
@@ -382,9 +403,12 @@ core::Result<ConnId, core::NetError> GnsTransport::connect(
 
 void GnsTransport::send(ConnId conn, protocol::Lane lane,
 		std::span<const std::byte> frame) {
-	const int flags = send_mode_for_lane(lane) == SendMode::kReliableOrdered
+	int flags = send_mode_for_lane(lane) == SendMode::kReliableOrdered
 			? k_nSteamNetworkingSend_Reliable
 			: k_nSteamNetworkingSend_UnreliableNoNagle;
+	if (lane_skips_nagle(lane)) {
+		flags |= k_nSteamNetworkingSend_NoNagle;
+	}
 	// The result used to be discarded entirely. If the send buffer is ever
 	// full (k_EResultLimitExceeded) or the connection is otherwise unusable,
 	// GNS does not queue the message at all -- reliable does not mean
@@ -394,9 +418,25 @@ void GnsTransport::send(ConnId conn, protocol::Lane lane,
 	// GnsRuntime::acquire() and STATE.md §8) with zero trace on either end.
 	// Raising the buffer fixes the common case; log loudly if it still ever
 	// happens so a recurrence isn't silent again.
-	const EResult result = SteamNetworkingSockets()->SendMessageToConnection(
-			static_cast<HSteamNetConnection>(conn), frame.data(),
-			static_cast<std::uint32_t>(frame.size()), flags, nullptr);
+	EResult result = k_EResultOK;
+	if (const int gns_lane = gns_lane_index(lane); gns_lane == 0) {
+		result = SteamNetworkingSockets()->SendMessageToConnection(
+				static_cast<HSteamNetConnection>(conn), frame.data(),
+				static_cast<std::uint32_t>(frame.size()), flags, nullptr);
+	} else {
+		// Only SendMessages() takes a lane index.
+		SteamNetworkingMessage_t *msg =
+				SteamNetworkingUtils()->AllocateMessage(static_cast<int>(frame.size()));
+		std::memcpy(msg->m_pData, frame.data(), frame.size());
+		msg->m_conn = static_cast<HSteamNetConnection>(conn);
+		msg->m_nFlags = flags;
+		msg->m_idxLane = static_cast<std::uint16_t>(gns_lane);
+		int64 number_or_result = 0; // GNS's int64 (long long), not std::int64_t
+		SteamNetworkingSockets()->SendMessages(1, &msg, &number_or_result, /*bDeleteFailedMessages*/ true);
+		if (number_or_result < 0) {
+			result = static_cast<EResult>(-number_or_result);
+		}
+	}
 	if (result != k_EResultOK) {
 		VB_ERROR("net", "SendMessageToConnection failed (result=",
 				static_cast<int>(result), ", ", frame.size(),

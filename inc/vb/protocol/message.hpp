@@ -77,6 +77,10 @@ enum class Lane : std::uint8_t {
 	kSnapshot = 2,
 	kAssets = 3,
 	kInput = 4,
+	// Small, latency-sensitive world updates (block damage) that must not
+	// queue behind bulk `kWorld` chunk data. Reliable ordered within itself,
+	// but *not* ordered against kWorld: receivers reconcile by revision.
+	kFeedback = 5,
 };
 
 // Lane a message type travels on (spec §8.2). Unknown -> control.
@@ -96,8 +100,9 @@ constexpr Lane lane_for(MessageType type) {
 		case MessageType::kS2CDayNightCurve:
 		case MessageType::kS2CFogParams:
 		case MessageType::kS2CEntityKindRegistry:
-		case MessageType::kS2CBlockDamage:
 			return Lane::kWorld;
+		case MessageType::kS2CBlockDamage:
+			return Lane::kFeedback;
 		case MessageType::kS2CEntitySnapshot:
 			return Lane::kSnapshot;
 		case MessageType::kC2SAssetManifestRequest:

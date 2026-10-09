@@ -614,6 +614,10 @@ int main(int argc, char **argv) {
 	// STATE.md §6: bounds the send side of streaming a player's view box --
 	// see ServerConfig::chunk_send_budget_bytes_per_tick's own comment.
 	replicator->set_send_budget_bytes(config.chunk_send_budget_bytes_per_tick);
+	// Half of each tick for lighting newly generated chunks: a view box
+	// filling (a player joining or exploring) can't hold a tick -- and with it
+	// every player's input -- for hundreds of milliseconds.
+	replicator->set_chunk_ingest_time_budget(0.5 * 1000.0 / static_cast<double>(config.tick_rate));
 	session.set_world_replicator(std::move(replicator));
 	pack_runtime.attach_session(session);
 

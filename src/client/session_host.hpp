@@ -515,6 +515,9 @@ struct Singleplayer {
 	// set_ingest_budget()'s doc for why this needs shrinking per catch-up
 	// step below instead of being spent in full on every one of them.
 	static constexpr std::size_t kBaseChunkIngestBudget = 32;
+	// The same, as wall time per rendered frame: the integrated server runs
+	// inside the client's frame, so chunk lighting here is a frame hitch.
+	static constexpr double kFrameChunkIngestMs = 20.0;
 
 	// Phase 7.6 follow-up: mirrors src/server/main.cpp's own
 	// autosave_interval_seconds default (60s) -- a chunk that stays loaded
@@ -545,6 +548,8 @@ struct Singleplayer {
 							  kBaseChunkIngestBudget / static_cast<std::size_t>(expected_steps))
 					: kBaseChunkIngestBudget;
 			wr->set_chunk_ingest_budget(per_step_budget);
+			wr->set_chunk_ingest_time_budget(
+					kFrameChunkIngestMs / static_cast<double>(std::max(1, expected_steps)));
 		}
 		int steps = 0;
 		while (tick_accum_ >= kFixedDt && steps < kMaxStepsPerFrame) {

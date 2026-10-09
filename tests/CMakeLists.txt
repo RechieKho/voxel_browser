@@ -12,6 +12,8 @@ add_executable(vb_tests
   unit/assetsync_cache_test.cpp
   unit/assetsync_manifest_test.cpp
   unit/biome_selector_test.cpp
+  unit/chunk_lifecycle_test.cpp
+  unit/block_damage_tracker_test.cpp
   unit/blockedit_test.cpp
   unit/block_damage_test.cpp
   unit/block_registry_test.cpp
