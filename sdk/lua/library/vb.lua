@@ -65,12 +65,22 @@ function vb.register_item(def) end
 ---@field origin? {x: number, y: number} Normalised anchor in a frame (default bottom-centre `{0.5, 1.0}`).
 ---@field clips EntityVisualClip[] Non-empty animation clip list.
 
+---@class EntityText
+---@field value? string Label text: UTF-8, at most 64 bytes, `\n` starts a new line. Empty hides the label.
+---@field color? integer[] Text colour `{r, g, b}` or `{r, g, b, a}`, 0-255 (default white).
+---@field background? integer[]|false Rounded panel colour behind the text, RGB(A); without one the text gets a dark outline.
+---@field size? number Height of one text line in blocks (default 0.3).
+---@field offset_y? number Height of the label's bottom above the entity's position (default the kind's `height` + 0.25; 0 for `visual = false`).
+---@field max_distance? number Hide the label beyond this many blocks (default 0 = never).
+---@field through_walls? boolean Draw through walls instead of being hidden by them, e.g. name tags (default false).
+
 ---@class EntityDef
 ---@field name string Kind name. Required; idempotent by name.
 ---@field health? number Max health (> 0); enables `entity:get_health()` and auto-despawn at 0.
 ---@field width? number Footprint width (default 0.8).
 ---@field height? number Footprint height (default 1.8).
----@field visual? EntityVisual Sprite description.
+---@field visual? EntityVisual|false Sprite description; `false` draws no sprite at all (a text-only entity).
+---@field text? EntityText Default label style (and optional default `value`) for every instance.
 ---@field represents? "player"|"item_drop" Render players or dropped items with this kind.
 ---@field on_spawn? fun(self: Entity)
 ---@field on_tick? fun(self: Entity, dt: number)

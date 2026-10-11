@@ -223,6 +223,10 @@ struct EntityKindRegistryRecord {
 	// only sets width/height), same "missing = default" posture as every
 	// other opt-in registry field in this codebase.
 	std::optional<EntityVisualDef> visual;
+	// `vb.register_entity{visual = false}` (protocol v32): draw no sprite and
+	// no placeholder quad at all -- for a text-only entity whose whole look
+	// is its S2C_EntityText label.
+	bool hidden = false;
 
 	bool operator==(const EntityKindRegistryRecord &) const = default;
 };

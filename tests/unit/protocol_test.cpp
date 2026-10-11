@@ -105,6 +105,7 @@ TEST_CASE("lane assignment matches the spec") {
 	CHECK(lane_for(MessageType::kS2CKeybindRegistry) == Lane::kWorld);
 	CHECK(lane_for(MessageType::kS2CEntityKindRegistry) == Lane::kWorld);
 	CHECK(lane_for(MessageType::kS2CBlockDamage) == Lane::kFeedback);
+	CHECK(lane_for(MessageType::kS2CEntityText) == Lane::kFeedback);
 }
 
 TEST_CASE("transport lane policy: kFeedback is reliable, unbatched, on its own GNS lane") {
@@ -495,6 +496,51 @@ TEST_CASE("entity kind registry round-trips, including an empty list") {
 	CHECK(r2.kinds[1].width == doctest::Approx(0.8f));
 	CHECK(r2.kinds[1].height == doctest::Approx(1.8f));
 	CHECK(r2.kinds == reg.kinds);
+}
+
+TEST_CASE("entity kind registry round-trips the hidden (text-only) flag") {
+	S2CEntityKindRegistry reg;
+	reg.kinds.push_back({ .name = "test:label", .visual = std::nullopt, .hidden = true });
+	reg.kinds.push_back({ .name = "test:golem", .visual = std::nullopt });
+	auto r2 = round_trip(reg);
+	REQUIRE(r2.kinds.size() == 2);
+	CHECK(r2.kinds[0].hidden);
+	CHECK_FALSE(r2.kinds[1].hidden);
+	CHECK(r2.kinds == reg.kinds);
+}
+
+TEST_CASE("S2C_EntityText round-trips set and removed labels") {
+	S2CEntityText m;
+	m.server_tick = 1234;
+	EntityText t;
+	t.value = "Ripe!\nnow";
+	t.color = { 120, 235, 110, 255 };
+	t.background = std::array<std::uint8_t, 4>{ 40, 40, 40, 200 };
+	t.size = 0.4f;
+	t.offset_y = 0.2f;
+	t.max_distance = 24.0f;
+	t.through_walls = true;
+	m.updates.push_back({ static_cast<vb::core::NetId>(0x4000'0001u), t });
+	m.updates.push_back({ static_cast<vb::core::NetId>(0x4000'0002u), std::nullopt });
+	EntityText plain;
+	plain.value = "27s";
+	m.updates.push_back({ static_cast<vb::core::NetId>(0x4000'0003u), plain });
+
+	auto r = round_trip(m);
+	CHECK(r.server_tick == 1234);
+	CHECK(r.updates == m.updates);
+	REQUIRE(r.updates[2].text.has_value());
+	CHECK_FALSE(r.updates[2].text->background.has_value());
+}
+
+TEST_CASE("S2C_EntityText decode rejects a value over kMaxEntityTextBytes") {
+	S2CEntityText m;
+	EntityText t;
+	t.value = std::string(kMaxEntityTextBytes + 1, 'x');
+	m.updates.push_back({ static_cast<vb::core::NetId>(1), t });
+	std::vector<std::byte> buf;
+	m.encode(buf);
+	CHECK_FALSE(S2CEntityText::decode(buf));
 }
 
 TEST_CASE("entity kind registry round-trips a real visual def") {

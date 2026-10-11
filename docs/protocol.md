@@ -4,7 +4,25 @@
 > as any change to a struct in `inc/vb/protocol/`, and bump
 > `kEngineProtocolVersion` in `cmake/version.hpp.in`.
 
-Current `ENGINE_PROTOCOL_VERSION`: **31**.
+Current `ENGINE_PROTOCOL_VERSION`: **32**.
+
+- **32** — Entity text labels. New `S2C_EntityText` (61, lane `kFeedback`,
+  reliable ordered): `u32 server_tick`, `varint n` (≤ 65536) + `n ×
+  (u32 net_id, bool has_text, EntityText text if has_text)`; `has_text =
+  false` removes the label. `EntityText` = `string value` (UTF-8, ≤ 64 bytes,
+  `kMaxEntityTextBytes`; longer ⇒ `kLengthExceeded`), `u8×4 color` (RGBA),
+  `bool has_background` + `u8×4 background`, `f32 size` (line height,
+  metres), `f32 offset_y` (metres above the entity's position), `f32
+  max_distance` (0 = no limit), `bool through_walls`. The server sends at
+  most one per player per tick: the label of every script entity that
+  entered that player's interest set this tick, plus every label that
+  changed on an entity they already see. The label lives as long as the
+  entity is in the client's interest set; because snapshots are unreliable
+  and this is not, the client drops a label on a snapshot `removed` entry
+  only if the label's `server_tick` is older than the snapshot's.
+  `EntityKindRegistryRecord` gains a trailing `bool hidden`
+  (`vb.register_entity{visual = false}`): the client draws no sprite or
+  placeholder for that kind.
 
 - **31** — `S2C_BlockDamage` moves from lane `kWorld` to a new lane
   `kFeedback` (5, reliable ordered) and gains a trailing `u64 revision`: the
@@ -387,7 +405,7 @@ buffered, and yields `consumed` so a stream reader can advance.
 | 2    | `snapshot` | unreliable (seq-gated)  | entity snapshots                               |
 | 3    | `assets`   | reliable ordered       | asset manifest + file chunk transfer           |
 | 4    | `input`    | unreliable (seq)        | `C2S_InputBatch`                               |
-| 5    | `feedback` | reliable ordered       | `S2C_BlockDamage` (v31+); not ordered against `world` |
+| 5    | `feedback` | reliable ordered       | `S2C_BlockDamage` (v31+), `S2C_EntityText` (v32+); not ordered against `world` |
 
 ## Messages
 
@@ -415,6 +433,7 @@ buffered, and yields `consumed` so a stream reader can advance.
 | Type (id)               | Fields                                                                 |
 | ----------------------- | --------------------------------------------------------------------- |
 | `S2C_EntitySnapshot` (60) | `u32 server_tick`, `u32 last_acked_input_seq`, `varint n` + `n×EntityRecord entered`, `varint n` + `n×EntityRecord updated`, `varint n` + `n×u32 removed`, `bool has_local`, `EntityRecord local` (only if `has_local`) |
+| `S2C_EntityText` (61) | `u32 server_tick`, `varint n` + `n×(u32 net_id, bool has_text, EntityText text)` — see the version-32 entry above |
 
 `EntityRecord` = `u32 net_id`, `u16 kind`, `f64×3 pos`, `f32×2 rot` (yaw,pitch deg),
 `f32×3 vel`, `u8 flags` (bit 0 = `on_ground`), `bool has_override` + optional

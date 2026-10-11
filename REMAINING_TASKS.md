@@ -172,8 +172,14 @@ Full detail: `remaining_tasks/phase6.md`.
       replicated block damage + crack textures, movement keybinds in the
       registry (6.19), HUD click/change reporting, player list/chat/hotbar
       moved to `ui.define_hud`, opt-in punch cooldown, held item / hotbar
-      selection, unified reach (6.21).
+      selection, unified reach (6.21), entity text labels (protocol 32:
+      `vb.world.spawn{text=}`, `entity:set_text`, `visual = false`
+      text-only kinds, `S2C_EntityText`).
 - [ ] Still open: no swing animation, no PvP armor/knockback.
+- [ ] Script entities never replicate `on_ground`/anim flags, so the client
+      resolves their clip to `jump`; needs either real flags or an
+      `entity:set_clip(name)` API. `entity:set_visual_override()` after spawn
+      is also still missing.
 
 ---
 

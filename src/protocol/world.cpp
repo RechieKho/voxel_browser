@@ -244,6 +244,7 @@ void S2CEntityKindRegistry::encode(std::vector<std::byte> &out) const {
 		w.f32(k.width);
 		w.f32(k.height);
 		write_entity_visual(w, k.visual);
+		w.boolean(k.hidden);
 	}
 }
 
@@ -262,6 +263,7 @@ Decoded<S2CEntityKindRegistry> S2CEntityKindRegistry::decode(
 		k.width = r.f32();
 		k.height = r.f32();
 		k.visual = read_entity_visual(r);
+		k.hidden = r.boolean();
 		m.kinds.push_back(std::move(k));
 	}
 	return finish(r, std::move(m));

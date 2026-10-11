@@ -1563,6 +1563,7 @@ void ServerSession::remove_script_entity(core::NetId id) {
 	}
 	interest_.remove(id);
 	script_entity_visual_overrides_.erase(id);
+	script_entity_texts_.erase(id);
 }
 
 void ServerSession::set_script_entity_visual_override(
@@ -1572,6 +1573,20 @@ void ServerSession::set_script_entity_visual_override(
 	} else {
 		script_entity_visual_overrides_.erase(id);
 	}
+}
+
+void ServerSession::set_script_entity_text(
+		core::NetId id, std::optional<protocol::EntityText> text) {
+	if (text) {
+		const auto it = script_entity_texts_.find(id);
+		if (it != script_entity_texts_.end() && it->second == *text) {
+			return; // unchanged: nothing to resend
+		}
+		script_entity_texts_[id] = std::move(*text);
+	} else if (script_entity_texts_.erase(id) == 0) {
+		return;
+	}
+	dirty_entity_texts_.push_back(id);
 }
 
 void ServerSession::broadcast_time_of_day() {
@@ -1668,6 +1683,33 @@ void ServerSession::broadcast_snapshots() {
 		}
 		snap.removed = d.left;
 
+		// Text labels ride their own reliable message (S2C_EntityText): the
+		// current label of everything that just entered, plus every label
+		// that changed on something this player already sees.
+		protocol::S2CEntityText text_msg;
+		text_msg.server_tick = server_tick_;
+		if (!script_entity_texts_.empty()) {
+			for (core::NetId id : d.entered) {
+				if (const auto it = script_entity_texts_.find(id);
+						it != script_entity_texts_.end()) {
+					text_msg.updates.push_back({ id, it->second });
+				}
+			}
+		}
+		for (core::NetId id : dirty_entity_texts_) {
+			if (!std::binary_search(d.stayed.begin(), d.stayed.end(), id)) {
+				continue; // not visible, or just entered (handled above)
+			}
+			const auto it = script_entity_texts_.find(id);
+			text_msg.updates.push_back({ id,
+					it != script_entity_texts_.end()
+							? std::optional<protocol::EntityText>(it->second)
+							: std::nullopt });
+		}
+		if (!text_msg.updates.empty()) {
+			send_message(transport_, conn, text_msg);
+		}
+
 		state.last_visible = std::move(visible);
 
 		snap.last_acked_input_seq = registry_.get<ecs::PlayerInput>(state.entity).last_seq;
@@ -1697,6 +1739,7 @@ void ServerSession::broadcast_snapshots() {
 		}
 		send_message(transport_, conn, snap);
 	}
+	dirty_entity_texts_.clear();
 }
 
 void ServerSession::set_player_state(core::NetId id, core::Vec3d pos,
@@ -2220,6 +2263,15 @@ bool ClientSession::apply_gameplay_frame(const protocol::Frame &frame) {
 			}
 			return true;
 		}
+		case MessageType::kS2CEntityText: {
+			if (auto m = protocol::S2CEntityText::decode(frame.payload)) {
+				apply_entity_text(*m);
+			} else {
+				VB_ERROR("net", "malformed S2C_EntityText: ",
+						core::message(m.error()));
+			}
+			return true;
+		}
 		case MessageType::kS2CBlockDamage: {
 			if (auto m = protocol::S2CBlockDamage::decode(frame.payload)) {
 				apply_block_damage(*m);
@@ -2328,6 +2380,16 @@ void ClientSession::apply_block_damage(const protocol::S2CBlockDamage &msg) {
 	block_damage_.on_damage(msg.pos, msg.punches, msg.revision);
 }
 
+void ClientSession::apply_entity_text(const protocol::S2CEntityText &msg) {
+	for (const auto &u : msg.updates) {
+		if (u.text) {
+			entity_texts_[u.net_id] = { *u.text, msg.server_tick };
+		} else {
+			entity_texts_.erase(u.net_id);
+		}
+	}
+}
+
 void ClientSession::apply_snapshot(const protocol::S2CEntitySnapshot &snap) {
 	last_server_tick_ = snap.server_tick;
 
@@ -2384,6 +2446,12 @@ void ClientSession::apply_snapshot(const protocol::S2CEntitySnapshot &snap) {
 		remote_.erase(id);
 		entity_visual_overrides_.erase(id);
 		entity_items_.erase(id);
+		// A label sent at or after this snapshot's tick belongs to a later
+		// re-entry that overtook this (unreliable) removal -- keep it.
+		if (const auto it = entity_texts_.find(id);
+				it != entity_texts_.end() && it->second.server_tick < snap.server_tick) {
+			entity_texts_.erase(it);
+		}
 		if (const auto it = net_to_entity_.find(id); it != net_to_entity_.end()) {
 			entity_registry_.destroy(it->second);
 			net_to_entity_.erase(it);

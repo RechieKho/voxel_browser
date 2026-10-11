@@ -41,6 +41,8 @@ One line per function. Click a name for its parameters and example. Narrative/de
 - [`Entity:remove(cause)`](Entity.md#entity-remove) — Server pack VM only. Despawns the entity.
 - [`Entity:get_health() -> {current:`](Entity.md#entity-get-health) — Server pack VM only. Current and maximum health, or `nil` for a kind without `health`.
 - [`Entity:set_health(value)`](Entity.md#entity-set-health) — Server pack VM only. Sets health (clamped; reaching 0 despawns).
+- [`Entity:set_text(text)`](Entity.md#entity-set-text) — Server pack VM only. Sets, changes or removes the entity's world-space label; replicated as a small update, the entity is not respawned. A string changes only the text and keeps the current style. A table applies the kind's `text` style with its own fields on top (an omitted `value` keeps the current text). `nil` or `""` removes the label. Text over 64 bytes or a bad colour is an error.
+- [`Entity:get_text() -> string|nil`](Entity.md#entity-get-text) — Server pack VM only. The label's current text, or `nil` if the entity has none.
 
 ## `ui`
 

@@ -159,7 +159,23 @@ rt.dispatch_tick(dt);
   to change or clear it for a client that has already seen the entity (spec
   architecture_spec/rendering.md §11.3, `docs/protocol.md`'s version-21
   entry); the reserved `self.visual_override` table is kept for pack
-  introspection only, nothing engine-side reads it back. `vb.register_biome(def)` (Phase 6.14: `name`
+  introspection only, nothing engine-side reads it back. **Text labels**
+  (protocol 32): `vb.world.spawn(kind, pos, { text = "27s" })` or `{ text =
+  { value=, color=, background=, size=, offset_y=, max_distance=,
+  through_walls= } }` attaches a camera-facing world-space label, drawn with
+  the engine's UI font; `entity:set_text(...)` changes it at any time and is
+  replicated as a small `S2C_EntityText` delta (the entity keeps its net id,
+  so a countdown that ticks every second costs a few bytes per viewer, not a
+  respawn), `entity:set_text(nil)` removes it, `entity:get_text()` reads the
+  value back. `vb.register_entity{ text = {...} }` sets a kind's default
+  style (and optionally a default `value`): a string passed to `set_text`
+  changes only the value, a table re-applies the kind style with its own
+  fields on top. `visual = false` makes a text-only kind (no sprite, no
+  placeholder quad). The value is capped at 64 bytes of UTF-8 and colours
+  are `{r, g, b}`/`{r, g, b, a}` with 0-255 integers; both are checked in
+  the binding and fail with a Lua error. Labels are depth-tested (walls hide
+  them) unless `through_walls = true`, and `max_distance` hides one beyond
+  that many blocks. `vb.register_biome(def)` (Phase 6.14: `name`
   (idempotent-by-name, mirrors every other registration function),
   `surface`/`filler`/`stone` (block *names*, resolved to `BlockId`s via the
   registry when a pipeline is compiled), `probability` (base Voronoi-cell

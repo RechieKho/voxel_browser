@@ -271,3 +271,23 @@ function Entity:get_health() end
 ---```
 ---@param value number
 function Entity:set_health(value) end
+
+---@vb context runtime
+---Server pack VM only. Sets, changes or removes the entity's world-space label; replicated as a small update, the entity is not respawned.
+---A string changes only the text and keeps the current style. A table applies the kind's `text` style with its own fields on top
+---(an omitted `value` keeps the current text). `nil` or `""` removes the label. Text over 64 bytes or a bad colour is an error.
+---```lua
+---self:set_text("26s")
+---self:set_text({ value = "Ripe!", color = { 120, 235, 110 } })
+---self:set_text(nil)
+---```
+---@param text string|EntityText|nil
+function Entity:set_text(text) end
+
+---@vb context runtime
+---Server pack VM only. The label's current text, or `nil` if the entity has none.
+---```lua
+---if self:get_text() == "Ripe!" then return end
+---```
+---@return string|nil
+function Entity:get_text() end

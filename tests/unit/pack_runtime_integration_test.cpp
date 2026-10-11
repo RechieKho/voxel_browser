@@ -1811,6 +1811,165 @@ TEST_CASE("vb.world.spawn rejects a malformed visual_override without "
 	CHECK_FALSE(r);
 }
 
+TEST_CASE("entity text labels: spawn with text, set_text replicates as a "
+		  "delta without respawning, a late joiner sees the current text, "
+		  "nil removes it") {
+	LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("entity_text"));
+	REQUIRE(rt.load_pack_file(R"(
+		vb.register_entity({
+			name = "test:label",
+			visual = false,
+			text = { size = 0.4, background = { 40, 40, 40, 200 } },
+		})
+	)"));
+	rt.freeze();
+
+	HandshakeServerHost host; // carries the kind registry (hidden flag)
+	rt.install_entity_kind_registry(host);
+
+	HandshakeServerConfig cfg;
+	cfg.world_seed = 7;
+	ServerSession server(net.server(), cfg, host);
+	rt.attach_session(server);
+	REQUIRE(net.server().listen(0));
+
+	Transport &ta = net.create_client();
+	auto ida = ta.connect("x", 0);
+	REQUIRE(ida);
+	ClientSession a(ta, *ida, HandshakeClientConfig{ "A", "", "v", 1 });
+	std::unique_ptr<ClientSession> b;
+
+	auto pump = [&](int n) {
+		for (int i = 0; i < n; ++i) {
+			server.tick(0.05);
+			a.tick(0.05);
+			if (b) {
+				b->tick(0.05);
+			}
+		}
+	};
+	pump(16);
+	REQUIRE(a.joined());
+	server.set_player_state(a.join_accept()->your_net_id, Vec3d{ 5, 5, 7 });
+
+	REQUIRE(rt.load_pack_file(R"(
+		label = vb.world.spawn("test:label", { x = 5, y = 5, z = 5 },
+				{ text = { value = "27s", color = { 255, 255, 255 }, offset_y = 0.2 } })
+		assert(label:get_text() == "27s")
+	)"));
+	pump(4);
+	REQUIRE(a.remote_entities().size() == 1);
+	const NetId id = a.remote_entities().begin()->first;
+	const vb::protocol::EntityKindRegistryRecord *kind =
+			a.entity_kind(a.remote_entities().begin()->second.kind);
+	REQUIRE(kind != nullptr);
+	CHECK(kind->hidden);
+	{
+		const auto *t = a.entity_text(id);
+		REQUIRE(t != nullptr);
+		CHECK(t->value == "27s");
+		CHECK(t->size == doctest::Approx(0.4)); // kind default
+		CHECK(t->offset_y == doctest::Approx(0.2)); // per-spawn field
+		REQUIRE(t->background.has_value());
+		CHECK((*t->background)[3] == 200);
+	}
+
+	// A string keeps the style, a table re-applies the kind style with its
+	// own fields on top; neither respawns the entity.
+	REQUIRE(rt.load_pack_file(R"( label:set_text("26s") )"));
+	pump(2);
+	REQUIRE(a.remote_entities().size() == 1);
+	CHECK(a.remote_entities().begin()->first == id);
+	REQUIRE(a.entity_text(id) != nullptr);
+	CHECK(a.entity_text(id)->value == "26s");
+	CHECK(a.entity_text(id)->offset_y == doctest::Approx(0.2));
+
+	REQUIRE(rt.load_pack_file(R"( label:set_text({ value = "Ripe!", color = { 120, 235, 110 } }) )"));
+	pump(2);
+	REQUIRE(a.entity_text(id) != nullptr);
+	CHECK(a.entity_text(id)->value == "Ripe!");
+	CHECK(a.entity_text(id)->color[1] == 235);
+	CHECK(a.entity_text(id)->color[3] == 255);
+	CHECK(a.entity_text(id)->offset_y == doctest::Approx(0.0)); // hidden kind's default
+
+	// A client that joins later sees the current text, not the first one.
+	Transport &tb = net.create_client();
+	auto idb = tb.connect("x", 0);
+	REQUIRE(idb);
+	b = std::make_unique<ClientSession>(tb, *idb, HandshakeClientConfig{ "B", "", "v", 1 });
+	pump(16);
+	REQUIRE(b->joined());
+	server.set_player_state(b->join_accept()->your_net_id, Vec3d{ 5, 5, 3 });
+	pump(4);
+	REQUIRE(b->entity_text(id) != nullptr);
+	CHECK(b->entity_text(id)->value == "Ripe!");
+
+	REQUIRE(rt.load_pack_file(R"(
+		label:set_text(nil)
+		assert(label:get_text() == nil)
+	)"));
+	pump(2);
+	CHECK(a.entity_text(id) == nullptr);
+	CHECK(b->entity_text(id) == nullptr);
+	CHECK(a.remote_entities().size() == 2); // entity itself still there (+ B)
+
+	// Moving out of interest drops the label client-side; coming back
+	// re-sends it.
+	REQUIRE(rt.load_pack_file(R"( label:set_text("back") )"));
+	pump(2);
+	server.set_player_state(a.join_accept()->your_net_id, Vec3d{ 5000, 5, 7 });
+	pump(3);
+	CHECK(a.entity_text(id) == nullptr);
+	server.set_player_state(a.join_accept()->your_net_id, Vec3d{ 5, 5, 7 });
+	pump(3);
+	REQUIRE(a.entity_text(id) != nullptr);
+	CHECK(a.entity_text(id)->value == "back");
+}
+
+TEST_CASE("entity text labels: over-long text and bad colours are Lua errors") {
+	LoopbackNetwork net;
+	vb::world::BlockRegistry registry = vb::world::BlockRegistry::base();
+
+	vb::script::PackRuntime rt(net.server(), registry, temp_storage("entity_text_bad"));
+	REQUIRE(rt.load_pack_file(R"(
+		vb.register_entity({ name = "test:label" })
+	)"));
+	rt.freeze();
+
+	HandshakeServerConfig cfg;
+	cfg.world_seed = 7;
+	ServerSession server(net.server(), cfg);
+	rt.attach_session(server);
+
+	const auto expect_error = [&](const char *code, const char *needle) {
+		const auto r = rt.load_pack_file(code);
+		CHECK_FALSE(r);
+		CHECK_MESSAGE(r.message.find(needle) != std::string::npos, r.message);
+	};
+	expect_error(R"( vb.world.spawn("test:label", { x = 0, y = 0, z = 0 },
+			{ text = string.rep("x", 65) }) )",
+			"the limit is 64");
+	expect_error(R"( vb.world.spawn("test:label", { x = 0, y = 0, z = 0 },
+			{ text = { value = "hi", color = { 300, 0, 0 } } }) )",
+			"text.color components must be integers in [0, 255]");
+	expect_error(R"( vb.world.spawn("test:label", { x = 0, y = 0, z = 0 },
+			{ text = { value = "hi", background = { 1, 2 } } }) )",
+			"text.background must have 3 or 4 components");
+	expect_error(R"( vb.world.spawn("test:label", { x = 0, y = 0, z = 0 },
+			{ text = "\xff\xfe" }) )",
+			"not valid UTF-8");
+	REQUIRE(rt.load_pack_file(R"(
+		e = vb.world.spawn("test:label", { x = 0, y = 0, z = 0 }, { text = "ok" })
+	)"));
+	expect_error(R"( e:set_text(string.rep("y", 100)) )", "entity:set_text(): text is 100 bytes");
+	expect_error(R"( e:set_text({ value = "a", size = -1 }) )", "text.size must be in");
+	expect_error(R"( e:set_text(42) )", "expected a string, a table or nil");
+	REQUIRE(rt.load_pack_file(R"( assert(e:get_text() == "ok") )"));
+}
+
 TEST_CASE("region_enter/region_exit (Phase 7.3): fires once per crossing, "
 		  "not per tick spent inside, and passes the block's registered name") {
 	LoopbackNetwork net;

@@ -139,6 +139,47 @@ EntityRecord read_record(ByteReader &r) {
 	return out;
 }
 
+void write_rgba(ByteWriter &w, const std::array<std::uint8_t, 4> &c) {
+	for (std::uint8_t v : c) {
+		w.u8(v);
+	}
+}
+
+std::array<std::uint8_t, 4> read_rgba(ByteReader &r) {
+	std::array<std::uint8_t, 4> c{};
+	for (std::uint8_t &v : c) {
+		v = r.u8();
+	}
+	return c;
+}
+
+void write_entity_text(ByteWriter &w, const EntityText &t) {
+	w.string(t.value);
+	write_rgba(w, t.color);
+	w.boolean(t.background.has_value());
+	if (t.background) {
+		write_rgba(w, *t.background);
+	}
+	w.f32(t.size);
+	w.f32(t.offset_y);
+	w.f32(t.max_distance);
+	w.boolean(t.through_walls);
+}
+
+EntityText read_entity_text(ByteReader &r) {
+	EntityText t;
+	t.value = r.string(kMaxEntityTextBytes);
+	t.color = read_rgba(r);
+	if (r.boolean()) {
+		t.background = read_rgba(r);
+	}
+	t.size = r.f32();
+	t.offset_y = r.f32();
+	t.max_distance = r.f32();
+	t.through_walls = r.boolean();
+	return t;
+}
+
 } // namespace
 
 void S2CEntitySnapshot::encode(std::vector<std::byte> &out) const {
@@ -201,6 +242,43 @@ Decoded<S2CEntitySnapshot> S2CEntitySnapshot::decode(std::span<const std::byte> 
 		m.local = read_record(r);
 	}
 
+	r.expect_consumed();
+	if (r.failed()) {
+		return Err{ r.error() };
+	}
+	return m;
+}
+
+void S2CEntityText::encode(std::vector<std::byte> &out) const {
+	ByteWriter w(out);
+	w.u32(server_tick);
+	w.varint(updates.size());
+	for (const auto &u : updates) {
+		w.u32(static_cast<std::uint32_t>(u.net_id));
+		w.boolean(u.text.has_value());
+		if (u.text) {
+			write_entity_text(w, *u.text);
+		}
+	}
+}
+
+Decoded<S2CEntityText> S2CEntityText::decode(std::span<const std::byte> in) {
+	ByteReader r(in);
+	S2CEntityText m;
+	m.server_tick = r.u32();
+	const std::uint64_t n = r.varint();
+	if (n > kMaxRecords) {
+		return Err{ core::ProtocolError::kLengthExceeded };
+	}
+	m.updates.reserve(static_cast<std::size_t>(n));
+	for (std::uint64_t i = 0; i < n && !r.failed(); ++i) {
+		EntityTextUpdate u;
+		u.net_id = static_cast<core::NetId>(r.u32());
+		if (r.boolean()) {
+			u.text = read_entity_text(r);
+		}
+		m.updates.push_back(std::move(u));
+	}
 	r.expect_consumed();
 	if (r.failed()) {
 		return Err{ r.error() };

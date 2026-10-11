@@ -126,7 +126,8 @@ integer Numeric block id. A held item and a placeable block share one id space.
 | `health?` | `number` | Max health (> 0); enables `entity:get_health()` and auto-despawn at 0. |
 | `width?` | `number` | Footprint width (default 0.8). |
 | `height?` | `number` | Footprint height (default 1.8). |
-| `visual?` | `EntityVisual` | Sprite description. |
+| `visual?` | `EntityVisual|false` | Sprite description; `false` draws no sprite at all (a text-only entity). |
+| `text?` | `EntityText` | Default label style (and optional default `value`) for every instance. |
 | `represents?` | `"player"|"item_drop"` | Render players or dropped items with this kind. |
 | `on_spawn?` | `fun(self:` | Entity) |
 | `on_tick?` | `fun(self:` | Entity, dt: number) |
@@ -136,6 +137,18 @@ integer Numeric block id. A held item and a placeable block share one id space.
 ## EntityKindId
 
 integer Numeric entity kind id (registration order, starting at 1).
+
+## EntityText
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `value?` | `string` | Label text: UTF-8, at most 64 bytes, `\n` starts a new line. Empty hides the label. |
+| `color?` | `integer[]` | Text colour `{r, g, b}` or `{r, g, b, a}`, 0-255 (default white). |
+| `background?` | `integer[]|false` | Rounded panel colour behind the text, RGB(A); without one the text gets a dark outline. |
+| `size?` | `number` | Height of one text line in blocks (default 0.3). |
+| `offset_y?` | `number` | Height of the label's bottom above the entity's position (default the kind's `height` + 0.25; 0 for `visual = false`). |
+| `max_distance?` | `number` | Hide the label beyond this many blocks (default 0 = never). |
+| `through_walls?` | `boolean` | Draw through walls instead of being hidden by them, e.g. name tags (default false). |
 
 ## EntityVisual
 
@@ -299,6 +312,7 @@ integer[] `{r, g, b, a?}`, 0-255 each.
 | Field | Type | Description |
 | --- | --- | --- |
 | `visual_override?` | `table` | Per-instance override of the kind's `visual` (every field optional). |
+| `text?` | `string|EntityText` | World-space label; fields not given come from the kind's `text`. Change it later with `entity:set_text`. |
 
 ## StructureDef
 

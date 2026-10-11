@@ -448,6 +448,16 @@ public:
 	void set_script_entity_visual_override(
 			core::NetId id, std::optional<protocol::EntityVisualOverride> override_def);
 
+	// A script entity's world-space text label (`vb.world.spawn`'s `text`
+	// option / `entity:set_text`), already fully resolved by PackRuntime.
+	// `nullopt` removes it (no-op if never set). Unlike the visual override
+	// above this can change at any time: broadcast_snapshots() sends the
+	// current label in an S2C_EntityText to each client the entity enters the
+	// interest set of, and sends a change (or removal) to every client that
+	// already sees it, on the next tick.
+	void set_script_entity_text(
+			core::NetId id, std::optional<protocol::EntityText> text);
+
 	// Phase 6.18 (Growtopia-style combat): tunables for punch() below. One
 	// discrete swing per call -- edge-triggering (only calling punch() on a
 	// rising "attack key" edge, not every tick it's held) is entirely the
@@ -676,6 +686,10 @@ private:
 	// to_record()); absent means the entity never set one.
 	std::unordered_map<core::NetId, protocol::EntityVisualOverride>
 			script_entity_visual_overrides_;
+	// set_script_entity_text()'s storage, plus the ids whose label changed
+	// since the last broadcast_snapshots() (which sends and clears them).
+	std::unordered_map<core::NetId, protocol::EntityText> script_entity_texts_;
+	std::vector<core::NetId> dirty_entity_texts_;
 	std::map<ConnId, Conn> conns_;
 	replication::InterestGrid interest_;
 	std::unique_ptr<WorldReplicator> replicator_;
@@ -942,6 +956,13 @@ public:
 		return it == entity_visual_overrides_.end() ? nullptr : &it->second;
 	}
 
+	// A script entity's current text label (S2C_EntityText); nullptr if it
+	// has none. Dropped when the entity leaves this client's interest set.
+	const protocol::EntityText *entity_text(core::NetId id) const {
+		const auto it = entity_texts_.find(id);
+		return it == entity_texts_.end() ? nullptr : &it->second.text;
+	}
+
 	// The block a replicated dropped-item entity represents (learned from its
 	// `entered` record, EntityRecord::item); nullopt for anything else.
 	std::optional<core::BlockId> entity_item(core::NetId id) const {
@@ -1050,6 +1071,7 @@ private:
 	void apply_day_night_curve(const protocol::S2CDayNightCurve &msg);
 	void apply_fog_params(const protocol::S2CFogParams &msg);
 	void apply_block_damage(const protocol::S2CBlockDamage &msg);
+	void apply_entity_text(const protocol::S2CEntityText &msg);
 	void apply_snapshot(const protocol::S2CEntitySnapshot &snap);
 	void reconcile(const protocol::EntityRecord &authoritative,
 			std::uint32_t acked_seq);
@@ -1104,6 +1126,14 @@ private:
 	std::unordered_map<core::NetId, protocol::EntityVisualOverride>
 			entity_visual_overrides_;
 	std::unordered_map<core::NetId, std::uint16_t> entity_items_;
+	// entity_text()'s storage. `server_tick` is the S2C_EntityText tick the
+	// label arrived with: a snapshot removal only drops a label older than
+	// itself, since the two travel on different lanes (see apply_snapshot).
+	struct ReceivedEntityText {
+		protocol::EntityText text;
+		std::uint32_t server_tick = 0;
+	};
+	std::unordered_map<core::NetId, ReceivedEntityText> entity_texts_;
 	world::DayNightCurve day_night_curve_; // empty = default_day_night_curve()
 	std::optional<protocol::S2CFogParams> fog_override_;
 	BlockDamageTracker block_damage_;

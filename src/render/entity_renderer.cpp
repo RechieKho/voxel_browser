@@ -1,14 +1,19 @@
 #include "vb/render/entity_renderer.hpp"
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 #include <raylib.h>
+#include <raymath.h>
 #include <rlgl.h>
 
 #include "vb/core/ids.hpp"
@@ -70,6 +75,11 @@ struct TrackedEntity {
 	bool mirror = true;
 	// Set for a dropped-item entity: draw_item_cube() instead of a billboard.
 	std::optional<core::BlockId> item;
+	// `vb.register_entity{visual = false}`: no sprite at all (text only).
+	bool hidden = false;
+	// The entity's current label, copied from ClientSession::entity_text()
+	// every sync(); nullopt = none.
+	std::optional<protocol::EntityText> text;
 
 	explicit TrackedEntity(int initial_facings) : state(initial_facings) {}
 };
@@ -205,6 +215,14 @@ void EntityRenderer::sync(const net::ClientSession &client,
 		if (kind_record != nullptr) {
 			it->second.width = kind_record->width;
 			it->second.height = kind_record->height;
+			it->second.hidden = kind_record->hidden;
+		}
+		if (const protocol::EntityText *text = client.entity_text(id)) {
+			if (!it->second.text || *it->second.text != *text) {
+				it->second.text = *text;
+			}
+		} else {
+			it->second.text.reset();
 		}
 		// Entity-management follow-up: a per-instance visual_override is
 		// resolved (merged over the kind's own default, if any, then decoded)
@@ -301,6 +319,9 @@ void EntityRenderer::draw(const CameraView &camera_view) const {
 		}
 		const bool has_visual = visual != nullptr;
 
+		if (tracked.hidden) {
+			continue;
+		}
 		if (tracked.item && impl_->chunks != nullptr) {
 			draw_item_cube(feet, impl_->chunks->underwater_tint(*tracked.item),
 					static_cast<float>(id));
@@ -353,6 +374,156 @@ void EntityRenderer::draw(const CameraView &camera_view) const {
 				Vector3{ 0.0f, 1.0f, 0.0f }, size, origin, 0.0f,
 				has_visual ? WHITE : tint_for_entity(id));
 	}
+}
+
+namespace {
+
+// Labels use the engine's UI font (raylib's built-in bitmap font, the one
+// raygui draws with) at its native pixel size: point-sampled, so it stays
+// crisp at any scale. One text line is kLabelFontPx "pixels" tall and is
+// mapped to EntityText::size metres.
+constexpr float kLabelFontPx = 10.0f;
+constexpr float kLabelSpacingPx = 1.0f;
+constexpr float kLabelLineGapPx = 2.0f;
+constexpr float kLabelPaddingPx = 2.0f;
+
+Color to_color(const std::array<std::uint8_t, 4> &c) {
+	return Color{ c[0], c[1], c[2], c[3] };
+}
+
+std::vector<std::string> split_lines(const std::string &value) {
+	std::vector<std::string> lines;
+	std::size_t start = 0;
+	while (true) {
+		const std::size_t nl = value.find('\n', start);
+		lines.push_back(value.substr(start, nl == std::string::npos ? nl : nl - start));
+		if (nl == std::string::npos) {
+			break;
+		}
+		start = nl + 1;
+	}
+	return lines;
+}
+
+// Draws one label as a camera-facing quad whose bottom centre sits at
+// `anchor`. The text is laid out in 2D pixel space (y down) and mapped onto
+// the camera's right/up axes by a model matrix, so raylib's ordinary 2D text
+// and rectangle calls draw it in world space.
+void draw_label(const protocol::EntityText &text, Vector3 anchor,
+		Vector3 right, Vector3 up) {
+	const Font font = GetFontDefault();
+	const std::vector<std::string> lines = split_lines(text.value);
+	std::vector<float> widths;
+	widths.reserve(lines.size());
+	float max_width = 0.0f;
+	for (const std::string &line : lines) {
+		const float w = MeasureTextEx(font, line.c_str(), kLabelFontPx, kLabelSpacingPx).x;
+		widths.push_back(w);
+		max_width = std::max(max_width, w);
+	}
+	const float n = static_cast<float>(lines.size());
+	const float panel_w = max_width + 2.0f * kLabelPaddingPx;
+	const float panel_h = n * kLabelFontPx + (n - 1.0f) * kLabelLineGapPx +
+			2.0f * kLabelPaddingPx;
+	const float scale = text.size / kLabelFontPx; // metres per pixel
+
+	// Pixel (x, y) -> anchor + right*(x - panel_w/2)*scale + up*(panel_h - y)*scale.
+	const Vector3 origin = Vector3Add(anchor,
+			Vector3Add(Vector3Scale(right, -0.5f * panel_w * scale),
+					Vector3Scale(up, panel_h * scale)));
+	const Vector3 forward = Vector3CrossProduct(right, up);
+	const Matrix model{
+		right.x * scale, -up.x * scale, forward.x, origin.x,
+		right.y * scale, -up.y * scale, forward.y, origin.y,
+		right.z * scale, -up.z * scale, forward.z, origin.z,
+		0.0f, 0.0f, 0.0f, 1.0f
+	};
+
+	rlPushMatrix();
+	rlMultMatrixf(MatrixToFloat(model));
+	if (text.background) {
+		DrawRectangleRounded(Rectangle{ 0.0f, 0.0f, panel_w, panel_h }, 0.35f, 4,
+				to_color(*text.background));
+	}
+	const Color color = to_color(text.color);
+	const Color outline{ 0, 0, 0, static_cast<unsigned char>(color.a * 3 / 4) };
+	for (std::size_t i = 0; i < lines.size(); ++i) {
+		const Vector2 at{ kLabelPaddingPx + 0.5f * (max_width - widths[i]),
+			kLabelPaddingPx + static_cast<float>(i) * (kLabelFontPx + kLabelLineGapPx) };
+		if (!text.background) {
+			// No panel: a one-pixel dark outline keeps it legible on any terrain.
+			static constexpr Vector2 kOffsets[] = { { -1, 0 }, { 1, 0 }, { 0, -1 }, { 0, 1 } };
+			for (const Vector2 o : kOffsets) {
+				DrawTextEx(font, lines[i].c_str(), Vector2{ at.x + o.x, at.y + o.y },
+						kLabelFontPx, kLabelSpacingPx, outline);
+			}
+		}
+		DrawTextEx(font, lines[i].c_str(), at, kLabelFontPx, kLabelSpacingPx, color);
+	}
+	rlPopMatrix();
+}
+
+} // namespace
+
+void EntityRenderer::draw_labels(const CameraView &camera_view) const {
+	const Vector3 eye{ static_cast<float>(camera_view.position.x),
+		static_cast<float>(camera_view.position.y),
+		static_cast<float>(camera_view.position.z) };
+	struct Pending {
+		const protocol::EntityText *text;
+		Vector3 anchor;
+		float dist_sq;
+	};
+	std::vector<Pending> pending;
+	for (const auto &[id, tracked] : impl_->states) {
+		(void)id;
+		if (!tracked.text || tracked.text->value.empty()) {
+			continue;
+		}
+		const core::Vec3d pos = tracked.state.position();
+		const Vector3 anchor{ static_cast<float>(pos.x),
+			static_cast<float>(pos.y) + tracked.text->offset_y,
+			static_cast<float>(pos.z) };
+		const float dist_sq = Vector3DistanceSqr(anchor, eye);
+		const float max = tracked.text->max_distance;
+		if (max > 0.0f && dist_sq > max * max) {
+			continue;
+		}
+		pending.push_back({ &*tracked.text, anchor, dist_sq });
+	}
+	if (pending.empty()) {
+		return;
+	}
+	// Depth-tested labels first, then through-walls ones; far to near within
+	// each group so overlapping translucent panels blend correctly.
+	std::sort(pending.begin(), pending.end(), [](const Pending &a, const Pending &b) {
+		if (a.text->through_walls != b.text->through_walls) {
+			return !a.text->through_walls;
+		}
+		return a.dist_sq > b.dist_sq;
+	});
+
+	// Billboard axes from the view matrix, as DrawBillboardPro does.
+	const Matrix view = GetCameraMatrix(to_raylib_camera(camera_view));
+	const Vector3 right{ view.m0, view.m4, view.m8 };
+	const Vector3 up{ view.m1, view.m5, view.m9 };
+
+	rlDrawRenderBatchActive();
+	rlDisableDepthMask();
+	rlDisableBackfaceCulling(); // the y-flipped text quads wind backwards
+	bool depth_test = true;
+	for (const Pending &p : pending) {
+		if (p.text->through_walls && depth_test) {
+			rlDrawRenderBatchActive();
+			rlDisableDepthTest();
+			depth_test = false;
+		}
+		draw_label(*p.text, p.anchor, right, up);
+	}
+	rlDrawRenderBatchActive();
+	rlEnableDepthTest();
+	rlEnableBackfaceCulling();
+	rlEnableDepthMask();
 }
 
 std::size_t EntityRenderer::tracked_count() const {

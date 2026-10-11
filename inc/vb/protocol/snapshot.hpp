@@ -1,8 +1,11 @@
 #pragma once
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <string>
 #include <vector>
 
 #include "vb/core/ids.hpp"
@@ -60,6 +63,51 @@ struct S2CEntitySnapshot {
 
 	void encode(std::vector<std::byte> &out) const;
 	static Decoded<S2CEntitySnapshot> decode(std::span<const std::byte> in);
+};
+
+// A world-space text label attached to a script entity (protocol v32;
+// `vb.world.spawn(kind, pos, {text = ...})` / `entity:set_text(...)`). Always
+// fully resolved server-side (kind default + per-call fields merged by
+// PackRuntime), so the client never has to know a kind's text defaults.
+inline constexpr std::size_t kMaxEntityTextBytes = 64;
+
+struct EntityText {
+	std::string value; // UTF-8, <= kMaxEntityTextBytes, '\n' starts a new line
+	std::array<std::uint8_t, 4> color{ 255, 255, 255, 255 }; // RGBA
+	// Rounded panel drawn behind the text; nullopt draws a dark outline
+	// around the glyphs instead, so the label stays legible either way.
+	std::optional<std::array<std::uint8_t, 4>> background;
+	float size = 0.3f; // height of one text line, metres
+	float offset_y = 2.05f; // metres above the entity's position (its anchor)
+	float max_distance = 0.0f; // hide beyond this many metres; 0 = no limit
+	bool through_walls = false; // skip the depth test (name tags)
+
+	bool operator==(const EntityText &) const = default;
+};
+
+struct EntityTextUpdate {
+	core::NetId net_id = core::NetId::kInvalid;
+	std::optional<EntityText> text; // nullopt = the label was removed
+
+	bool operator==(const EntityTextUpdate &) const = default;
+};
+
+// S2C_EntityText (protocol v32) -- lane kFeedback (reliable ordered), at most
+// one per player per server tick. Carries the current label of every script
+// entity that entered the recipient's interest set this tick and has one,
+// plus every label that changed (set or removed) on an entity already in it.
+// The text's lifetime on the client is the entity's: a snapshot `removed`
+// entry drops it. Because this is reliable and snapshots are not, the two can
+// arrive in either order; `server_tick` lets the client keep a label sent at
+// or after the tick of a (late) removal, see ClientSession::apply_snapshot.
+struct S2CEntityText {
+	static constexpr MessageType kType = MessageType::kS2CEntityText;
+
+	std::uint32_t server_tick = 0;
+	std::vector<EntityTextUpdate> updates;
+
+	void encode(std::vector<std::byte> &out) const;
+	static Decoded<S2CEntityText> decode(std::span<const std::byte> in);
 };
 
 } // namespace vb::protocol

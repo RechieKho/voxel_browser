@@ -110,3 +110,35 @@ Server pack VM only. Sets health (clamped; reaching 0 despawns).
 ```lua
 self:set_health(5)
 ```
+
+## Entity:set_text
+
+`Entity:set_text(text)`
+
+context: **runtime**
+
+Server pack VM only. Sets, changes or removes the entity's world-space label; replicated as a small update, the entity is not respawned. A string changes only the text and keeps the current style. A table applies the kind's `text` style with its own fields on top (an omitted `value` keeps the current text). `nil` or `""` removes the label. Text over 64 bytes or a bad colour is an error.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `text` | `string|EntityText|nil` |  |
+
+```lua
+self:set_text("26s")
+self:set_text({ value = "Ripe!", color = { 120, 235, 110 } })
+self:set_text(nil)
+```
+
+## Entity:get_text
+
+`Entity:get_text() -> string|nil`
+
+context: **runtime**
+
+Server pack VM only. The label's current text, or `nil` if the entity has none.
+
+Returns `string|nil`
+
+```lua
+if self:get_text() == "Ripe!" then return end
+```

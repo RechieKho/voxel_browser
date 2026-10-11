@@ -76,6 +76,12 @@ public:
 	// BeginMode3D/EndMode3D.
 	void draw(const CameraView &camera) const;
 
+	// Draw every tracked entity's text label (S2C_EntityText) as a
+	// camera-facing billboard. Call inside BeginMode3D/EndMode3D after
+	// everything else in the 3D pass: labels test depth (walls hide them
+	// unless the label set through_walls) but never write it.
+	void draw_labels(const CameraView &camera) const;
+
 	std::size_t tracked_count() const;
 
 private:

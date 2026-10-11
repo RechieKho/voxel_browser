@@ -1176,6 +1176,10 @@ bool ClientApp::frame(const vb::render::InputFrame &input, double dt) {
 				}
 				crack_overlay->end();
 			}
+			if (entity_renderer) {
+				entity_renderer->draw_labels(
+						{ controller.position(), controller.target() });
+			}
 			EndMode3D();
 			draw_overlay(controller, status, chunk_count, entity_count,
 					mouse_captured, client->time_of_day());
